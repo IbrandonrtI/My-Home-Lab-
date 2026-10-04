@@ -2,18 +2,18 @@
 body { -ms-overflow-style: none; scrollbar-width: none; }
 
 .service-card, .group-header, div[id$="-card"], div[id$="-card"] > div {
-  border-radius: 20px !important;
+  border-radius:20px !important;
   overflow: hidden !important;
   isolation: isolate !important;
 }
 
-#adguard-card, #beszel-card, #portainer-card, #filebrowser-card {
+#adguard-card, #beszel-card, #portainer-card, #filebrowser-card, #tailscale-card{
   position: relative !important;
   background-color: transparent !important;
 }
 
 #adguard-card::before, #beszel-card::before,
-#portainer-card::before, #filebrowser-card::before {
+#portainer-card::before, #filebrowser-card::before, #tailscale-card::before {
   content: "";
   position: absolute;
   top: 2px; left: 2px; right: 2px; bottom: 6px;
@@ -28,20 +28,18 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
 #filebrowser-card::before { background-color: #69d0ff !important; }
 #tailscale-card::before { background-color: #131212 !important; }
 
-/* Colored resource bars (CPU/RAM/disk/network) */
+/* --- Colored resource bars (CPU/RAM/disk/network) --- */
 .information-widget-resource div[style*="width"] {
   background: linear-gradient(90deg, #4ade80 0%, #2dd4bf 40%, #3b82f6 75%, #b80fde 100%) !important;
   opacity: 0.55 !important;
   border-radius: 10px !important;
 }
 
-/* First resources pill: CPU / RAM / Temp / Uptime */
+/* First resources pill: CPU / RAM / Temp / Uptime */  Disk / Disk / Network 
 .widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; } /* CPU */
 .widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(2) svg { color: #22d3ee !important; } /* RAM */
 .widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(3) svg { color: #ef4444 !important; } /* Temp */
 .widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(4) svg { color: #3b82f6 !important; } /* Uptime */
-
-/* Second resources pill: Disk / Disk / Network */
 .widget-container:nth-of-type(3) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; } /* Disk 1 */
 .widget-container:nth-of-type(3) .information-widget-resource:nth-of-type(2) svg { color: #4ade80 !important; } /* Disk 2 */
 .widget-container:nth-of-type(3) .information-widget-resource:nth-of-type(3) svg { color: #3b82f6 !important; } /* Network */
@@ -70,24 +68,25 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
   flex-shrink: 0 !important;
 }
 
-@media (min-width: 768px) {
-  .widget-container,
-  .information-widget-logo,
-  [class*="information-widget-glances"] {
-    background-color: rgba(30, 30, 40, 0.55) !important;
-    border-radius: 50px !important;
-    border: 1px solid rgba(255, 255, 255, 0.08) !important;
-    height: 42px !important;
-    display: flex !important;
-    align-items: center !important;
-    padding: 0 16px !important;
-  }
-}
-
+/* Dividers between stats inside the same pill (e.g. CPU | RAM | TEMP | UP) */
 .information-widget-resource:not(:last-child) {
   border-right: 1px solid rgba(255, 255, 255, 0.12) !important;
   padding-right: 14px !important;
   margin-right: 14px !important;
+}
+
+.information-widget-logo {
+  width: auto !important;
+  white-space: nowrap !important;
+  gap: 8px !important;
+}
+
+.logo-text {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main, #e8e8ee);
+  letter-spacing: 0.03em;
+  line-height: 1;
 }
 
 .service-card > div { position: relative; z-index: 1; }
@@ -99,4 +98,26 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
 .service-group-name {
   color: #cfcfcf !important;
   font-weight: 700 !important;
+}
+
+@media (min-width: 768px) {
+
+  .widget-container {
+    height: 62px !important;
+
+    display: flex !important;
+    align-items: center !important;
+    border-radius: 50px !important;
+    background-color: rgba(58, 58, 58, 0.2) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    padding: 5px 16px !important;
+    margin-top: 10px !important;
+  }
+  .widget-container .information-widget-resource {
+    align-items: center !important;
+  }
+  .widget-container > div:last-child {
+    text-align: center !important;
+    margin-left: 0 !important;
+  }
 }
