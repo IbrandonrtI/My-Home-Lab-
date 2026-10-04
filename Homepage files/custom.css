@@ -22,10 +22,11 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
   opacity: 0.35;
 }
 
-#adguard-card::before    { background-color: #08b110 !important; }
-#beszel-card::before     { background-color: #3eadff !important; }
-#portainer-card::before  { background-color: #36535c !important; }
-#filebrowser-card::before{ background-color: #478fcc !important; }
+#adguard-card::before    { background-color: #5eba00 !important; }
+#beszel-card::before     { background-color: #747bff !important; }
+#portainer-card::before  { background-color: #09090a !important; }
+#filebrowser-card::before { background-color: #69d0ff !important; }
+#tailscale-card::before { background-color: #131212 !important; }
 
 /* Colored resource bars (CPU/RAM/disk/network) */
 .information-widget-resource div[style*="width"] {

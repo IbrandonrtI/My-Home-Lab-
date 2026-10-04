@@ -53,7 +53,7 @@
 
 - Services:
     - FileBrowser (SSD):
-        id: filebrowser
+        id: filebrowser-card
         href: https://home.tail30c3e5.ts.net/files/ssd
         siteMonitor: http://192.168.X.X:8081
         icon: filebrowser.png
