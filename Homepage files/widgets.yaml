@@ -1,0 +1,28 @@
+- logo:
+    icon: https://cdn.iconscout.com/icon/premium/png-512-thumb/server-icon-svg-download-png-6628653.png?f=webp&w=512
+
+- resources:
+    cpu: true
+    memory: true
+    cputemp: true
+    uptime: true
+
+- resources:
+    disk:
+      - /
+      - /media/your-username/USB STICK
+    network: true
+
+- datetime:
+    text_size: xl
+    format:
+      dateStyle: short
+      timeStyle: short
+      hour12: true
+
+- openmeteo:
+    label: City
+    latitude: x
+    longitude: x
+    units: imperial or metic
+    cache: 5

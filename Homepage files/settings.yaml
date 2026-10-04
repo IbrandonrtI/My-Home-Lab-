@@ -1,0 +1,15 @@
+title: Home Lab
+headerStyle: boxedWidgets
+theme: dark
+color: neutral
+background:
+  image: https://images.unsplash.com/photo-1548679847-1d4ff48016c7?q=80&w=2671&auto=format&fit=crop
+  blur: md
+  saturate: 50
+  brightness: 50
+  opacity: 80
+  maxGroupColumns: 4
+  disableCollapse: true
+  iconStyle: theme
+providers:
+  openweathermap: your-own
