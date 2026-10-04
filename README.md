@@ -1,6 +1,7 @@
 # My Home Lab
 
 A self-hosted home lab running on a repurposed laptop: DNS-level ad blocking, container management, system monitoring, file access, and a unified dashboard, all accessible remotely over a private Tailscale network.
+![image alt](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Untitled.jpg?raw=true)
 
 ## Table of Contents
 
