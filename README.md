@@ -357,17 +357,19 @@ Resulting in:
 
 | Service | URL |
 | --- | --- |
-| FileBrowser | `https://home.tail30c3e5.ts.net` |
-| AdGuard Home | `https://home.tail30c3e5.ts.net:8443` |
-| Beszel | `https://home.tail30c3e5.ts.net:8444` |
-| Homepage | `https://home.tail30c3e5.ts.net:8447` |
-| Portainer | `https://home.tail30c3e5.ts.net:9444` |
+| FileBrowser | `https://home.tail.ts.net` |
+| AdGuard Home | `https://home.tail.ts.net:8443` |
+| Beszel | `https://home.tail.ts.net:8444` |
+| Homepage | `https://home.tail.ts.net:8447` |
+| Portainer | `https://home.tail.ts.net:9444` |
 
 Check the live config at any time:
 
 ```bash
 tailscale serve status
 ```
+
+![image alt](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Tailscale%20Home.jpg?raw=true)
 
 ---
 
@@ -393,7 +395,7 @@ services:
     ports:
       - 3001:3000
     environment:
-      HOMEPAGE_ALLOWED_HOSTS: 192.168.X.X:3001,home.tail30c3e5.ts.net:8447,localhost:3001
+      HOMEPAGE_ALLOWED_HOSTS: 192.168.X.X:3001,home.tail.ts.net:8447,localhost:3001
     volumes:
       - /home/your-username/homepage-config:/app/config
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -407,7 +409,7 @@ services:
 - Network:
     - AdGuard Home:
         id: adguard-card
-        href: https://home.tail30c3e5.ts.net:8443
+        href: https://home.tail.ts.net:8443
         siteMonitor: http://192.168.X.X:3000
         icon: adguard-home.png
         description: DNS ad blocking
@@ -431,7 +433,7 @@ services:
 - System Monitor:
     - Beszel:
         id: beszel-card
-        href: https://home.tail30c3e5.ts.net:8444
+        href: https://home.tail.ts.net:8444
         siteMonitor: http://192.168.X.X:8090
         icon: beszel.png
         description: Real-Time Server Stats
@@ -445,7 +447,7 @@ services:
 - Infrastructure:
     - Portainer:
         id: portainer-card
-        href: https://home.tail30c3e5.ts.net:9444
+        href: https://home.tail.ts.net:9444
         siteMonitor: http://192.168.X.X:9000
         icon: portainer.png
         description: Docker container management
@@ -460,7 +462,7 @@ services:
 - Services:
     - FileBrowser (SSD):
         id: filebrowser
-        href: https://home.tail30c3e5.ts.net/files/ssd
+        href: https://home.tail.ts.net/files/ssd
         siteMonitor: http://192.168.X.X:8081
         icon: filebrowser.png
         description: 256GB SSD
@@ -714,7 +716,7 @@ const observer = new MutationObserver(addLogoText);
 observer.observe(document.body, { childList: true, subtree: true });
 ```
 
-Access the finished dashboard at `http://192.168.X.X:3001` locally, or `https://home.tail30c3e5.ts.net:8447` remotely via Tailscale.
+Access the finished dashboard at `http://192.168.X.X:3001` locally, or `https://home.tail.ts.net:8447` remotely via Tailscale.
 
 ---
 
