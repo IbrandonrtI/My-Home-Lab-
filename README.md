@@ -194,6 +194,104 @@ docker logs portainer
 ```
 
 Create an admin account on first load. From here on, containers are deployed as **Stacks** in Portainer using the compose files below.
+The code for the creation of each stacks for the current services used is listed below.
+
+### `Adguard`
+```bash
+services:
+  adguard:
+    image: adguard/adguardhome:v0.107.79
+    container_name: adguardhome
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /opt/adguard-docker/work:/opt/adguardhome/work
+      - /opt/adguard-docker/conf:/opt/adguardhome/conf
+```
+
+### 'beszel'
+```bash
+services:
+  beszel:
+    image: henrygd/beszel:latest
+    container_name: beszel
+    restart: unless-stopped
+    ports:
+      - 8090:8090
+    volumes:
+      - beszel_data:/beszel_data
+
+volumes:
+  beszel_data:
+```
+### 'beszel-agent'
+```bash
+services:
+  beszel-agent:
+    image: henrygd/beszel-agent
+    container_name: beszel-agent
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./beszel_agent_data:/var/lib/beszel-agent
+    environment:
+      LISTEN: 45876
+      KEY: 'your-own'
+      TOKEN: 'your-own'
+      HUB_URL: http://192.168.X.X:8090
+```
+### 'filebrowser'
+```bash
+version: '3'
+services:
+  filebrowser:
+    image: filebrowser/filebrowser
+    restart: always
+    ports:
+      - "8081:80"
+    volumes:
+      - "/home/brandon/256GB_SSD:/srv/ssd"
+      - "/media/brandon/USB STICK/1TB_HDD:/srv/hdd"
+      - filebrowser_data:/database
+
+volumes:
+  filebrowser_data:
+```
+### 'homepage'
+```bash
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - 3001:3000
+    environment:
+      HOMEPAGE_ALLOWED_HOSTS: 192.168.X.X:3001,home.tail30c3e5.ts.net:8447,localhost:3001
+    volumes:
+      - /home/brandon/homepage-config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/host:ro
+      - "/media/brandon/USB STICK:/media/brandon/USB STICK:ro"
+```
+### 'homepage'
+```bash
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - 3001:3000
+    environment:
+      HOMEPAGE_ALLOWED_HOSTS: 192.168.X.X:3001,home.tail30c3e5.ts.net:8447,localhost:3001
+    volumes:
+      - /home/brandon/homepage-config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/host:ro
+      - "/media/brandon/USB STICK:/media/brandon/USB STICK:ro"
+```
 
 ---
 
