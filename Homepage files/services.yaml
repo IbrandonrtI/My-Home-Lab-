@@ -1,0 +1,65 @@
+- Network:
+    - AdGuard Home:
+        id: adguard-card
+        href: https://home.tail30c3e5.ts.net:8443
+        siteMonitor: http://192.168.X.X:3000
+        icon: adguard-home.png
+        description: DNS ad blocking
+        widget:
+          type: adguard
+          url: http://192.168.X.X:3000
+          username: your-own
+          password: your-own
+
+    - Tailscale:
+        id: tailscale-card
+        href: https://console.tailscale.com/admin/machines
+        siteMonitor: https://console.tailscale.com/admin/machines
+        icon: tailscale.png
+        description: Connected to Tailscale
+        widget:
+          type: tailscale
+          deviceid: your-own
+          key: your-own
+
+- System Monitor:
+    - Beszel:
+        id: beszel-card
+        href: https://home.tail30c3e5.ts.net:8444
+        siteMonitor: http://192.168.X.X:8090
+        icon: beszel.png
+        description: Real-Time Server Stats
+        widget:
+          type: beszel
+          url: http://192.168.X.X:8090
+          username: your-own
+          password: your-own
+          version: 2
+
+- Infrastructure:
+    - Portainer:
+        id: portainer-card
+        href: https://home.tail30c3e5.ts.net:9444
+        siteMonitor: http://192.168.X.X:9000
+        icon: portainer.png
+        description: Docker container management
+        widget:
+          type: portainer
+          url: http://192.168.X.X:9000
+          username: your-own
+          password: your-own
+          env: 3
+          key: your-own
+
+- Services:
+    - FileBrowser (SSD):
+        id: filebrowser
+        href: https://home.tail30c3e5.ts.net/files/ssd
+        siteMonitor: http://192.168.X.X:8081
+        icon: filebrowser.png
+        description: 256GB SSD
+        widget:
+          type: filebrowser
+          url: http://192.168.X.X:8081
+          username: your-own
+          password: your-own
