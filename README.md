@@ -196,7 +196,7 @@ docker logs portainer
 Create an admin account on first load. From here on, containers are deployed as **Stacks** in Portainer using the compose files below.
 The code for the creation of each stacks for the current services used is listed below.
 
-### `Adguard`
+### `Adguard Home`
 ```bash
 services:
   adguard:
@@ -209,7 +209,7 @@ services:
       - /opt/adguard-docker/conf:/opt/adguardhome/conf
 ```
 
-### 'beszel'
+### 'Beszel'
 ```bash
 services:
   beszel:
@@ -224,7 +224,7 @@ services:
 volumes:
   beszel_data:
 ```
-### 'beszel-agent'
+### 'Beszel-agent'
 ```bash
 services:
   beszel-agent:
@@ -241,7 +241,7 @@ services:
       TOKEN: 'your-own'
       HUB_URL: http://192.168.X.X:8090
 ```
-### 'filebrowser'
+### 'Filebrowser'
 ```bash
 version: '3'
 services:
@@ -258,24 +258,7 @@ services:
 volumes:
   filebrowser_data:
 ```
-### 'homepage'
-```bash
-services:
-  homepage:
-    image: ghcr.io/gethomepage/homepage:latest
-    container_name: homepage
-    restart: unless-stopped
-    ports:
-      - 3001:3000
-    environment:
-      HOMEPAGE_ALLOWED_HOSTS: 192.168.X.X:3001,home.tail30c3e5.ts.net:8447,localhost:3001
-    volumes:
-      - /home/brandon/homepage-config:/app/config
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /:/host:ro
-      - "/media/brandon/USB STICK:/media/brandon/USB STICK:ro"
-```
-### 'homepage'
+### 'Homepage'
 ```bash
 services:
   homepage:
