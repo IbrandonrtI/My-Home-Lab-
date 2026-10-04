@@ -35,16 +35,15 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
 }
 
 /* First resources pill: CPU / RAM / Temp / Uptime */
-.widget-container:nth-of-type(1) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; }
-.widget-container:nth-of-type(1) .information-widget-resource:nth-of-type(2) svg { color: #22d3ee !important; }
-.widget-container:nth-of-type(1) .information-widget-resource:nth-of-type(3) svg { color: #ef4444 !important; }
-.widget-container:nth-of-type(1) .information-widget-resource:nth-of-type(4) svg { color: #3b82f6 !important; }
+.widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; } /* CPU */
+.widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(2) svg { color: #22d3ee !important; } /* RAM */
+.widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(3) svg { color: #ef4444 !important; } /* Temp */
+.widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(4) svg { color: #3b82f6 !important; } /* Uptime */
 
 /* Second resources pill: Disk / Disk / Network */
-.widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; }
-.widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(2) svg { color: #22d3ee !important; }
-.widget-container:nth-of-type(2) .information-widget-resource:nth-of-type(3) svg { color: #3b82f6 !important; }
-
+.widget-container:nth-of-type(3) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; } /* Disk 1 */
+.widget-container:nth-of-type(3) .information-widget-resource:nth-of-type(2) svg { color: #4ade80 !important; } /* Disk 2 */
+.widget-container:nth-of-type(3) .information-widget-resource:nth-of-type(3) svg { color: #3b82f6 !important; } /* Network */
 .information-widget-logo {
   display: flex !important;
   flex-direction: row !important;
