@@ -196,6 +196,7 @@ docker logs portainer
 
 Create an admin account on first load. From here on, containers are deployed as **Stacks** in Portainer using the compose files below.
 
+![image alt](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Portainer%20Home.png?raw=true)
 
 ---
 
@@ -289,6 +290,8 @@ services:
 docker exec beszel /beszel superuser upsert your-email@example.com YourPassword
 ```
 
+![image alt](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Beszel%20Home.jpg?raw=true)
+
 ---
 
 ## 9. FileBrowser
@@ -320,6 +323,8 @@ volumes:
 ```
 
 Access `http://192.168.X.X:8081`, log in with the default `admin` / `admin`, and change the password immediately.
+
+![image alt](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Filebrowser%20Home.png?raw=true)
 
 ---
 
