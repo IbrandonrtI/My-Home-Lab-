@@ -196,6 +196,7 @@ docker logs portainer
 
 Create an admin account on first load. From here on, containers are deployed as **Stacks** in Portainer using the compose files below.
 
+
 ---
 
 ## 7. AdGuard Home
@@ -235,6 +236,8 @@ Complete the setup wizard at `http://192.168.X.X:3000`:
 - Set upstream DNS servers (plain IPs, e.g. `1.1.1.1`, `8.8.8.8`, `9.9.9.9`, rather than DNS-over-HTTPS URLs, to avoid blocklists accidentally blocking the DoH provider domains themselves)
 
 **Point the network at it:** a static IP reservation for the server (`192.168.X.X`) was set in the router's DHCP settings, and the router's primary DNS was set to that same address.
+
+![image alt}](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Adguard%20Home.jpg?raw=true)
 
 ---
 
