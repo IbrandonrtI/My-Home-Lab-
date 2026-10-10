@@ -20,18 +20,29 @@
           href: https://amazon.com/
           icon: https://cdn.iconscout.com/icon/free/png-512/free-amazon-logo-icon-svg-download-png-2285069.png?f=webp&w=512
 
+     - Newegg:
+        - abbr: NEWEGG
+          href: https://newegg.com/
+          icon: https://cdn.brandfetch.io/idk4VupXU2/w/400/h/400/theme/dark/icon.jpeg?c=1dxbfHSJFAPEGdCLU4o5B
+
     - eBay:
         - abbr: EBAY
           href: https://ebay.com/
           icon: https://cdn.brandfetch.io/idC0T6HUjp/w/400/h/400/theme/dark/icon.jpeg?c=1dxbfHSJFAPEGdCLU4o5B
 
 - Productivity:
-    - Claude:
-        - abbr: CL
-          href: https://claude.ai/
-          icon: https://cdn.iconscout.com/icon/free/png-512/free-claude-icon-svg-download-png-14426777.png?f=webp&w=512
+    - GitHub:
+        - abbr: GH
+          href: https://github.com/
+          icon: https://cdn.brandfetch.io/idZAyF9rlg/w/400/h/400/theme/dark/icon.jpeg?c=1dxbfHSJFAPEGdCLU4o5B
 
-    - ChatGPT:
-        - abbr: CGPT
-          href: https://chat.openai.com/
-          icon: https://cdn.iconscout.com/icon/free/png-512/free-gpt-icon-svg-download-png-14426781.png?f=webp&w=512
+    - Gmail:
+        - abbr: GM
+          href: https://mail.google.com/
+          icon: https://cdn.iconscout.com/icon/free/png-512/free-gmail-logo-icon-svg-download-png-9343749.png?f=webp&w=512
+
+    - Outlook:
+       - abbr: OL
+         href: https://outlook.office.com/mail/
+         icon: https://cdn.brandfetch.io/idgdw68PEO/theme/dark/logo.svg?c=1dxbfHSJFAPEGdCLU4o5B
+   
