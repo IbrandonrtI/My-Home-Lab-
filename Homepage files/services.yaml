@@ -3,7 +3,7 @@
         id: adguard-card
         href: https://home.griffin-luma.ts.net:8443
         siteMonitor: http://192.168.1.93:3000
-        icon: adguard-home.png
+        icon: adguard-home.svg
         description: DNS ad blocking
         widget:
           type: adguard
@@ -16,7 +16,7 @@
         id: tailscale-card
         href: https://console.tailscale.com/admin/machines
         siteMonitor: https://console.tailscale.com/admin/machines
-        icon: tailscale.png
+        icon: tailscale.svg
         description: Connected to Tailscale
         widget:
           type: tailscale
@@ -28,7 +28,7 @@
         id: beszel-card
         href: https://home.griffin-luma.ts.net:8444
         siteMonitor: http://192.168.1.93:8090
-        icon: beszel.png
+        icon: beszel.svg
         description: Server health and resource usage
         widget:
           type: beszel
@@ -41,7 +41,7 @@
         id: speedtest-card
         href: https://home.griffin-luma.ts.net:8442/admin
         siteMonitor: http://192.168.1.93:8088
-        icon: speedtest-tracker.png
+        icon: speedtest-tracker.svg
         description: Internet speed and connection history
         widget:
           type: speedtest
@@ -55,7 +55,7 @@
         id: portainer-card
         href: https://home.griffin-luma.ts.net:9444
         siteMonitor: http://192.168.1.93:9000
-        icon: portainer.png
+        icon: portainer.svg
         description: Docker containers and stacks
         widget:
           type: portainer
@@ -68,7 +68,7 @@
         id: filebrowser-card
         href: https://home.griffin-luma.ts.net/files/ssd
         siteMonitor: http://192.168.1.93:8081
-        icon: filebrowser.png
+        icon: filebrowser.svg
         description: Browse and manage files on the SSD
         widget:
           type: filebrowser
@@ -80,7 +80,7 @@
         id: immich-card
         href: https://home.griffin-luma.ts.net:8445/photos
         siteMonitor: http://192.168.1.93:2283
-        icon: immich.png
+        icon: immich.svg
         description: Photo and video library
         widget:
           type: immich
@@ -92,7 +92,7 @@
         id: nextcloud-card
         href: https://home.griffin-luma.ts.net:8441
         siteMonitor: http://192.168.1.93:8082/status.php
-        icon: nextcloud.png
+        icon: nextcloud.svg
         description: Personal cloud
         widget:
           type: nextcloud
