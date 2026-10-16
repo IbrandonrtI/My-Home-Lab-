@@ -1,15 +1,16 @@
-- Network:
-    - AdGuard Home:
+- Network & DNS:
+    - AdGuard Home: 
         id: adguard-card
-        href: https://home.tail30c3e5.ts.net:8443
-        siteMonitor: http://192.168.X.X:3000
+        href: https://home.griffin-luma.ts.net:8443
+        siteMonitor: http://192.168.1.93:3000
         icon: adguard-home.png
         description: DNS ad blocking
         widget:
           type: adguard
-          url: http://192.168.X.X:3000
+          url: http://192.168.1.93:3000
           username: your-own
           password: your-own
+
 
     - Tailscale:
         id: tailscale-card
@@ -22,44 +23,79 @@
           deviceid: your-own
           key: your-own
 
-- System Monitor:
+- Monitoring:
     - Beszel:
         id: beszel-card
-        href: https://home.tail30c3e5.ts.net:8444
-        siteMonitor: http://192.168.X.X:8090
+        href: https://home.griffin-luma.ts.net:8444
+        siteMonitor: http://192.168.1.93:8090
         icon: beszel.png
-        description: Real-Time Server Stats
+        description: Server health and resource usage
         widget:
           type: beszel
-          url: http://192.168.X.X:8090
+          url: http://192.168.1.93:8090
           username: your-own
           password: your-own
           version: 2
 
-- Infrastructure:
+    - Speedtest Tracker:
+        id: speedtest-card
+        href: https://home.griffin-luma.ts.net:8442/admin
+        siteMonitor: http://192.168.1.93:8088
+        icon: speedtest-tracker.png
+        description: Internet speed and connection history
+        widget:
+          type: speedtest
+          url: http://192.168.1.93:8088
+          version: 2
+          key: your-own
+          bitratePrecision: 2
+
+- Management:
     - Portainer:
         id: portainer-card
-        href: https://home.tail30c3e5.ts.net:9444
-        siteMonitor: http://192.168.X.X:9000
+        href: https://home.griffin-luma.ts.net:9444
+        siteMonitor: http://192.168.1.93:9000
         icon: portainer.png
-        description: Docker container management
+        description: Docker containers and stacks
         widget:
           type: portainer
-          url: http://192.168.X.X:9000
-          username: your-own
-          password: your-own
+          url: http://192.168.1.93:9000
           env: 3
           key: your-own
 
-- Services:
-    - FileBrowser (SSD):
+- Files & Photos:
+    - FileBrowser:
         id: filebrowser-card
-        href: https://home.tail30c3e5.ts.net/files/ssd
-        siteMonitor: http://192.168.X.X:8081
+        href: https://home.griffin-luma.ts.net/files/ssd
+        siteMonitor: http://192.168.1.93:8081
         icon: filebrowser.png
-        description: 256GB SSD
+        description: Browse and manage files on the SSD
         widget:
           type: filebrowser
-          url: http://192.168.X.X:8081
+          url: http://192.168.1.93:8081
           username: your-own
           password: your-own
+
+    - Immich:
+        id: immich-card
+        href: https://home.griffin-luma.ts.net:8445/photos
+        siteMonitor: http://192.168.1.93:2283
+        icon: immich.png
+        description: Photo and video library
+        widget:
+          type: immich
+          url: http://192.168.1.93:2283
+          key: your-own
+          version: 2
+
+    - Nextcloud:
+        id: nextcloud-card
+        href: https://home.griffin-luma.ts.net:8441
+        siteMonitor: http://192.168.1.93:8082/status.php
+        icon: nextcloud.png
+        description: Personal cloud
+        widget:
+          type: nextcloud
+          url: http://192.168.1.93:8082
+          key: your-own
+          fields: ["freespace", "activeusers", "numfiles", "numshares"]
