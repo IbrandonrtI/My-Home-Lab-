@@ -2,7 +2,7 @@
 
 A self-hosted home lab running on a repurposed laptop: DNS-level ad blocking, container management, system monitoring, file access, and a unified dashboard, all accessible remotely over a private Tailscale network.
 
-![image alt](https://github.com/IbrandonrtI/My-Home-Lab-/blob/af5bb2855b9ba8d767b95a5a87b099b8eaaa430c/Homepage.jpg)
+![image alt](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Homepage.jpg?raw=true)
 
 ## Table of Contents
 
