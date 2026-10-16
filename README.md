@@ -20,7 +20,7 @@ A self-hosted home lab running on a repurposed laptop: DNS-level ad blocking, co
 
 ## 1. Base System
 
-**OS:** Linux Mint Cinnamon, installed on a repurposed laptop acting as the always-on home lab server.
+**OS:** Linux Mint Cinnamon or Ubuntu Servers, installed on a repurposed laptop acting as the always-on home lab server.
 
 The laptop stays powered on 24/7, so two power-related settings were configured first:
 
@@ -78,7 +78,7 @@ code -a ~/homepage-config/
 
 ---
 
-## 3. AnyDesk (Remote Desktop)
+## 3. AnyDesk (Remote Desktop on Desktop Enviroment)
 
 Used for full remote desktop / screen mirroring access to the headless laptop, functioning like a self-hosted TeamViewer.
 
