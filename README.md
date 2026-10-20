@@ -4,9 +4,9 @@ A self-hosted home lab running on a small HP mini PC: network-wide ad blocking, 
 
 > **About the placeholders.** Every address and name in this file is a placeholder: `your-username` (the Linux user), `192.168.X.X` (the server's address on your home network) and `your-tailnet.ts.net` (your Tailscale network name). Passwords, keys and tokens are written as `your-own-key`. Replace them with your own values and keep the real ones out of Git. The companion file [TROUBLESHOOTING.md](TROUBLESHOOTING.md) has the real values from my build, every problem I hit and how I fixed it, and the full migration from my previous server.
 
-![Homepage dashboard on a desktop monitor](docs/images/dashboard-desktop.png)
+![Homepage dashboard on a desktop monitor](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Homepage-desktop.png?raw=true)
 
-![Homepage dashboard on a phone](docs/images/dashboard-mobile.png)
+![Homepage dashboard on a phone](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Homepage-mobile.jpeg?raw=true)
 
 ## Highlights
 
