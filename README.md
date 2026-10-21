@@ -4,9 +4,9 @@ A self-hosted home lab running on a small HP mini PC: network-wide ad blocking, 
 
 > **About the placeholders.** Every address and name in this file is a placeholder: `your-username` (the Linux user), `192.168.X.X` (the server's address on your home network) and `your-tailnet.ts.net` (your Tailscale network name). Passwords, keys and tokens are written as `your-own-key`. Replace them with your own values and keep the real ones out of Git. The companion file [TROUBLESHOOTING.md](TROUBLESHOOTING.md) has the real values from my build, every problem I hit and how I fixed it, and the full migration from my previous server.
 
-![Homepage dashboard on a desktop monitor](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Homepage-desktop.png?raw=true)
+![Homepage dashboard on a desktop monitor](docs/images/dashboard-desktop.png)
 
-![Homepage dashboard on a phone](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Homepage-mobile.jpeg?raw=true)
+![Homepage dashboard on a phone](docs/images/dashboard-mobile.png)
 
 ## Highlights
 
@@ -457,21 +457,24 @@ UID 33 is the user Nextcloud runs as inside its container (it shows as `www-data
 
 ### 3.4 Drive power settings
 
-Laptop-style drives park their heads aggressively at the default power setting, which wears them out when a server never sleeps. This sets a safer level on both drives. Check each drive's name with `lsblk` first (mine are `sda` for the boot drive and `sdb` for the data drive):
+Laptop-style drives park their heads aggressively at the default power setting, which wears them out when a server never sleeps. This sets a safer level on both drives. Check each drive's name with `lsblk` first. Drive letters can swap between boots. On my machine the data drive is now `sda` and the boot drive is `sdb` (it was the other way round at first), so these commands use those letters:
 
 ```bash
 sudo hdparm -B 254 /dev/sda
 sudo hdparm -B 254 /dev/sdb
+sudo hdparm -B /dev/sda
 sudo hdparm -B /dev/sdb
 sudo crontab -e
 ```
 
-The `hdparm -B` check should print `APM_level = 254`. The settings reset at every reboot, so add these two lines at the bottom of root's crontab. They find the data drive by its label and the boot drive by its name, and re-apply the setting 60 seconds after boot:
+Both `hdparm -B` checks should print `APM_level = 254`. The settings reset at every reboot, so add these two lines at the bottom of root's crontab. They find the data drive by its label and the boot drive by the partition mounted at `/boot/efi`, and re-apply the setting 60 seconds after boot:
 
 ```cron
 @reboot sleep 60 && /usr/sbin/hdparm -S 0 -B 254 "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/STORAGE)")"
-@reboot sleep 60 && /usr/sbin/hdparm -B 254 /dev/sda
+@reboot sleep 60 && /usr/sbin/hdparm -B 254 "/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")"
 ```
+
+Don't type a drive letter such as `/dev/sdb` into these cron lines. If the letters swap after a reboot, the setting would be applied to the wrong drive. Both lines look the drive up instead, so they keep working.
 
 `-S 0` means the data drive never spins down, which suits a drive that Immich and Nextcloud use all day. Some USB adapters ignore these commands and print `SG_IO: bad/missing sense data`. That message is harmless.
 
@@ -512,7 +515,7 @@ docker exec nextcloud df -h /data
 docker exec homepage df -h /mnt/storage
 ```
 
-Every container should show the data drive (about 916G, `/dev/sdb1`). Then run two tests:
+Every container should show the data drive (about 916G, `/dev/sda1` on my machine; the letter can differ on yours). Then run two tests:
 
 - **Reboot:** run `sudo reboot`. After two minutes, `findmnt /mnt/storage` and `docker ps` should show the drive mounted and the containers up with no help from you.
 - **Unplug:** with the stacks running, unplug the drive for ten seconds, plug it in, and run `sudo hdd-recover`. You should see `Recovered.`
@@ -878,7 +881,7 @@ docker ps
 docker exec filebrowser-filebrowser-1 df -h /srv/hdd /srv/750GB_HDD
 ```
 
-The container should be `healthy`. `/srv/hdd` should show the data drive (`/dev/sdb1`, about 916G), and `/srv/750GB_HDD` should show the boot drive's `vgmint-root`.
+The container should be `healthy`. `/srv/hdd` should show the data drive (`/dev/sda1`, about 916G), and `/srv/750GB_HDD` should show the boot drive's `vgmint-root`.
 
 ---
 
@@ -988,7 +991,7 @@ docker exec immich_server df -h /data
 ls -a /mnt/storage/immich
 ```
 
-All four Immich containers should be `healthy` or `Up`. `/data` should show the data drive (`/dev/sdb1`, about 916G). After a minute, the folder should list `backups encoded-video library profile thumbs upload`. Open `http://192.168.X.X:2283` and create the admin account. The first account you create becomes the admin.
+All four Immich containers should be `healthy` or `Up`. `/data` should show the data drive (`/dev/sda1`, about 916G). After a minute, the folder should list `backups encoded-video library profile thumbs upload`. Open `http://192.168.X.X:2283` and create the admin account. The first account you create becomes the admin.
 
 ### 11.4 Phone app
 
@@ -1591,9 +1594,11 @@ Every container should be `Up` or `healthy`, neither drive should be near full, 
 ### Drive health
 
 ```bash
-sudo smartctl -H -A /dev/sda | grep -E "overall-health|Reallocated_Sector|Current_Pending|Load_Cycle"
+sudo smartctl -H -A /dev/sdb | grep -E "overall-health|Reallocated_Sector|Current_Pending|Load_Cycle"
 sudo smartctl -H -A -d sat /dev/disk/by-label/STORAGE | grep -E "overall-health|Reallocated_Sector|Current_Pending|Load_Cycle"
 ```
+
+The first line is the boot drive (`sdb` on my machine). Check the letters with `lsblk` first, because they can swap after a reboot. The second line finds the data drive by its label, so it always reads the right drive.
 
 `PASSED` and zeros for `Reallocated_Sector_Ct` and `Current_Pending_Sector` mean the drive is healthy. If either number starts to rise, replace the drive. The `Load_Cycle_Count` should climb slowly. Hundreds a day means the power setting from section 3.4 isn't applied.
 

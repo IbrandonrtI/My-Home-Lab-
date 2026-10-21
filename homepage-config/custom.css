@@ -1,0 +1,345 @@
+:root {
+  /* Desktop (1500px wide and up) */
+  --d-search-top: 80px;
+  --d-search-space: 90px;
+
+  /* Phones, tablets and small windows */
+  --m-gap: 12px;            /* space between every pill */
+  --m-search-top: 12px;     /* space between the date/weather and the search*/
+  --m-search-bottom: 8px;
+  --m-search-pad: 10px;
+}
+
+::-webkit-scrollbar { display: none; }
+body { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* Outer wrapper and inner card share one radius so the corners clip cleanly. */
+.service-card,
+.group-header,
+div[id$="-card"],
+div[id$="-card"] > div {
+  border-radius: 16px !important;
+  overflow: hidden !important;
+  isolation: isolate !important;
+}
+
+#adguard-card, #tailscale-card, #beszel-card, #portainer-card, 
+#filebrowser-card, #speedtest-card, #immich-card, #nextcloud-card,
+#netdata-card {
+  position: relative !important;
+  background-color: transparent !important;
+}
+
+/* Frosted glass on the visible card */
+.service-card {
+  background: rgba(14, 19, 31, 0.58) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  box-shadow: 0 10px 28px -14px rgba(0, 0, 0, 0.6) !important;
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+  transition: border-color 0.2s ease;
+}
+
+.service-card:hover { border-color: rgba(255, 255, 255, 0.22) !important; }
+.service-card:focus-within { border-color: rgba(255, 255, 255, 0.55) !important; }
+
+/* Content sits above the accent layers */
+.service-card > div { position: relative; z-index: 1; }
+
+/* accent colors (R, G, B) */
+#adguard-card     { --accent: 104, 186, 72;   }   /* AdGuard green */
+#tailscale-card   { --accent: 36,  140, 255;  }   /* Tailscale blue */
+#beszel-card      { --accent: 0,   197, 253;  }   /* Beszel Light Blue */
+#portainer-card   { --accent: 23,  21,  20;   }   /* Portainer dark */
+#filebrowser-card { --accent: 107, 97,  223;  }   /* FileBrowser blue */
+#speedtest-card   { --accent: 214, 90,  22;   }   /* Speedtest orange */
+#immich-card      { --accent: 209, 18,  18;   }   /* Immich red */
+#nextcloud-card   { --accent: 23,  10,  191;  }   /* Nextcloud blue */
+#netdata-card     { --accent: 0,   171, 68;   }   /* Netdata Green */
+/* Soft corner glow */
+#adguard-card::before, #tailscale-card::before, #beszel-card::before,
+#portainer-card::before, #filebrowser-card::before, #speedtest-card::before, 
+#immich-card::before, #nextcloud-card::before, #netdata-card::before {
+  content: "";
+  position: absolute;
+  top: 2px; left: 2px; right: 2px; bottom: 6px;
+  z-index: 0;
+  border-radius: 14px !important;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(var(--accent), 0.30), rgba(var(--accent), 0.04) 55%) !important;
+}
+
+/* Thin accent rail on the left edge */
+#adguard-card::after, #tailscale-card::after, #beszel-card::after,
+#portainer-card::after, #filebrowser-card::after, #speedtest-card::after, 
+#immich-card::after, #nextcloud-card::after, #netdata-card::after {
+  content: "";
+  position: absolute;
+  left: 2px; top: 16px; bottom: 20px;
+  width: 3px;
+  z-index: 0;
+  border-radius: 0 3px 3px 0;
+  pointer-events: none;
+  background: rgb(var(--accent));
+}
+
+/*Text*/
+.service-name {
+  color: #f4f6fa !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em;
+}
+
+.service-description {
+  color: #b9c2d0 !important;
+}
+
+.service-group-name {
+  color: #eef1f7 !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.015em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
+}
+
+/* Stat boxes inside service widgets */
+.service-block {
+  background: rgba(255, 255, 255, 0.06) !important;
+  border-radius: 10px !important;
+}
+
+/* top status strip*/
+#information-widgets {
+  flex-wrap: wrap !important;
+  row-gap: 8px !important;
+}
+
+.widget-container,
+.information-widget-logo,
+[class*="information-widget-glances"] {
+  background: rgba(14, 19, 31, 0.58) !important;
+  border: 1px solid rgba(255, 255, 255, 0.09) !important;
+  border-radius: 999px !important;
+  height: 40px !important;
+  display: flex !important;
+  align-items: center !important;
+  padding: 0 18px !important;
+  color: #eef1f7;
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+}
+
+/*line between stats*/
+.information-widget-resource:not(:last-child) {
+  border-right: 1px solid rgba(255, 255, 255, 0.12) !important;
+  padding-right: 14px !important;
+  margin-right: 14px !important;
+}
+
+/* Resource bars */
+.information-widget-resource div[style*="width"] {
+  background: linear-gradient(90deg, #4ade80 0%, #2dd4bf 40%, #3b82f6 75%, #b80fde 100%) !important;
+  opacity: 0.55 !important;
+  border-radius: 10px !important;
+}
+
+/* stats: CPU / RAM / Temp / Uptime */
+.widget-container:has(.information-widget-resource):not(.widget-container:has(.information-widget-resource) ~ .widget-container) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; } /* CPU */
+.widget-container:has(.information-widget-resource):not(.widget-container:has(.information-widget-resource) ~ .widget-container) .information-widget-resource:nth-of-type(2) svg { color: #22d3ee !important; } /* RAM */
+.widget-container:has(.information-widget-resource):not(.widget-container:has(.information-widget-resource) ~ .widget-container) .information-widget-resource:nth-of-type(3) svg { color: #ef4444 !important; } /* Temp */
+.widget-container:has(.information-widget-resource):not(.widget-container:has(.information-widget-resource) ~ .widget-container) .information-widget-resource:nth-of-type(4) svg { color: #3b82f6 !important; } /* Uptime */
+
+/* stats: Disk / Disk / Network */
+.widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; } /* Disk 1 */
+.widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource) .information-widget-resource:nth-of-type(2) svg { color: #4ade80 !important; } /* Disk 2 */
+.widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource) .information-widget-resource:nth-of-type(3) svg { color: #3b82f6 !important; } /* Network */
+
+@media (min-width: 1500px) {
+
+  .widget-container {
+    height: 62px !important;
+    display: flex !important;
+    align-items: center !important;
+    border-radius: 50px !important;
+    background-color: rgba(58, 58, 58, 0.2) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    padding: 5px 16px !important;
+    margin-top: 10px !important;
+  }
+
+  .widget-container .information-widget-resource {
+    align-items: center !important;
+  }
+
+  .widget-container > div:last-child {
+    text-align: center !important;
+    margin-left: 0 !important;
+  }
+
+  /* Search bar location */
+  #information-widgets {
+    position: relative !important;
+    padding-bottom: var(--d-search-space) !important;
+  }
+
+  #information-widgets .information-widget-search {
+    position: absolute !important;
+    top: var(--d-search-top) !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: auto !important;
+    box-sizing: border-box !important;
+    z-index: 20 !important;
+  }
+}
+
+/*scaling changees for zooming on browsers*/
+@media (min-width: 2040px) and (max-width: 2399px) { #information-widgets { zoom: 0.90; } }  /* 1440p at 125% (2048px) */
+@media (min-width: 1800px) and (max-width: 2039px) { #information-widgets { zoom: 0.80; } }
+@media (min-width: 1650px) and (max-width: 1799px) { #information-widgets { zoom: 0.70; } }
+@media (min-width: 1530px) and (max-width: 1649px) { #information-widgets { zoom: 0.90; } }  /* 1080p at 125% (1536px) */
+@media (min-width: 1490px) and (max-width: 1529px) { #information-widgets { zoom: 0.80; } }
+
+
+
+/*Mobile fixes*/
+@media (max-width: 1000px) {
+
+  #information-widgets {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    align-items: flex-start !important;
+    justify-content: flex-start !important;
+    column-gap: 0 !important;
+    row-gap: 0 !important;
+    padding: 8px 0 0 !important;
+  }
+
+  /* Every pill: same shape, same space underneath */
+  #information-widgets .widget-container,
+  #information-widgets .information-widget-logo {
+    box-sizing: border-box !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: fit-content !important;
+    max-width: 100% !important;
+    height: auto !important;
+    min-height: 48px !important;
+    padding: 8px 18px !important;
+    margin: 0 0 var(--m-gap) 0 !important;
+    border-radius: 26px !important;
+  }
+
+  /* ProDesk / Drives pills: stats in a grid, label centred underneath */
+  #information-widgets .widget-container:has(.information-widget-resource) {
+    flex-wrap: wrap !important;
+    gap: 8px !important;
+    padding: 12px 16px !important;
+  }
+
+  #information-widgets .information-widget-resource {
+    border-right: none !important;
+    padding-right: 0 !important;
+    margin-right: 0 !important;
+  }
+
+  #information-widgets .widget-container:has(.information-widget-resource) > div:last-child {
+    position: static !important;
+    width: 100% !important;
+    margin: 4px 0 0 !important;
+    text-align: center !important;
+  }
+
+  /* Home Lab pill: text and icon on one line, text first */
+  #information-widgets .information-widget-logo {
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
+    gap: 10px !important;
+    padding: 0 18px !important;
+    border-radius: 999px !important;
+  }
+
+  #information-widgets .information-widget-logo > * {
+    width: auto !important;
+    height: auto !important;
+    margin: 0 !important;
+    flex: 0 0 auto !important;
+  }
+
+  #information-widgets .information-widget-logo > .logo-text { order: 1 !important; }
+  #information-widgets .information-widget-logo > :not(.logo-text) { order: 2 !important; }
+
+  #information-widgets .information-widget-logo img,
+  #information-widgets .information-widget-logo svg {
+    width: 24px !important;
+    height: 24px !important;
+    max-width: 24px !important;
+    max-height: 24px !important;
+    object-fit: contain !important;
+  }
+
+  /* Date and weather: two halves that look like one pill */
+  #information-widgets [class*="information-widget-datetime"],
+  #information-widgets [class*="information-widget-openmeteo"],
+  #information-widgets div:has(> .information-widget-search) > :first-child,
+  #information-widgets div:has(> .information-widget-search) > :nth-child(2) {
+    flex: 1 1 0 !important;
+    min-width: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+    min-height: 48px !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 6px 14px !important;
+    justify-content: center !important;
+  }
+
+  #information-widgets [class*="information-widget-datetime"],
+  #information-widgets div:has(> .information-widget-search) > :first-child {
+    border-radius: 999px 0 0 999px !important;
+    border-right: none !important;
+  }
+
+  #information-widgets [class*="information-widget-openmeteo"],
+  #information-widgets div:has(> .information-widget-search) > :nth-child(2) {
+    border-radius: 0 999px 999px 0 !important;
+    border-left: 1px solid rgba(255, 255, 255, 0.14) !important;
+  }
+
+  /* The date normally uses extra-large text; shrink it to fit the pill */
+  #information-widgets [class*="information-widget-datetime"] *,
+  #information-widgets div:has(> .information-widget-search) > :first-child * {
+    font-size: 15px !important;
+    line-height: 1.2 !important;
+  }
+
+  /* Search bar: its own row, spacing controlled by the knobs at the top */
+  #information-widgets .information-widget-search {
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
+    right: auto !important;
+    flex: 0 0 100% !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+    margin: var(--m-search-top) 0 var(--m-search-bottom) !important;
+    padding-top: var(--m-search-pad) !important;
+    padding-bottom: var(--m-search-pad) !important;
+  }
+}
+
+
+@media (prefers-reduced-motion: reduce) {
+  .service-card { transition: none; }
+}
+
+/* Mobile only: width of the ProDesk and Drives pills */
+@media (max-width: 1000px) {
+  #information-widgets .widget-container:has(.information-widget-resource) {
+    width: 90% !important;        /* try 90%, 85%, or a fixed value like 320px */
+    max-width: 100% !important;
+    margin-left: auto !important;  /* centres the pill when it is narrower than the row */
+    margin-right: auto !important;
+  }
+}

@@ -1,0 +1,32 @@
+- resources:
+    label: ProDesk
+    cpu: true
+    memory: true
+    cputemp: true
+    uptime: true
+
+- resources:
+    label: Drives
+    disk:
+      - /
+      - /mnt/storage
+    network: true
+
+- datetime:
+    text_size: md
+    format:
+      dateStyle: short
+      timeStyle: short
+      hour12: true
+
+- openmeteo:
+    label: City
+    latitude: 40.7128
+    longitude: -74.0060
+    units: imperial
+    cache: 5
+
+- search:
+    provider: google
+    showSearchSuggestions: true
+    target: _self

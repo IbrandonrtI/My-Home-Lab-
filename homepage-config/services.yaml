@@ -1,0 +1,110 @@
+- Network & DNS:
+    - AdGuard Home:
+        id: adguard-card
+        href: https://pc.your-tailnet.ts.net:1004
+        siteMonitor: http://192.168.X.X:3000
+        icon: adguard-home.svg
+        description: DNS ad blocking
+        widget:
+          type: adguard
+          url: http://192.168.X.X:3000
+          username: Brandon
+          password: your-own-key
+
+    - Tailscale:
+        id: tailscale-card
+        href: https://console.tailscale.com/admin/machines
+        siteMonitor: https://console.tailscale.com/admin/machines
+        icon: tailscale.svg
+        description: Connected to Tailscale
+        widget:
+          type: tailscale
+          deviceid: your-own-key
+          key: your-own-key
+
+- Monitoring:
+    - Beszel:
+        id: beszel-card
+        href: https://pc.your-tailnet.ts.net:1003
+        siteMonitor: http://192.168.X.X:8090
+        icon: beszel.svg
+        description: Server health and resource usage
+        widget:
+          type: beszel
+          url: http://192.168.X.X:8090
+          username: your-email@example.com
+          password: your-own-key
+          version: 2
+
+    - Netdata:
+        id: netdata-card
+        href: https://pc.your-tailnet.ts.net:1008
+        siteMonitor: http://192.168.X.X:19999
+        icon: netdata.svg
+        description: Live server metrics
+        widget:
+          type: netdata
+          url: http://192.168.X.X:19999
+
+    - Speedtest Tracker:
+        id: speedtest-card
+        href: https://pc.your-tailnet.ts.net:1007/admin
+        siteMonitor: http://192.168.X.X:8088
+        icon: speedtest-tracker.png
+        description: Internet speed and connection history
+        widget:
+          type: speedtest
+          url: http://192.168.X.X:8088
+          version: 2
+          key: your-own-key
+          bitratePrecision: 2
+
+- Management:
+    - Portainer:
+        id: portainer-card
+        href: https://pc.your-tailnet.ts.net:1001
+        siteMonitor: http://192.168.X.X:9000
+        icon: portainer.svg
+        description: Docker containers and stacks
+        widget:
+          type: portainer
+          url: http://192.168.X.X:9000
+          env: 3
+          key: your-own-key
+
+- Files & Photos:
+    - FileBrowser:
+        id: filebrowser-card
+        href: https://pc.your-tailnet.ts.net:1006/files/750GB_HDD
+        siteMonitor: http://192.168.X.X:8081
+        icon: filebrowser.svg
+        description: Browse and manage files on the 750GB HDD
+        widget:
+          type: filebrowser
+          url: http://192.168.X.X:8081
+          username: Brandon
+          password: your-own-key
+
+    - Immich:
+        id: immich-card
+        href: https://pc.your-tailnet.ts.net:1002/photos
+        siteMonitor: http://192.168.X.X:2283
+        icon: immich.svg
+        description: Photo and video library
+        widget:
+          type: immich
+          url: http://192.168.X.X:2283
+          key: your-own-key
+          version: 2
+
+    - Nextcloud:
+        id: nextcloud-card
+        href: https://pc.your-tailnet.ts.net:1005
+        siteMonitor: http://192.168.X.X:8082/status.php
+        icon: nextcloud.svg
+        description: Personal cloud
+        widget:
+          type: nextcloud
+          url: http://192.168.X.X:8082
+          key: your-own-key
+          fields: ["freespace", "activeusers", "numfiles", "numshares"]
