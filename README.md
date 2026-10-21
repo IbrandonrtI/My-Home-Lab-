@@ -594,6 +594,8 @@ Port 9000 is plain HTTP and is the one Tailscale will forward to. Portainer's ow
 
 **Verify:** `docker ps` lists `portainer`, and you can log in.
 
+![portainer](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Portainer.png?raw=true)
+
 ---
 
 ## 6. Tailscale
@@ -642,6 +644,8 @@ If the first command asks you to enable HTTPS certificates for your tailnet, fol
 To remove one entry: `sudo tailscale serve --https=1008 off`.
 
 **Verify:** `tailscale serve status` lists nine entries, and `https://pc.your-tailnet.ts.net:1001` shows Portainer from a device that has Tailscale turned on.
+
+![tailscale](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Tailscale.png?raw=true)
 
 ---
 
@@ -733,6 +737,8 @@ My router wouldn't let me change its DNS setting, so I set the DNS server on eac
 
 **Verify:** in AdGuard's dashboard, the **Top clients** list shows your devices' addresses, and the query count rises as you browse.
 
+![adgurad-home](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Adguard-home.png?raw=true)
+
 ---
 
 ## 8. Beszel
@@ -797,6 +803,8 @@ Look for a line like `WebSocket connected host=192.168.X.X:8090`. In the hub, th
 
 For the Homepage widget, Beszel needs a **superuser** login that is separate from your hub login. You will set it in [section 15](#15-homepage-dashboard).
 
+![beszel](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Beszel.png?raw=true)
+
 ---
 
 ## 9. Netdata
@@ -841,6 +849,8 @@ If the page offers a way to continue without signing in, you can use the local d
 
 **Verify:** `docker ps` shows `netdata-netdata-1` as `healthy`, and the dashboard shows live charts.
 
+![netdata](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Netdata.png?raw=true)
+
 ---
 
 ## 10. FileBrowser
@@ -882,6 +892,8 @@ docker exec filebrowser-filebrowser-1 df -h /srv/hdd /srv/750GB_HDD
 ```
 
 The container should be `healthy`. `/srv/hdd` should show the data drive (`/dev/sda1`, about 916G), and `/srv/750GB_HDD` should show the boot drive's `vgmint-root`.
+
+![filebrowser](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Filebrowser.png?raw=true)
 
 ---
 
@@ -982,6 +994,8 @@ DB_DATABASE_NAME=immich
 ```
 
 Deploy it. The first start takes a few minutes. On a hard-drive boot disk, wait for it to settle before deploying anything heavy, because Immich and Nextcloud starting together can overload the machine.
+
+![immich](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Immich.png?raw=true)
 
 ### 11.3 Verify and create your account
 
@@ -1110,6 +1124,8 @@ sudo ls -a /mnt/storage/nextcloud
 ```
 
 `/data` should show the data drive, and the folder should contain `.ncdata`, an `appdata_...` folder and a folder named for your login. Open `https://pc.your-tailnet.ts.net:1005` from a device with Tailscale on, and log in with your admin name and password. After you're in, change the admin password to one you haven't used anywhere else (your profile, then **Security**).
+
+![nextcloud](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Nextcloud.png?raw=true)
 
 ---
 
@@ -1436,6 +1452,8 @@ curl -s -H "Accept: application/json" -H "Authorization: Bearer your-own-key" ht
 ```
 
 Put your real token in place of `your-own-key`. You should see JSON with your download and upload speeds. `Unauthenticated` means the token is wrong or lacks the Read Results ability.
+
+![speedtest](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Speedtest-Tracker.png?raw=true)
 
 ---
 
