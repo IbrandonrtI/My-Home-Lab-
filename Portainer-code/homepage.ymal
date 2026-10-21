@@ -1,0 +1,14 @@
+services:
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    restart: unless-stopped
+    ports:
+      - 3001:3000
+    environment:
+      HOMEPAGE_ALLOWED_HOSTS: 192.168.1.198:3001,pc.griffin-luma.ts.net:1000,localhost:3001
+    volumes:
+      - /home/brandon/homepage-config:/app/config
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/host:ro
+      - /mnt/storage:/mnt/storage:ro

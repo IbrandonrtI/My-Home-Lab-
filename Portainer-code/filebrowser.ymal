@@ -1,0 +1,14 @@
+version: '3'
+services:
+  filebrowser:
+    image: filebrowser/filebrowser
+    restart: always
+    ports:
+      - "8081:80"
+    volumes:
+      - "/home/brandon/750GB_HDD:/srv/750GB_HDD"
+      - "/mnt/storage/filebrowser:/srv/hdd"
+      - filebrowser_data:/database
+
+volumes:
+  filebrowser_data:
