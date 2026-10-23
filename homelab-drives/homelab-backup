@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+# homelab-backup - daily copy of the main storage and the boot drive's configs.
+#
+# Runs from root's crontab at 6:00. What it does, in order:
+#   1. dumps the Nextcloud database
+#   2. copies the main storage to the backup storage with rsync
+#      (files you delete or replace are moved to _deleted/<date>/ and kept 30 days)
+#   3. copies the boot drive's configs
+#   4. removes dumps and _deleted folders older than 30 days
+#
+# Settings can be overridden in /etc/homelab-backup.conf (see the guide).
+
+set -u
+set -o pipefail
+export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+SRC="/mnt/storage"
+DEST_POOL="/mnt/backup"
+DEST_FALLBACK=""                    # e.g. /home/brandon/750GB_HDD/backup-interim (used only if the pool is not mounted)
+RETENTION_DAYS=30
+LOGFILE="/var/log/homelab-backup.log"
+STATUS_FILE="/var/lib/homelab-backup/last-run"
+NEXTCLOUD_DB_CONTAINER="nextcloud_db"
+NEXTCLOUD_DB_USER="nextcloud"
+NEXTCLOUD_DB_NAME="nextcloud"
+MIN_FREE_GB=20
+CONFIG_PATHS=(
+  /home/brandon/homepage-config
+  /home/brandon/nextcloud/html
+  /opt/adguard-docker
+  /var/lib/docker/volumes/portainer_data
+  /var/lib/docker/volumes/beszel_beszel_data
+  /var/lib/docker/volumes/filebrowser_filebrowser_data
+  /etc/fstab
+  /etc/systemd/system/docker.service.d
+  /usr/local/bin/hdd-recover
+  /usr/local/sbin/drives
+  /usr/local/sbin/homelab-backup
+)
+
+CONF="${BACKUP_CONF:-/etc/homelab-backup.conf}"
+# shellcheck disable=SC1090
+[ -f "$CONF" ] && . "$CONF"
+
+START=$(date +%s)
+TODAY=$(date +%F)
+ERRORS=0
+NOTES=""
+DEST=""
+
+log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE"; }
+fail() { ERRORS=$((ERRORS + 1)); NOTES="$NOTES$*; "; log "ERROR: $*"; }
+
+finish() {
+  local result=OK secs=$(( $(date +%s) - START ))
+  [ "$ERRORS" -eq 0 ] || result="FAILED ($ERRORS problem(s): ${NOTES%; })"
+  mkdir -p "$(dirname "$STATUS_FILE")"
+  printf '%s|%s|%s|%s\n' "$(date '+%F %H:%M')" "$result" "${DEST:-none}" "$secs" >"$STATUS_FILE"
+  log "finished: $result in ${secs}s"
+  if [ -f "$LOGFILE" ] && [ "$(stat -c %s "$LOGFILE")" -gt 5242880 ]; then
+    tail -n 2000 "$LOGFILE" >"$LOGFILE.tmp" && mv "$LOGFILE.tmp" "$LOGFILE"
+  fi
+  [ "$ERRORS" -eq 0 ]
+  exit $?
+}
+
+[ "$(id -u)" = 0 ] || { echo "Run as root: sudo homelab-backup"; exit 1; }
+mkdir -p "$(dirname "$LOGFILE")"
+exec 8>/var/lock/homelab-backup.lock
+flock -n 8 || { log "another backup is already running, skipping"; exit 0; }
+log "start"
+
+# ---- where to write ----
+if mountpoint -q "$DEST_POOL"; then
+  DEST="$DEST_POOL"
+elif [ -n "$DEST_FALLBACK" ]; then
+  mkdir -p "$DEST_FALLBACK"
+  DEST="$DEST_FALLBACK"
+  log "backup pool not mounted, using the fallback folder $DEST"
+else
+  fail "backup storage ($DEST_POOL) is not mounted and no fallback is set"
+  finish
+fi
+
+# ---- safety checks on the source ----
+if ! mountpoint -q "$SRC"; then
+  fail "main storage ($SRC) is not mounted, nothing was copied"
+  finish
+fi
+if [ -z "$(find "$SRC" -mindepth 1 -maxdepth 1 ! -name lost+found -print -quit)" ]; then
+  fail "main storage ($SRC) looks empty, nothing was copied (this protects the backup from being emptied)"
+  finish
+fi
+
+# ---- free space ----
+free_gb=$(( $(df -B1 --output=avail "$DEST" | tail -1 | tr -d ' ') / 1073741824 ))
+if [ "$free_gb" -lt "$MIN_FREE_GB" ]; then
+  fail "only ${free_gb} GB free at $DEST (need at least $MIN_FREE_GB)"
+  finish
+fi
+if [ ! -d "$DEST/main" ]; then
+  used_gb=$(( $(df -B1 --output=used "$SRC" | tail -1 | tr -d ' ') / 1073741824 ))
+  if [ "$free_gb" -lt $(( used_gb + MIN_FREE_GB )) ]; then
+    fail "first backup needs about ${used_gb} GB plus $MIN_FREE_GB GB spare, but only ${free_gb} GB are free at $DEST"
+    finish
+  fi
+fi
+mkdir -p "$DEST/main" "$DEST/boot-configs" "$DEST/db-dumps" "$DEST/_deleted/$TODAY"
+
+# ---- 1. Nextcloud database ----
+if docker info >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -qx "$NEXTCLOUD_DB_CONTAINER"; then
+  dump="$DEST/db-dumps/nextcloud-$TODAY.sql.gz"
+  if docker exec "$NEXTCLOUD_DB_CONTAINER" pg_dump -U "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_NAME" | gzip -c >"$dump.tmp" \
+     && gzip -t "$dump.tmp" && [ "$(stat -c %s "$dump.tmp")" -gt 1024 ]; then
+    mv "$dump.tmp" "$dump"
+    log "database dump saved: $dump"
+  else
+    rm -f "$dump.tmp"
+    fail "the Nextcloud database dump failed"
+  fi
+else
+  fail "container $NEXTCLOUD_DB_CONTAINER is not running, database not dumped"
+fi
+
+# ---- 2. main storage ----
+rsync -aH --numeric-ids --delete --exclude=/lost+found \
+  --backup --backup-dir="$DEST/_deleted/$TODAY/main" \
+  "$SRC/" "$DEST/main/" >>"$LOGFILE" 2>&1
+rc=$?
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 24 ]; then fail "rsync of main storage exited with code $rc"; else log "main storage copied"; fi
+
+# ---- 3. boot drive configs ----
+for p in "${CONFIG_PATHS[@]}"; do
+  if [ ! -e "$p" ]; then log "config path not found, skipped: $p"; continue; fi
+  rsync -aHR --numeric-ids --delete \
+    --backup --backup-dir="$DEST/_deleted/$TODAY/boot-configs" \
+    "$p" "$DEST/boot-configs/" >>"$LOGFILE" 2>&1
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 24 ]; then fail "rsync of $p exited with code $rc"; fi
+done
+crontab -l >"$DEST/boot-configs/root-crontab.txt" 2>/dev/null || true
+log "configs copied"
+
+# ---- 4. clean-up ----
+find "$DEST/db-dumps" -maxdepth 1 -type f -name 'nextcloud-*.sql.gz' -mtime +"$RETENTION_DAYS" -delete
+if [ -d "$DEST/_deleted" ]; then
+  find "$DEST/_deleted" -mindepth 1 -maxdepth 1 -type d -mtime +"$RETENTION_DAYS" -exec rm -rf {} +
+  find "$DEST/_deleted/$TODAY" -type d -empty -delete 2>/dev/null || true
+fi
+
+finish
