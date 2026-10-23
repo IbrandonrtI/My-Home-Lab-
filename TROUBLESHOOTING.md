@@ -6,7 +6,8 @@ This guide covers my home lab on an HP ProDesk 600 G3 Mini: the storage setup th
 
 - Server: an HP ProDesk 600 G3 DM (hostname `pc`) running Linux Mint 22.3 XFCE. User `brandon`, LAN address `192.168.1.198`, Tailscale name `pc.griffin-luma.ts.net`.
 - Old server: a Lenovo Yoga 6 13ALC6 (`192.168.1.93`), kept as a separate machine on the tailnet.
-- Drives: a 750GB hard drive is the boot drive (`sdb` today) and a 1TB hard drive is the data drive (`sda` today, label `STORAGE`). Drive letters change, so use the label or the UUID for anything permanent. Replace `sda`, `sdb` or `sdX` in commands with your drive's current letter.
+- Drives: a 750GB hard drive is the boot drive (`sdb` today) and a 1TB hard drive is the data drive (`sda` today, label `MAIN1`, the first drive of the main pool at `/mnt/storage`; its label was `STORAGE` until Phase 15). Drive letters change, so use the label or the UUID for anything permanent. Replace `sda`, `sdb` or `sdX` in commands with your drive's current letter.
+- Storage tools: `sudo drives` (menu and status), `sudo hdd-recover` and `sudo homelab-backup`. Their source is in the repository's [`scripts/`](scripts/) folder, and the README explains them in [section 3](README.md#3-storage-drive-pools-and-backups).
 - Anything secret (passwords, API keys, tokens) is written as `your-own-key`.
 - The README has the clean build guide with placeholders. This file has the real values.
 
@@ -14,13 +15,14 @@ This guide covers my home lab on an HP ProDesk 600 G3 Mini: the storage setup th
 
 1. [Setup at a glance](#1-setup-at-a-glance)
 1. [Storage setup that works](#2-storage-setup-that-works)
-   - [Step 1: Reformat the data drive](#step-1-reformat-the-data-drive)
-   - [Step 2: Make the mount permanent](#step-2-make-the-mount-permanent)
+   - [Step 1: Install the tools and scripts](#step-1-install-the-tools-and-scripts)
+   - [Step 2: Add the main drive](#step-2-add-the-main-drive)
    - [Step 3: Create a folder for each service](#step-3-create-a-folder-for-each-service)
    - [Step 4: Point each service at its folder](#step-4-point-each-service-at-its-folder)
    - [Step 5: Drive power settings and cron lines](#step-5-drive-power-settings-and-cron-lines)
-   - [Step 6: The hdd-recover script](#step-6-the-hdd-recover-script)
-   - [Step 7: Verify it](#step-7-verify-it)
+   - [Step 6: The recovery command](#step-6-the-recovery-command)
+   - [Step 7: The daily backup](#step-7-the-daily-backup)
+   - [Step 8: Verify it](#step-8-verify-it)
    - [How the widgets see the drives](#how-the-widgets-see-the-drives)
 1. [Migration from the Lenovo to the ProDesk](#3-migration-from-the-lenovo-to-the-prodesk)
    - [Phase 0: Plan and decisions](#phase-0-plan-and-decisions)
@@ -38,6 +40,7 @@ This guide covers my home lab on an HP ProDesk 600 G3 Mini: the storage setup th
    - [Phase 12: Recovery script, reboot test and final inventory](#phase-12-recovery-script-reboot-test-and-final-inventory)
    - [Phase 13: Nextcloud and Immich integration, and the phone](#phase-13-nextcloud-and-immich-integration-and-the-phone)
    - [Phase 14: The Lenovo](#phase-14-the-lenovo)
+   - [Phase 15: Drive pools and the daily backup](#phase-15-drive-pools-and-the-daily-backup)
 1. [Troubleshooting](#4-troubleshooting)
    - [A. Drives and storage](#a-drives-and-storage)
    - [B. Docker and Portainer](#b-docker-and-portainer)
@@ -72,72 +75,119 @@ The nine Portainer stacks are named `adguard`, `beszel`, `beszel-agent`, `filebr
 | Drive | Size | Used for |
 | :--- | :--- | :--- |
 | Boot drive: Hitachi Travelstar 5K750 (`sdb` today) | 698.6G | Linux Mint on LVM, Docker, databases, app files and config |
-| Data drive: Toshiba MQ01ABD100 (`sda` today, label `STORAGE`) | 916G usable | Photos, Nextcloud files, FileBrowser share. ext4, mounted at `/mnt/storage` |
+| Data drive: Toshiba MQ01ABD100 (`sda` today, label `MAIN1`) | 916G usable | Photos, Nextcloud files, FileBrowser share. ext4, mounted at `/mnt/disks/MAIN1` and joined into the main pool at `/mnt/storage` |
+| Backup | no drive yet | The daily 6:00 backup goes to `/home/brandon/750GB_HDD/backup-interim` on the boot drive. A backup drive (label `BACKUP1`, pool `/mnt/backup`) comes later. |
 
-**Drive letters change.** The letters `sda` and `sdb` are not fixed. On my machine they were `sda` for the Hitachi and `sdb` for the Toshiba at first, and they swapped later (the Toshiba is now `sda`, so the data drive's partition is `/dev/sda1`). The expected outputs in this guide show those current letters. If yours differ, read them as "the data drive's partition". Identify drives by model with `lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS`, by the label `STORAGE`, or by the partition mounted at `/boot/efi`.
+**Drive letters change.** The letters `sda` and `sdb` are not fixed. On my machine they were `sda` for the Hitachi and `sdb` for the Toshiba at first, and they swapped later (the Toshiba is now `sda`, so the data drive's partition is `/dev/sda1`). The expected outputs in this guide show those current letters. If yours differ, read them as "the data drive's partition". Identify drives by model with `lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS`, by the label `MAIN1`, or by the partition mounted at `/boot/efi`. `sudo drives status` lists every pool drive with its current device name.
 
 ---
 
 ## 2. Storage setup that works
 
-Goal: the data drive keeps the same label, format and path after a reboot or a disconnect. Each service has its own folder on it, and Homepage, FileBrowser, Immich and Nextcloud all see the drive correctly.
+Goal: the data drives are joined into a pool at `/mnt/storage` and keep the same labels, formats and paths after a reboot or a disconnect. Each service has its own folder in the pool, Homepage, FileBrowser, Immich and Nextcloud all see the pool correctly, and a daily backup copies it to a separate place.
+
+**How it is laid out today**
+
+- The Toshiba is the first drive of the main pool: ext4, label `MAIN1`, mounted by UUID at `/mnt/disks/MAIN1`. The mergerfs pool on top of it is mounted at `/mnt/storage`, the same path the stacks always used.
+- The backup pool `/mnt/backup` (drive label `BACKUP1`) does not exist yet, because there is no backup drive. Until there is one, the daily backup goes to `/home/brandon/750GB_HDD/backup-interim` on the boot drive.
+- Three tools manage it: `sudo drives` (menu and status), `sudo hdd-recover` (remount and restart) and `sudo homelab-backup` (daily copy). Their source is in the repository's `scripts/` folder, and the README explains each option in [section 3](README.md#3-storage-drive-pools-and-backups).
 
 **Why ext4:** it's a Linux filesystem, so Docker and databases get proper file permissions, and it isn't locked as "dirty" when the drive is unplugged the way NTFS can be.
 
-### Step 1: Reformat the data drive
-
-Use this when the drive is new, formatted by Windows, or you want a clean start. If the drive is already ext4 with the label `STORAGE` and holds nothing you need, skip to Step 2. Unplug any other external drives first so you can't pick the wrong one. Find the drive and confirm it:
+### Step 1: Install the tools and scripts
 
 ```bash
-lsblk -o NAME,SIZE,MODEL,TRAN,FSTYPE,LABEL,MOUNTPOINTS
-sudo smartctl -i -d sat /dev/sdX | grep -E "Device Model|Serial"
+uname -r
+timedatectl | grep "Time zone"
+sudo apt update && sudo apt install -y mergerfs rsync parted hdparm smartmontools
+mergerfs --version | head -1
 ```
 
-It should be about 931G and say `TOSHIBA MQ01ABD100`. Then wipe and format it. **This erases everything on the drive:**
+On my machine the kernel was `7.0.0-38-generic` (6.6 or newer is best), the time zone was `America/New_York (EDT, -0400)`, and `apt` installed one new package, `mergerfs 2.33.5-1ubuntu2`, from Ubuntu's `noble/universe` repository. The version command printed `mergerfs version: 2.33.5`. The other four packages were already installed.
+
+I first copied the scripts to the server from a zip file with VS Code (Remote-SSH). They are now in the repository's `scripts/` folder. Check them and install two of them (the third comes in Step 6):
 
 ```bash
-sudo umount /dev/sdX1 /dev/sdX2 2>/dev/null
-sudo wipefs -a /dev/sdX
-sudo parted /dev/sdX --script mklabel gpt mkpart storage ext4 1MiB 100%
-sudo partprobe /dev/sdX; sleep 2
-sudo wipefs -a /dev/sdX1
-sudo mkfs.ext4 -L STORAGE -m 0 /dev/sdX1
+cd ~/homelab-drives
+sha256sum -c SHA256SUMS
+grep -c $'\r' drives hdd-recover homelab-backup
+sudo install -m 755 drives /usr/local/sbin/drives
+sudo install -m 755 homelab-backup /usr/local/sbin/homelab-backup
+sudo drives version
+sudo drives status
 ```
 
-`-L STORAGE` sets the permanent label. `-m 0` turns off the 5% of space ext4 reserves by default, which gives about 50GB back.
+Every checksum line printed `OK`, and the line-ending count was `0` for all three files (Windows line endings would stop a script from running). `drives version` printed `drives 1.0`. The first `status`, before anything was converted, looked like this:
 
-### Step 2: Make the mount permanent
+```
+=== Pools ===
+main     /mnt/storage   mounted (ext4)  61GB used of 916GB
+backup   /mnt/backup    NOT MOUNTED
+Note: main storage is still one plain drive. Menu option 5 converts it into a pool.
 
-**1. Create the mount point and lock it.** Do this while the drive is not mounted:
+=== Pool drives ===
+LABEL     ROLE     DEVICE       SIZE      USED      SMART     STATE
+(no drives in a pool yet)
 
-```bash
-sudo mkdir -p /mnt/storage
-sudo chattr +i /mnt/storage
+=== Other drives ===
+/dev/sda  931.5G  TOSHIBA MQ01ABD100  [usb]   current data drive (plain, not in a pool yet)
+/dev/sdb  698.6G  Hitachi HTS547575A9E384  [sata]   boot/system drive (never touched)
+
+=== Last backup ===
+no backup has run yet
 ```
 
-The lock means that if the drive is ever missing, nothing can write into the empty folder. Services fail with an error instead of silently filling the boot drive.
+### Step 2: Add the main drive
 
-**2. Add the drive to `/etc/fstab`:**
+**A new or blank drive:** run `sudo drives`, choose **2** (Connect a new drive), pick the drive, choose **Main storage**, then type the device name and `ERASE`. The script formats it as ext4 with the label `MAIN1`, locks the empty mount points, adds the `/etc/fstab` lines below, mounts the drive and the pool, and sets the power level. **This erases the drive.** Practise first in test mode (see Phase 15).
+
+**My case: a drive already mounted at `/mnt/storage`** (the Toshiba, ext4, with its files in place). This keeps every file where it is:
 
 ```bash
-sudo cp /etc/fstab /etc/fstab.bak
-NEWUUID=$(sudo blkid -s UUID -o value /dev/sdX1)
-echo "UUID=$NEWUUID  /mnt/storage  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2" | sudo tee -a /etc/fstab
-sudo umount /media/brandon/STORAGE 2>/dev/null
-sudo systemctl daemon-reload
-sudo mount -a
+sudo drives adopt
+```
+
+It printed what it was about to do, and I answered `y`:
+
+```
+This converts your current data drive into the first drive of the main pool.
+  Drive:        /dev/sda  931.5G  TOSHIBA MQ01ABD100  [usb]
+  Now:          mounted directly at /mnt/storage (label 'STORAGE')
+  After:        mounted at /mnt/disks/MAIN1 (label MAIN1), and /mnt/storage becomes the pool
+  Your files are not moved or copied. Containers using /mnt/storage will be stopped for a minute.
+Continue? [y/N]: y
+Stopping containers that use this storage: filebrowser-filebrowser-1 homepage immich_server nextcloud nextcloud_cron
+Starting containers: filebrowser-filebrowser-1 homepage immich_server nextcloud nextcloud_cron
+
+Done. /mnt/storage is now a pool containing MAIN1. Check: sudo drives status
+```
+
+It saved the old `/etc/fstab` as `/etc/fstab.bak-drives-<date>`, commented out the old `/mnt/storage` line and added the two new ones. My `/etc/fstab` now has:
+
+```
+# removed by drives 2026-10-22: UUID=0f029dec-c289-4d9a-b893-8ea5ef2817bc  /mnt/storage  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2
+UUID=0f029dec-c289-4d9a-b893-8ea5ef2817bc  /mnt/disks/MAIN1  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2
+/mnt/disks/MAIN1 /mnt/storage fuse.mergerfs allow_other,cache.files=off,category.create=mfs,moveonenospc=true,dropcacheonclose=true,nofail,fsname=mergerfs-main,x-systemd.requires-mounts-for=/mnt/disks/MAIN1 0 0
+```
+
+The pool type must be `fuse.mergerfs`. In my testing, plain `mergerfs` rejected `nofail`. The README explains each pool option in [section 3.4](README.md#34-add-the-first-main-drive). Check it, one command at a time (`findmnt` prints nothing if you give it two paths, see [A12](#a12-findmnt-prints-nothing-when-given-two-paths)):
+
+```bash
 findmnt /mnt/storage
+findmnt /mnt/disks/MAIN1
+sudo drives status
 ```
 
-My current line in `/etc/fstab`:
-
 ```
-UUID=0f029dec-c289-4d9a-b893-8ea5ef2817bc  /mnt/storage  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2
+TARGET       SOURCE        FSTYPE        OPTIONS
+/mnt/storage mergerfs-main fuse.mergerfs rw,relatime,user_id=0,group_id=0,default_permissions,allow_other
+TARGET           SOURCE    FSTYPE OPTIONS
+/mnt/disks/MAIN1 /dev/sda1 ext4   rw,noatime
 ```
 
-`nofail` lets the computer boot even if the drive isn't plugged in. `findmnt` should show your drive at `/mnt/storage`.
+`status` showed `main /mnt/storage mounted (fuse.mergerfs) 61GB used of 916GB` and `MAIN1 main /dev/sda1 916GB 61GB PASSED connected`.
 
-**3. Make Docker wait for the drive at boot:**
+**Make Docker wait for the pool at boot.** This is the same file as before. `/mnt/storage` is still `mnt-storage.mount` to `systemd`, so it needed no change:
 
 ```bash
 sudo mkdir -p /etc/systemd/system/docker.service.d
@@ -145,7 +195,7 @@ printf '[Unit]\nWants=mnt-storage.mount\nAfter=mnt-storage.mount\n' | sudo tee /
 sudo systemctl daemon-reload
 ```
 
-Without this, containers can start before the drive is mounted.
+Without this, containers can start before the pool is mounted.
 
 ### Step 3: Create a folder for each service
 
@@ -225,50 +275,99 @@ DB_DATABASE_NAME=immich
 
 ### Step 5: Drive power settings and cron lines
 
-Laptop drives park their heads aggressively at the default power setting. This changes it on both drives, and keeps it that way after a reboot:
+Laptop drives park their heads aggressively at the default power setting. `drives power` changes it on every pool drive, and a cron line keeps it that way after a reboot:
 
 ```bash
-DATA=$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/STORAGE)")
-BOOT=$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")
-sudo hdparm -B 254 /dev/$DATA
-sudo hdparm -B 254 /dev/$BOOT
-sudo hdparm -B /dev/$DATA
-sudo hdparm -B /dev/$BOOT
+sudo drives power
+sudo hdparm -B /dev/sda
+sudo hdparm -C /dev/sda
 sudo crontab -e
 ```
 
-The check should print `APM_level = 254` for both drives. My root crontab has these lines. They re-apply the setting 60 seconds after every boot. They find the data drive by its label and the boot drive by the partition mounted at `/boot/efi`, so they keep working when the drive letters swap (on my machine the Toshiba became `sda` and the Hitachi `sdb` after a reboot, which broke an earlier version of the third line that said `/dev/sda`). Don't type a drive letter into these cron lines:
+`drives power` sets `hdparm -B 254 -S 0` on main drives (least head parking, never spin down) and `hdparm -B 254 -S 120` on backup drives (the same, and spin down after 10 minutes idle, since `120 x 5 seconds` is 10 minutes). It printed:
+
+```
+Power settings applied (main drives never sleep, backup drives sleep after 10 minutes idle).
+Some USB adapters ignore these commands. That is harmless.
+```
+
+`hdparm -B` printed `APM_level      = 254`, and `hdparm -C` printed `drive state is:  active/idle`. The `-S` value can't be read back, so `-C` after a long idle period is the only way to see whether a drive sleeps. The drive was awake, which is what a main drive should be. I have not been able to test the backup drives' sleep setting, because there is no backup drive yet. Some USB adapters ignore it.
+
+My root crontab now has these lines. The first re-applies the settings to every pool drive 60 seconds after every boot. The second logs the main drive's head-parking count each morning (optional). The third sets the boot drive, which it finds by the partition mounted at `/boot/efi`. The fourth is the daily backup from Step 7. Don't type a drive letter into these lines: on my machine the Toshiba became `sda` and the Hitachi `sdb` after a reboot, which broke an earlier version of the boot-drive line that said `/dev/sda`.
 
 ```cron
-@reboot sleep 60 && /usr/sbin/hdparm -S 0 -B 254 "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/STORAGE)")"
-0 6 * * * echo "$(date +\%F) $(smartctl -A -d sat /dev/disk/by-label/STORAGE | awk '/Load_Cycle/ {print $10}')" >> /var/log/loadcycles.log
+@reboot sleep 60 && /usr/local/sbin/drives power >/dev/null 2>&1
+0 6 * * * echo "$(date +\%F) $(smartctl -A -d sat /dev/disk/by-label/MAIN1 | awk '/Load_Cycle/ {print $10}')" >> /var/log/loadcycles.log
 @reboot sleep 60 && /usr/sbin/hdparm -B 254 "/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")"
+0 6 * * * /usr/local/sbin/homelab-backup
 ```
 
-The second line logs the data drive's head-parking count every morning, and is optional. `-S 0` means the data drive never spins down, which is right for a drive that Immich and Nextcloud use all day.
+The old versions of the first two lines said `by-label/STORAGE`. Phase 15 shows the command that changed them.
 
-### Step 6: The hdd-recover script
+### Step 6: The recovery command
 
-Containers keep the view of the drive they had when they started. After an unplug, they need a restart. This script stops the five containers that use the data drive, remounts it, re-applies the power setting and starts them again:
+Containers keep the view of the drive they had when they started. After an unplug, they need a restart. `hdd-recover` is now a one-line wrapper that calls `drives recover`:
 
 ```bash
-sudo tee /usr/local/bin/hdd-recover >/dev/null <<'EOT'
-#!/bin/bash
-docker stop immich_server filebrowser-filebrowser-1 homepage nextcloud nextcloud_cron
-umount -l /mnt/storage 2>/dev/null; sleep 2
-mount /mnt/storage || { echo "Drive not found. Check the cable."; exit 1; }
-hdparm -S 0 -B 254 "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/STORAGE)")" 2>/dev/null
-docker start immich_server filebrowser-filebrowser-1 homepage nextcloud nextcloud_cron
-echo "Recovered."
-EOT
-sudo chmod +x /usr/local/bin/hdd-recover
+sudo install -m 755 ~/homelab-drives/hdd-recover /usr/local/bin/hdd-recover
+sudo hdd-recover
 ```
 
-After you reconnect the drive at any time, run `sudo hdd-recover`. If the drive isn't found, the script stops on purpose and leaves the containers stopped.
+`drives recover` looks at what each container has mounted under `/mnt/storage`, `/mnt/backup` and `/mnt/disks`, stops those containers, unmounts the pools and drives, mounts them again from `/etc/fstab`, re-applies the power settings and starts the containers. The old script had a fixed list of five container names. This one finds them by itself, so a new service is picked up with no edit. On my server it printed:
 
-### Step 7: Verify it
+```
+Stopping containers that use this storage: filebrowser-filebrowser-1 homepage immich_server nextcloud nextcloud_cron
+Starting containers: filebrowser-filebrowser-1 homepage immich_server nextcloud nextcloud_cron
+Recovered.
+```
 
-Start the Immich, FileBrowser, Nextcloud and Homepage stacks, then check that each container sees the data drive:
+If a main drive isn't found, it prints `Drive not found. Check the cable.` with the drive's label and leaves the containers stopped on purpose. A missing backup drive only gives a warning. The old script is saved on the server as `/usr/local/bin/hdd-recover.old`, and its text is in Phase 15.
+
+### Step 7: The daily backup
+
+`homelab-backup` dumps the Nextcloud database, copies the main pool with `rsync` (a file you delete or replace is moved into `_deleted/<date>/` and kept for 30 days), copies the boot drive's config files, and deletes dumps and `_deleted` folders older than 30 days. It writes to `/mnt/backup` when that pool is mounted. Until then it uses the folder named in `DEST_FALLBACK`:
+
+```bash
+sudo tee /etc/homelab-backup.conf >/dev/null <<'EOF'
+DEST_FALLBACK="/home/brandon/750GB_HDD/backup-interim"
+EOF
+df -h / /mnt/storage
+sudo nohup /usr/local/sbin/homelab-backup >/dev/null 2>&1 &
+sudo tail -f /var/log/homelab-backup.log
+```
+
+The boot drive had 606 GB free before the backup, and the pool holds 61 GB. The first run took 1420 seconds (about 24 minutes) and the log ended like this:
+
+```
+2026-10-22 19:04:46 start
+2026-10-22 19:04:46 backup pool not mounted, using the fallback folder /home/brandon/750GB_HDD/backup-interim
+2026-10-22 19:04:53 database dump saved: /home/brandon/750GB_HDD/backup-interim/db-dumps/nextcloud-2026-10-22.sql.gz
+2026-10-22 19:27:04 main storage copied
+2026-10-22 19:28:26 configs copied
+2026-10-22 19:28:26 finished: OK in 1420s
+```
+
+While it ran, `du -sh` on the `main` folder grew from 8.2G to 17G to 21G, and in the end both folders showed `61G`. `sudo drives status` then showed `2026-10-22 19:28  result: OK  destination: /home/brandon/750GB_HDD/backup-interim  took: 1420s`. The folder holds `main`, `boot-configs` (1.1 GB, with `etc`, `home`, `opt`, `usr`, `var` and `root-crontab.txt`), `db-dumps` (the dump was 2.0 MB) and `_deleted`. To watch whether it is still running, use `pgrep -af homelab-backup` (see [A15](#a15-pgrep-shows-nothing-while-the-backup-is-running)). Then the schedule, added to root's crontab with `sudo crontab -e`:
+
+```cron
+0 6 * * * /usr/local/sbin/homelab-backup
+```
+
+**Guards.** The backup refuses to run, and logs why, if the main pool isn't mounted or looks empty (so a missing drive can't empty the backup), if the backup target isn't mounted and no fallback is set, or if the target has less than 20 GB free (or less than the pool's size plus 20 GB for the first run).
+
+**The weakness for now.** The interim backup is on the boot drive. It protects against a failed data drive, but not against a failed boot drive or a lost machine, and it adds about 63 GB to the boot drive's root filesystem (107 GB used with it, 44 GB without). When a backup drive is connected (`sudo drives`, then **2**, **Backup storage**), delete the `DEST_FALLBACK` line, run `sudo homelab-backup`, and then remove the interim folder.
+
+**Restore.** Copy files out of the backup, and never edit them there, because the next run overwrites a changed file. With the pool as the target, the paths start with `/mnt/backup` instead of the interim folder:
+
+```bash
+ls /home/brandon/750GB_HDD/backup-interim/_deleted/
+sudo cp -a /home/brandon/750GB_HDD/backup-interim/main/nextcloud/some-folder /mnt/storage/nextcloud/
+docker exec -u www-data nextcloud php occ files:scan --all
+```
+
+### Step 8: Verify it
+
+Start the Immich, FileBrowser, Nextcloud and Homepage stacks, then check that each container sees the pool:
 
 ```bash
 findmnt /mnt/storage
@@ -278,15 +377,22 @@ docker exec nextcloud df -h /data
 docker exec homepage df -h /mnt/storage
 ```
 
-Every container should show `/dev/sda1` at about 916G (FileBrowser's `/srv/750GB_HDD` line shows the boot drive's `vgmint-root`). If one shows the boot drive instead, that container was started before the drive was mounted, so restart it. Then run three tests:
+Every container should show the filesystem `mergerfs-main` at about 916G (FileBrowser's `/srv/750GB_HDD` line shows the boot drive's `vgmint-root`). After the conversion mine showed:
 
-- **Reboot:** run `sudo reboot`. After two minutes, run `findmnt /mnt/storage` and `docker ps`. The drive should be mounted and the containers up with no help from you.
-- **Unplug:** unplug the drive, wait a few seconds, plug it back in and run `sudo hdd-recover`. You should see `Recovered.`
-- **Lock test (optional):** with the stacks stopped, run `sudo umount /mnt/storage`, then `touch /mnt/storage/test`. It should say `Operation not permitted`, which shows nothing can write to the empty folder. Then run `sudo mount /mnt/storage` and start the stacks again. `lsattr` can't show the lock while the drive is mounted, because the flag sits on the hidden folder underneath.
+```
+Filesystem      Size  Used Avail Use% Mounted on
+mergerfs-main   916G   61G  855G   7% /data
+```
+
+FileBrowser and Homepage, whose `df` prints a slightly different layout, showed `mergerfs-main 915.8G 60.9G 854.9G 7%`. If one shows the boot drive instead, that container was started before the pool was mounted, so restart it. Then run these tests:
+
+- **Reboot:** run `sudo reboot`. After about three minutes, run `findmnt /mnt/storage`, `findmnt /mnt/disks/MAIN1` and `docker ps --format "table {{.Names}}\t{{.Status}}"`. The pool and the drive should be mounted and the containers up with no help from you. My result is in Phase 15.
+- **Unplug:** unplug the drive, wait a few seconds, plug it back in and run `sudo hdd-recover`. You should see `Recovered.` I tested this with fake drives, but I have not repeated it on the real drive since it became a pool.
+- **Lock test (optional):** with the stacks stopped, run `sudo umount /mnt/storage`, then `touch /mnt/storage/test`. It should say `Operation not permitted`, which shows nothing can write to the empty folder. Then run `sudo mount /mnt/storage` and start the stacks again. I ran this test on the single drive. The pool uses the same locked folders, but I haven't repeated it since. `lsattr` can't show the lock while the drive is mounted, because the flag sits on the hidden folder underneath.
 
 ### How the widgets see the drives
 
-- **Homepage drive pill:** it reads `/` (the boot drive) and `/mnt/storage` (the data drive) inside the Homepage container. The second works because of the `/mnt/storage:/mnt/storage:ro` volume. If it goes blank after a replug, restart Homepage.
+- **Homepage drive pill:** it reads `/` (the boot drive) and `/mnt/storage` (the main pool) inside the Homepage container. The second works because of the `/mnt/storage:/mnt/storage:ro` volume. If it goes blank after a replug, restart Homepage.
 - **Immich storage meter (bottom left of its web page):** it shows the disk that holds the photo folder (`/data`), so it shows the data drive while that is mounted.
 - **Nextcloud card (`freespace`):** it reports the drive that holds the data folder, so it shows the data drive.
 - **FileBrowser card:** FileBrowser reports the drive of the login's folder, and the admin login sees `/srv`, which is on the boot drive. That is why the card says "750GB HDD". To show the data drive on a card, see [C3](#c3-the-filebrowser-card-shows-the-boot-drive-numbers).
@@ -295,7 +401,7 @@ Every container should show `/dev/sda1` at about 916G (FileBrowser's `/srv/750GB
 
 ## 3. Migration from the Lenovo to the ProDesk
 
-This is the full runbook for moving my home lab from a Lenovo laptop to the HP ProDesk, in the order I did it. The steps are the clean, correct sequence. The problems I ran into along the way are written up as separate entries in [section 4](#4-troubleshooting), and each phase links to the ones that matter.
+This is the full runbook for moving my home lab from a Lenovo laptop to the HP ProDesk, in the order I did it. Phases 0 to 14 were done with a single data drive, so their checks show `/dev/sda1` and the label `STORAGE`. Phase 15 turned that drive into a pool, after which the same checks show `mergerfs-main` and the label `MAIN1`. The steps are the clean, correct sequence. The problems I ran into along the way are written up as separate entries in [section 4](#4-troubleshooting), and each phase links to the ones that matter.
 
 ### Phase 0: Plan and decisions
 
@@ -413,7 +519,7 @@ findmnt /mnt/storage
 docker ps
 ```
 
-The drive should be mounted and Portainer running. If a step went wrong, see [A1](#a1-the-data-drive-comes-back-under-a-different-path-after-a-replug) and [A7](#a7-containers-start-before-the-drive-is-mounted-after-a-reboot).
+The drive should be mounted and Portainer running. (This is the single-drive setup. Phase 15 later turned it into a pool, and the label `STORAGE` became `MAIN1`.) If a step went wrong, see [A1](#a1-the-data-drive-comes-back-under-a-different-path-after-a-replug) and [A7](#a7-containers-start-before-the-drive-is-mounted-after-a-reboot).
 
 ### Phase 3: Clear the old data and create the folders
 
@@ -976,7 +1082,7 @@ Check in AdGuard Home's dashboard: the **Top clients** list should show the devi
 
 ### Phase 12: Recovery script, reboot test and final inventory
 
-Create the recovery script from [Step 6](#step-6-the-hdd-recover-script), then test it without unplugging anything. It stops the five containers, unmounts and remounts the drive, and starts them again. That takes about a minute:
+Create the recovery script (this was the first version, with a fixed list of containers. Phase 15 replaced it with the version in [Step 6](#step-6-the-recovery-command)), then test it without unplugging anything. It stops the five containers, unmounts and remounts the drive, and starts them again. That takes about a minute:
 
 ```bash
 sudo hdd-recover
@@ -991,7 +1097,7 @@ docker exec immich_server df -h /data
 docker exec nextcloud df -h /data
 ```
 
-Then run the reboot test from [Step 7](#step-7-verify-it), and run the inventory script from [section 5](#52-the-inventory-script) again. It should show all nine stacks running, the data drive at `/mnt/storage`, and every container seeing `/dev/sda1`.
+Then run the reboot test from [Step 8](#step-8-verify-it), and run the inventory script from [section 5](#52-the-inventory-script) again. It should show all nine stacks running, the data drive at `/mnt/storage`, and every container seeing `/dev/sda1`.
 
 ### Phase 13: Nextcloud and Immich integration, and the phone
 
@@ -1024,11 +1130,160 @@ sudo tailscale serve reset
 
 If the Lenovo's AdGuard Home is still running, stop it, so no device gets answers from two different DNS servers. The ProDesk is the only DNS server for the devices configured in Phase 11.
 
+### Phase 15: Drive pools and the daily backup
+
+Done on 2026-10-22, after the migration was finished and every service was running. It turns the single data drive into a pool that more drives can join, adds a daily backup, and replaces `hdd-recover`. I did it one step at a time and checked each result before the next. Steps 0 to 4 didn't touch my real data.
+
+**Decisions**
+
+- **Two pools, both mergerfs.** Main storage is `/mnt/storage` (labels `MAIN1`, `MAIN2` and so on) and backup storage is `/mnt/backup` (`BACKUP1`...). Every drive is a normal ext4 drive mounted by UUID under `/mnt/disks/`.
+- **mergerfs, not RAID.** If a drive fails, only the files on that drive are lost from its pool, instead of everything.
+- **Backup with `rsync`, every day at 6:00.** Files I delete or replace go into a dated folder and are kept for 30 days. The Nextcloud database is dumped as part of the run. The backup drives sleep when idle (untested, see Step 5).
+- **The backup can be browsed from FileBrowser in read and write mode** (planned for when the backup pool exists).
+- **For now the backup lives on the boot drive**, in `/home/brandon/750GB_HDD/backup-interim`, until a backup drive is bought.
+- **No change to any stack.** The pool takes over the path `/mnt/storage`.
+
+**Step 0: put the files on the server and check them.** I unzipped `homelab-drives.zip` on the Windows PC and dragged the folder into `/home/brandon` with VS Code:
+
+```bash
+cd ~/homelab-drives && sha256sum -c SHA256SUMS
+grep -c $'\r' ~/homelab-drives/drives ~/homelab-drives/hdd-recover ~/homelab-drives/homelab-backup
+```
+
+```
+drives: OK
+hdd-recover: OK
+homelab-backup: OK
+homelab-backup.conf.example: OK
+GUIDE.md: OK
+/home/brandon/homelab-drives/drives:0
+/home/brandon/homelab-drives/hdd-recover:0
+/home/brandon/homelab-drives/homelab-backup:0
+```
+
+**Step 1: check the server and install the tools.** Details and versions are in [section 2, Step 1](#step-1-install-the-tools-and-scripts).
+
+**Step 2: install `drives` and `homelab-backup`.** `hdd-recover` is not replaced yet:
+
+```bash
+cd ~/homelab-drives
+sudo install -m 755 drives /usr/local/sbin/drives
+sudo install -m 755 homelab-backup /usr/local/sbin/homelab-backup
+sudo drives version
+sudo drives status
+```
+
+`status` looked as shown in section 2, Step 1: `main /mnt/storage mounted (ext4)`, `backup /mnt/backup NOT MOUNTED`, the Toshiba as `current data drive (plain, not in a pool yet)` and the Hitachi as `boot/system drive (never touched)`.
+
+**Step 3: practise with fake drives.** Test mode uses disk-image files and its own folders and fstab (`/mnt/test-main`, `/mnt/test-backup`, `/mnt/test-disks`), so my real drives, `/etc/fstab` and containers are not touched:
+
+```bash
+sudo DRIVES_TEST=1 drives test-setup 3 1G
+sudo DRIVES_TEST=1 drives
+```
+
+I connected the fake drives as `TMAIN1` (main) and `TBACKUP1` (backup). The script asks for the device name and then `ERASE`, and it cancels with `Cancelled. Nothing was changed.` if either is wrong, which I saw twice when I pressed Enter without typing anything. The status then showed both pools mounted as `fuse.mergerfs` with `TMAIN1` and `TBACKUP1` connected, and the Toshiba as `not connected to a pool`. Trying to disconnect the only main drive was refused:
+
+```
+TMAIN1 is the only main drive. Removing it would take away the storage your services use.
+Add another main drive first (menu option 2), then try again.
+```
+
+Removing the only backup drive asked me to type `REMOVE` first, and then said the data on the drive was not touched. A second practice run with two 4 GB fake drives tested the copy-before-removing step. I wrote two 200 MB random files into the pool, one landed on each drive, and disconnected `TMAIN1`, answering `y` to copy its files first:
+
+```
+Copying 201MB from TMAIN1 to TMAIN2 (pass 1, services keep running)...
+Pass 2 (catching changes made during the first pass)...
+Verified: every file from TMAIN1 is also on TMAIN2.
+TMAIN1 is disconnected from the main storage. The data on the drive was not touched.
+```
+
+`sha256sum` of both files was identical before and after (`d81cd063...` and `b0e124b9...`). Then I removed the test setup and checked that `status` was back to how it looked in Step 2:
+
+```bash
+sudo DRIVES_TEST=1 drives test-cleanup
+sudo drives status
+```
+
+**Step 4: practise with the 8 GB USB stick** (it gets erased). The stick showed up as `/dev/sdc`, exFAT, 7.2 GB, and was the only drive in the connect list, because the boot drive and the Toshiba are never offered. I connected it as `TMAIN1` in test mode, saw it as `connected` in `status`, and the script again refused to remove the only main drive. I closed the menu without running `test-cleanup`, which left the test pool mounted (see [A11](#a11-the-practice-pool-is-still-mounted-after-test-mode)). After running it, this printed nothing, which is correct:
+
+```bash
+sudo DRIVES_TEST=1 drives test-cleanup
+findmnt -rn | grep -E 'test-main|test-disks'
+```
+
+`lsblk` then showed the stick's partition mounted at `/media/brandon/TMAIN1`. That is the desktop auto-mounting the freshly formatted stick, and is harmless.
+
+**Step 5: replace `hdd-recover`.** I saved the old script first, installed the new one and ran it. The containers restarted for about a minute:
+
+```bash
+sudo cp /usr/local/bin/hdd-recover /usr/local/bin/hdd-recover.old
+sudo install -m 755 ~/homelab-drives/hdd-recover /usr/local/bin/hdd-recover
+sudo hdd-recover
+docker ps --format "table {{.Names}}\t{{.Status}}"
+```
+
+It stopped and started exactly `filebrowser-filebrowser-1 homepage immich_server nextcloud nextcloud_cron`, printed `Recovered.`, and all 16 containers were up again a few minutes later. The old script, for reference (a fixed list of five names, no pools):
+
+```bash
+#!/bin/bash
+docker stop immich_server filebrowser-filebrowser-1 homepage nextcloud nextcloud_cron
+umount -l /mnt/storage 2>/dev/null; sleep 2
+mount /mnt/storage || { echo "Drive not found. Check the cable."; exit 1; }
+hdparm -S 0 -B 254 "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/STORAGE)")" 2>/dev/null
+docker start immich_server filebrowser-filebrowser-1 homepage nextcloud nextcloud_cron
+echo "Recovered."
+```
+
+**Step 6: start the daily backup, onto the boot drive.** Details, log lines and sizes are in [section 2, Step 7](#step-7-the-daily-backup). The first run started at 19:04 and finished at 19:28 with `finished: OK in 1420s`, and both `/mnt/storage` and the copy were `61G`. Then I added the schedule with `sudo crontab -e`:
+
+```cron
+0 6 * * * /usr/local/sbin/homelab-backup
+```
+
+**Step 7a: convert the Toshiba into the main pool.** I did this only after Step 6 had made a verified backup from the same day. `sudo drives adopt` is shown in [section 2, Step 2](#step-2-add-the-main-drive). The containers were stopped for about a minute. Each container then showed `mergerfs-main  916G  61G  855G  7%` for `/data`, and `status` listed `MAIN1` as `connected` with SMART `PASSED`. No stack needed an edit. The first check I tried, `findmnt /mnt/storage /mnt/disks/MAIN1`, printed nothing (see [A12](#a12-findmnt-prints-nothing-when-given-two-paths)).
+
+**Step 7b: update root's crontab.** The old lines pointed at a drive labelled `STORAGE`, which no longer exists. I saved a copy, then applied the change with one `sed`. It replaces the old `hdparm` line with `drives power` and changes the label in the load-cycle line:
+
+```bash
+sudo crontab -l > ~/crontab-before-step7.txt
+```
+
+```bash
+sudo crontab -l | sed -e 's|^@reboot sleep 60 && /usr/sbin/hdparm -S 0 -B 254 .*by-label/STORAGE.*$|@reboot sleep 60 \&\& /usr/local/sbin/drives power >/dev/null 2>\&1|' -e 's|by-label/STORAGE|by-label/MAIN1|' | sudo crontab -
+```
+
+```bash
+sudo crontab -l | grep -v '^#'
+```
+
+```
+@reboot sleep 60 && /usr/local/sbin/drives power >/dev/null 2>&1
+0 6 * * * echo "$(date +\%F) $(smartctl -A -d sat /dev/disk/by-label/MAIN1 | awk '/Load_Cycle/ {print $10}')" >> /var/log/loadcycles.log
+@reboot sleep 60 && /usr/sbin/hdparm -B 254 "/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")"
+0 6 * * * /usr/local/sbin/homelab-backup
+```
+
+The first time, the saved copy was restored by accident right after the change, because I ran the "undo" command in the same block (see [A14](#a14-the-crontab-went-back-to-the-old-lines)). I ran the `sed` again, which fixed it. Then `sudo drives power` printed the two power lines, and `sudo hdparm -B /dev/sda` printed `APM_level      = 254`. A first attempt to read the setting with `sudo hdparm -B -S /dev/sda` printed `-S: bad/missing standby-interval value (0..255)` (see [A13](#a13-hdparm--b--s-says-bad-or-missing-standby-interval)).
+
+**Step 7c: reboot test.** After `sudo reboot` and about five minutes:
+
+```
+TARGET       SOURCE        FSTYPE        OPTIONS
+/mnt/storage mergerfs-main fuse.mergerfs rw,relatime,user_id=0,group_id=0,default_permissions,allow_oth
+TARGET           SOURCE    FSTYPE OPTIONS
+/mnt/disks/MAIN1 /dev/sda1 ext4   rw,noatime
+```
+
+All 16 containers were up. Fourteen had been up for 5 minutes, while Homepage showed `Up 30 seconds` and Portainer `Up 23 seconds`, so those two had restarted once after the boot. I didn't investigate why. About two hours later every container showed `Up 2 hours`, so neither has restarted again. `sudo drives status` still showed `MAIN1` connected and the last backup as `OK`. `systemctl --failed` listed one unit, `casper-md5check.service` (it verifies the live installer ISO and has nothing to do with the drives). `/var/log/homelab-drives.log` recorded `adopted /dev/sda1 as MAIN1; pool at /mnt/storage` and the power settings being applied. The last entry, at 20:45, is the cron job running after the reboot.
+
+The first scheduled 6:00 backup was the next morning, 2026-10-23.
+
 ---
 
 ## 4. Troubleshooting
 
-Each entry has the same four parts: Symptom, Cause, Fix and Verify.
+Each entry has the same four parts: Symptom, Cause, Fix and Verify. Entries written before Phase 15 show the data drive as `/dev/sda1` in the `df` checks. Since the drive became a pool, the same checks show `mergerfs-main` instead, and everything else in them still applies.
 
 ### A. Drives and storage
 
@@ -1053,7 +1308,7 @@ sudo mount -t ntfs-3g -o uid=1000,gid=1000 /dev/sdb2 "/media/brandon/USB STICK"
 docker restart filebrowser-filebrowser-1 homepage
 ```
 
-**Verify:** `findmnt /mnt/storage` shows the drive, and the `df` checks from [Step 7](#step-7-verify-it) show the data drive in each container.
+**Verify:** `findmnt /mnt/storage` shows the drive, and the `df` checks from [Step 8](#step-8-verify-it) show the pool in each container.
 
 #### A2. A Windows-formatted drive: sdb1 vs sdb2 and the wrong filesystem type error
 
@@ -1140,7 +1395,7 @@ rsync -rt --no-perms --no-owner --no-group --info=progress2 /home/brandon/immich
 du -sh /home/brandon/immich-ssd-copy "/media/brandon/USB STICK/1TB HDD/immich"
 ```
 
-The two sizes should match. Once Immich shows your photos from the data drive, free the space with `sudo rm -rf /home/brandon/immich-ssd-copy`. The lasting fix is the locked mount point and the Docker wait rule from [Step 2](#step-2-make-the-mount-permanent), which make a missing drive stop the service with an error.
+The two sizes should match. Once Immich shows your photos from the data drive, free the space with `sudo rm -rf /home/brandon/immich-ssd-copy`. The lasting fix is the locked mount point and the Docker wait rule from [Step 2](#step-2-add-the-main-drive), which make a missing drive stop the service with an error.
 
 **Verify:**
 
@@ -1163,9 +1418,9 @@ The first should show about 916G on `/dev/sda1`, and the second should show the 
 sudo hdd-recover
 ```
 
-To do it by hand: stop the stacks, run `sudo umount /mnt/storage`, plug the drive back in, run `sudo mount /mnt/storage` and start the stacks. Before you unplug the drive on purpose, always stop the stacks first and run `sudo umount /mnt/storage`.
+Before you unplug a drive on purpose, open `sudo drives` and choose **3** (Disconnect a drive). It stops the containers that use the pool and unmounts the drive for you. (Before the pool existed, the manual way was: stop the stacks, run `sudo umount /mnt/storage`, plug the drive back in, run `sudo mount /mnt/storage` and start the stacks.)
 
-**Verify:** the `df` commands in [Step 7](#step-7-verify-it) show the data drive in each container.
+**Verify:** the `df` commands in [Step 8](#step-8-verify-it) show the pool in each container.
 
 #### A7. Containers start before the drive is mounted after a reboot
 
@@ -1173,7 +1428,7 @@ To do it by hand: stop the stacks, run `sudo umount /mnt/storage`, plug the driv
 
 **Cause:** Docker started containers before the drive was mounted.
 
-**Fix:** add the wait rule if it's missing (it's in [Step 2](#step-2-make-the-mount-permanent)):
+**Fix:** add the wait rule if it's missing (it's in [Step 2](#step-2-add-the-main-drive)):
 
 ```bash
 sudo mkdir -p /etc/systemd/system/docker.service.d
@@ -1181,7 +1436,7 @@ printf '[Unit]\nWants=mnt-storage.mount\nAfter=mnt-storage.mount\n' | sudo tee /
 sudo systemctl daemon-reload
 ```
 
-If the drive is missing at boot, the locked mount point makes the services fail with an error, and they don't write to the boot drive. Plug the drive in and run `sudo hdd-recover`.
+If a drive of the pool is missing at boot, the pool does not mount, and the locked mount point makes the services fail with an error, so they don't write to the boot drive. Plug the drive in and run `sudo hdd-recover`. I tested the missing-drive case with fake drives, not on my real hardware.
 
 **Verify:** after `sudo reboot`, run `findmnt /mnt/storage` and `docker ps`.
 
@@ -1194,15 +1449,15 @@ If the drive is missing at boot, the locked mount point makes the services fail 
 **Fix:**
 
 ```bash
-DATA=$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/STORAGE)")
+DATA=$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/MAIN1)")
 BOOT=$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")
-sudo smartctl -A -d sat /dev/disk/by-label/STORAGE | grep -E "Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending"
+sudo smartctl -A -d sat /dev/disk/by-label/MAIN1 | grep -E "Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending"
 sudo hdparm -B /dev/$DATA
 sudo hdparm -B 254 /dev/$DATA
 sudo hdparm -B /dev/$DATA
 ```
 
-The last command should print `APM_level = 254`. Do the same for the boot drive with `/dev/$BOOT`. The `SG_IO: bad/missing sense data` messages are common with USB adapters and can be ignored. Keep the setting after reboots with the cron lines from [Step 5](#step-5-drive-power-settings-and-cron-lines). If the count still climbs by hundreds a day, try `sudo hdparm -B 255 /dev/$DATA`.
+The last command should print `APM_level = 254`. Do the same for the boot drive with `/dev/$BOOT`. The `SG_IO: bad/missing sense data` messages are common with USB adapters and can be ignored. Keep the setting after reboots with the cron lines from [Step 5](#step-5-drive-power-settings-and-cron-lines). The `drives power` line there applies it to every pool drive. If the count still climbs by hundreds a day, try `sudo hdparm -B 255 /dev/$DATA`.
 
 **Verify:** the boot drive's count stayed at 48,421 after the change, and the data drive's rose only from 105,799 to 105,835 over a few hours. With the logging line from Step 5, `cat /var/log/loadcycles.log` shows one number a day. Under about 50 a day is healthy.
 
@@ -1243,6 +1498,87 @@ sudo ls -a /mnt/storage/nextcloud
 A healthy Immich answers the ping with `{"res":"pong"}`. The Nextcloud install is finished when the folder lists `.ncdata`, an `appdata_...` folder and your login folder. On my machine the load fell to about 0.05 after 10 to 15 minutes, and Immich turned healthy by itself.
 
 **Verify:** `docker ps --format "table {{.Names}}\t{{.Status}}"` shows every Immich container `healthy`. To prevent it, deploy Immich, wait for it to turn healthy, and only then deploy Nextcloud.
+
+#### A11. The practice pool is still mounted after test mode
+
+**Symptom:** after practising with `DRIVES_TEST=1 drives` and closing the menu, the USB stick is still mounted in the practice pool (under `/mnt/test-disks` and `/mnt/test-main`). The normal `sudo drives status` doesn't show that: it lists the stick as `/dev/sdc   7.2G  USB DISK 2.0  [usb]   not connected to a pool`, so it looks as if nothing is left over.
+
+**Cause:** test mode keeps its pools mounted until you run `test-cleanup`. I closed the menu after the USB stick practice and didn't run it.
+
+**Fix:**
+
+```bash
+sudo DRIVES_TEST=1 drives test-cleanup
+```
+
+It unmounts the practice pools and drives, detaches the fake drives and deletes the image files and the test fstab.
+
+**Verify:** this prints nothing:
+
+```bash
+findmnt -rn | grep -E 'test-main|test-disks'
+```
+
+A USB stick you practised with may still appear in `lsblk` under `/media/brandon/TMAIN1`. That is the desktop auto-mounting the freshly formatted stick. Unmount it from the file manager, or format it again if you want it back as a normal stick.
+
+#### A12. findmnt prints nothing when given two paths
+
+**Symptom:** right after `sudo drives adopt`, `findmnt /mnt/storage /mnt/disks/MAIN1` printed nothing at all, and it looked as if neither the pool nor the drive was mounted.
+
+**Cause:** `findmnt` is meant to be given one mount point or device per command. With two, it printed nothing for me, even though both were mounted. The next commands showed both mounts correctly.
+
+**Fix:** run one `findmnt` per command:
+
+```bash
+findmnt /mnt/storage
+findmnt /mnt/disks/MAIN1
+```
+
+**Verify:** the first shows `mergerfs-main` with the type `fuse.mergerfs`, and the second shows `/dev/sda1` with the type `ext4`.
+
+#### A13. hdparm -B -S says bad or missing standby interval
+
+**Symptom:** `sudo hdparm -B -S /dev/sda` prints `-S: bad/missing standby-interval value (0..255)` and shows nothing else.
+
+**Cause:** `-S` always needs a number right after it, because it sets the spin-down timeout. It can't be used to read the setting back, and as far as I know `hdparm` has no option that reads the spin-down timeout.
+
+**Fix:** read the head-parking level with `-B` alone, and check the drive's current power state with `-C`:
+
+```bash
+sudo hdparm -B /dev/sda
+sudo hdparm -C /dev/sda
+```
+
+**Verify:** the first prints `APM_level      = 254`, and the second prints `drive state is:  active/idle` for a main drive. A backup drive that has been idle for more than 10 minutes should print `standby` (I haven't been able to test that yet).
+
+#### A14. The crontab went back to the old lines
+
+**Symptom:** after running the `sed` command that changes root's crontab, `sudo crontab -l` shows the old lines again, with `by-label/STORAGE`, and no `drives power` line.
+
+**Cause:** I ran the command that restores the saved copy (`sudo crontab ~/crontab-before-step7.txt`) in the same block as the change, so it replaced the new crontab with the old one.
+
+**Fix:** run the `sed` command again. It only rewrites lines that still say `STORAGE`, so running it twice does no harm:
+
+```bash
+sudo crontab -l | sed -e 's|^@reboot sleep 60 && /usr/sbin/hdparm -S 0 -B 254 .*by-label/STORAGE.*$|@reboot sleep 60 \&\& /usr/local/sbin/drives power >/dev/null 2>\&1|' -e 's|by-label/STORAGE|by-label/MAIN1|' | sudo crontab -
+```
+
+**Verify:** `sudo crontab -l | grep -v '^#'` shows the `drives power` line and `by-label/MAIN1` in the load-cycle line. Keep an "undo" command in its own block, away from the commands that change something, so it can't be run by accident. To undo for real, use `sudo crontab ~/crontab-before-step7.txt`.
+
+#### A15. pgrep shows nothing while the backup is running
+
+**Symptom:** while the first backup was running (the backup folder kept growing), `pgrep -a homelab-backup` printed nothing, so it looked as if the backup had stopped.
+
+**Cause:** the script starts with `#!/usr/bin/env bash`, so the running process is called `bash`, not `homelab-backup`. Without `-f`, `pgrep` matches only the process name.
+
+**Fix:** search the full command line with `-f`, or follow the log until it says `finished`:
+
+```bash
+pgrep -af homelab-backup
+sudo tail -f /var/log/homelab-backup.log
+```
+
+**Verify:** while the backup runs, `pgrep -af homelab-backup` should list the process. After the log says `finished: OK`, it prints nothing, which is what I saw, and `sudo drives status` shows the result.
 
 ### B. Docker and Portainer
 
@@ -2254,7 +2590,9 @@ autologin-user-timeout=0
 
 ```bash
 lsblk -f                                       # drives, filesystems, labels, mount points
-findmnt /mnt/storage                           # is the data drive mounted?
+sudo drives status                             # pools, pool drives with SMART health, and the last backup
+findmnt /mnt/storage                           # is the main pool mounted?
+findmnt /mnt/disks/MAIN1                       # is the drive itself mounted? (one path per findmnt)
 df -hT                                         # space used on each drive
 docker ps -a                                   # all containers and their status
 docker logs <container> --tail 30              # recent logs
@@ -2262,8 +2600,11 @@ docker exec <container> df -h /data            # which drive a container sees
 tailscale serve status                         # every Tailscale address and where it points
 sudo ss -tulpn | grep :53                      # who is using the DNS port
 sudo smartctl -A /dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)") | grep -E "Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending"
-sudo smartctl -A -d sat /dev/disk/by-label/STORAGE | grep -E "Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending"
-sudo hdparm -B "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/STORAGE)")"   # data drive power setting (should be 254)
+sudo smartctl -A -d sat /dev/disk/by-label/MAIN1 | grep -E "Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending"
+sudo hdparm -B "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/MAIN1)")"   # data drive power setting (should be 254)
+sudo hdparm -C "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/MAIN1)")"   # power state (active/idle for a main drive)
+sudo tail -20 /var/log/homelab-backup.log      # the daily backup log
+sudo tail -20 /var/log/homelab-drives.log      # what the drives tool changed
 sudo crontab -l                                # root's scheduled jobs
 uptime                                         # load average
 ```
@@ -2288,12 +2629,13 @@ dmidecode -t memory 2>/dev/null | grep -E "^\s+(Size|Speed|Locator):" | grep -v 
 sec "DRIVES: layout"; lsblk -o NAME,SIZE,ROTA,MODEL,TRAN,FSTYPE,LABEL,UUID,MOUNTPOINTS
 sec "DRIVES: space"; df -hT -x tmpfs -x devtmpfs -x squashfs -x efivarfs
 sec "DRIVES: fstab"; grep -v '^#' /etc/fstab | grep -v '^$'
-sec "DRIVES: mount point and folders"; lsattr -d /mnt/storage 2>&1; ls -la /mnt /mnt/storage 2>&1; ls -la /usr/local/bin 2>&1
+sec "DRIVES: mount points and folders"; lsattr -d /mnt/storage /mnt/disks/* 2>&1; ls -la /mnt /mnt/disks /mnt/storage 2>&1; ls -la /usr/local/bin /usr/local/sbin 2>&1
 sec "DRIVES: health"
 echo "-- boot drive /dev/$BOOT"; smartctl -i -H -A /dev/$BOOT 2>&1 | grep -E "Device Model|Model Family|User Capacity|Rotation|overall-health|Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending|Temperature"; hdparm -B /dev/$BOOT 2>&1 | tail -1
-echo "-- storage drive (label STORAGE)"; smartctl -i -H -A -d sat /dev/disk/by-label/STORAGE 2>&1 | grep -E "Device Model|User Capacity|Rotation|overall-health|Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending|Temperature"; hdparm -B "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/STORAGE)")" 2>&1 | tail -1
+echo "-- main drive (label MAIN1)"; smartctl -i -H -A -d sat /dev/disk/by-label/MAIN1 2>&1 | grep -E "Device Model|User Capacity|Rotation|overall-health|Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending|Temperature"; hdparm -B "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/MAIN1)")" 2>&1 | tail -1
 sec "SYSTEMD AND CRON"; cat /etc/systemd/system/docker.service.d/*.conf 2>&1; for s in docker tailscaled ssh anydesk lightdm; do echo "$s: $(systemctl is-active $s 2>&1)"; done; echo "systemd-resolved enabled: $(systemctl is-enabled systemd-resolved 2>&1)"
 echo "-- root cron"; crontab -l 2>&1 | grep -v '^#'; echo "-- load cycle log"; tail -5 /var/log/loadcycles.log 2>&1; echo "-- hdd-recover"; cat /usr/local/bin/hdd-recover 2>&1
+sec "STORAGE POOLS AND BACKUP"; /usr/local/sbin/drives version 2>&1; /usr/local/sbin/drives status 2>&1; echo "-- backup settings"; cat /etc/homelab-backup.conf 2>&1; echo "-- last lines of the backup log"; tail -5 /var/log/homelab-backup.log 2>&1
 sec "NETWORK AND DNS"; ip -4 -br addr; cat /etc/resolv.conf; ss -tulpn | grep ':53 '; ufw status 2>&1 | head -2; nslookup google.com 192.168.1.198 2>&1 | tail -4
 sec "REMOTE ACCESS SETTINGS"; grep -E "^Handle" /etc/systemd/logind.conf 2>&1; grep -h -E "^autologin" /etc/lightdm/lightdm.conf /etc/lightdm/lightdm.conf.d/* 2>&1; cat /etc/apt/sources.list.d/docker.list 2>&1
 sec "DOCKER"; docker --version; docker compose version; docker info 2>/dev/null | grep -E "Docker Root Dir|Storage Driver"
@@ -2329,15 +2671,17 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 
 **Storage**
 
-- [ ] Mount the data drive by UUID in `/etc/fstab` with `nofail`, at a fixed path (`/mnt/storage`).
-- [ ] Lock the empty mount point with `chattr +i` before mounting.
+- [ ] Add, remove and move drives with `sudo drives`, and don't edit the pool lines in `/etc/fstab` by hand. Every drive is mounted by UUID with `nofail` under `/mnt/disks/<label>`, and the pools are at `/mnt/storage` and `/mnt/backup`.
+- [ ] Practise any new drive operation first in test mode (`sudo DRIVES_TEST=1 drives`), and run `test-cleanup` afterwards.
+- [ ] Keep the empty mount points locked with `chattr +i` (`drives` does it before mounting).
 - [ ] Keep the Docker wait-for-mount file in `/etc/systemd/system/docker.service.d/`.
-- [ ] Keep databases (Immich, Nextcloud) on the boot drive, and photos and files on the data drive.
-- [ ] Set the drive power level to 254 on both drives, and keep the `@reboot` cron lines.
-- [ ] Stop the stacks and run `sudo umount /mnt/storage` before unplugging the data drive.
-- [ ] After any reconnect, run `sudo hdd-recover`.
-- [ ] Check both drives' SMART health regularly: `PASSED`, and zeros for reallocated and pending sectors.
-- [ ] Save a copy of Nextcloud's database, since it lives on the boot drive: `docker exec nextcloud_db pg_dump -U nextcloud nextcloud > /mnt/storage/nextcloud-db.sql`.
+- [ ] Keep databases (Immich, Nextcloud) on the boot drive, and photos and files in the main pool.
+- [ ] Keep the power level at 254 on every drive (`sudo drives power`), and keep both `@reboot` cron lines.
+- [ ] Before unplugging a drive on purpose, use `sudo drives` and choose **3** (Disconnect a drive). Don't just pull the cable.
+- [ ] After any reconnect or power cut, run `sudo hdd-recover`.
+- [ ] Check `sudo drives status` every few days: every pool drive `PASSED`, and the last backup `OK` with a recent date. Keep an eye on the numbers from `smartctl` too (zeros for reallocated and pending sectors).
+- [ ] The daily backup dumps Nextcloud's database (30 days kept) and keeps deleted files for 30 days. Until a backup drive is connected, it sits on the boot drive, which doesn't protect against a failed boot drive.
+- [ ] Run one command at a time when checking things, and keep any "undo" command in its own block.
 
 **Deploying**
 
