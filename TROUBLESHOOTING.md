@@ -25,6 +25,7 @@ This guide covers my home lab on an HP ProDesk 600 G3 Mini: the storage setup th
    - [Step 8: Verify it](#step-8-verify-it)
    - [Step 9: The cheat sheet at login](#step-9-the-cheat-sheet-at-login)
    - [Step 10: Replace a dead drive](#step-10-replace-a-dead-drive)
+   - [Step 11: Rebuild the server from GitHub and the backup](#step-11-rebuild-the-server-from-github-and-the-backup)
    - [How the widgets see the drives](#how-the-widgets-see-the-drives)
 1. [Migration from the Lenovo to the ProDesk](#3-migration-from-the-lenovo-to-the-prodesk)
    - [Phase 0: Plan and decisions](#phase-0-plan-and-decisions)
@@ -520,7 +521,7 @@ cp ~/.bashrc.bak-2026-10-23 ~/.bashrc
 
 ### Step 10: Replace a dead drive
 
-**Status: written and tested on fake drives on 2026-10-23. Not yet used on my real drive.** This is the part that lets me recover when the Toshiba (`MAIN1`) dies. The README explains it in [section 3.15](README.md#315-replace-a-dead-drive). `drives` is version 1.1 from here on, and `homelab` was updated too (its Main pool line now mentions `sudo drives replace`, and the cheat sheet has a line for it).
+**Status: written and tested on fake drives, and rehearsed with a USB stick on 2026-10-23. Not yet used on my real drive.** This is the part that lets me recover when the Toshiba (`MAIN1`) dies. The README explains it in [section 3.15](README.md#315-replace-a-dead-drive). `drives` is version 1.1 from here on, and `homelab` was updated too (its Main pool line now mentions `sudo drives replace`, and the cheat sheet has a line for it).
 
 **What I am relying on.** My main pool has one drive, so if it dies the whole pool is gone and every service stops. The only copy of my files is the daily backup in `/home/brandon/750GB_HDD/backup-interim` on the boot drive. `sudo drives replace` makes a new drive take the name `MAIN1`, shows what is missing, copies only the missing files from that backup, checks them, and then starts the containers. The new drive needs room for the 61 GB that are in the pool today, and it should be at least as big as I want the pool to be.
 
@@ -542,7 +543,67 @@ All five checksum lines must say `OK`, both line-ending counts must be `0`, and 
 sudo drives status
 ```
 
-**2. Rehearse it** with the USB stick and fake drives before a real drive dies. The commands are in the README, [section 3.15](README.md#315-replace-a-dead-drive), under "Rehearse it with a USB stick". When I have done it, I will paste the result here. **Not done yet.**
+**2. Rehearse it** with the USB stick and fake drives before a real drive dies. The numbered steps are in the README, [section 3.15](README.md#315-replace-a-dead-drive), under "Rehearse it with a USB stick". **Done on 2026-10-23, and it passed.** What I did and what I saw, step by step:
+
+**2.1 Two fake drives, stick still unplugged.** `sudo DRIVES_TEST=1 drives test-setup 2 1G` made `/dev/loop0` (`disk1.img`) and `/dev/loop1` (`disk2.img`). Then I ran `sudo DRIVES_TEST=1 drives connect` twice. The list showed only the two fake drives, I chose **Main storage**, typed the drive name and `ERASE`, and it ended with `Done. TMAIN1 is connected to the main storage (/mnt/test-main).` and the same for `TMAIN2`. The status then showed:
+
+```
+main     /mnt/test-main mounted (fuse.mergerfs)  48KB used of 1.9GB
+LABEL     ROLE     DEVICE       SIZE      USED      SMART     STATE
+TMAIN1    main     /dev/loop0p1 972MB     24KB      skipped (test mode) connected
+TMAIN2    main     /dev/loop1p1 972MB     24KB      skipped (test mode) connected
+/dev/sda  931.5G  TOSHIBA MQ01ABD100  [usb]   not connected to a pool
+```
+
+The last line is only how test mode sees my real Toshiba: it knows nothing about my real pool. The real pool was not touched.
+
+**2.2 Practice files and a practice backup.** Three 50 MB random files in `/mnt/test-main/photos`, copied with `rsync -a` to `/var/tmp/practice-backup/main`, checksums saved in `~/practice-sums.txt`. The pool put `file1.bin` on `TMAIN1` and `file2.bin` and `file3.bin` on `TMAIN2` (51 MB and 101 MB used), so losing `TMAIN2` would lose two of the three files.
+
+**2.3 Pretend `TMAIN2` died.** `umount -l /mnt/test-main`, `umount -l /mnt/test-disks/TMAIN2`, `losetup -d /dev/loop1`. The status showed:
+
+```
+main     /mnt/test-main NOT MOUNTED
+TMAIN1    main     /dev/loop0p1 972MB     51MB      skipped (test mode) connected
+TMAIN2    main     -            -         -         -         MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)
+```
+
+**2.4 Plug in the stick and find it.** `lsblk` listed a new `sdc`, 7.2G, `usb`, with one partition labelled `TMAIN1` (left over from an earlier practice). `dmesg` showed `USB DISK 2.0 ... Attached SCSI removable disk`. My Toshiba (`sda`, 931.5G) and the boot drive (`sdb`, 698.6G) were unmistakably different. I did not unplug the Toshiba.
+
+**2.5 The replace.** `sudo DRIVES_TEST=1 DRIVES_RESTORE_SRC=/var/tmp/practice-backup drives replace`. I chose `TMAIN2`, answered `y` to the no-backup-record warning, chose the stick (the only real drive in the list), typed its name and `ERASE`, saw the preview and typed `RESTORE`. The desktop had auto-mounted the stick at `/media/brandon/TMAIN1`; the tool handled that. What it printed (the stick's serial number left out):
+
+```
+Pool drives that cannot be found:
+  1) TMAIN2  (main)  not found
+Which drive is dead? 1
+
+TMAIN2 will be replaced by a new drive that gets the same name (TMAIN2).
+The files that were on the dead drive are copied back from the backup. Only missing files are copied.
+Backup copy to restore from: /var/tmp/practice-backup/main
+WARNING: There is no record of a backup run. I cannot tell how old this copy is.
+Use this copy anyway? [y/N]: y
+Measuring the backup copy (this can take a minute)...
+The backup holds about 100MB more than the remaining main drives. The new drive should be larger than that.
+  1) /dev/sdc   7.2G  USB DISK 2.0  [usb]
+!! ERASE WARNING !!
+Everything on /dev/sdc will be permanently deleted.
+TMAIN2 is in place and the main pool is mounted.
+
+Missing from the pool but present in the backup: 2 files, 100MB
+First 20:
+  photos/file2.bin
+  photos/file3.bin
+Type RESTORE (capitals) to copy these 2 files: RESTORE
+Copying (the services stay stopped)...
+Checking that every file in the backup is now in the pool...
+Verified: all 2 restored files, and every other file in the backup, are in the pool.
+Done. If the old drive ever turns up again, do not plug it in next to the new one: both are called TMAIN2.
+```
+
+**2.6 Checked by hand.** `sha256sum -c ~/practice-sums.txt` printed `OK` for `file1.bin`, `file2.bin` and `file3.bin`. The status showed `TMAIN2` on `/dev/sdc1` (7.0GB, 101MB used) and the pool at 151MB used of 8.0GB. `ls` showed `file2.bin` and `file3.bin` on the stick, 52,428,800 bytes each.
+
+**2.7 Cleanup.** `sudo DRIVES_TEST=1 drives test-cleanup` printed `Test setup removed.` The real `sudo drives status` was exactly as before (`MAIN1` connected, 61GB used of 916GB, last backup 06:00 OK). `findmnt /mnt/storage` showed the pool still mounted. All 16 containers were running, with the longest at 11 hours, so nothing restarted at any point. The stick stayed formatted as `TMAIN2` with no mount point; I unplugged it afterwards.
+
+**What it showed.** The whole flow works on a real USB drive: it detects the dead drive, refuses to guess a backup without asking, only lists drives that are safe to erase, previews exactly what it will copy, verifies the copy, and the files match their checksums. Two small things, neither a bug: the stick's old label and the desktop auto-mount did not matter, and test mode's status lists my real Toshiba as "not connected to a pool". What is still untested is a real failed drive and the real backup folder on the boot drive as the source.
 
 **3. What a real failure looks like, and what I will do.**
 
@@ -566,6 +627,42 @@ sudo drives status
 **One limit I found while testing.** In my fake-drive test, two hard-linked files showed different inode numbers through the mergerfs pool, so `rsync -H` copied them into the backup as two separate files. A restored hard link would then be a normal copy. I have not checked whether any of my real files are hard-linked.
 
 **Undo for the install,** if you want the old version back: install the old `drives` from the repository history, or from `/home/brandon/homelab-drives` if you still have it. The old version does not have the `replace` command and works as before.
+
+### Step 11: Rebuild the server from GitHub and the backup
+
+**Status: written on 2026-10-23 from the design and checked on a fake file tree. Not rehearsed on a real rebuild.** The README has the full procedure with explanations ([Rebuild the server after the boot drive dies](README.md#rebuild-the-server-after-the-boot-drive-dies)). This step is the same procedure with my real values, and the list of what I have to fix first.
+
+**What I found when I checked it on paper**
+
+1. **Until `BACKUP1` exists, the backup dies with the boot drive.** The backup sits in `/home/brandon/750GB_HDD/backup-interim`, on the same drive as the databases and the app folders. If that drive dies, I lose the Nextcloud database dump, the Nextcloud app folder (`config.php`), AdGuard Home's settings and the Beszel and FileBrowser data. Not lost: all photos and files (they are on `MAIN1`) and the Immich database, because Immich writes its own dumps to `/mnt/storage/immich/backups`. Until the backup drive is connected, I copy the `db-dumps` and `boot-configs` folders of the interim backup to another computer once a month.
+2. **A full copy of the saved configs would break the new server.** The backup holds the old `/etc/fstab`. Copying it back makes the new install unbootable, which is why Step 6 of the README leaves it out (with the scripts and the Docker data). I tested the exclusions on a fake tree: the new `fstab` and the new `drives` stayed, the Homepage, Nextcloud and AdGuard files came back, the Homepage files kept their owner (1000), and `root-crontab.txt` did not land in `/`.
+3. **The stack names matter.** The Beszel and FileBrowser data come back by their volume names, `beszel_beszel_data` and `filebrowser_filebrowser_data`. Before I need this, I run this once and keep the output:
+
+```bash
+docker ps --format '{{.Names}}   {{.Label "com.docker.compose.project"}}'
+```
+
+The second column is the stack name each container belongs to.
+
+4. **The secrets are in no file.** Where each one comes from: the Nextcloud database password is also inside `/home/brandon/nextcloud/html/config/config.php` (`dbpassword`), so it can be read back after the restore of that folder; everything else (Nextcloud admin, Immich database user and password, the Homepage widget keys, the Speedtest Tracker `APP_KEY`) must be in my password manager. **To do: check that each of them is there.**
+5. **The Tailscale name.** Delete the old `pc` in the admin console before the new server joins, or it becomes `pc-1` and `griffin-luma.ts.net` addresses stop matching (Nextcloud's `OVERWRITEHOST`, Homepage's allowed hosts, the phone).
+
+**The procedure with my values**
+
+| Step | What I do |
+| :--- | :--- |
+| 1 | Delete the dead `pc` in the Tailscale admin console. |
+| 2 | Install Linux Mint with user `brandon` and host name `pc`. SSH, and the router reservation for 192.168.1.198 (new network card: update the reservation). |
+| 3 | Docker and Tailscale (`tailscale up` only), and the `wait-for-hdd.conf` file. No stacks yet. |
+| 4 | `git clone`, `sha256sum -c SHA256SUMS` (five `OK`), install `drives`, `homelab-backup`, `hdd-recover`, `homelab`. |
+| 5 | `sudo drives` → 2 → the Toshiba → Main storage → **Keep the data and add the drive as it is**. Check `ls /mnt/storage`. Make the folders under `/home/brandon` and `/opt`, then the two cron lines and `/etc/homelab-backup.conf` (`DEST_FALLBACK` only while there is no `BACKUP1`, and `CONFIG_PATHS+=(/home/brandon/speedtest-tracker)`). |
+| 6 | `BK=/home/brandon/750GB_HDD/backup-interim` (later `BK=/mnt/backup`), then the `rsync -aHn` preview, then the real `rsync -aH`, both with `--exclude=/etc/fstab --exclude=/usr/local/ --exclude=/root-crontab.txt --exclude=/var/lib/docker/`. Compare `root-crontab.txt` with `sudo crontab -l`. |
+| 7 | Portainer (new admin account), then the stacks one at a time, with the same names. The files are in `Portainer-code/` on GitHub. Then the `tailscale serve` commands. |
+| 8 | Beszel and FileBrowser: stop the container, `rsync` the volume from `$BK/boot-configs/var/lib/docker/volumes/...`, start it. Immich: **Restore from backup** on the welcome page, newest file in `/mnt/storage/immich/backups`. Nextcloud: stop `nextcloud` and `nextcloud_cron`, drop and create the `nextcloud` database in `nextcloud_db`, load the newest `db-dumps/nextcloud-DATE.sql.gz`, start them, then `occ maintenance:data-fingerprint` and `occ files:scan --all`. |
+| 9 | AdGuard DNS rewrite and the devices, and the Immich address in the phone app. |
+| 10 | `docker ps`, `sudo drives status`, `sudo homelab-backup` until `finished: OK`, then the reboot test. |
+
+**When I rehearse this:** the safest way is a second computer or a virtual machine with a fresh Mint install, a copy of the interim backup, and a spare drive copy of `MAIN1`'s `immich/backups` and `nextcloud` folders. I will paste the result here when I have done it.
 
 ### How the widgets see the drives
 
@@ -3055,7 +3152,8 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 - [ ] Check `sudo drives status` every few days: every pool drive `PASSED`, and the last backup `OK` with a recent date. Keep an eye on the numbers from `smartctl` too (zeros for reallocated and pending sectors).
 - [ ] The daily backup dumps Nextcloud's database (30 days kept) and keeps deleted files for 30 days. Until a backup drive is connected, it sits on the boot drive, which doesn't protect against a failed boot drive.
 - [ ] Run one command at a time when checking things, and keep any "undo" command in its own block.
-- [ ] If a pool drive dies for good, use `sudo drives replace` ([Step 10](#step-10-replace-a-dead-drive)). Rehearse it once with the USB stick before it is needed. Do not improvise on the live pool.
+- [ ] If the boot drive dies, follow [Step 11](#step-11-rebuild-the-server-from-github-and-the-backup). Until `BACKUP1` exists, copy the `db-dumps` and `boot-configs` folders of the interim backup to another computer once a month.
+- [ ] If a pool drive dies for good, use `sudo drives replace` ([Step 10](#step-10-replace-a-dead-drive)). I rehearsed it once with the USB stick on 2026-10-23. Do not improvise on the live pool.
 - [ ] Run `sudo install` and `sha256sum -c` from inside the folder that holds the files ([A16](#a16-install-says-cannot-stat-when-installing-a-script)). Keep `SHA256SUMS` in step with the files: five lines today.
 - [ ] Keep the `homelab` login block in `~/.bashrc` free of exported variables, or VS Code copies them into every terminal ([H5](#h5-the-cheat-sheet-does-not-appear-in-the-vs-code-terminal)).
 
@@ -3088,7 +3186,8 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 
 - [ ] Stop Homepage before editing its keys, then start it again.
 - [ ] Copy API tokens and keys with the copy button when they're first shown, and never commit real ones. Use `your-own-key` in files you publish.
-- [ ] Check a YAML file with a parser before you copy it to the server.
+- [ ] Check a YAML file with a parser before you copy it to the server and before you upload it to GitHub: `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1])); print('OK')" Portainer-code/immich.yaml`. On 2026-10-23 I checked all nine stack files in the repository and found three that would not parse: a missing closing quote in the Speedtest Tracker file, and plain-text notes after the YAML in the Immich and Nextcloud files. They are comments now.
+- [ ] Keep the `.gitattributes` file in the repository. The nine stack files had Windows line endings (CRLF) from the upload and are plain LF now; the file keeps them that way.
 - [ ] After editing a Homepage file, restart it and hard-refresh the browser.
 
 ---

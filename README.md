@@ -808,7 +808,7 @@ To browse the backup from FileBrowser, add `- /mnt/backup:/srv/backup` to the vo
 
 - **A main drive is unplugged or dead:** the main pool does not mount, the empty locked `/mnt/storage` makes Immich, Nextcloud and FileBrowser fail with errors, and `sudo drives status` shows the drive as `MISSING`. Reconnect it and run `sudo hdd-recover`. I tested this with fake drives, not on my real hardware.
 - **A backup drive is missing:** the main pool and the services are not affected, and the backup run fails and says why. `drives status` shows `FAILED` in the last-backup line.
-- **A drive is gone for good:** the files that were stored on it are in the backup, up to a day old. `sudo drives replace` swaps in a new drive and copies back only the files that are missing ([section 3.15](#315-replace-a-dead-drive)). I have tested it with fake drives, not yet on real hardware, so rehearse it first.
+- **A drive is gone for good:** the files that were stored on it are in the backup, up to a day old. `sudo drives replace` swaps in a new drive and copies back only the files that are missing ([section 3.15](#315-replace-a-dead-drive)). I have tested it with fake drives and rehearsed it once on my server with a USB stick, but not yet on a real failed drive. Rehearse it first.
 
 ### 3.14 The cheat sheet at login
 
@@ -919,7 +919,7 @@ Settings, for the rare case you need them, are environment variables: `HOMELAB_M
 
 Use this when a pool drive is gone for good: it won't spin up, it isn't found any more, and `sudo hdd-recover` can't bring it back. The command is `sudo drives replace` (or choose **8** in the `sudo drives` menu). It needs two things: a **new drive** (it will be erased) and a **backup copy** (the daily backup, 3.9).
 
-> **Tested with fake drives only.** I ran 58 automatic checks on practice drives (one drive dying, one of two dying, refusing to continue, a dead backup drive, two dead drives). I have not yet used it on a real failed drive. Do the rehearsal at the end of this section before you depend on it. Version 1.1 of `drives` is the first one that has this command: `sudo drives version` should print `drives 1.1`.
+> **Tested with fake drives and one USB-stick rehearsal.** I ran 58 automatic checks on practice drives (one drive dying, one of two dying, refusing to continue, a dead backup drive, two dead drives). I also rehearsed it on my server: one of two practice drives "died", a real 8 GB USB stick took its place, the 2 missing files (100 MB) came back, and their SHA-256 checksums matched the ones I saved before. I have not yet used it on a real failed drive. Do the rehearsal at the end of this section once before you depend on it. Version 1.1 of `drives` is the first one that has this command: `sudo drives version` should print `drives 1.1`.
 
 **What it does, in order**
 
@@ -1016,15 +1016,37 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
 - If the old drive ever turns up again, don't plug it in next to the new one, because both are called `MAIN1`.
 - Until a backup drive exists, the backup is a folder on the boot drive (3.9). `replace` finds it by itself from the record of the last run.
 
-**Rehearse it with a USB stick (it will be erased).** This uses test mode, so your real pools and `/etc/fstab` are not touched. `DRIVES_RESTORE_SRC` tells the tool where the practice backup is.
+**Rehearse it with a USB stick (it will be erased).** Do this once, while nothing is broken, so you know what the screens look like before you need them. It takes about 15 minutes. It uses test mode, so your real pools, `/etc/fstab` and containers are not touched: test mode has its own folders (`/mnt/test-main`, `/mnt/test-disks`) and its own test `fstab`. You need one spare USB stick of 2 GB or more. Everything on it is erased.
+
+The idea: make two fake drives, put three files on them, pretend one fake drive died, and let a real USB stick take its place. Then check that the files came back unchanged. Run one command at a time in the terminal on the server, and check each result before going on.
+
+**Step 1: Make two fake drives. Do not plug in the USB stick yet.** If the stick is already in, the connect menu in Step 2 would list it too, and you could pick it by mistake.
 
 ```bash
 sudo DRIVES_TEST=1 drives test-setup 2 1G
-sudo DRIVES_TEST=1 drives connect
+```
+
+You should see two lines like `/dev/loop0 /var/tmp/homelab-drives-test/disk1.img` and `/dev/loop1 ... disk2.img`. Those are two 1 GB image files acting as drives.
+
+**Step 2: Connect both fake drives as Main storage.** Run this twice, one drive each time.
+
+```bash
 sudo DRIVES_TEST=1 drives connect
 ```
 
-Run `connect` twice and choose **Main storage** both times. Then put some data in the practice pool and make a practice backup:
+1. Choose the drive in the list. Only the fake ones (`loop0`, `loop1`) should be there. Your real drives are never listed.
+2. Choose **Main storage**.
+3. Type the drive name exactly as shown (for example `/dev/loop0`), then type `ERASE`. This only erases the fake image file.
+
+Each run ends with `Done. TMAIN1 is connected to the main storage` (then `TMAIN2` the second time). Check the result:
+
+```bash
+sudo DRIVES_TEST=1 drives status
+```
+
+You should see two main drives, `TMAIN1` and `TMAIN2`, both `connected`, and the practice pool `/mnt/test-main` mounted with about 1.9 GB. In test mode, the "Other drives" part may list your real data drive as "not connected to a pool". That is only because test mode knows nothing about your real pool. Your real pool is not affected.
+
+**Step 3: Put practice files in the practice pool, and make a practice backup.** This writes 150 MB of random data into the fake pool only.
 
 ```bash
 sudo mkdir -p /mnt/test-main/photos
@@ -1032,32 +1054,71 @@ for i in 1 2 3; do sudo sh -c "head -c 50M /dev/urandom > /mnt/test-main/photos/
 sudo mkdir -p /var/tmp/practice-backup/main
 sudo rsync -a /mnt/test-main/ /var/tmp/practice-backup/main/
 (cd /mnt/test-main && sha256sum photos/*.bin) | tee ~/practice-sums.txt
+ls -la /mnt/test-disks/TMAIN1/photos /mnt/test-disks/TMAIN2/photos
 ```
 
-Now pretend that a drive died. Replace `TMAIN2` and `disk2.img` if your practice drive has another name (check with `sudo DRIVES_TEST=1 drives status`):
+You should see three `sha256sum` lines, which are the fingerprints of the files before the "crash". The `ls` shows which fake drive holds which file. The pool puts new files on the drive with the most free space, so in my run `TMAIN1` held `file1.bin` and `TMAIN2` held `file2.bin` and `file3.bin`. The next steps use `TMAIN2` as the drive that dies. If your split is different, use the drive that holds at least one file, and swap the names (and `disk2.img`) below.
+
+**Step 4: Pretend `TMAIN2` died.** This unmounts the pool and takes the fake drive away.
 
 ```bash
 sudo umount -l /mnt/test-main
 sudo umount -l /mnt/test-disks/TMAIN2
 sudo losetup -d "$(losetup -j /var/tmp/homelab-drives-test/disk2.img | cut -d: -f1)"
+sudo DRIVES_TEST=1 drives status
 ```
 
-Plug in the USB stick and run the replace with the stick as the new drive:
+You should see `TMAIN2` as `MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)` and the practice main pool as `NOT MOUNTED`. The pool refuses to mount with a drive missing, which is on purpose: a half-empty pool would look healthy while it hid files.
+
+**Step 5: Plug in the USB stick and find it.** This only reads; nothing is erased yet.
+
+```bash
+lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS,TRAN
+sudo dmesg | tail -15
+```
+
+The stick is the new line with `usb` in the last column and a size that matches the stick (an 8 GB stick shows about 7.2G), usually `sdc`. `dmesg` should mention a new USB device. Your real data drive (also `usb`, hundreds of GB) and your boot drive are much bigger, so they are easy to tell apart. If the stick has an old label, or the desktop mounted it under `/media/...`, that is fine: the tool unmounts it before it erases it. If the stick does not show up, wait 10 seconds, try another USB port and run the two commands again.
+
+**Step 6: Run the replace with the stick as the new drive.** `DRIVES_RESTORE_SRC` tells the tool where the practice backup is, because there is no real backup record in test mode.
 
 ```bash
 sudo DRIVES_TEST=1 DRIVES_RESTORE_SRC=/var/tmp/practice-backup drives replace
 ```
 
-The tool warns that there is no record of a backup run, because this is a practice backup. Answer `y`. At the end, check that all files are back, and clean up:
+Answer the questions as they come:
+
+1. **Which drive is dead?** Choose `TMAIN2`.
+2. **WARNING: There is no record of a backup run. Use this copy anyway? [y/N]:** type `y`. This is your hand-made practice backup, so the warning is expected.
+3. **Which drive do you want to connect?** Choose the stick. It must be the only real drive in the list. If your data drive or boot drive is listed, press `0` and stop.
+4. **Type the drive name exactly:** type the stick's name (for example `/dev/sdc`), then type `ERASE`.
+5. The tool formats the stick, names it `TMAIN2`, mounts it and rebuilds the pool. Then it prints a preview: `Missing from the pool but present in the backup: 2 files, 100MB`, followed by the names (`photos/file2.bin` and `photos/file3.bin`). Check that these are the files that were on the dead drive.
+6. **Type RESTORE (capitals) to copy these 2 files:** type `RESTORE`.
+
+It copies the files and then checks them: `Verified: all 2 restored files, and every other file in the backup, are in the pool.` It ends with `Done.` and a reminder not to plug the old drive in next to the new one, because both are called `TMAIN2`.
+
+**Step 7: Check the files yourself.** The script's own check says the files are there; this check says they are unchanged.
 
 ```bash
 (cd /mnt/test-main && sha256sum -c ~/practice-sums.txt)
+sudo DRIVES_TEST=1 drives status
+ls -la /mnt/test-disks/TMAIN2/photos
+```
+
+All three `sha256sum` lines must end in `OK`. The status should show `TMAIN1` and `TMAIN2` both `connected`, with `TMAIN2` now on the stick (about 7 GB), and the pool mounted with about 151 MB used. The `ls` shows `file2.bin` and `file3.bin` on the stick.
+
+**Step 8: Clean up, and check your real system is as it was.**
+
+```bash
 sudo DRIVES_TEST=1 drives test-cleanup
 sudo rm -rf /var/tmp/practice-backup ~/practice-sums.txt
 sudo drives status
+lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINTS,TRAN
+docker ps --format "table {{.Names}}\t{{.Status}}"
 ```
 
-Every line of the `sha256sum` check should end in `OK`. The last command should look like it did before the practice.
+You should see `Test setup removed.`, then your real `drives status` looking exactly as before the practice (your data drive connected, the same amount used). In `lsblk` there is no `loop0` and nothing is mounted under `/mnt/test-*`. The stick may still show the label `TMAIN2` with no mount point; cleanup does not wipe it. All your containers are still running. Now you can unplug the stick. It still holds the practice files, so wipe it before you use it for anything else.
+
+**Do not skip Step 8.** If you do, the practice pool stays mounted. If a step goes wrong and you want to stop, run the first two commands of Step 8. They remove the practice setup whatever state it is in.
 
 ---
 
@@ -2192,6 +2253,103 @@ sudo hdd-recover
 
 If you unplug a drive on purpose, don't just pull the cable. Open `sudo drives`, choose **3** (Disconnect a drive) and wait for the message that it is safe to unplug.
 
+### Rebuild the server after the boot drive dies
+
+This is the plan for the day the boot drive (the one with Linux on it) fails or you want to start over on a clean install. The idea: **GitHub gives you the tools, the backup gives you the data, and your password manager gives you the secrets.** Nothing is typed from memory.
+
+> **Status: written from the design and checked on a fake file tree, not yet rehearsed on a real rebuild.** The parts that touch my real services (the two database restores) follow the official [Immich](https://docs.immich.app/administration/backup-and-restore) and [Nextcloud](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/restore.html) restore guides. Treat the first real run as a rehearsal: go slowly, one step at a time, and keep the old drives untouched until the end.
+
+**What survives a dead boot drive**
+
+| Where it lives | What is in it | After the boot drive dies |
+| :--- | :--- | :--- |
+| GitHub (this repository) | The scripts, the stack files, the Homepage config, these guides | Safe |
+| The main drive (`MAIN1`) | Immich photos, Nextcloud files, FileBrowser share, Immich's own nightly database dumps in `/mnt/storage/immich/backups` | Safe, it is a separate drive |
+| A backup drive (`BACKUP1`) | The daily copy of the main pool, `boot-configs/` (Homepage, Nextcloud app files, AdGuard settings, Beszel and FileBrowser data), `db-dumps/` (Nextcloud database) | Safe, if you have one |
+| The interim backup folder on the boot drive | The same as above | **Lost with the boot drive.** Without a backup drive, you lose the Nextcloud database dump and the saved configs. The photos and files are still safe, and Immich can still be restored from its own dumps |
+| Your password manager | The passwords and keys the stacks need | Safe, if you really keep them there |
+
+**Have these ready before you start:** the Linux Mint installer stick ([1.2](#12-make-the-installer-usb-stick)), the main drive and the backup drive, your Tailscale login, and from your password manager: the Nextcloud database password, the Nextcloud admin login, the Immich database user name and password, the Speedtest Tracker `APP_KEY`, and the Homepage widget keys ([15.3](#153-fill-in-the-widget-keys)). The Nextcloud database password must be the same one as before, because it is also written inside Nextcloud's `config.php`.
+
+**Step 1: Free the old name in Tailscale.** In the [admin console](https://login.tailscale.com/admin/machines), delete the dead machine. If you skip this, the new server joins as `your-hostname-1` and every address that contains the old name stops matching (Nextcloud's `OVERWRITEHOST`, the Homepage allowed hosts, your phone's Immich address).
+
+**Step 2: Install Linux and the base system.** Use the **same user name and the same host name** as before, because the scripts and the stack files contain `/home/your-username/...`. Follow [1.3 to 1.5](#13-bios-setting-and-booting-the-stick), then [2.1](#21-reserve-a-fixed-address-for-the-server) and [2.2](#22-ssh-server). If the computer is new, its network card has a new address, so update the reservation in your router so the server gets the same fixed address.
+
+**Step 3: Install Docker, but do not start any stack yet.** Follow [section 4](#4-docker), then the "wait for the pool" file from [3.6](#36-make-docker-wait-for-the-pool). Install Tailscale ([section 6](#6-tailscale)) and run `sudo tailscale up`, but leave the `tailscale serve` commands for later.
+
+**Step 4: Get the tools from GitHub.** Follow [3.1](#31-install-the-tools) and [3.2](#32-install-the-scripts): install the tools, clone the repository, check `SHA256SUMS` (all five lines `OK`), then install `drives`, `homelab-backup`, `hdd-recover` ([3.8](#38-the-recovery-command)) and `homelab` ([3.14](#314-the-cheat-sheet-at-login)).
+
+**Step 5: Reconnect the drives without erasing them.** Plug in the main drive and run `sudo drives`. Choose **2** (Connect a new drive), pick the main drive, choose **Main storage**, and when it says the drive already has an ext4 partition with data, choose **Keep the data and add the drive as it is**. **Never choose "Erase everything" here.** Repeat for the backup drive with **Backup storage**. Then check:
+
+```bash
+sudo drives status
+ls /mnt/storage
+ls /mnt/backup
+```
+
+`ls /mnt/storage` must show your folders (`immich`, `nextcloud`, `filebrowser`). Now create the folders on the boot drive, the same as [3.5](#35-create-a-folder-for-each-service) but **only the lines that create folders under `/home/your-username/` and `/opt/`**. Skip the two `chown -R` lines for the pool: its folders already exist with the right owners. Finally set the drive power cron line ([3.7](#37-drive-power-settings)) and the backup settings and cron line ([3.9](#39-the-daily-backup)).
+
+**Step 6: Restore the saved config files, the safe way.** The backup keeps the boot drive's config files under their full paths in `boot-configs/`, so one `rsync` can put them back. **Do not copy everything.** The backup contains the old `/etc/fstab`, which holds the old boot drive's identifiers, and restoring it makes the new server unbootable. The command below leaves out that file, the scripts (the ones from GitHub are newer), the crontab record, and the Docker data (those are restored service by service in Step 8). Set `BK` to your backup first:
+
+```bash
+BK=/mnt/backup
+sudo ls "$BK/boot-configs"
+sudo rsync -aHn --numeric-ids --itemize-changes --exclude=/etc/fstab --exclude=/usr/local/ --exclude=/root-crontab.txt --exclude=/var/lib/docker/ "$BK/boot-configs/" / | head -40
+```
+
+The first `ls` should list `etc`, `home`, `opt`, `usr`, `var` and `root-crontab.txt`. The `rsync` with `-n` only **prints** what it would copy. Read it: you should see the Homepage config, the Nextcloud app folder and AdGuard Home's settings, and nothing under `/etc/fstab` or `/usr/local`. If it looks right, run it for real, and compare the saved crontab with the one you set up in Step 5:
+
+```bash
+sudo rsync -aH --numeric-ids --exclude=/etc/fstab --exclude=/usr/local/ --exclude=/root-crontab.txt --exclude=/var/lib/docker/ "$BK/boot-configs/" /
+sudo systemctl daemon-reload
+sudo cat "$BK/boot-configs/root-crontab.txt"
+sudo crontab -l
+```
+
+**Step 7: Portainer and the stacks.** Install Portainer fresh ([section 5](#5-portainer)) and create a new admin account. (The saved Portainer data is not restored on purpose: it is a live database file, and your stacks are all in this repository.) Create each stack with **the same name as before**. It matters most for Beszel (`beszel`) and FileBrowser (`filebrowser`), because the stack name is the start of their Docker volume names (`beszel_beszel_data`, `filebrowser_filebrowser_data`), and Step 8 needs those exact names. Use the YAML from the sections below or from the [`Portainer-code/`](Portainer-code/) folder, and put the passwords from your password manager into the "Environment variables" box. Deploy them one at a time and wait for each to be healthy. Then run the `tailscale serve` commands from [section 6](#6-tailscale).
+
+**Step 8: Put each service's data back.**
+
+| Service | What to do |
+| :--- | :--- |
+| AdGuard Home ([7](#7-adguard-home)) | Nothing more. Its settings came back in Step 6, so it starts with your filters and DNS rewrites. |
+| Homepage ([15](#15-homepage-dashboard)) | Nothing more. Its config came back in Step 6. |
+| Speedtest Tracker ([14](#14-speedtest-tracker)) | Nothing more if its folder was in your `CONFIG_PATHS` (3.9). Use the same `APP_KEY` as before, or its saved settings can't be read. |
+| Beszel ([8](#8-beszel)) and FileBrowser ([10](#10-filebrowser)) | Deploy the stack, then `docker stop beszel` (or `filebrowser-filebrowser-1`), run `sudo rsync -aH --numeric-ids "$BK/boot-configs/var/lib/docker/volumes/beszel_beszel_data/" /var/lib/docker/volumes/beszel_beszel_data/` (FileBrowser: `filebrowser_filebrowser_data`), then `docker start` it again. If the Beszel agent can't connect, copy a fresh `KEY` and `TOKEN` from the hub ([8.2](#82-agent)). |
+| Netdata ([9](#9-netdata)) | Nothing to restore. |
+| Immich ([11](#11-immich)) | Deploy with the same `UPLOAD_LOCATION`. The photos are already there, but the database on the boot drive is gone. On the welcome page click **Restore from backup**, choose the newest file from `/mnt/storage/immich/backups` and restore. Don't create a new account first. |
+| Nextcloud ([12](#12-nextcloud)) | Step 6 already brought back the app folder with `config.php`. Use the **same** database password as in that file. Deploy the stack, immediately stop the app containers (`docker stop nextcloud nextcloud_cron`), empty the new database and load the newest dump. Details below. |
+
+**Nextcloud database restore.** Replace `DATE` with the date of the newest file in `$BK/db-dumps`. The user and database are both called `nextcloud`:
+
+```bash
+ls -lh "$BK/db-dumps" | tail -3
+docker exec nextcloud_db psql -U nextcloud -d template1 -c 'DROP DATABASE nextcloud;'
+docker exec nextcloud_db psql -U nextcloud -d template1 -c 'CREATE DATABASE nextcloud;'
+gunzip -c "$BK/db-dumps/nextcloud-DATE.sql.gz" | docker exec -i nextcloud_db psql -U nextcloud -d nextcloud >/dev/null
+docker start nextcloud nextcloud_cron
+docker exec -u www-data nextcloud php occ maintenance:data-fingerprint
+docker exec -u www-data nextcloud php occ files:scan --all
+```
+
+The `gunzip` line prints a lot unless you silence it, which is why it ends with `>/dev/null`. Errors still show. If `DROP DATABASE` complains that the database is in use, the app containers are still running: stop them and try again. `data-fingerprint` makes your synced devices check their files against the restored server, and `files:scan` makes Nextcloud look at the files in the pool.
+
+**Step 9: Point everything at the server again.** If the server's address or Tailscale name changed, update AdGuard's DNS rewrite and the devices that use it ([7.4](#74-point-your-devices-at-it)), and the Immich address in the phone app.
+
+**Step 10: Check it, then make a backup.**
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}"
+sudo drives status
+sudo homelab-backup
+```
+
+Every container should be `Up` or `healthy`. Log in to Immich and Nextcloud and open a few old photos and files. When `homelab-backup` finishes with `finished: OK` (watch it with `sudo tail -f /var/log/homelab-backup.log`), do the reboot test from [3.10](#310-verify-the-storage-setup). Only now is it safe to wipe or throw away anything from the old setup.
+
+**If the backup was lost too** (the interim backup on the dead boot drive), skip the parts of Step 6 and Step 8 that need it. Immich still restores from its own dumps on the main drive. Homepage comes from the repository, and AdGuard Home needs a new setup ([section 7](#7-adguard-home)). Nextcloud's files are safe on the main drive, but its accounts, shares and settings are gone: the realistic way is to deploy it as a new install, create the same user names, and run `occ files:scan --all`. I have not tried this, so ask for help and don't delete anything on the main drive while you work on it.
+
+**If the main drive died too,** do Step 5 with the new drive as **Main storage**, then use the replace tool ([3.15](#315-replace-a-dead-drive)) to copy the files back from the backup before you continue with Step 6.
+
 ### Updating
 
 Every service here has its own written update procedure in [section 7 of TROUBLESHOOTING.md](TROUBLESHOOTING.md#7-updating-services). It lists what can be updated, what to check first and how to undo each update. In short:
@@ -2209,7 +2367,7 @@ Every service here has its own written update procedure in [section 7 of TROUBLE
 Storage plans, in the order I expect to do them:
 
 - **A backup drive.** A second 1TB hard drive becomes `BACKUP1`, so the daily backup leaves the boot drive ([section 3.12](#312-adding-the-backup-drive)).
-- **Replace a dead drive:** built as `sudo drives replace` ([section 3.15](#315-replace-a-dead-drive)) and tested with fake drives. The rehearsal with a USB stick, and a real replacement, are still to do.
+- **Replace a dead drive:** built as `sudo drives replace` ([section 3.15](#315-replace-a-dead-drive)) and tested with fake drives and rehearsed once with a USB stick. A real replacement is still to do (I hope never).
 - **A faster boot drive.** Move the operating system to a 128GB NVMe SSD. The 750GB drive stays as a bootable spare that a script refreshes every Sunday at 4:00, with the containers stopped for a few minutes so the databases are copied cleanly.
 
 Services I plan to add:
