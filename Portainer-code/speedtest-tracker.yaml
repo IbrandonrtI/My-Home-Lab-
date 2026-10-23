@@ -10,7 +10,7 @@ services:
     environment:
       PUID: "1000"
       PGID: "1000"
-      APP_KEY: "base64:1I16xofU+Yyr7IYnDlCT20LZ1F/TVMgF2NHQsPxnbvQ="
+      APP_KEY: "base64:your-own-key
       APP_DEBUG: "false"
       APP_URL: "http://192.168.1.198:8088"
       DB_CONNECTION: sqlite
