@@ -7,7 +7,7 @@ This guide covers my home lab on an HP ProDesk 600 G3 Mini: the storage setup th
 - Server: an HP ProDesk 600 G3 DM (hostname `pc`) running Linux Mint 22.3 XFCE. User `brandon`, LAN address `192.168.1.198`, Tailscale name `pc.griffin-luma.ts.net`.
 - Old server: a Lenovo Yoga 6 13ALC6 (`192.168.1.93`), kept as a separate machine on the tailnet.
 - Drives: a 750GB hard drive is the boot drive (`sdb` today) and a 1TB hard drive is the data drive (`sda` today, label `MAIN1`, the first drive of the main pool at `/mnt/storage`; its label was `STORAGE` until Phase 15). Drive letters change, so use the label or the UUID for anything permanent. Replace `sda`, `sdb` or `sdX` in commands with your drive's current letter.
-- Storage tools: `sudo drives` (menu and status), `sudo hdd-recover` and `sudo homelab-backup`. Their source is in the repository's [`scripts/`](scripts/) folder, and the README explains them in [section 3](README.md#3-storage-drive-pools-and-backups).
+- Storage tools: `sudo drives` (menu and status), `sudo hdd-recover` and `sudo homelab-backup`, plus `homelab`, which prints a cheat sheet and a live status when a terminal opens. Their source is in the repository's [`homelab-drives/`](homelab-drives/) folder, and the README explains them in [section 3](README.md#3-storage-drive-pools-and-backups).
 - Anything secret (passwords, API keys, tokens) is written as `your-own-key`.
 - The README has the clean build guide with placeholders. This file has the real values.
 
@@ -23,6 +23,8 @@ This guide covers my home lab on an HP ProDesk 600 G3 Mini: the storage setup th
    - [Step 6: The recovery command](#step-6-the-recovery-command)
    - [Step 7: The daily backup](#step-7-the-daily-backup)
    - [Step 8: Verify it](#step-8-verify-it)
+   - [Step 9: The cheat sheet at login](#step-9-the-cheat-sheet-at-login)
+   - [Step 10: Replace a dead drive](#step-10-replace-a-dead-drive)
    - [How the widgets see the drives](#how-the-widgets-see-the-drives)
 1. [Migration from the Lenovo to the ProDesk](#3-migration-from-the-lenovo-to-the-prodesk)
    - [Phase 0: Plan and decisions](#phase-0-plan-and-decisions)
@@ -53,6 +55,23 @@ This guide covers my home lab on an HP ProDesk 600 G3 Mini: the storage setup th
    - [I. Hardware and boot](#i-hardware-and-boot)
 1. [Diagnostic commands](#5-diagnostic-commands)
 1. [Prevention checklist](#6-prevention-checklist)
+1. [Updating services](#7-updating-services)
+   - [7.1 What can be updated](#71-what-can-be-updated)
+   - [7.2 Before you update anything](#72-before-you-update-anything)
+   - [7.3 Portainer](#73-portainer)
+   - [7.4 Homepage](#74-homepage)
+   - [7.5 Speedtest Tracker](#75-speedtest-tracker)
+   - [7.6 Netdata](#76-netdata)
+   - [7.7 Beszel hub and agent](#77-beszel-hub-and-agent)
+   - [7.8 AdGuard Home](#78-adguard-home)
+   - [7.9 FileBrowser](#79-filebrowser)
+   - [7.10 Immich](#710-immich)
+   - [7.11 Nextcloud](#711-nextcloud)
+   - [7.12 Docker Engine](#712-docker-engine)
+   - [7.13 Tailscale](#713-tailscale)
+   - [7.14 Linux Mint packages](#714-linux-mint-packages)
+   - [7.15 After updating](#715-after-updating)
+   - [7.16 Sources](#716-sources)
 
 ---
 
@@ -67,7 +86,7 @@ This guide covers my home lab on an HP ProDesk 600 G3 Mini: the storage setup th
 | AdGuard Home | `adguardhome` (host network) | 3000 (web), 53 (DNS) | `https://pc.griffin-luma.ts.net:1004` | `/opt/adguard-docker` (boot drive) |
 | Nextcloud | `nextcloud`, `nextcloud_db`, `nextcloud_redis`, `nextcloud_cron` | 8082 | `https://pc.griffin-luma.ts.net:1005` | Files on the data drive: `/mnt/storage/nextcloud`. Database and app files on the boot drive: `/home/brandon/nextcloud` |
 | FileBrowser | `filebrowser-filebrowser-1` | 8081 | `https://pc.griffin-luma.ts.net:1006` | Data drive: `/mnt/storage/filebrowser` (shown as `/srv/hdd`). Boot drive: `/home/brandon/750GB_HDD` (shown as `/srv/750GB_HDD`) |
-| Speedtest Tracker | `speedtest-tracker` | 8088 | `https://pc.griffin-luma.ts.net:1007` | Docker volume |
+| Speedtest Tracker | `speedtest-tracker` | 8088 | `https://pc.griffin-luma.ts.net:1007` | `/home/brandon/speedtest-tracker` (boot drive), shown in the container as `/config`. It was an anonymous Docker volume until 2026-10-23: [B6](#b6-a-container-starts-empty-after-update-the-stack) |
 | Netdata | `netdata-netdata-1` | 19999 | `https://pc.griffin-luma.ts.net:1008` | Docker volumes |
 
 The nine Portainer stacks are named `adguard`, `beszel`, `beszel-agent`, `filebrowser`, `immich`, `nextcloud`, `speedtest-tracker`, `netdata` and `homepage`.
@@ -90,7 +109,7 @@ Goal: the data drives are joined into a pool at `/mnt/storage` and keep the same
 
 - The Toshiba is the first drive of the main pool: ext4, label `MAIN1`, mounted by UUID at `/mnt/disks/MAIN1`. The mergerfs pool on top of it is mounted at `/mnt/storage`, the same path the stacks always used.
 - The backup pool `/mnt/backup` (drive label `BACKUP1`) does not exist yet, because there is no backup drive. Until there is one, the daily backup goes to `/home/brandon/750GB_HDD/backup-interim` on the boot drive.
-- Three tools manage it: `sudo drives` (menu and status), `sudo hdd-recover` (remount and restart) and `sudo homelab-backup` (daily copy). Their source is in the repository's `scripts/` folder, and the README explains each option in [section 3](README.md#3-storage-drive-pools-and-backups).
+- Three tools manage it: `sudo drives` (menu and status), `sudo hdd-recover` (remount and restart) and `sudo homelab-backup` (daily copy). A fourth, `homelab`, only reads information and shows a cheat sheet and the status at every login ([Step 9](#step-9-the-cheat-sheet-at-login)). Their source is in the repository's `homelab-drives/` folder, and the README explains each option in [section 3](README.md#3-storage-drive-pools-and-backups).
 
 **Why ext4:** it's a Linux filesystem, so Docker and databases get proper file permissions, and it isn't locked as "dirty" when the drive is unplugged the way NTFS can be.
 
@@ -105,7 +124,7 @@ mergerfs --version | head -1
 
 On my machine the kernel was `7.0.0-38-generic` (6.6 or newer is best), the time zone was `America/New_York (EDT, -0400)`, and `apt` installed one new package, `mergerfs 2.33.5-1ubuntu2`, from Ubuntu's `noble/universe` repository. The version command printed `mergerfs version: 2.33.5`. The other four packages were already installed.
 
-I first copied the scripts to the server from a zip file with VS Code (Remote-SSH). They are now in the repository's `scripts/` folder. Check them and install two of them (the third comes in Step 6):
+I first copied the scripts to the server from a zip file with VS Code (Remote-SSH). They are now in the repository's `homelab-drives/` folder. Check them and install two of them (the third comes in Step 6, and `homelab` in Step 9):
 
 ```bash
 cd ~/homelab-drives
@@ -117,7 +136,7 @@ sudo drives version
 sudo drives status
 ```
 
-Every checksum line printed `OK`, and the line-ending count was `0` for all three files (Windows line endings would stop a script from running). `drives version` printed `drives 1.0`. The first `status`, before anything was converted, looked like this:
+Every checksum line printed `OK` (four lines then; `SHA256SUMS` has five now that `homelab` is in it, see Step 9), and the line-ending count was `0` for all three files (Windows line endings would stop a script from running). `drives version` printed `drives 1.0`. The first `status`, before anything was converted, looked like this:
 
 ```
 === Pools ===
@@ -365,6 +384,22 @@ sudo cp -a /home/brandon/750GB_HDD/backup-interim/main/nextcloud/some-folder /mn
 docker exec -u www-data nextcloud php occ files:scan --all
 ```
 
+**Extra folders.** The list of boot-drive folders that the backup copies is `CONFIG_PATHS` at the top of `homelab-backup`. Speedtest Tracker's data folder is not in it, because the container used an anonymous volume when the list was written ([B6](#b6-a-container-starts-empty-after-update-the-stack)). I don't edit the script. I add the folder from the settings file, which is read after the defaults:
+
+```bash
+echo 'CONFIG_PATHS+=(/home/brandon/speedtest-tracker)' | sudo tee -a /etc/homelab-backup.conf
+cat /etc/homelab-backup.conf
+```
+
+Use `+=`. A plain `=` would replace the whole list and the backup would stop copying Homepage, AdGuard, Nextcloud and the rest. **Verify** after the next backup (the 6:00 run, or `sudo homelab-backup` by hand):
+
+```bash
+sudo drives status
+sudo ls /home/brandon/750GB_HDD/backup-interim/boot-configs/home/brandon/
+```
+
+The status should say `OK`, and the listing should include `speedtest-tracker`. I gave myself this command on 2026-10-23 and have not yet checked the result of a backup after it.
+
 ### Step 8: Verify it
 
 Start the Immich, FileBrowser, Nextcloud and Homepage stacks, then check that each container sees the pool:
@@ -389,6 +424,148 @@ FileBrowser and Homepage, whose `df` prints a slightly different layout, showed 
 - **Reboot:** run `sudo reboot`. After about three minutes, run `findmnt /mnt/storage`, `findmnt /mnt/disks/MAIN1` and `docker ps --format "table {{.Names}}\t{{.Status}}"`. The pool and the drive should be mounted and the containers up with no help from you. My result is in Phase 15.
 - **Unplug:** unplug the drive, wait a few seconds, plug it back in and run `sudo hdd-recover`. You should see `Recovered.` I tested this with fake drives, but I have not repeated it on the real drive since it became a pool.
 - **Lock test (optional):** with the stacks stopped, run `sudo umount /mnt/storage`, then `touch /mnt/storage/test`. It should say `Operation not permitted`, which shows nothing can write to the empty folder. Then run `sudo mount /mnt/storage` and start the stacks again. I ran this test on the single drive. The pool uses the same locked folders, but I haven't repeated it since. `lsattr` can't show the lock while the drive is mounted, because the flag sits on the hidden folder underneath.
+
+### Step 9: The cheat sheet at login
+
+`homelab` is a read-only script. It prints the commands from this guide, grouped by job, and a live status block, so I don't have to memorise them. I run it from `~/.bashrc`, so it shows in every new terminal: a plain SSH session and the terminal inside VS Code Remote-SSH. The README explains it in [section 3.14](README.md#314-the-cheat-sheet-at-login).
+
+**1. Install it,** from inside the folder that holds the files. This is the step where I first made a mistake: I ran `install` from my home folder and got `install: cannot stat 'homelab'` ([A16](#a16-install-says-cannot-stat-when-installing-a-script)).
+
+```bash
+cd ~/homelab-drives
+sha256sum -c SHA256SUMS
+sudo install -m 755 homelab /usr/local/bin/homelab
+homelab version
+```
+
+```
+drives: OK
+homelab-backup: OK
+hdd-recover: OK
+homelab-backup.conf.example: OK
+homelab: OK
+homelab 1.0
+```
+
+`SHA256SUMS` has five lines now: the four from Phase 15 (the old fifth line, `GUIDE.md`, is gone) and `homelab`. If you change any of the files, make the list again from inside the folder with `sha256sum drives homelab-backup hdd-recover homelab-backup.conf.example homelab > SHA256SUMS`, and check it with `sha256sum -c SHA256SUMS`.
+
+**2. Run it once by hand:**
+
+```bash
+homelab
+```
+
+```
+Home lab  pc  up 51 minutes
+
+Storage
+  sudo drives                        menu: connect, disconnect or check drives
+  sudo drives status                 pools, drives, SMART health, last backup
+  sudo hdd-recover                   after an unplug or power cut: remount, restart containers
+  sudo drives power                  re-apply the drive power settings
+Backup
+  sudo homelab-backup                run the backup now (about 20 minutes)
+  sudo tail -f /var/log/homelab-backup.log
+                                     watch the backup (Ctrl+C to leave)
+Checks
+  docker ps                          what is running (add --format "table {{.Names}}\t{{.Status}}")
+  findmnt /mnt/storage               is the pool mounted (one path per command)
+Docs  /home/brandon/My-Home-Lab-
+  homelab docs                       sections of README.md and TROUBLESHOOTING.md
+  git -C ~/My-Home-Lab- pull         refresh them from GitHub
+
+Status
+  Main pool       mounted, 61G used of 916G
+  Backup pool     not connected (the backup goes to the boot drive)
+  Last backup     2026-10-22 19:28  OK  (7 h ago)
+  Containers      16 of 16 running
+  Boot drive      18% used, 536G free
+```
+
+The first time, the Containers line was red because `portainer-old`, the spare container kept after the Portainer update ([7.3](#73-portainer)), was stopped on purpose. I changed the script to ignore a stopped container whose restart policy is `no`, so only containers that should be running count.
+
+**3. Get the documents on the server,** so `homelab docs` has something to list. The first try failed with `Could not resolve host: github.com`, which turned out to be a DNS problem and not a mistake in the command ([F6](#f6-the-server-cannot-look-up-names-after-a-tailscale-update)). After F6 was fixed:
+
+```bash
+git clone https://github.com/IbrandonrtI/My-Home-Lab-.git ~/My-Home-Lab-
+homelab docs
+```
+
+`homelab docs` lists the `##` headings of the README and of this file with their line numbers.
+
+**4. Show it at login.** Back up `~/.bashrc`, then add the block at the end. The quotes around `'EOF'` stop the shell from changing the text:
+
+```bash
+cp ~/.bashrc ~/.bashrc.bak-2026-10-23
+cat >> ~/.bashrc <<'EOF'
+
+# >>> homelab login display >>>
+if [[ $- == *i* ]] && [ -t 1 ] && command -v homelab >/dev/null 2>&1; then
+  timeout 20 homelab
+fi
+# <<< homelab login display <<<
+EOF
+tail -8 ~/.bashrc
+```
+
+The `timeout 20` in front of `homelab` is a safety net: if Docker or a drive hangs, the sheet gives up after 20 seconds and the prompt still appears. The three conditions in the `if` are: an interactive shell, output going to a terminal, and the command existing. Together they keep `scp`, `sftp`, cron jobs and VS Code's background shell quiet.
+
+**5. Test it in both places.** Open a new VS Code terminal (**Terminal**, then **New Terminal**) and a new SSH session from PowerShell. Both must show the cheat sheet. The first version of my block failed in VS Code ([H5](#h5-the-cheat-sheet-does-not-appear-in-the-vs-code-terminal)). The block above is the fixed one: it needs no variable.
+
+**Undo,** if you want the old `.bashrc` back (only if you changed nothing else in it since):
+
+```bash
+cp ~/.bashrc.bak-2026-10-23 ~/.bashrc
+```
+
+### Step 10: Replace a dead drive
+
+**Status: written and tested on fake drives on 2026-10-23. Not yet used on my real drive.** This is the part that lets me recover when the Toshiba (`MAIN1`) dies. The README explains it in [section 3.15](README.md#315-replace-a-dead-drive). `drives` is version 1.1 from here on, and `homelab` was updated too (its Main pool line now mentions `sudo drives replace`, and the cheat sheet has a line for it).
+
+**What I am relying on.** My main pool has one drive, so if it dies the whole pool is gone and every service stops. The only copy of my files is the daily backup in `/home/brandon/750GB_HDD/backup-interim` on the boot drive. `sudo drives replace` makes a new drive take the name `MAIN1`, shows what is missing, copies only the missing files from that backup, checks them, and then starts the containers. The new drive needs room for the 61 GB that are in the pool today, and it should be at least as big as I want the pool to be.
+
+**1. Put the new version on the server.** Copy `drives`, `homelab` and `SHA256SUMS` into the folder (`~/homelab-drives`, or `~/My-Home-Lab-/homelab-drives` after a `git pull`), then, inside that folder:
+
+```bash
+cd ~/homelab-drives
+sha256sum -c SHA256SUMS
+grep -c $'\r' drives homelab
+sudo install -m 755 drives /usr/local/sbin/drives
+sudo install -m 755 homelab /usr/local/bin/homelab
+sudo drives version
+homelab version
+```
+
+All five checksum lines must say `OK`, both line-ending counts must be `0`, and the versions must be `drives 1.1` and `homelab 1.0`. Then check that nothing else changed:
+
+```bash
+sudo drives status
+```
+
+**2. Rehearse it** with the USB stick and fake drives before a real drive dies. The commands are in the README, [section 3.15](README.md#315-replace-a-dead-drive), under "Rehearse it with a USB stick". When I have done it, I will paste the result here. **Not done yet.**
+
+**3. What a real failure looks like, and what I will do.**
+
+1. `homelab` shows `Main pool NOT MOUNTED` in red, the containers are down, and `sudo drives status` lists `MAIN1` as `MISSING`.
+2. Check the cable and the adapter's power, plug it in again and run `sudo hdd-recover`. If it comes back, stop here.
+3. If the drive is dead, plug in the new drive, check it with `lsblk -o NAME,SIZE,MODEL,TRAN`, and run `sudo drives replace`.
+4. Answer the questions, read the preview and type `RESTORE`.
+5. After the check says `Verified`, look at Immich, Nextcloud and FileBrowser, run `docker exec -u www-data nextcloud php occ files:scan --all`, and run `sudo homelab-backup`.
+
+**The tests.** I ran 58 automatic checks against fake drives (loop devices over image files) with a fake `docker` command that records which containers were stopped and started:
+
+| Scenario | What I checked |
+|---|---|
+| The only main drive dies | The new drive gets the label `MAIN1` and a new UUID in `/etc/fstab` (the old line is kept as a comment). Every file is identical afterwards (`sha256sum`), including symlinks, names with spaces and accents, and nested folders. The containers are stopped first and started only after the check. |
+| One of two main drives dies | Only the missing files come back. A file I had changed on the surviving drive after the backup was not overwritten, a file created after the backup was untouched, and a file I had deleted after the backup came back (documented behaviour). |
+| I type something other than `RESTORE` | Nothing is copied, the containers stay stopped, and `sudo drives restore` finishes the job later. Running it again says `Nothing is missing`. |
+| A backup drive dies | The new drive gets the label `BACKUP1`, the pool mounts, the main data is untouched, and the backup run is offered. |
+| Refusals | No missing drive, no backup found, a failed last backup, a wrong device name, `ERASE` not typed, a drive that is too small, and not enough free space all stop with the fstab unchanged and (where it applies) the drive not formatted. |
+| Two main drives die | The first replacement leaves the pool down and the containers stopped, the second brings it up and restores everything. |
+
+**One limit I found while testing.** In my fake-drive test, two hard-linked files showed different inode numbers through the mergerfs pool, so `rsync -H` copied them into the backup as two separate files. A restored hard link would then be a normal copy. I have not checked whether any of my real files are hard-linked.
+
+**Undo for the install,** if you want the old version back: install the old `drives` from the repository history, or from `/home/brandon/homelab-drives` if you still have it. The old version does not have the `replace` command and works as before.
 
 ### How the widgets see the drives
 
@@ -591,6 +768,8 @@ tailscale status | head -3
 ```
 
 Port 53 should no longer be held by `systemd-resolve`. `resolv.conf` should start with `# resolv.conf(5) file generated by tailscale` and show `nameserver 100.100.100.100`. The lookup should return an address, and `tailscale status` should still show the machine connected. If the lookup fails, undo it with the rollback in [F1](#f1-port-53-conflict-with-systemd-resolved).
+
+**A warning from later.** This worked for a month. On 2026-10-23, after Tailscale updated itself, the server could not look up any name while Tailscale owned `resolv.conf`. That is [F6](#f6-the-server-cannot-look-up-names-after-a-tailscale-update).
 
 **5. Create the stack.** In Portainer (`http://192.168.1.198:9000`), go to **Stacks**, then **Add stack**, name it `adguard`:
 
@@ -935,7 +1114,11 @@ services:
       APP_DEBUG: "false"
       APP_URL: "http://192.168.1.198:8088"
       DB_CONNECTION: sqlite
+    volumes:
+      - /home/brandon/speedtest-tracker:/config
 ```
+
+Create the folder first with `mkdir -p ~/speedtest-tracker`. I deployed this stack without the `volumes:` lines in Phase 9, and that cost me the app's data on 2026-10-23, when I updated it ([B6](#b6-a-container-starts-empty-after-update-the-stack)). The lines are there now.
 
 Open `http://192.168.1.198:8088` and log in with `admin@example.com` and `password`, then change both in your profile. Then create an API token at `http://192.168.1.198:8088/admin/api-tokens` with the **Read Results** ability, and run one speed test from the dashboard. Verify the token with:
 
@@ -1160,6 +1343,8 @@ GUIDE.md: OK
 /home/brandon/homelab-drives/hdd-recover:0
 /home/brandon/homelab-drives/homelab-backup:0
 ```
+
+That was the list at the time. Later the `GUIDE.md` line was dropped and `homelab` was added ([Step 9](#step-9-the-cheat-sheet-at-login)), so `SHA256SUMS` now lists five files: `drives`, `homelab-backup`, `hdd-recover`, `homelab-backup.conf.example` and `homelab`.
 
 **Step 1: check the server and install the tools.** Details and versions are in [section 2, Step 1](#step-1-install-the-tools-and-scripts).
 
@@ -1580,6 +1765,24 @@ sudo tail -f /var/log/homelab-backup.log
 
 **Verify:** while the backup runs, `pgrep -af homelab-backup` should list the process. After the log says `finished: OK`, it prints nothing, which is what I saw, and `sudo drives status` shows the result.
 
+#### A16. install says cannot stat when installing a script
+
+**Symptom:** running `sudo install -m 755 homelab /usr/local/bin/homelab` prints `install: cannot stat 'homelab': No such file or directory`.
+
+**Cause:** the command names the file without a path, so it looks in the folder the terminal is in. A new terminal starts in the home folder (`/home/brandon`), and the script is in `~/homelab-drives`. The same applies to `sha256sum -c SHA256SUMS`.
+
+**Fix:** go into the folder that holds the files, and run the command again:
+
+```bash
+cd ~/homelab-drives
+ls
+sudo install -m 755 homelab /usr/local/bin/homelab
+```
+
+If you cloned the repository, the folder is `~/My-Home-Lab-/homelab-drives`.
+
+**Verify:** `ls` lists `homelab`, `install` prints nothing, and `homelab version` prints `homelab 1.0`.
+
 ### B. Docker and Portainer
 
 #### B1. Docker installs from the wrong repository on Mint
@@ -1672,6 +1875,61 @@ docker pull ghcr.io/gethomepage/homepage:latest
 Then, in Portainer, open the stack and click **Update the stack** (or add the stack again with the same YAML and variables).
 
 **Verify:** `docker images | grep -E "immich|valkey|speedtest|homepage"` lists the images, and the stack deploys with nothing to download.
+
+#### B6. A container starts empty after Update the stack
+
+**Symptom:** I updated Speedtest Tracker in Portainer with **Update the stack**. The container started and was healthy, and `docker logs speedtest-tracker` ended with `generating self-signed keys`, but the app behaved like a new install: the old results and settings were gone.
+
+**Cause:** the stack had no `volumes:` line for `/config`, so Docker created an **anonymous volume** (a volume with a 64-character name and no label). When Portainer recreated the container, the new one got a new empty anonymous volume, and the old one was left behind unused. Bind mounts (a folder on the host) and named volumes are kept. Anonymous volumes are not reliably kept.
+
+**Fix (what I did, as steps).** I had copied `/config` out of the old container with `docker cp` before updating ([7.5](#75-speedtest-tracker)), so nothing was lost.
+
+1. Stop the container and make a folder on the host. Copy the saved data into it:
+
+   ```bash
+   docker stop speedtest-tracker
+   mkdir -p ~/speedtest-tracker
+   cp -a ~/speedtest-config-backup-2026-10-23/. ~/speedtest-tracker/
+   ls -la ~/speedtest-tracker
+   ```
+
+   If `cp` says `Permission denied`, the files belong to another user. Use `sudo cp -a` and then `sudo chown -R 1000:1000 ~/speedtest-tracker`. The container runs as user 1000 (`PUID`).
+
+2. In Portainer, open the `speedtest-tracker` stack, click **Editor**, and add a `volumes:` block under the service, at the same level as `ports:` and `environment:`:
+
+   ```yaml
+       volumes:
+         - /home/brandon/speedtest-tracker:/config
+   ```
+
+   Click **Update the stack**.
+
+3. Check it:
+
+   ```bash
+   docker ps --filter name=speedtest-tracker --format "table {{.Names}}\t{{.Status}}"
+   ls ~/speedtest-tracker
+   ```
+
+   Open `https://pc.griffin-luma.ts.net:1007`. The earlier results should be listed again, and the Speedtest card on Homepage should turn green. Mine did, and it stayed green after a second **Update the stack**, which is the real test.
+
+4. Add the folder to the daily backup ([section 2, Step 7](#step-7-the-daily-backup), "Extra folders").
+
+**Prevent it.** Before you update any stack, list which containers use anonymous volumes. A volume name made of 64 letters and digits is anonymous:
+
+```bash
+docker inspect $(docker ps -q) --format '{{.Name}}: {{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}'
+```
+
+To list only the anonymous ones:
+
+```bash
+docker inspect $(docker ps -q) --format '{{.Name}}: {{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}' | grep -E '[0-9a-f]{64}'
+```
+
+A container on the second list needs a bind mount or a named volume before you update it. Make a copy first with `docker cp <container>:<path> ~/some-folder`.
+
+**Verify:** the second command prints nothing for the container you are about to update, or you have a `docker cp` copy of its data.
 
 ### C. FileBrowser
 
@@ -2087,7 +2345,7 @@ echo "nameserver 192.168.1.1" | sudo tee /etc/resolv.conf
 sudo systemctl restart tailscaled
 ```
 
-The router's address in `resolv.conf` keeps the machine resolving names until AdGuard runs. Tailscale then replaces the file with its own, starting with `nameserver 100.100.100.100`.
+The router's address in `resolv.conf` keeps the machine resolving names until AdGuard runs. Tailscale then replaces the file with its own, starting with `nameserver 100.100.100.100`. If the server later stops resolving names with this setup, see [F6](#f6-the-server-cannot-look-up-names-after-a-tailscale-update).
 
 **Fix (the other method, from an earlier native install):** keep `systemd-resolved` running and turn off only its port 53 listener:
 
@@ -2205,6 +2463,88 @@ nslookup google.com 192.168.1.198
 ```
 
 `ss` should show ports 3000 and 53, `curl` should return a line starting with `HTTP/1.1`, and the lookup should still answer.
+
+#### F6. The server cannot look up names after a Tailscale update
+
+**Status:** fixed on 2026-10-23 and working since. **Not yet checked after a reboot.** I don't know yet whether the setting and the file below survive one. The check is at the end of this entry.
+
+**Symptom:**
+
+- `git clone https://github.com/...` on the server fails with `fatal: unable to access ...: Could not resolve host: github.com`.
+- `nslookup github.com` answers `** server can't find github.com: SERVFAIL` from `100.100.100.100`.
+- The Tailscale card on Homepage turns red, and its log shows `getaddrinfo EAI_AGAIN api.tailscale.com`. The Speedtest Tracker card was red at the same time (it had a second problem of its own, see [B6](#b6-a-container-starts-empty-after-update-the-stack)).
+- Everything that does not need a name still works: the web pages open by address and Docker keeps running.
+
+**Cause:** on this server Tailscale owns `/etc/resolv.conf` ([F1](#f1-port-53-conflict-with-systemd-resolved)). The file said `nameserver 100.100.100.100`, which is Tailscale's own resolver, and that resolver had nothing to forward to. The message I found was `dns: resolver: forward: no upstream resolvers set, returning SERVFAIL`. The Machines page showed `pc` on 1.104.2, one version newer than the 1.104.1 I had installed, so Tailscale had updated itself (see [7.13](#713-tailscale)) and I believe that change is what broke it. That is my best explanation, not something I proved. Docker containers copy the host's DNS setting when they start, so Homepage had the broken setting too.
+
+**Diagnose (read-only).** One command at a time:
+
+```bash
+cat /etc/resolv.conf
+nslookup github.com
+tailscale dns status
+docker logs adguardhome --tail 30
+```
+
+On my server `resolv.conf` started with `# resolv.conf(5) file generated by tailscale` and showed `nameserver 100.100.100.100`. A copy of the file from before Tailscale took it over was still there: `cat /etc/resolv.pre-tailscale-backup.conf` showed `nameserver 192.168.1.1`, the router.
+
+**What did not help.** `sudo systemctl restart tailscaled` changed nothing. `sudo tailscale set --accept-dns=false` stopped Tailscale from using its DNS, but it did not put the old file back, so `resolv.conf` still pointed at `100.100.100.100`.
+
+**Fix.** Do this on the local address or at the machine, not over a session through Tailscale ([E7](#e7-an-ssh-session-over-tailscale-drops-when-tailscale-restarts)).
+
+1. Tell Tailscale not to manage DNS on this machine:
+
+   ```bash
+   sudo tailscale set --accept-dns=false
+   ```
+
+2. Put back the file that Tailscale saved:
+
+   ```bash
+   sudo cp /etc/resolv.pre-tailscale-backup.conf /etc/resolv.conf
+   cat /etc/resolv.conf
+   ```
+
+   It should show `nameserver 192.168.1.1`.
+
+3. Check that names resolve:
+
+   ```bash
+   nslookup github.com
+   ```
+
+   It must return addresses.
+
+4. Restart Homepage **after** step 3, so the container copies the working DNS setting. I restarted it once too early, before the file was fixed, and had to do it again:
+
+   ```bash
+   docker restart homepage
+   ```
+
+5. Reload the dashboard. The Tailscale card should be green again. Mine was. (The Speedtest card also needed its data restored: [B6](#b6-a-container-starts-empty-after-update-the-stack).)
+
+**What this changes.** The server now sends its own lookups to the router (`192.168.1.1`), not through Tailscale. The server's own lookups do not pass through AdGuard Home, and names ending in `.ts.net` may not resolve on the server itself. Your other devices are not affected, and the Tailscale addresses on ports 1000 to 1008 still work for them.
+
+**Undo,** to let Tailscale manage DNS again:
+
+```bash
+sudo tailscale set --accept-dns=true
+```
+
+Tailscale then rewrites `/etc/resolv.conf` by itself.
+
+**Verify:**
+
+```bash
+cat /etc/resolv.conf
+nslookup github.com
+tailscale dns status
+docker ps --filter name=homepage --format "table {{.Names}}\t{{.Status}}"
+```
+
+The file shows the router's address, the lookup returns addresses, and Homepage is `Up` with a green Tailscale card.
+
+**Still to check after a reboot.** Run `sudo reboot`, wait about three minutes and run `cat /etc/resolv.conf` and `nslookup github.com` again. If the file is back to `100.100.100.100` and the lookup fails, repeat steps 1 to 4 and look at `tailscale debug prefs | grep -i dns` to see whether the setting was lost. I will replace this paragraph with the result.
 
 ### G. Homepage
 
@@ -2560,6 +2900,32 @@ autologin-user-timeout=0
 
 **Verify:** you connect with AnyDesk and the picture is smooth at a normal resolution.
 
+#### H5. The cheat sheet does not appear in the VS Code terminal
+
+**Symptom:** the cheat sheet from [Step 9](#step-9-the-cheat-sheet-at-login) appeared in an SSH session from PowerShell, but not in a new terminal in VS Code Remote-SSH, on the same server.
+
+**Cause:** my first version of the `~/.bashrc` block used a guard variable, `export HOMELAB_SHOWN=1`, so the sheet showed once per terminal. VS Code Remote-SSH reads your environment by starting a shell on the server and copying its variables into every terminal it opens. That shell ran my block, which exported `HOMELAB_SHOWN=1`, so every VS Code terminal began with the variable already set and printed nothing. In a VS Code terminal, `echo "[$HOMELAB_SHOWN]"` printed `[1]`; in a fresh SSH session it printed `[]`.
+
+**Fix:** remove the guard variable. The block does not need one, because it only runs in a shell that is interactive and attached to a terminal. The background shell VS Code uses has its output captured, so the `[ -t 1 ]` test skips it.
+
+1. Look at what is in the file now:
+
+   ```bash
+   grep -n 'homelab\|HOMELAB' ~/.bashrc
+   ```
+
+2. Remove the old block, and add the new one. If your block used the same two marker lines as in Step 9, this removes it:
+
+   ```bash
+   sed -i '/# >>> homelab login display >>>/,/# <<< homelab login display <<</d' ~/.bashrc
+   ```
+
+   Then add the block from [Step 9, part 4](#step-9-the-cheat-sheet-at-login). If `grep` still shows a line with `HOMELAB_SHOWN`, open the file with `nano ~/.bashrc` and delete that line by hand.
+
+3. Close the VS Code terminals and open a new one. If the old variable is still set, clear it in that terminal with `unset HOMELAB_SHOWN`. If a new terminal still shows `[1]`, run **Remote-SSH: Kill VS Code Server on Host** from the Command Palette and reconnect. I did not need that step.
+
+**Verify:** a new VS Code terminal and a new SSH session both show the cheat sheet, `echo "[$HOMELAB_SHOWN]"` prints `[]`, and `ssh brandon@192.168.1.198 "echo ok"` from PowerShell prints only `ok`. All of that was true on my server.
+
 ### I. Hardware and boot
 
 #### I1. The mini PC won't start, and the light by the power jack flickers
@@ -2591,6 +2957,9 @@ autologin-user-timeout=0
 ```bash
 lsblk -f                                       # drives, filesystems, labels, mount points
 sudo drives status                             # pools, pool drives with SMART health, and the last backup
+homelab                                        # cheat sheet and live status (shown when a terminal opens)
+sudo drives replace                            # a pool drive died: swap it and restore the missing files from the backup
+sudo drives restore                            # only the restore part: preview, copy the missing files, check
 findmnt /mnt/storage                           # is the main pool mounted?
 findmnt /mnt/disks/MAIN1                       # is the drive itself mounted? (one path per findmnt)
 df -hT                                         # space used on each drive
@@ -2599,6 +2968,10 @@ docker logs <container> --tail 30              # recent logs
 docker exec <container> df -h /data            # which drive a container sees
 tailscale serve status                         # every Tailscale address and where it points
 sudo ss -tulpn | grep :53                      # who is using the DNS port
+cat /etc/resolv.conf                           # who owns DNS on the server (Tailscale's file says nameserver 100.100.100.100)
+nslookup github.com                            # can the server look up names? SERVFAIL: see F6
+tailscale dns status                           # what Tailscale does with DNS on this machine
+docker inspect $(docker ps -q) --format '{{.Name}}: {{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}'   # volumes per container (64 hex characters = anonymous, see B6)
 sudo smartctl -A /dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)") | grep -E "Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending"
 sudo smartctl -A -d sat /dev/disk/by-label/MAIN1 | grep -E "Power_On_Hours|Load_Cycle|Reallocated_Sector|Current_Pending"
 sudo hdparm -B "/dev/$(lsblk -no pkname "$(readlink -f /dev/disk/by-label/MAIN1)")"   # data drive power setting (should be 254)
@@ -2682,6 +3055,9 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 - [ ] Check `sudo drives status` every few days: every pool drive `PASSED`, and the last backup `OK` with a recent date. Keep an eye on the numbers from `smartctl` too (zeros for reallocated and pending sectors).
 - [ ] The daily backup dumps Nextcloud's database (30 days kept) and keeps deleted files for 30 days. Until a backup drive is connected, it sits on the boot drive, which doesn't protect against a failed boot drive.
 - [ ] Run one command at a time when checking things, and keep any "undo" command in its own block.
+- [ ] If a pool drive dies for good, use `sudo drives replace` ([Step 10](#step-10-replace-a-dead-drive)). Rehearse it once with the USB stick before it is needed. Do not improvise on the live pool.
+- [ ] Run `sudo install` and `sha256sum -c` from inside the folder that holds the files ([A16](#a16-install-says-cannot-stat-when-installing-a-script)). Keep `SHA256SUMS` in step with the files: five lines today.
+- [ ] Keep the `homelab` login block in `~/.bashrc` free of exported variables, or VS Code copies them into every terminal ([H5](#h5-the-cheat-sheet-does-not-appear-in-the-vs-code-terminal)).
 
 **Deploying**
 
@@ -2690,13 +3066,23 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 - [ ] Use the exact stack names from this guide, because container names are built from them.
 - [ ] Choose passwords with letters and numbers only, and write them down before deploying. Nextcloud reads them only once.
 - [ ] Put a `base64:` prefix on Speedtest Tracker's app key, and change the default `admin@example.com` login.
+- [ ] Give every container's data a bind-mounted folder or a named volume, never an anonymous one ([B6](#b6-a-container-starts-empty-after-update-the-stack)). Check with the `docker inspect` line in section [5](#5-diagnostic-commands).
 
 **Network**
 
 - [ ] Reserve the server's address in the router.
 - [ ] After a Tailscale rename or port change, check `tailscale serve status` and update Homepage's `HOMEPAGE_ALLOWED_HOSTS`, Nextcloud's overwrite settings and your apps.
 - [ ] Use the local address (`192.168.1.198`), not the Tailscale one, for any step that restarts Tailscale.
+- [ ] After a Tailscale update, run `nslookup github.com` on the server. If it says `SERVFAIL`, follow [F6](#f6-the-server-cannot-look-up-names-after-a-tailscale-update).
 - [ ] Point each device's DNS at the server by hand if the router won't allow it, and check the AdGuard Query Log.
+
+**Updating**
+
+- [ ] Before any update, run `sudo homelab-backup`, wait for `finished: OK`, and update one service at a time (section [7](#7-updating-services)).
+- [ ] Run `docker pull` first and update only what says `Downloaded newer image`. Update Immich and Nextcloud on their own, never together.
+- [ ] Pin Nextcloud to its major version (`nextcloud:35-apache`) so a re-pull can't start a major upgrade by surprise, and never skip a major version.
+- [ ] Update Tailscale from the local address (`192.168.1.198`), and expect every container to restart when Docker Engine is updated.
+- [ ] FileBrowser is no longer maintained. Keep it off the internet and keep its command runner off.
 
 **Homepage and secrets**
 
@@ -2704,3 +3090,606 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 - [ ] Copy API tokens and keys with the copy button when they're first shown, and never commit real ones. Use `your-own-key` in files you publish.
 - [ ] Check a YAML file with a parser before you copy it to the server.
 - [ ] After editing a Homepage file, restart it and hard-refresh the browser.
+
+---
+
+## 7. Updating services
+
+How to keep each service, and the system under it, up to date. Written on 2026-10-23.
+
+**How much of this has been tested.** I updated Portainer on 2026-10-22 ([7.3](#73-portainer)) and Speedtest Tracker on 2026-10-23 ([7.5](#75-speedtest-tracker)), and those two sections show what I ran and what happened, including what went wrong. Everything else was written from each project's own documentation and release page, and **I have not run those steps on this server yet**. Each service says so. When I run one, I will replace its "not yet run" line with the real output.
+
+**How updates work here.** Most images use a moving tag (`latest`, `release` or no tag), so a container never updates by itself. An update is always the same two moves: download the newer image, then recreate the container from it. In Portainer, the second move is **Update the stack**. Settings and data that live in bind-mounted folders and in named Docker volumes survive the recreate. Data in an **anonymous** volume may not: it is how Speedtest Tracker lost its data ([B6](#b6-a-container-starts-empty-after-update-the-stack)). Check for them first (7.2, check 5).
+
+### 7.1 What can be updated
+
+Versions found on the projects' release pages on 2026-10-23. "Running" comes from my server report of 2026-10-20, except Portainer, Speedtest Tracker and Tailscale, which I looked at later. Check the live state with [7.2](#72-before-you-update-anything) before you act on this table.
+
+| Service | Stack | Running | Newest found | What to do |
+|---|---|---|---|---|
+| Portainer | none (standalone container) | 2.45.2 | 2.45.3 | Updated on 2026-10-22: [7.3](#73-portainer) |
+| Homepage | `homepage` | v2.6.0 | v2.6.0 | Nothing to do: [7.4](#74-homepage) |
+| Speedtest Tracker | `speedtest-tracker` | v1.15.1-ls177 | v1.15.1 | Updated on 2026-10-23, and lost its data once: [7.5](#75-speedtest-tracker) |
+| Netdata | `netdata` | nightly build | not versioned | Optional: [7.6](#76-netdata) |
+| Beszel hub and agent | `beszel`, `beszel-agent` | 0.21.0 | 0.21.1 | Update, hub first: [7.7](#77-beszel-hub-and-agent) |
+| AdGuard Home | `adguard` | v0.107.79 | v0.107.79 | Nothing to do (pinned tag): [7.8](#78-adguard-home) |
+| FileBrowser | `filebrowser` | 2.63.23 | 2.63.23 | Nothing to do, and none will come: [7.9](#79-filebrowser) |
+| Immich | `immich` | v3.3.3 | v3.3.5 | Update (security fixes): [7.10](#710-immich) |
+| Nextcloud | `nextcloud` | 35.0.2 | 35.0.2 | Nothing to do now: [7.11](#711-nextcloud) |
+| Docker Engine | system | 29.9.1 | 29.9.2 | Update: [7.12](#712-docker-engine) |
+| Tailscale | system | 1.104.2 (updated itself) | 1.104.2 | Nothing to install, but check DNS: [7.13](#713-tailscale) |
+| Linux Mint packages | system | not checked | not checked | Check and update: [7.14](#714-linux-mint-packages) |
+
+Two notes on this table:
+
+- **Immich v3.3.5** is a security release. Its release notes list no breaking changes and no manual steps, and say to update as soon as possible.
+- **FileBrowser** is finished as a project. Its repository was archived on 2026-09-01, and its notice says there will be no further releases, bug fixes or security fixes. Version 2.63.23, which I run, is the last one. The notice suggests treating a copy that stays in use as unmaintained software.
+
+### 7.2 Before you update anything
+
+Do these five things every time. They take a few minutes and make every later step safer.
+
+**1. Pick a quiet time.** Avoid 6:00 to 6:30, when the daily backup runs. Update one service at a time and wait until it is healthy before the next one. Never start Immich and Nextcloud together (see [A10](#a10-immich-and-nextcloud-overload-the-machine-when-they-start-together)).
+
+**2. Make a fresh backup.** The first full run took 24 minutes. Later runs copy only what changed, so they should be shorter, but I haven't timed one yet. In the Linux server terminal:
+
+```bash
+sudo nohup /usr/local/sbin/homelab-backup >/dev/null 2>&1 &
+sudo tail -f /var/log/homelab-backup.log
+```
+
+Press `Ctrl+C` when the log says `finished: OK`, then check the result:
+
+```bash
+sudo drives status
+```
+
+The "Last backup" line should show `result: OK` and today's time. Know what this backup covers:
+
+| Covered by `homelab-backup` | Not covered |
+|---|---|
+| Everything in the main pool (`/mnt/storage`): Immich photos, Immich's own database dumps, Nextcloud files | The Immich database folder `/home/brandon/immich/postgres` (live files) |
+| A fresh dump of the Nextcloud database | The Nextcloud database folder `/home/brandon/nextcloud/db` (the dump covers it) |
+| Homepage config, AdGuard Home config, Nextcloud app files, and the Portainer, Beszel and FileBrowser volumes | The Netdata volumes. Speedtest Tracker's folder is covered only after you add it to `CONFIG_PATHS` ([Step 7](#step-7-the-daily-backup), "Extra folders") |
+
+Also remember that the backup lives on the boot drive until a backup drive is connected, so it does not protect against that drive failing.
+
+**3. See which images have a newer version.** Pulling only downloads an image. It does not touch a running container, so it is safe to run any time. Run the pulls one at a time, because the GitHub registry throttles parallel downloads ([B5](#b5-toomanyrequests-from-githubs-container-registry)). Each pull ends with either `Status: Downloaded newer image` (an update is available) or `Status: Image is up to date` (nothing to do):
+
+```bash
+docker pull ghcr.io/gethomepage/homepage:latest
+docker pull lscr.io/linuxserver/speedtest-tracker:latest
+docker pull netdata/netdata
+docker pull henrygd/beszel:latest
+docker pull henrygd/beszel-agent
+docker pull filebrowser/filebrowser
+docker pull ghcr.io/immich-app/immich-server:release
+docker pull ghcr.io/immich-app/immich-machine-learning:release
+docker pull nextcloud:apache
+```
+
+Pulling `nextcloud:apache` is harmless, but it can download a **new major version** of Nextcloud. Don't recreate Nextcloud until you have read section [7.11](#711-nextcloud). The Netdata image is large (about 1.3 GB), so give it time.
+
+**4. Read the release notes** of anything you are about to update. The links are in [Sources](#716-sources).
+
+**5. Check for anonymous volumes.** A container that keeps its data in an anonymous volume can come back empty after **Update the stack** ([B6](#b6-a-container-starts-empty-after-update-the-stack)). This only reads information:
+
+```bash
+docker inspect $(docker ps -q) --format '{{.Name}}: {{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{end}}{{end}}' | grep -E '[0-9a-f]{64}'
+```
+
+Any container listed there needs a bind mount before you update it, or at least a `docker cp <container>:<path> ~/some-folder` copy of its data. If nothing is listed, you are fine.
+
+**The same Portainer steps for every stack.** Each service section below refers to them:
+
+1. Open Portainer and click **Stacks**, then the name of the stack.
+2. Click the **Editor** tab. Leave the YAML and the environment variables alone. Passwords and keys stay saved.
+3. If a switch called **Re-pull image and redeploy** is shown, switch it on. If it isn't shown, nothing is lost: the image was already downloaded in the terminal, and Docker Compose recreates a container when its image has changed.
+4. Click **Update the stack**. The page says the request was accepted, and the containers restart in the background.
+5. Back in the terminal, check the result with:
+
+```bash
+docker ps --format "table {{.Names}}\t{{.Status}}"
+```
+
+### 7.3 Portainer
+
+**Status: done and tested on 2026-10-22** (2.45.2 to 2.45.3). Portainer is the one container here that is not a stack. It was started with `docker run`, so it is recreated from the terminal, not with **Update the stack**. Its settings, users, stack files and the token Homepage uses are in the `portainer_data` volume, so they survive.
+
+**1. Record how it runs now.** This only reads information:
+
+```bash
+docker inspect portainer --format 'Image: {{.Config.Image}}{{"\n"}}Restart: {{.HostConfig.RestartPolicy.Name}}{{"\n"}}Ports: {{json .HostConfig.PortBindings}}{{"\n"}}Mounts:{{range .Mounts}}{{"\n"}}  {{.Type}} {{.Name}} {{.Source}} -> {{.Destination}}{{end}}'
+```
+
+Mine printed `portainer/portainer-ce:latest`, `Restart: always`, ports 9000 and 9443, the `portainer_data` volume at `/data` and the Docker socket. Every option in step 4 comes from this output.
+
+**2. Stop Portainer and back up its data.** Stopping first means the database file is not being written to. Your other containers are not affected. The Portainer page and the Homepage Portainer card are down until step 4. The backup holds Portainer's private keys, so lock it down and never put it on GitHub:
+
+```bash
+docker stop portainer
+sudo tar -czf ~/portainer_data-backup-$(date +%F).tar.gz -C /var/lib/docker/volumes/portainer_data/_data .
+sudo chown brandon:brandon ~/portainer_data-backup-$(date +%F).tar.gz
+chmod 600 ~/portainer_data-backup-$(date +%F).tar.gz
+ls -lh ~/portainer_data-backup-$(date +%F).tar.gz
+```
+
+Mine was 77 KB and listed `portainer.db`, `portainer.key`, `tls/`, `chisel/` and `compose/` (the nine stack files).
+
+**3. Download the new image.** The old container stays where it is:
+
+```bash
+docker pull portainer/portainer-ce:latest
+docker images portainer/portainer-ce
+```
+
+The image ID changed from `03f94a406496` to `3609c307943b`.
+
+**4. Keep the old container as a spare and start the new one.** The rename and the restart policy `no` mean the old one never starts by itself:
+
+```bash
+docker rename portainer portainer-old
+docker update --restart=no portainer-old
+```
+
+```bash
+docker run -d --name portainer --restart=always -p 9000:9000 -p 9443:9443 -v portainer_data:/data -v /var/run/docker.sock:/var/run/docker.sock portainer/portainer-ce:latest
+```
+
+**5. Check it:**
+
+```bash
+docker ps --filter name=portainer --format "table {{.Names}}\t{{.Image}}\t{{.Status}}"
+docker logs --tail 15 portainer
+```
+
+The log showed `migrating database from version 2.45.2 to 2.45.3`, a safety copy at `/data/backups/portainer.db.bak`, and `starting Portainer ... version=2.45.3` with the web server listening on ports 9000 and 9443. Then log in and look at the version at the bottom of the left menu.
+
+**6. Clean up** once everything has worked for a day or so:
+
+```bash
+docker rm portainer-old
+docker image prune
+```
+
+`docker image prune` removes the old, unused image (about 200 MB). It asks for confirmation.
+
+**Rollback (not tested).** The database was upgraded, so starting `portainer-old` against it is not safe. Go back by restoring the backup into the volume and running the old version:
+
+```bash
+docker stop portainer
+docker rm portainer
+sudo find /var/lib/docker/volumes/portainer_data/_data -mindepth 1 -delete
+sudo tar -xzf ~/portainer_data-backup-2026-10-22.tar.gz -C /var/lib/docker/volumes/portainer_data/_data
+docker run -d --name portainer --restart=always -p 9000:9000 -p 9443:9443 -v portainer_data:/data -v /var/run/docker.sock:/var/run/docker.sock portainer/portainer-ce:2.45.2
+```
+
+Use the date of your own backup file in the `tar` line.
+
+### 7.4 Homepage
+
+**Status: written from the documentation, not yet run on my server.** Homepage v2.6.0 is the newest release (published on 2026-10-17), so there is nothing to update now. When a newer one appears:
+
+1. Do the four checks in [7.2](#72-before-you-update-anything). Homepage's settings are in `/home/brandon/homepage-config`, which the daily backup covers.
+2. Read the release notes. The v2.6.0 notes mention changes to how `$` is handled in secrets, so check the notes when your keys contain a dollar sign.
+3. Download the image:
+
+   ```bash
+   docker pull ghcr.io/gethomepage/homepage:latest
+   ```
+
+4. In Portainer, open the `homepage` stack and use **Update the stack** (the steps are in 7.2). The settings folder is a bind mount, and `HOMEPAGE_ALLOWED_HOSTS` is part of the stack, so both stay as they are.
+5. Check it. The container should become `healthy`, the log should not show a "Host validation failed" line, and the page should load after a hard refresh (`Ctrl+Shift+R`):
+
+   ```bash
+   docker ps --filter name=homepage --format "table {{.Names}}\t{{.Status}}"
+   docker logs --tail 20 homepage
+   ```
+
+   The Netdata line `Parse Error: Data after Connection: close` is known and harmless ([G13](#g13-the-netdata-card-is-green-but-homepages-log-shows-a-parse-error)).
+
+**Rollback:** in the stack's **Editor**, change `homepage:latest` to the previous version's tag (for example `homepage:v2.6.0`) and click **Update the stack**. Your files in `/home/brandon/homepage-config` are not changed by an update.
+
+### 7.5 Speedtest Tracker
+
+**Status: done on 2026-10-23** (v1.15.0 to v1.15.1-ls177), **but it lost its data and I had to restore it.** The update itself is easy. The data loss was my own setup's fault, and it is fixed for good now. Version v1.15.1 was released on 2026-10-22. Its notes list a fix for a server filter that returned nothing with SQLite, and dependency updates. They list no breaking change.
+
+**What happened.** My stack had no `volumes:` line, so Speedtest Tracker's `/config` folder (the database, the settings and the application key) was an anonymous Docker volume. I copied `/config` out by hand before updating, which saved the data. **Update the stack** then started a new container with a new empty volume. The old results and settings were gone until I restored them ([B6](#b6-a-container-starts-empty-after-update-the-stack)). My first version of this section said that the data survives a recreate. That was wrong for this container.
+
+**The procedure to follow,** with what I learned. If your stack already has the bind mount from [Phase 9](#phase-9-speedtest-tracker-and-netdata), skip step 2.
+
+1. Do the five checks in [7.2](#72-before-you-update-anything).
+2. **Make sure `/config` is a folder on the host, not an anonymous volume.** Check:
+
+   ```bash
+   docker inspect speedtest-tracker --format '{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}}{{println}}{{end}}'
+   ```
+
+   You want a line that starts with `bind /home/brandon/speedtest-tracker -> /config`. A line that starts with `volume` and a long name means an anonymous volume. In that case, do the fix in [B6](#b6-a-container-starts-empty-after-update-the-stack) first (copy the data, add the `volumes:` lines), and only then update.
+3. Make a copy by hand anyway. It is cheap, and it is what saved my data:
+
+   ```bash
+   docker cp speedtest-tracker:/config ~/speedtest-config-backup-$(date +%F)
+   ls ~/speedtest-config-backup-$(date +%F)
+   ```
+
+   Keep this copy private. It contains the database and the application key.
+4. Download the image:
+
+   ```bash
+   docker pull lscr.io/linuxserver/speedtest-tracker:latest
+   ```
+
+5. In Portainer, open the `speedtest-tracker` stack and use **Update the stack**. `APP_KEY` stays in the stack's variables, so don't retype it.
+6. Check it:
+
+   ```bash
+   docker ps --filter name=speedtest-tracker --format "table {{.Names}}\t{{.Status}}"
+   docker logs --tail 20 speedtest-tracker
+   ```
+
+   The log may say `generating self-signed keys` on the first start of a new `/config`. That is normal for an empty folder, and it is also what I saw when the data was lost, so don't use that line as proof either way. Open `https://pc.griffin-luma.ts.net:1007`, log in, and check that the past results are still listed. Then check that the Speedtest card on the Homepage dashboard shows numbers. Its API token lives in the database, so it should keep working.
+
+**Result on my server:** after the restore and the bind mount, the card was green, and it was still green after another **Update the stack**.
+
+**Rollback:** in the **Editor**, change `:latest` to the earlier version's tag (the report showed `v1.15.0-ls175`; check the exact spelling on the image's tag list) and click **Update the stack**. If the new version changed the database, stop the container and put the copy from step 3 back into the data folder:
+
+```bash
+docker stop speedtest-tracker
+cp -a ~/speedtest-config-backup-DATE/. ~/speedtest-tracker/
+docker start speedtest-tracker
+```
+
+### 7.6 Netdata
+
+**Status: written from the documentation, not yet run on my server.** My stack uses `netdata/netdata` with no tag, which means `latest`. Netdata's documentation says `latest` may include nightly builds, and my report showed a nightly build. There is no fixed version to compare, so a pull simply tells you whether the image changed. The configuration, data and cache are in the volumes `netdataconfig`, `netdatalib` and `netdatacache` and survive an update.
+
+1. Do the checks in [7.2](#72-before-you-update-anything). Nothing here needs special care.
+2. Download the image (about 1.3 GB):
+
+   ```bash
+   docker pull netdata/netdata
+   ```
+
+3. If it printed `Downloaded newer image`, open the `netdata` stack in Portainer and use **Update the stack**.
+4. Check it:
+
+   ```bash
+   docker ps --filter name=netdata --format "table {{.Names}}\t{{.Status}}"
+   docker exec netdata-netdata-1 netdata -W buildinfo | head -5
+   ```
+
+   The container should become `healthy`. The Netdata card on Homepage should be green.
+
+**Optional: follow stable releases only.** To avoid nightly builds, change the image line in the stack's **Editor** from `netdata/netdata` to `netdata/netdata:stable` and click **Update the stack**. Netdata's documentation describes `stable` as the most recently published stable build. I have not done this, so treat it as a choice to make, not a fix.
+
+**Rollback:** change the image line to a version tag from the image's tag list on Docker Hub (for example `netdata/netdata:v2.0.0`, written here as a format example only) and update the stack.
+
+### 7.7 Beszel hub and agent
+
+**Status: written from the documentation, not yet run on my server.** Version 0.21.1 was released on 2026-10-22. The notes mention that some memory fields are being replaced by new fields that carry byte values, and that the new fields are filled in by a hub 0.21.1 or newer. Beszel's guides don't state an update order. My reasoning is that the hub should be updated first so it understands everything the newer agent sends. That is my inference, not a rule from the project.
+
+1. Do the four checks in [7.2](#72-before-you-update-anything). The Beszel hub's data is in the `beszel_beszel_data` volume, which the daily backup covers. Beszel's guide also mentions the hub's own backup feature as an extra copy.
+2. Download both images:
+
+   ```bash
+   docker pull henrygd/beszel:latest
+   docker pull henrygd/beszel-agent
+   ```
+
+3. **Hub first.** In Portainer, open the `beszel` stack and use **Update the stack**. Check it:
+
+   ```bash
+   docker ps --filter name=beszel --format "table {{.Names}}\t{{.Status}}"
+   docker logs --tail 15 beszel
+   ```
+
+   Open the Beszel page (`https://pc.griffin-luma.ts.net:1003`) and log in. The system `pc` should still be listed.
+4. **Then the agent.** Open the `beszel-agent` stack and use **Update the stack**. The `KEY` and `TOKEN` variables stay saved, so don't retype them. The system `pc` should show as up again in the hub within a minute.
+5. Check that the Beszel card on Homepage shows the numbers.
+
+**Rollback:** change the image lines to `henrygd/beszel:0.21.0` and `henrygd/beszel-agent:0.21.0` in the two stacks' **Editor** and update them. If the hub's data looks wrong afterwards, restore the `beszel_beszel_data` folder from the backup (`/home/brandon/750GB_HDD/backup-interim/boot-configs/var/lib/docker/volumes/beszel_beszel_data`) with the hub stopped.
+
+### 7.8 AdGuard Home
+
+**Status: written from the documentation, not yet run on my server.** This stack pins its version in the image line (`adguard/adguardhome:v0.107.79`), so it never changes by itself. v0.107.79 is also the newest release found (published in August), so there is nothing to update now. When a newer version is out:
+
+1. Read its release notes on the project's release page. The v0.107.79 notes say `strict_sni_check` is deprecated, so check whether my config uses it:
+
+   ```bash
+   sudo grep -n strict_sni_check /opt/adguard-docker/conf/AdGuardHome.yaml
+   ```
+
+   No output means it isn't set.
+2. Do the checks in [7.2](#72-before-you-update-anything), then copy the AdGuard configuration. The copy holds a password hash, so keep it private:
+
+   ```bash
+   sudo cp -a /opt/adguard-docker/conf ~/adguard-conf-backup-$(date +%F)
+   ```
+
+3. Download the new version. Replace `vX.Y.Z` with the version you picked, for example the one in the release notes:
+
+   ```bash
+   docker pull adguard/adguardhome:vX.Y.Z
+   ```
+
+4. In Portainer, open the `adguard` stack, click **Editor**, change only the version at the end of the image line to `vX.Y.Z`, and click **Update the stack**. DNS is down for a few seconds. Devices that use 8.8.8.8 as their alternate keep working, without filtering.
+5. Check it:
+
+   ```bash
+   docker ps --filter name=adguardhome --format "table {{.Names}}\t{{.Status}}"
+   nslookup example.com 192.168.1.198
+   ```
+
+   The lookup should return an address. Open AdGuard Home (`https://pc.griffin-luma.ts.net:1004`) and check that the Query Log is filling and the version in the footer is the new one.
+
+**Rollback:** change the image line back to the old tag (`v0.107.79`) in the **Editor** and update the stack. If the configuration file was changed by the newer version, stop the container, put the copy from step 2 back into `/opt/adguard-docker/conf`, and start it.
+
+### 7.9 FileBrowser
+
+**Status: nothing to update, and nothing will come.** The latest and last release is 2.63.23, which is what I run. The project's repository was archived on 2026-09-01, and its notice says there will be no further releases, bug fixes or security fixes. The Docker images stay available.
+
+You can confirm that nothing changed with:
+
+```bash
+docker pull filebrowser/filebrowser
+```
+
+It should end with `Status: Image is up to date`. If it ever downloads something newer, update it like the others: open the `filebrowser` stack in Portainer and use **Update the stack**, then check `docker ps` for `filebrowser-filebrowser-1`.
+
+What I do about it, following the project's own advice for unmaintained software:
+
+- FileBrowser is reachable only through Tailscale. There is no port forwarding on the router, so it is not exposed to the internet.
+- Keep its command runner turned off (the FileBrowser settings page has the switch).
+- Replacing it with a maintained file manager is a decision for later. I have not chosen one.
+
+### 7.10 Immich
+
+**Status: written from the documentation, not yet run on my server.** v3.3.5 is a security release with no breaking changes and no manual steps listed. The stack uses `ghcr.io/immich-app/immich-server:release` and the matching machine-learning image, so a re-pull moves to the newest version.
+
+Immich's own rules, from its upgrade page:
+
+- Read the release notes first. Breaking changes are supposed to appear only in major releases.
+- The server only works with its own major version. The mobile apps support the current and the previous major version, so update the iPhone app first when a major version changes.
+- Downgrades are not supported, not even inside a minor version. Rolling back means restoring a backup.
+
+Steps:
+
+1. Do the four checks in [7.2](#72-before-you-update-anything), including the fresh backup.
+2. Make a fresh database dump. Immich also writes its own dump every night at 2:00 into the `backups` folder of the photo folder and keeps the last 14. Create one now: in the Immich web page, open **Administration**, then **Job Queues**, click **Create job**, choose **Create Database Dump** and confirm. Then check that it appeared:
+
+   ```bash
+   ls -lh /mnt/storage/immich/backups | tail -3
+   ```
+
+   The newest file should have today's time.
+3. Download the two images, one at a time (the GitHub registry throttles parallel pulls):
+
+   ```bash
+   docker pull ghcr.io/immich-app/immich-server:release
+   docker pull ghcr.io/immich-app/immich-machine-learning:release
+   ```
+
+4. Leave the database image (`immich/postgres:14-vectorchord0.4.3-pgvectors0.2.0`) and the Valkey image exactly as they are. They are pinned on purpose, and Immich's release notes say when they change.
+5. In Portainer, open the `immich` stack and use **Update the stack**.
+6. Wait. A first start after an update can take from seconds to several minutes. Logs that seem stuck on `Reindexing clip_index` or `Reindexing face_index` are normal as long as no error appears. Don't touch Nextcloud meanwhile. Follow the log and the status until all four containers are `healthy`:
+
+   ```bash
+   docker logs -f --tail 30 immich_server
+   ```
+
+   Press `Ctrl+C` to leave the log, then:
+
+   ```bash
+   docker ps --format "table {{.Names}}\t{{.Status}}"
+   ```
+
+7. Check it. Open Immich (`https://pc.griffin-luma.ts.net:1002`), log in, and confirm that the server version is the new one and that your photos and the storage meter (bottom left) show as before. Open the Immich app on the iPhone and let it sync. Then check the Immich card on Homepage and the Nextcloud integration (Nextcloud's Immich page should still list your photos).
+8. When everything is fine, free the disk space of the old images:
+
+   ```bash
+   docker image prune
+   ```
+
+**Rollback:** only for a small problem inside the same major version. In the stack's variables set `IMMICH_VERSION` to the previous version (for example `v3.3.3`) and click **Update the stack**. Immich does not support downgrades, so if the database was changed by the new version, restore the database from the dump made in step 2 following Immich's backup and restore page.
+
+### 7.11 Nextcloud
+
+**Status: written from the documentation, not yet run on my server.** 35.0.2 is the newest Nextcloud 35 release (published on 2026-10-15), which is what I run (`35.0.2.2`), so there is nothing to update now. My stack also has `postgres:16-alpine` (the database), `redis:alpine` (the cache) and a second container, `nextcloud_cron`, that uses the same Nextcloud image.
+
+**The one rule that matters.** The Docker image docs say it is only possible to upgrade one major version at a time (for example 35 to 36, never 35 straight to 37). My image line is `nextcloud:apache`, which always points at the newest major. So the day Nextcloud 36 arrives, a re-pull followed by **Update the stack** would start that upgrade without asking. To stay in control, pin the major version once, in the `nextcloud` stack's **Editor**: change both `image: nextcloud:apache` lines (the `nextcloud` and the `nextcloud_cron` service) to `image: nextcloud:35-apache`, then click **Update the stack**. It's the same software, so nothing changes today. I have not done this yet.
+
+**A normal update inside the same major version (for example 35.0.2 to 35.0.3):**
+
+1. Do the four checks in [7.2](#72-before-you-update-anything). The backup includes a fresh dump of the Nextcloud database, and that is your safety net, because Nextcloud cannot go back to an older version.
+2. Write down the current state:
+
+   ```bash
+   docker exec -u www-data nextcloud php occ status
+   ```
+
+   It should say `installed: true`, the version, and `maintenance: false`.
+3. Download the image for your pinned tag:
+
+   ```bash
+   docker pull nextcloud:35-apache
+   ```
+
+4. In Portainer, open the `nextcloud` stack and use **Update the stack**. Both Nextcloud containers are recreated. On start, the image notices the new version and runs the upgrade by itself, so you don't run `occ upgrade`.
+5. Watch the log until Apache is ready. The first start after an update can take several minutes, and the page shows an error until then ([D5](#d5-a-502-right-after-deploying-nextcloud)):
+
+   ```bash
+   docker logs -f --tail 30 nextcloud
+   ```
+
+   Press `Ctrl+C` when it says it is ready.
+6. Check the result:
+
+   ```bash
+   docker exec -u www-data nextcloud php occ status
+   docker ps --format "table {{.Names}}\t{{.Status}}"
+   ```
+
+   It should show the new version, `needsDbUpgrade: false` and `maintenance: false`.
+7. Update the apps (such as `integration_immich`) from Nextcloud: sign in as admin, open the profile menu, click **Apps**, then **Updates**, and update what is listed. The command-line version, which I have not run, is:
+
+   ```bash
+   docker exec -u www-data nextcloud php occ app:update --all
+   ```
+
+8. Open **Administration settings**, then **Overview**, and read the list of warnings. Check the Homepage Nextcloud card too (it reads `/status.php` and the serverinfo token).
+
+**A major upgrade (35 to 36).** Don't do it on the day it's released. Wait until the apps you use (including `integration_immich`) support it, read the Nextcloud release notes, make sure the backup is fresh, and then in the **Editor** change both image lines from `35-apache` to `36-apache` and update the stack. Do one major at a time.
+
+**Rollback:** there is none inside Nextcloud. Restore the database dump from the backup (`db-dumps` folder in the backup) and the app files, which means you also need the matching older image. That's why the backup comes first.
+
+### 7.12 Docker Engine
+
+**Status: written from the documentation, not yet run on my server.** 29.9.2 is newer than the 29.9.1 I run. Docker came from Docker's Ubuntu `noble` repository ([B1](#b1-docker-installs-from-the-wrong-repository-on-mint)), so `apt` updates it.
+
+**What to expect:** restarting Docker stops all containers. The `restart` settings in my stacks bring them back, but every service is down for a minute or two, and Immich and Nextcloud take longer to turn healthy. Pick a quiet time and update Docker on its own, not together with anything else.
+
+1. Do the four checks in [7.2](#72-before-you-update-anything).
+2. See what apt offers:
+
+   ```bash
+   sudo apt update
+   apt list --upgradable 2>/dev/null | grep -E 'docker|containerd'
+   ```
+
+3. Upgrade only the Docker packages:
+
+   ```bash
+   sudo apt install --only-upgrade docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+   ```
+
+4. Check it, after two or three minutes:
+
+   ```bash
+   docker version --format '{{.Server.Version}}'
+   docker compose version
+   systemctl show docker -p ActiveState
+   docker ps --format "table {{.Names}}\t{{.Status}}"
+   ```
+
+   The version should be 29.9.2, and all 16 containers should come back up on their own. The wait-for-mount file in `/etc/systemd/system/docker.service.d/` is not touched by an update. If a container that needs the drive shows the wrong disk, run `sudo hdd-recover`.
+
+**Rollback:** list the older versions with `apt list --all-versions docker-ce` and install one by naming its version, as Docker's install page describes. I wouldn't downgrade unless Docker itself stops working.
+
+### 7.13 Tailscale
+
+**Status: the machine is already on 1.104.2, and the update broke DNS on the server.** I had not run these steps. The Machines page in the Tailscale admin console showed `pc` on 1.104.2, so the machine had updated itself. Right after that, the server could not look up names (`SERVFAIL` from `100.100.100.100`) and the Tailscale card on Homepage turned red. The cause and the fix are in [F6](#f6-the-server-cannot-look-up-names-after-a-tailscale-update). The steps below are written from Tailscale's documentation, which says an update through a package manager is done by that manager and also names `tailscale update`. I have not run them.
+
+**Important:** use the local address for this, not the Tailscale one. A restart of Tailscale drops a session that is running over Tailscale ([E7](#e7-an-ssh-session-over-tailscale-drops-when-tailscale-restarts)). From the Windows PC:
+
+```powershell
+ssh brandon@192.168.1.198
+```
+
+Then, in the Linux server terminal:
+
+1. Check the current version and what is offered:
+
+   ```bash
+   tailscale version
+   sudo apt update
+   apt list --upgradable 2>/dev/null | grep tailscale
+   ```
+
+2. Upgrade only Tailscale:
+
+   ```bash
+   sudo apt install --only-upgrade tailscale
+   ```
+
+3. Check it:
+
+   ```bash
+   tailscale version
+   tailscale status | head -5
+   tailscale serve status
+   ```
+
+   The version should be 1.104.2, the status should show `pc` connected, and the Serve status should list all nine entries on ports 1000 to 1008. Open one address from your phone or the Windows PC to confirm, for example Homepage on port 1000.
+
+4. **Check that the server can still look up names.** This is the step that would have caught the problem:
+
+   ```bash
+   cat /etc/resolv.conf
+   nslookup github.com
+   ```
+
+   The lookup must return addresses. If it says `SERVFAIL`, follow [F6](#f6-the-server-cannot-look-up-names-after-a-tailscale-update), and restart Homepage afterwards.
+
+If the Serve list is empty after an update, re-create the nine entries from the Tailscale phase of the migration ([Phase 6](#phase-6-tailscale-addresses)).
+
+### 7.14 Linux Mint packages
+
+**Status: written from general apt practice, not yet run for this purpose on my server.** This covers the operating system and everything installed with `apt`, such as `mergerfs`, `smartmontools` and the kernel.
+
+1. Do the four checks in [7.2](#72-before-you-update-anything).
+2. Update Docker and Tailscale first, on their own, by following [7.12](#712-docker-engine) and [7.13](#713-tailscale). That way their restarts don't hide in a large update.
+3. See what is waiting:
+
+   ```bash
+   sudo apt update
+   apt list --upgradable 2>/dev/null
+   ```
+
+   Read the list. Look for a new kernel (`linux-image-...`) and for packages you recognize, such as `mergerfs`.
+4. Install the updates:
+
+   ```bash
+   sudo apt upgrade
+   ```
+
+   Answer the prompts after reading them. Don't remove old kernels afterwards. Keeping the previous one gives you something to boot if the new one has a problem.
+5. See whether a restart is needed:
+
+   ```bash
+   ls /var/run/reboot-required 2>/dev/null && echo "restart needed"
+   ```
+
+6. If a restart is needed (a new kernel always needs one), stop and make sure the backup is not running. Then:
+
+   ```bash
+   sudo reboot
+   ```
+
+7. After about five minutes, run the same checks as after any restart (one `findmnt` per command, see [A12](#a12-findmnt-prints-nothing-when-given-two-paths)):
+
+   ```bash
+   findmnt /mnt/storage
+   findmnt /mnt/disks/MAIN1
+   docker ps --format "table {{.Names}}\t{{.Status}}"
+   sudo drives status
+   uname -r
+   ```
+
+   If the drive is missing or a container shows the wrong disk, run `sudo hdd-recover`.
+
+**Rollback:** if a new kernel causes trouble, choose the older kernel from the GRUB menu's advanced options at boot. That menu appears before any remote access works, so it needs a monitor and keyboard connected to the machine. Connect them before you reboot into a new kernel if you want that option.
+
+### 7.15 After updating
+
+1. Run the inventory script from [section 5](#5-diagnostic-commands) so the report shows the new versions, and keep the new report.
+2. Check `sudo drives status` again the next morning: the 6:00 backup should say `OK`.
+3. Update the version numbers anywhere you keep them (the README's "Tested with" line, if a version there changed).
+4. Remove the spare Portainer container and the unused images once everything has worked for a day (see [7.3](#73-portainer), step 6).
+5. Run `homelab` ([Step 9](#step-9-the-cheat-sheet-at-login)). Every status line should be green, and `nslookup github.com` should still work ([F6](#f6-the-server-cannot-look-up-names-after-a-tailscale-update)).
+
+### 7.16 Sources
+
+The steps above come from these pages, which I read on 2026-10-23:
+
+- Immich: [upgrading](https://docs.immich.app/install/upgrading), [backup and restore](https://docs.immich.app/administration/backup-and-restore), [releases](https://github.com/immich-app/immich/releases/latest)
+- Nextcloud: [Docker image (updating)](https://github.com/nextcloud/docker), [changelog](https://nextcloud.com/changelog/). Nextcloud's own admin manual blocks automated reading, so the `occ app:update --all` command and the Apps page steps come from my general knowledge and are untested.
+- Portainer: [editing a stack](https://docs.portainer.io/user/docker/stacks/edit)
+- Beszel: [hub installation](https://www.beszel.dev/guide/hub-installation), [agent installation](https://www.beszel.dev/guide/agent-installation), [releases](https://github.com/henrygd/beszel/releases/latest)
+- AdGuard Home: [releases](https://github.com/AdguardTeam/AdGuardHome/releases/latest)
+- Homepage: [releases](https://github.com/gethomepage/homepage/releases/latest)
+- FileBrowser: [repository](https://github.com/filebrowser/filebrowser), [releases](https://github.com/filebrowser/filebrowser/releases/latest)
+- Speedtest Tracker: [releases](https://github.com/alexjustesen/speedtest-tracker/releases/latest)
+- Netdata: [Docker installation and updating](https://learn.netdata.cloud/docs/netdata-agent/installation/docker)
+- Docker Engine: [install and upgrade on Ubuntu](https://docs.docker.com/engine/install/ubuntu/), [release notes](https://docs.docker.com/engine/release-notes/)
+- Tailscale: [updating](https://tailscale.com/kb/1067/update), [releases](https://github.com/tailscale/tailscale/releases/latest)

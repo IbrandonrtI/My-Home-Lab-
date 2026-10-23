@@ -17,6 +17,7 @@ A self-hosted home lab running on a small HP mini PC: network-wide ad blocking, 
 - **A daily backup with a 30-day undo.** `rsync` copies the data and the boot drive's config files every morning at 6:00. Files I delete or replace are kept in dated folders for 30 days, and the Nextcloud database is dumped every day.
 - **Photo backup and a personal cloud.** Immich backs up phone photos, Nextcloud stores files, and Nextcloud can show the Immich library.
 - **Live monitoring.** Beszel, Netdata and Speedtest Tracker feed widgets on the Homepage dashboard.
+- **A cheat sheet at every login.** Every new terminal, over SSH or in VS Code, prints the commands I use and a live status: pools, last backup, containers and free space ([section 3.14](#314-the-cheat-sheet-at-login)).
 - **A custom-built dashboard** with frosted-glass cards, status dots, live widgets and a layout that adapts from phones to large monitors.
 
 ## What this project demonstrates
@@ -29,7 +30,7 @@ A self-hosted home lab running on a small HP mini PC: network-wide ad blocking, 
 | **Storage reliability** | Pooled drives with mergerfs, mounted ext4 drives by UUID with `nofail`, locked the empty mount points with `chattr +i`, ordered Docker after the mount with a `systemd` drop-in, tuned drive power management with `hdparm`, checked drive health with SMART, wrote a `bash` menu tool and recovery command that snapshot and roll back `fstab`, and scheduled a daily `rsync` backup that keeps deleted files for 30 days. |
 | **Secure remote access** | Used a private mesh VPN with HTTPS certificates instead of opening ports, kept secrets out of files and out of Git, used separate least-privilege API keys, and handled a brute-force lockout correctly. |
 | **Monitoring** | Combined Beszel, Netdata and Speedtest Tracker with live Homepage widgets, and used drive and container checks to prove each fix worked. |
-| **Troubleshooting** | Diagnosed and fixed 63 real problems (drive paths, filesystem permissions, registry throttling, reverse-proxy settings, API errors) and wrote each one up as symptom, cause, fix and verification. |
+| **Troubleshooting** | Diagnosed and fixed 67 real problems (drive paths, filesystem permissions, registry throttling, reverse-proxy settings, API errors) and wrote each one up as symptom, cause, fix and verification. |
 | **Hardware** | Built a mini PC server: SATA boot drive, USB data drive, BIOS and Secure Boot changes, power adapter diagnosis, and a display emulator for headless remote desktop. |
 | **Documentation and migration** | Planned and carried out a full server migration with a written runbook, and kept the documentation accurate by checking every step against the running system. |
 | **Front-end customization** | Wrote the Homepage stylesheet: frosted-glass cards, per-service accent colors, responsive scaling for different screen widths. |
@@ -372,13 +373,14 @@ From another device, install AnyDesk and connect with the ID and password. The D
 
 ## 3. Storage: drive pools and backups
 
-The big files live on hard drives that are grouped into **pools**. The Immich photos, the Nextcloud files and the FileBrowser share live in the **main pool**, which appears as the folder `/mnt/storage`. A second pool, `/mnt/backup`, holds the daily backup. Three small tools manage all of it, so connecting, removing, moving or recovering a drive is a menu choice instead of a pile of `fstab` edits.
+The big files live on hard drives that are grouped into **pools**. The Immich photos, the Nextcloud files and the FileBrowser share live in the **main pool**, which appears as the folder `/mnt/storage`. A second pool, `/mnt/backup`, holds the daily backup. Three small tools manage all of it, so connecting, removing, moving or recovering a drive is a menu choice instead of a pile of `fstab` edits. A fourth, `homelab`, prints the commands and the current status whenever a terminal opens, so none of them has to be memorised.
 
 | Command | What it does |
 | :--- | :--- |
-| `sudo drives` | A menu to see drive health, connect a new drive, disconnect a drive, move a drive between the main and backup pools, and recover after an unplug. |
+| `sudo drives` | A menu to see drive health, connect a new drive, disconnect a drive, move a drive between the main and backup pools, recover after an unplug, and replace a dead drive. |
 | `sudo hdd-recover` | Run it after an unplug or a power cut. It finds the containers that use the storage, stops them, remounts every drive and pool, re-applies the power settings and starts the containers again. |
 | `sudo homelab-backup` | Copies the main pool and the boot drive's config files to the backup. It runs by itself from `cron` at 6:00 every day. |
+| `homelab` | Only reads information. Prints a cheat sheet of these commands and a live status (pools, last backup, containers, free space). It runs when a terminal opens ([3.14](#314-the-cheat-sheet-at-login)). |
 
 **How the storage is organised**
 
@@ -403,12 +405,12 @@ The time zone should be yours, because the 6:00 backup runs on the server's cloc
 
 ### 3.2 Install the scripts
 
-The three scripts are in the [`scripts/`](scripts/) folder of this repository, and their full source is in the [appendix](#19-appendix-the-scripts) at the end of this file. Clone the repository on the server, check the files, and install two of them (the third comes in 3.8):
+The scripts are in the [`homelab-drives/`](homelab-drives/) folder of this repository, and their full source is in the [appendix](#19-appendix-the-scripts) at the end of this file. The folder holds four commands (`drives`, `homelab-backup`, `hdd-recover` and `homelab`), the example settings file `homelab-backup.conf.example`, and `SHA256SUMS`, which lists those five files. Clone the repository on the server, check the files, and install two of the commands now (`hdd-recover` comes in 3.8 and `homelab` in 3.14):
 
 ```bash
 sudo apt install -y git
 git clone https://github.com/IbrandonrtI/My-Home-Lab-.git ~/My-Home-Lab-
-cd ~/My-Home-Lab-/scripts
+cd ~/My-Home-Lab-/homelab-drives
 sha256sum -c SHA256SUMS
 sudo install -m 755 drives /usr/local/sbin/drives
 sudo install -m 755 homelab-backup /usr/local/sbin/homelab-backup
@@ -416,7 +418,19 @@ sudo drives version
 sudo drives status
 ```
 
-Every line of the checksum check should end in `OK`. If you copy the files from a Windows PC instead, run `grep -c $'\r' drives hdd-recover homelab-backup` as well. All three numbers must be `0`, because Windows line endings stop a script from running.
+Every line of the checksum check should end in `OK`. There are five lines, one for each file (`drives` is version 1.1, which added `drives replace`, see 3.15):
+
+```
+drives: OK
+homelab-backup: OK
+hdd-recover: OK
+homelab-backup.conf.example: OK
+homelab: OK
+```
+
+If you copy the files from a Windows PC instead, run `grep -c $'\r' drives hdd-recover homelab-backup homelab` as well. All four numbers must be `0`, because Windows line endings stop a script from running.
+
+Every `sha256sum` and `install` command here has to run **inside** the `homelab-drives` folder, because it names the files without a path. If `install` answers `cannot stat 'homelab'` (or another file name), you are in the wrong folder. Run `cd ~/My-Home-Lab-/homelab-drives` and repeat the command.
 
 On a server with no pools yet, `status` looks like this:
 
@@ -626,7 +640,7 @@ The first should print `APM_level = 254`. The second prints the drive state, whi
 Containers keep the view of the drive they had when they started. If a drive is unplugged and plugged back in, the containers need a restart. `hdd-recover` is a one-line command that calls `drives recover`, which does the whole job:
 
 ```bash
-cd ~/My-Home-Lab-/scripts
+cd ~/My-Home-Lab-/homelab-drives
 sudo install -m 755 hdd-recover /usr/local/bin/hdd-recover
 sudo hdd-recover
 ```
@@ -647,7 +661,7 @@ If a main drive isn't found, it prints `Drive not found. Check the cable.` with 
 
 1. dumps the Nextcloud database (the database lives on the boot drive, so a copy of the pool alone wouldn't contain it);
 2. copies the main pool to the backup with `rsync`. A file you delete or replace is moved into a dated folder, `_deleted/<date>/`, and not destroyed;
-3. copies the boot drive's config files: the Homepage config, the Nextcloud app files, AdGuard Home's settings, the Portainer, Beszel and FileBrowser data, `/etc/fstab`, the Docker wait file, the three scripts and root's crontab;
+3. copies the boot drive's config files: the Homepage config, the Nextcloud app files, AdGuard Home's settings, the Portainer, Beszel and FileBrowser data, `/etc/fstab`, the Docker wait file, the `drives`, `hdd-recover` and `homelab-backup` scripts and root's crontab, plus any extra folders you add (see below);
 4. removes dumps and `_deleted` folders older than 30 days.
 
 Immich also writes its own database backups into `/mnt/storage/immich/backups`, so they are included in the copy of the pool.
@@ -707,6 +721,19 @@ sudo crontab -e
 
 **Safety rules built in.** The backup refuses to run, and logs why, if main storage isn't mounted, if main storage looks empty (so a missing drive can never empty the backup), if the backup target isn't mounted and no fallback is set, or if the target has too little free space (less than 20 GB, or less than the pool's size plus 20 GB for the first run). `drives status` shows the result of the last run, and the log is `/var/log/homelab-backup.log`.
 
+**Backing up another folder.** The list of boot-drive folders is `CONFIG_PATHS` at the top of `homelab-backup`. Don't edit the script. Add to the list from the settings file instead, which is read after the defaults. For example, Speedtest Tracker keeps its database in `/home/your-username/speedtest-tracker` ([section 14](#14-speedtest-tracker)), and the default list doesn't include it:
+
+```bash
+echo 'CONFIG_PATHS+=(/home/your-username/speedtest-tracker)' | sudo tee -a /etc/homelab-backup.conf
+cat /etc/homelab-backup.conf
+```
+
+Use `+=`, which adds to the list. A plain `=` would replace the list, and the backup would stop copying everything else. A folder that doesn't exist is skipped, with a line in the log. After the next backup, the folder appears under `boot-configs/`, with its full path:
+
+```bash
+sudo ls /home/your-username/750GB_HDD/backup-interim/boot-configs/home/your-username/
+```
+
 **Restore a file or folder.** Copy it out of the backup, and don't edit it there, because the next backup overwrites a changed file. Replace the backup path with your fallback folder while you still use one:
 
 ```bash
@@ -741,9 +768,13 @@ sudo drives status
 | See pools, drives, SMART health and the last backup | `sudo drives status` |
 | Connect, disconnect or move a drive | `sudo drives` |
 | After an unplug or a power cut | `sudo hdd-recover` |
+| A drive died and you have a new one | `sudo drives replace` ([3.15](#315-replace-a-dead-drive)) |
+| Copy back only the missing files from the backup | `sudo drives restore` ([3.15](#315-replace-a-dead-drive)) |
 | Run the backup now | `sudo homelab-backup` |
 | Read the backup log | `sudo tail -50 /var/log/homelab-backup.log` |
 | Read the drives log | `sudo tail -50 /var/log/homelab-drives.log` |
+| See the commands and the status again | `homelab` |
+| List the sections of the README and TROUBLESHOOTING | `homelab docs` |
 
 **Before you unplug a drive on purpose,** open `sudo drives` and choose **3** (Disconnect a drive), then unplug when it says it is safe. Don't just pull the cable.
 
@@ -777,7 +808,256 @@ To browse the backup from FileBrowser, add `- /mnt/backup:/srv/backup` to the vo
 
 - **A main drive is unplugged or dead:** the main pool does not mount, the empty locked `/mnt/storage` makes Immich, Nextcloud and FileBrowser fail with errors, and `sudo drives status` shows the drive as `MISSING`. Reconnect it and run `sudo hdd-recover`. I tested this with fake drives, not on my real hardware.
 - **A backup drive is missing:** the main pool and the services are not affected, and the backup run fails and says why. `drives status` shows `FAILED` in the last-backup line.
-- **A drive is gone for good:** the files that were stored on it are in the backup, up to a day old. A guided "replace a dead drive" option for the main and backup pools is planned (see [section 17](#17-roadmap)). Until then, don't improvise on the live pool.
+- **A drive is gone for good:** the files that were stored on it are in the backup, up to a day old. `sudo drives replace` swaps in a new drive and copies back only the files that are missing ([section 3.15](#315-replace-a-dead-drive)). I have tested it with fake drives, not yet on real hardware, so rehearse it first.
+
+### 3.14 The cheat sheet at login
+
+`homelab` is a small read-only script. It prints the commands from this section, grouped by job, and a live status block. I run it from `~/.bashrc`, so every new terminal shows it, both in a plain SSH session and in the terminal of VS Code Remote-SSH. It never changes anything and needs no `sudo`.
+
+**1. Install it.** Run this on the server. The checksum check is the same one as in 3.2, and the commands must run inside the `homelab-drives` folder:
+
+```bash
+cd ~/My-Home-Lab-/homelab-drives
+sha256sum -c SHA256SUMS
+sudo install -m 755 homelab /usr/local/bin/homelab
+homelab version
+```
+
+`homelab version` should print `homelab 1.0`. Then run `homelab` once by hand. Mine printed this (the host name is replaced here, and the paths with `your-username`):
+
+```
+Home lab  your-server  up 51 minutes
+
+Storage
+  sudo drives                        menu: connect, disconnect or check drives
+  sudo drives status                 pools, drives, SMART health, last backup
+  sudo hdd-recover                   after an unplug or power cut: remount, restart containers
+  sudo drives power                  re-apply the drive power settings
+Backup
+  sudo homelab-backup                run the backup now (about 20 minutes)
+  sudo tail -f /var/log/homelab-backup.log
+                                     watch the backup (Ctrl+C to leave)
+Checks
+  docker ps                          what is running (add --format "table {{.Names}}\t{{.Status}}")
+  findmnt /mnt/storage               is the pool mounted (one path per command)
+Docs  /home/your-username/My-Home-Lab-
+  homelab docs                       sections of README.md and TROUBLESHOOTING.md
+  git -C ~/My-Home-Lab- pull         refresh them from GitHub
+
+Status
+  Main pool       mounted, 61G used of 916G
+  Backup pool     not connected (the backup goes to the boot drive)
+  Last backup     2026-10-22 19:28  OK  (7 h ago)
+  Containers      16 of 16 running
+  Boot drive      18% used, 536G free
+```
+
+On a terminal that supports colour, a good line is green, a warning is yellow and a problem is red. What each status line means:
+
+| Line | Meaning |
+| :--- | :--- |
+| Main pool | Green when `/mnt/storage` is mounted. Red with `NOT MOUNTED` when it isn't: plug the drive in and run `sudo hdd-recover`. |
+| Backup pool | Yellow with `not connected` until a backup drive exists. That is normal for now. |
+| Last backup | Green when the last run was `OK` and less than 36 hours old. Yellow when it is older. Red when the last run failed, with the command that shows why. |
+| Containers | The number running out of the number that should run. A container that was stopped on purpose (restart policy `no`) is not counted. Red lists the ones that are down. |
+| Boot drive | Space used and free on `/`. |
+
+**2. Show it at login.** Make a copy of `~/.bashrc` first, then add a short block at the end. The `'EOF'` in quotes matters: it stops the shell from changing the text while it is written.
+
+```bash
+cp ~/.bashrc ~/.bashrc.bak
+cat >> ~/.bashrc <<'EOF'
+
+# >>> homelab login display >>>
+if [[ $- == *i* ]] && [ -t 1 ] && command -v homelab >/dev/null 2>&1; then
+  timeout 20 homelab
+fi
+# <<< homelab login display <<<
+EOF
+tail -8 ~/.bashrc
+```
+
+The `if` has three conditions. `$- == *i*` means an interactive shell, `-t 1` means the output goes to a terminal and not to a file or a pipe, and `command -v homelab` means the command exists. Because of them, `scp`, `sftp`, cron jobs and the shell that VS Code starts in the background to read your environment print nothing extra. The `timeout 20` in front of `homelab` is a safety net: if Docker or a drive hangs, the cheat sheet gives up after 20 seconds and your prompt still appears.
+
+**3. Test it.** Open a new terminal in each place you use and check that the cheat sheet appears:
+
+1. In VS Code, open **Terminal**, then **New Terminal**.
+2. From the Windows PC, open a new PowerShell window and connect with `ssh your-username@192.168.X.X`.
+3. To confirm that scripts are not disturbed, run this from the Windows PC. It should print only the word `ok`:
+
+```powershell
+ssh your-username@192.168.X.X "echo ok"
+```
+
+**Do not** keep a variable such as `export HOMELAB_SHOWN=1` to show the sheet only once. VS Code reads your environment by starting a shell, so the exported variable ends up in every VS Code terminal and the sheet never appears there. The `if` above needs no variable. See [H5 in TROUBLESHOOTING.md](TROUBLESHOOTING.md#h5-the-cheat-sheet-does-not-appear-in-the-vs-code-terminal).
+
+**4. Open the documents from the terminal.** `homelab docs` lists the `##` headings of the README and TROUBLESHOOTING.md with their line numbers, read from the clone you made in 3.2:
+
+```bash
+homelab docs
+less +LINE ~/My-Home-Lab-/README.md
+git -C ~/My-Home-Lab- pull
+```
+
+The second command opens the README at a line from that list (replace `LINE` with the number, and press `q` to leave). The third refreshes the clone from GitHub. If the clone is missing, `homelab docs` prints the `git clone` command to run.
+
+**5. Update it later.** After a `git pull` that changes the script, repeat the checksum check and the `install` line from step 1.
+
+**Undo.** Remove the block, or put the old file back (only if you changed nothing else in `~/.bashrc` since):
+
+```bash
+sed -i '/# >>> homelab login display >>>/,/# <<< homelab login display <<</d' ~/.bashrc
+```
+
+```bash
+cp ~/.bashrc.bak ~/.bashrc
+```
+
+Settings, for the rare case you need them, are environment variables: `HOMELAB_MAIN_POOL`, `HOMELAB_BACKUP_POOL`, `HOMELAB_LAST_RUN_FILE`, `HOMELAB_DOCS_DIR` and `HOMELAB_STALE_HOURS` (the age in hours after which a backup shows yellow, 36 by default).
+
+### 3.15 Replace a dead drive
+
+Use this when a pool drive is gone for good: it won't spin up, it isn't found any more, and `sudo hdd-recover` can't bring it back. The command is `sudo drives replace` (or choose **8** in the `sudo drives` menu). It needs two things: a **new drive** (it will be erased) and a **backup copy** (the daily backup, 3.9).
+
+> **Tested with fake drives only.** I ran 58 automatic checks on practice drives (one drive dying, one of two dying, refusing to continue, a dead backup drive, two dead drives). I have not yet used it on a real failed drive. Do the rehearsal at the end of this section before you depend on it. Version 1.1 of `drives` is the first one that has this command: `sudo drives version` should print `drives 1.1`.
+
+**What it does, in order**
+
+1. Finds the pool drives that can't be found, and asks which one is dead. If none is missing, it says so and stops. (A drive that was only unplugged needs `sudo hdd-recover`, not this.)
+2. For a main drive, finds the backup copy and shows its date and result. It stops if there is no backup. Nothing has been changed so far.
+3. Asks you to pick the new drive, and to type its name and `ERASE`. Nothing is erased before both match, and the boot drive and your working pool drives are never offered.
+4. Stops the containers that use the storage, formats the new drive with **the same label as the dead one** (for example `MAIN1`), swaps the line in `/etc/fstab` (the old line stays in the file as a comment) and mounts the pool again.
+5. For a main drive: compares the backup with the pool and shows a **preview** with the number of missing files, their total size and the first 20 names. Nothing is copied until you type `RESTORE`.
+6. Copies only the missing files. Files that are already in the pool are never overwritten.
+7. Checks that every file in the backup is now in the pool. **Only if that check passes, the containers start again.** If anything fails, they stay stopped and the tool tells you what to run next.
+
+**Step by step**
+
+1. See what is wrong, and make sure it isn't just a cable:
+
+   ```bash
+   homelab
+   sudo drives status
+   ```
+
+   The dead drive shows as `MISSING` in the status. Check the cable and the power of the adapter, plug it in again and run `sudo hdd-recover`. Only go on if the drive is really dead.
+
+2. Look at the last backup. It should say `OK`, with a recent date:
+
+   ```bash
+   sudo drives status
+   ```
+
+   The files that were created after that backup are not in it and can't come back.
+
+3. Plug in the new drive. Check that the system sees it, and note the device name:
+
+   ```bash
+   lsblk -o NAME,SIZE,MODEL,TRAN
+   ```
+
+4. Run the command and follow the questions:
+
+   ```bash
+   sudo drives replace
+   ```
+
+   Here is the middle of a run from my practice drives (practice labels start with a `T`, so the dead drive is `TMAIN1`; on the real server it is `MAIN1`):
+
+   ```
+   Pool drives that cannot be found:
+     1) TMAIN1  (main)  not found
+   Which drive is dead? 1
+
+   TMAIN1 will be replaced by a new drive that gets the same name (TMAIN1).
+   Backup copy to restore from: /path/to/backup/main
+   Last backup run: 2026-10-23 06:00  result: OK  destination: /path/to/backup
+   ...
+   !! ERASE WARNING !!
+   Everything on /dev/loop1 will be permanently deleted.
+   Type the drive name exactly (/dev/loop1) to continue: /dev/loop1
+   Type ERASE (capitals) to confirm: ERASE
+   Stopping containers that use this storage: immich_server nextcloud
+
+   TMAIN1 is in place and the main pool is mounted.
+
+   Missing from the pool but present in the backup: 23 files, 31MB
+   First 20:
+     immich/photo-1.jpg
+     ...
+   What this will and will not do:
+     - Files that are already in the pool are never overwritten.
+     - Files you deleted since the last backup come back too (the backup still has them).
+     - Files created or changed since the last backup are not in the backup, so they cannot come back.
+   Type RESTORE (capitals) to copy these 23 files: RESTORE
+   ...
+   Verified: all 23 restored files, and every other file in the backup, are in the pool.
+   Starting containers: immich_server nextcloud
+   ```
+
+5. When it finishes, check the services in Immich, Nextcloud and FileBrowser. If you restored Nextcloud files, tell Nextcloud about them, then run a fresh backup:
+
+   ```bash
+   docker exec -u www-data nextcloud php occ files:scan --all
+   sudo homelab-backup
+   ```
+
+**If you type something other than `RESTORE`,** nothing is copied and the containers stay stopped. Come back to it later with `sudo drives restore`. It does the preview, the question, the copy and the check again, and then starts the containers. It is safe to run several times: once everything is back it says `Nothing is missing`.
+
+**If two main drives are dead,** replace them one at a time. After the first one, the pool can't start until the second is replaced too, so the tool tells you to run `sudo drives replace` again. The files are restored after the last one.
+
+**If the dead drive is a backup drive,** there is nothing to restore. The new drive gets the same label (`BACKUP1`) and starts empty, and the tool offers to run the backup now. The older versions of deleted files (`_deleted/`) that were on the dead drive are gone.
+
+**What it can't do**
+
+- It can't bring back files that were created after the last backup and lived on the dead drive. A file that was changed after the last backup comes back in its older, backed-up version.
+- It also brings back files you deleted after the last backup, because they are still in the backup.
+- If the drive is still connected but failing (SMART says `FAILED`, but it still mounts), don't use this. Copy the files off it first with option **3** (Disconnect a drive).
+- If the old drive ever turns up again, don't plug it in next to the new one, because both are called `MAIN1`.
+- Until a backup drive exists, the backup is a folder on the boot drive (3.9). `replace` finds it by itself from the record of the last run.
+
+**Rehearse it with a USB stick (it will be erased).** This uses test mode, so your real pools and `/etc/fstab` are not touched. `DRIVES_RESTORE_SRC` tells the tool where the practice backup is.
+
+```bash
+sudo DRIVES_TEST=1 drives test-setup 2 1G
+sudo DRIVES_TEST=1 drives connect
+sudo DRIVES_TEST=1 drives connect
+```
+
+Run `connect` twice and choose **Main storage** both times. Then put some data in the practice pool and make a practice backup:
+
+```bash
+sudo mkdir -p /mnt/test-main/photos
+for i in 1 2 3; do sudo sh -c "head -c 50M /dev/urandom > /mnt/test-main/photos/file$i.bin"; done
+sudo mkdir -p /var/tmp/practice-backup/main
+sudo rsync -a /mnt/test-main/ /var/tmp/practice-backup/main/
+(cd /mnt/test-main && sha256sum photos/*.bin) | tee ~/practice-sums.txt
+```
+
+Now pretend that a drive died. Replace `TMAIN2` and `disk2.img` if your practice drive has another name (check with `sudo DRIVES_TEST=1 drives status`):
+
+```bash
+sudo umount -l /mnt/test-main
+sudo umount -l /mnt/test-disks/TMAIN2
+sudo losetup -d "$(losetup -j /var/tmp/homelab-drives-test/disk2.img | cut -d: -f1)"
+```
+
+Plug in the USB stick and run the replace with the stick as the new drive:
+
+```bash
+sudo DRIVES_TEST=1 DRIVES_RESTORE_SRC=/var/tmp/practice-backup drives replace
+```
+
+The tool warns that there is no record of a backup run, because this is a practice backup. Answer `y`. At the end, check that all files are back, and clean up:
+
+```bash
+(cd /mnt/test-main && sha256sum -c ~/practice-sums.txt)
+sudo DRIVES_TEST=1 drives test-cleanup
+sudo rm -rf /var/tmp/practice-backup ~/practice-sums.txt
+sudo drives status
+```
+
+Every line of the `sha256sum` check should end in `OK`. The last command should look like it did before the practice.
 
 ---
 
@@ -935,6 +1215,8 @@ nslookup google.com
 ```
 
 The first command should not list `systemd-resolve` on port 53. `resolv.conf` should either show your one line or a Tailscale header with `nameserver 100.100.100.100`, and the lookup should return an address.
+
+> **Watch out later.** When Tailscale updates itself, the server can lose name resolution while Tailscale owns `/etc/resolv.conf`: lookups fail with `SERVFAIL` and `git clone` says `Could not resolve host`. The fix is two commands, in [F6 of TROUBLESHOOTING.md](TROUBLESHOOTING.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update). It happened to me on 2026-10-23.
 
 ### 7.2 Deploy the stack
 
@@ -1673,7 +1955,16 @@ Copy the whole output.
 docker pull lscr.io/linuxserver/speedtest-tracker:latest
 ```
 
-**3. Deploy the stack.** Create a stack named `speedtest-tracker`, and replace the `APP_KEY` value with your key, quotes included:
+**3. Create its data folder.** Speedtest Tracker keeps its database and settings in `/config`. Give that a folder on the server, not an anonymous Docker volume, because an anonymous volume can come back empty after **Update the stack** (see [B6 in TROUBLESHOOTING.md](TROUBLESHOOTING.md#b6-a-container-starts-empty-after-update-the-stack)):
+
+```bash
+mkdir -p ~/speedtest-tracker
+ls -ld ~/speedtest-tracker
+```
+
+The owner should be your user, because `PUID: "1000"` below runs the container as the first normal user.
+
+**4. Deploy the stack.** Create a stack named `speedtest-tracker`, and replace the `APP_KEY` value with your key, quotes included:
 
 ```yaml
 services:
@@ -1690,11 +1981,13 @@ services:
       APP_DEBUG: "false"
       APP_URL: "http://192.168.X.X:8088"
       DB_CONNECTION: sqlite
+    volumes:
+      - /home/your-username/speedtest-tracker:/config
 ```
 
-**4. Log in and change the default login.** Open `http://192.168.X.X:8088`. The default login is `admin@example.com` with the password `password`. Change both in your profile settings straight away.
+**5. Log in and change the default login.** Open `http://192.168.X.X:8088`. The default login is `admin@example.com` with the password `password`. Change both in your profile settings straight away.
 
-**5. Create an API token for the Homepage widget.** Open `http://192.168.X.X:8088/admin/api-tokens`, create a token and give it the **Read Results** ability. Copy it, because it's shown once. Then run one speed test from the dashboard so there is a result for the widget to read.
+**6. Create an API token for the Homepage widget.** Open `http://192.168.X.X:8088/admin/api-tokens`, create a token and give it the **Read Results** ability. Copy it, because it's shown once. Then run one speed test from the dashboard so there is a result for the widget to read.
 
 **Verify:**
 
@@ -1703,6 +1996,8 @@ curl -s -H "Accept: application/json" -H "Authorization: Bearer your-own-key" ht
 ```
 
 Put your real token in place of `your-own-key`. You should see JSON with your download and upload speeds. `Unauthenticated` means the token is wrong or lacks the Read Results ability.
+
+The folder is not in the daily backup by default. Add it as shown in [section 3.9](#39-the-daily-backup).
 
 ![speedtest](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/Services-screenshot/Speedtest-Tracker.png?raw=true)
 
@@ -1861,6 +2156,8 @@ sudo drives status
 
 Every container should be `Up` or `healthy`, neither the boot drive nor the pool should be near full, and the load average should be low when the machine is idle. `drives status` lists every pool drive with its SMART health and shows the result of the last backup. After 6:00 it should say `result: OK` with today's date.
 
+The short version of this check is the status block that `homelab` prints whenever you open a terminal ([section 3.14](#314-the-cheat-sheet-at-login)). Green lines are fine. Yellow or red lines tell you what to look at.
+
 ### Drive health
 
 `sudo drives status` shows `PASSED` or `FAILED` for each pool drive. For the details, read the SMART numbers:
@@ -1897,7 +2194,12 @@ If you unplug a drive on purpose, don't just pull the cable. Open `sudo drives`,
 
 ### Updating
 
-- **Containers:** in Portainer, open the stack, click **Editor**, then **Update the stack** with **Re-pull image** switched on. Don't skip major versions of Nextcloud: update one major version at a time.
+Every service here has its own written update procedure in [section 7 of TROUBLESHOOTING.md](TROUBLESHOOTING.md#7-updating-services). It lists what can be updated, what to check first and how to undo each update. In short:
+
+- **Containers:** make a fresh backup first (`sudo homelab-backup`, wait for `finished: OK`). Pull the new image in the terminal, then in Portainer open the stack and click **Update the stack**. Update one service at a time, and Immich and Nextcloud only on their own. Don't skip major versions of Nextcloud: update one major version at a time.
+- **Before you click Update the stack,** check the container has no anonymous volume. Its data can be lost on the update ([B6](TROUBLESHOOTING.md#b6-a-container-starts-empty-after-update-the-stack)).
+- **Portainer itself** is not a stack. It is recreated from the terminal, as described in [section 7.3](TROUBLESHOOTING.md#73-portainer).
+- **Docker Engine** restarts every container when it updates. **Tailscale** can disturb the server's DNS when it updates ([F6](TROUBLESHOOTING.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update)).
 - **System:** `sudo apt update && sudo apt upgrade -y`, then reboot and run the reboot test from section 3.10.
 
 ---
@@ -1907,7 +2209,7 @@ If you unplug a drive on purpose, don't just pull the cable. Open `sudo drives`,
 Storage plans, in the order I expect to do them:
 
 - **A backup drive.** A second 1TB hard drive becomes `BACKUP1`, so the daily backup leaves the boot drive ([section 3.12](#312-adding-the-backup-drive)).
-- **Replace a dead drive.** A guided option in `sudo drives` for both pools: remove the dead drive, connect a new one and restore the missing files from the backup, with a preview first.
+- **Replace a dead drive:** built as `sudo drives replace` ([section 3.15](#315-replace-a-dead-drive)) and tested with fake drives. The rehearsal with a USB stick, and a real replacement, are still to do.
 - **A faster boot drive.** Move the operating system to a 128GB NVMe SSD. The 750GB drive stays as a bootable spare that a script refreshes every Sunday at 4:00, with the containers stopped for a few minutes so the databases are copied cleanly.
 
 Services I plan to add:
@@ -1935,7 +2237,7 @@ If something doesn't work, start with [TROUBLESHOOTING.md](TROUBLESHOOTING.md). 
 
 ## 19. Appendix: the scripts
 
-These are the files in the [`scripts/`](scripts/) folder, shown in full so they can be read without leaving this page. The only change is that my user name `brandon` is replaced with `your-username`. The `scripts/` folder is the master copy, and its `SHA256SUMS` file matches the files exactly as I installed them. If the two ever differ, trust the folder. Click a title to open it.
+These are the files in the [`homelab-drives/`](homelab-drives/) folder, shown in full so they can be read without leaving this page. The only change is that my user name `brandon` is replaced with `your-username`. The `homelab-drives/` folder is the master copy, and its `SHA256SUMS` file matches the files exactly as I installed them. If the two ever differ, trust the folder. Click a title to open it.
 
 <details>
 <summary><code>drives</code>: the menu for connecting, disconnecting, moving and recovering drives (installed at <code>/usr/local/sbin/drives</code>)</summary>
@@ -1956,7 +2258,7 @@ set -u
 set -o pipefail
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-VERSION="1.0"
+VERSION="1.1"
 TEST_MODE="${DRIVES_TEST:-0}"
 OWNER="${DRIVES_OWNER:-your-username}"
 
@@ -1972,6 +2274,7 @@ if [ "$TEST_MODE" = 1 ]; then
   mkdir -p "$STATE_DIR"
   [ -f "$FSTAB" ] || : >"$FSTAB"
   TEST_POOL_EXTRA=",minfreespace=${DRIVES_MINFREE:-10M}"   # the test disks are tiny
+  BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-$STATE_DIR/last-run}"   # test mode never reads the real backup record
 else
   STATE_DIR="${DRIVES_STATE_DIR:-/var/lib/homelab-drives}"
   FSTAB="${FSTAB:-/etc/fstab}"
@@ -1990,6 +2293,7 @@ DRAIN_SPARE_BYTES="${DRAIN_SPARE_BYTES:-2147483648}"   # free space to keep on t
 
 STOPPED=""
 FSTAB_SNAP=""
+HOLD_HINT=""
 
 # ---------- small helpers ----------
 log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE" 2>/dev/null || true; }
@@ -2306,7 +2610,7 @@ on_exit() {
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
-    note "Fix the problem, then run:  sudo hdd-recover"
+    note "${HOLD_HINT:-Fix the problem, then run:  sudo hdd-recover}"
   fi
 }
 trap on_exit EXIT
@@ -2650,7 +2954,7 @@ status_flow() {
         "$(human "$(( $(used_bytes "$mp") + $(avail_bytes "$mp") ))")" "$(human "$(used_bytes "$mp")")" \
         "$(smart_health "$(disk_of_part "$p")")" "connected"
     else
-      printf '%-9s %-8s %-12s %-9s %-9s %-9s %s\n' "$(basename "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (check the cable, then: sudo hdd-recover)"
+      printf '%-9s %-8s %-12s %-9s %-9s %-9s %s\n' "$(basename "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)"
     fi
   done
   [ -n "$(all_branches)" ] || say "(no drives in a pool yet)"
@@ -2707,6 +3011,239 @@ recover_flow() {
   echo "Recovered."
 }
 
+# ---------- replace a dead drive ----------
+missing_branches() {   # missing_branches main|backup -> mount points of pool drives whose drive cannot be found
+  local mp
+  for mp in $(branches_of "$1"); do
+    [ -n "$(branch_part "$mp")" ] || echo "$mp"
+  done
+}
+
+backup_candidates() {   # folders that may hold the latest backup (a folder with main/ inside), best guess first
+  local dest="" conf="${BACKUP_CONF:-/etc/homelab-backup.conf}"
+  [ -r "$BACKUP_STATUS_FILE" ] && dest=$(awk -F'|' 'NR == 1 {print $3}' "$BACKUP_STATUS_FILE")
+  printf '%s\n' "${DRIVES_RESTORE_SRC:-}" "$dest" "$BACKUP_POOL"
+  # shellcheck disable=SC1090
+  if [ -r "$conf" ] && { [ "$TEST_MODE" != 1 ] || [ -n "${BACKUP_CONF:-}" ]; }; then ( DEST_FALLBACK=""; . "$conf" >/dev/null 2>&1; printf '%s\n' "$DEST_FALLBACK" ); fi
+}
+
+find_backup_source() {   # prints the folder that holds main/, or fails
+  local c
+  while read -r c; do
+    [ -n "$c" ] || continue
+    if [ -d "$c/main" ] && has_data "$c/main"; then echo "$c"; return 0; fi
+  done < <(backup_candidates)
+  return 1
+}
+
+show_backup_source() {   # show_backup_source folder -> asks to continue when the last backup did not end OK
+  local src=$1 stamp="" result="" dest=""
+  say "Backup copy to restore from: $src/main"
+  if [ -r "$BACKUP_STATUS_FILE" ]; then
+    IFS='|' read -r stamp result dest _ <"$BACKUP_STATUS_FILE"
+    say "Last backup run: $stamp  result: $result  destination: $dest"
+    if [ "$result" != OK ]; then
+      warn "The last backup run did not end with OK. The copy may be incomplete."
+      yn "Use this copy anyway?" || return 1
+    fi
+    if [ "$dest" != "$src" ]; then
+      warn "The last backup run wrote to $dest, but the copy found is in $src."
+      yn "Use $src anyway?" || return 1
+    fi
+  else
+    warn "There is no record of a backup run. I cannot tell how old this copy is."
+    yn "Use this copy anyway?" || return 1
+  fi
+  return 0
+}
+
+stat_num() {   # stat_num "Total transferred file size" file -> the number, without commas
+  awk -F': ' -v k="$1" 'index($0, k ":") == 1 {gsub(/[^0-9]/, "", $2); print $2; exit}' "$2"
+}
+
+restore_files() {   # restore_files folder  (main pool mounted, containers stopped): preview, ask, copy only what is missing, verify
+  local src=$1 base out list n bytes avail miss tag
+  base="$src/main/"
+  tag=$(date +%Y%m%d-%H%M%S)
+  out="$STATE_DIR/restore-$tag.out"; list="$STATE_DIR/restore-$tag.txt"
+  mkdir -p "$STATE_DIR"
+  say ""
+  say "Checking what is missing from $MAIN_POOL (nothing is copied yet)..."
+  if ! rsync -aHn --numeric-ids --ignore-existing --exclude=/lost+found --itemize-changes --stats "$base" "$MAIN_POOL/" >"$out" 2>"$out.err"; then
+    warn "The check failed: $(tail -3 "$out.err" | tr '\n' ' ')"
+    return 1
+  fi
+  grep -E '^[<>ch][fLDS]' "$out" | sed -E 's/^[^ ]+ //' >"$list" || true
+  n=$(wc -l <"$list" | tr -d ' ')
+  bytes=$(stat_num "Total transferred file size" "$out"); bytes=${bytes:-0}
+  if [ "$n" -eq 0 ]; then
+    say "Nothing is missing. Every file in the backup is already in $MAIN_POOL."
+    return 0
+  fi
+  avail=$(avail_bytes "$MAIN_POOL")
+  say ""
+  say "Missing from the pool but present in the backup: $n files, $(human "$bytes")"
+  say "First 20:"
+  head -20 "$list" | sed 's/^/  /'
+  [ "$n" -gt 20 ] && say "  ... and $((n - 20)) more. Full list: $list"
+  say ""
+  say "What this will and will not do:"
+  say "  - Files that are already in the pool are never overwritten."
+  say "  - Files you deleted since the last backup come back too (the backup still has them)."
+  say "  - Files created or changed since the last backup are not in the backup, so they cannot come back."
+  if [ "$bytes" -gt $((avail - DRAIN_SPARE_BYTES)) ]; then
+    warn "Not enough free space in $MAIN_POOL: $(human "$avail") free, $(human "$bytes") needed plus $(human "$DRAIN_SPARE_BYTES") spare."
+    return 1
+  fi
+  typed "RESTORE" "Type RESTORE (capitals) to copy these $n files: " || { say "Cancelled. Nothing was copied."; return 1; }
+  say "Copying (the services stay stopped)..."
+  local prog=--info=stats1
+  [ -t 1 ] && prog=--info=progress2
+  rsync -aH --numeric-ids --ignore-existing --exclude=/lost+found "$prog" "$base" "$MAIN_POOL/" || { warn "The copy stopped with an error."; return 1; }
+  sync
+  say ""
+  say "Checking that every file in the backup is now in the pool..."
+  miss=$(comm -23 -z \
+    <(cd "$src/main" && find . -path ./lost+found -prune -o \( -type f -o -type l \) -print0 | sort -z) \
+    <(cd "$MAIN_POOL" && find . -path ./lost+found -prune -o \( -type f -o -type l \) -print0 | sort -z) | tr '\0' '\n')
+  if [ -n "$miss" ]; then
+    warn "These files from the backup are still missing in the pool (first 20):"
+    printf '%s\n' "$miss" | head -20 | sed 's/^/  /' >&2
+    return 1
+  fi
+  say "Verified: all $n restored files, and every other file in the backup, are in the pool."
+  log "restored $n files ($(human "$bytes")) from $src/main into $MAIN_POOL"
+  return 0
+}
+
+after_restore_hints() {
+  say ""
+  say "Next steps:"
+  say "  - Check a few things in Immich, Nextcloud and FileBrowser."
+  if docker_ok && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx nextcloud; then
+    say "  - Tell Nextcloud about the restored files:  docker exec -u www-data nextcloud php occ files:scan --all"
+  fi
+  say "  - Run the backup again when you are happy:  sudo homelab-backup"
+}
+
+restore_flow() {   # restore only the missing files from the backup into the main pool
+  need_tools || return 1
+  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive and run sudo hdd-recover first."; return 1; }
+  local src
+  src=$(find_backup_source) || { note "No backup copy of the main storage was found, so there is nothing to restore from."; return 1; }
+  show_backup_source "$src" || { say "Cancelled."; return 1; }
+  stop_containers "$MAIN_POOL"
+  HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo hdd-recover  to start them without restoring."
+  restore_files "$src" || return 1
+  HOLD_HINT=""
+  start_containers
+  after_restore_hints
+  return 0
+}
+
+replace_flow() {
+  need_tools || return 1
+  local -a miss=() items=()
+  local role m mp idx label pool src dev part uuid size need have o left
+  for role in main backup; do
+    while read -r m; do [ -n "$m" ] && miss+=("$m"); done < <(missing_branches "$role")
+  done
+  if [ ${#miss[@]} -eq 0 ]; then
+    say "No pool drive is missing, so there is nothing to replace."
+    say "  - A drive that was only unplugged: plug it in and run  sudo hdd-recover"
+    say "  - A working drive you want to swap: use  sudo drives  option 3 (disconnect) and option 2 (connect)"
+    return 1
+  fi
+  for m in "${miss[@]}"; do items+=("$(basename "$m")  ($(branch_role "$m"))  not found"); done
+  say "Pool drives that cannot be found:"
+  idx=$(choose "Which drive is dead? " "${items[@]}") || return 1
+  mp=${miss[$idx]}; role=$(branch_role "$mp"); label=$(basename "$mp"); pool=$(role_pool "$role")
+
+  say ""
+  say "$label will be replaced by a new drive that gets the same name ($label)."
+  if [ "$role" = main ]; then
+    say "The files that were on the dead drive are copied back from the backup. Only missing files are copied."
+    src=$(find_backup_source) || { note "No backup copy of the main storage was found. Nothing was changed."; return 1; }
+    show_backup_source "$src" || { say "Cancelled. Nothing was changed."; return 1; }
+    say "Measuring the backup copy (this can take a minute)..."
+    need=$(du -sb "$src/main" 2>/dev/null | awk '{print $1}'); need=${need:-0}
+    have=0
+    for o in $(branches_of main); do mountpoint -q "$o" && [ -n "$(branch_part "$o")" ] && have=$((have + $(used_bytes "$o"))); done
+    need=$((need > have ? need - have : 0))
+    say "The backup holds about $(human "$need") more than the remaining main drives. The new drive should be larger than that."
+  else
+    say "A new backup drive starts empty. The next backup run copies everything to it again."
+    say "Older versions of deleted files (the _deleted folders) that were on the dead drive are gone."
+    need=0
+  fi
+
+  dev=$(pick_new_disk) || return 1
+  grep -qx "$dev" <<<"$(protected_disks)" && die "$dev holds the operating system. Refusing."
+  grep -qx "$dev" <<<"$(busy_disks)" && die "$dev is in use (something on it is mounted). Refusing."
+  describe_disk "$dev"
+  size=$(lsblk -bdno SIZE "$dev" | tr -d ' ')
+  if [ "$role" = main ] && [ "${#miss[@]}" -eq 1 ] && [ "$size" -lt $((need + DRAIN_SPARE_BYTES)) ]; then
+    warn "This drive ($(human "$size")) is smaller than the files to restore ($(human "$need")) plus $(human "$DRAIN_SPARE_BYTES") spare."
+    typed "CONTINUE" "Type CONTINUE to use it anyway, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
+  fi
+  say "!! ERASE WARNING !!"
+  say "Everything on $dev will be permanently deleted."
+  typed "$dev" "Type the drive name exactly ($dev) to continue: " || { say "Cancelled. Nothing was changed."; return 1; }
+  typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+
+  stop_containers "$pool"
+  if [ "$role" = main ]; then
+    HOLD_HINT="The containers stay stopped until the drive is replaced and the files are restored. Continue with:  sudo drives replace  or  sudo drives restore"
+  fi
+  pool_umount "$pool"
+  mountpoint -q "$mp" && { umount "$mp" 2>/dev/null || umount -l "$mp"; }
+  part=$(format_disk "$dev" "$label") || return 1
+  uuid=$(blkid -s UUID -o value "$part") || true
+  [ -n "$uuid" ] || die "Could not read the UUID of $part"
+  fstab_snapshot
+  fstab_remove_mp "$mp"
+  ensure_mp "$mp"
+  fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"
+  sd_reload
+  if ! mount_fstab "$mp"; then fstab_rollback; die "Could not mount $part at $mp. fstab was restored."; fi
+  if [ "$role" = main ]; then id -u "$OWNER" >/dev/null 2>&1 && chown "$OWNER:$OWNER" "$mp"; fi
+  log "replaced dead drive $label with $part (UUID $uuid) in the $role pool"
+
+  left=$(missing_branches "$role" | xargs -r -n1 basename | tr '\n' ' ')
+  if [ -n "${left// /}" ]; then
+    say ""
+    say "$label is replaced. Other $role drives are still missing: $left"
+    say "The $role pool cannot start until all of them are replaced. Run  sudo drives replace  again."
+    return 0
+  fi
+  if ! apply_pool "$role"; then
+    fstab_rollback
+    pool_umount "$pool"
+    die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
+  fi
+  power_apply "$mp" "$role"
+  say ""
+  say "$label is in place and the $role pool is mounted."
+
+  if [ "$role" = main ]; then
+    restore_files "$src" || { warn "The restore is not finished. The containers stay stopped."; return 1; }
+    HOLD_HINT=""
+    start_containers
+    after_restore_hints
+  else
+    start_containers
+    local bcmd="${HOMELAB_BACKUP_CMD:-$(command -v homelab-backup || echo /usr/local/sbin/homelab-backup)}"
+    if [ -x "$bcmd" ] && yn "Run the backup now to fill the new drive (it can take a long time)?"; then
+      "$bcmd" 9>&- || warn "The backup run reported an error. Read: sudo tail -20 /var/log/homelab-backup.log"
+    else
+      say "Run  sudo homelab-backup  when you are ready. The 6:00 backup also fills the drive."
+    fi
+  fi
+  say ""
+  say "Done. If the old drive ever turns up again, do not plug it in next to the new one: both are called $label."
+  return 0
+}
+
 # ---------- test helpers ----------
 test_setup() {
   [ "$TEST_MODE" = 1 ] || die "Test setup only works with DRIVES_TEST=1"
@@ -2743,6 +3280,7 @@ menu() {
     say "  5) Convert the current data drive into the main pool (one time)"
     say "  6) Apply power settings"
     say "  7) Recover after an unplug (same as hdd-recover)"
+    say "  8) Replace a dead drive (restores the missing files from the backup)"
     say "  0) Quit"
     c=$(ask "Choose: ")
     case "$c" in
@@ -2753,6 +3291,7 @@ menu() {
       5) adopt_flow ;;
       6) power_all ;;
       7) recover_flow ;;
+      8) replace_flow ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -2773,10 +3312,12 @@ main() {
     adopt)        adopt_flow ;;
     power)        power_all ;;
     recover)      recover_flow ;;
+    replace)      replace_flow ;;
+    restore)      restore_flow ;;
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;
-    *) say "Usage: sudo drives [menu|status|connect|disconnect|move|adopt|power|recover|version]" ;;
+    *) say "Usage: sudo drives [menu|status|connect|disconnect|move|adopt|power|recover|replace|restore|version]" ;;
   esac
 }
 
@@ -2971,6 +3512,160 @@ DEST_FALLBACK="/home/your-username/750GB_HDD/backup-interim"
 # Other settings you can change:
 # RETENTION_DAYS=30
 # MIN_FREE_GB=20
+```
+
+</details>
+
+<details>
+<summary><code>homelab</code>: the cheat sheet and status shown at login (installed at <code>/usr/local/bin/homelab</code>)</summary>
+
+```bash
+#!/usr/bin/env bash
+# homelab - cheat sheet and live status for the home lab server.
+#
+#   homelab         show the commands I use and the current status
+#   homelab docs    list the sections of the README and TROUBLESHOOTING
+#
+# It only reads information. It never changes anything and needs no sudo.
+# ~/.bashrc runs it when a terminal opens (see the README, section 3.14).
+
+VERSION="1.0"
+MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
+BACKUP_POOL="${HOMELAB_BACKUP_POOL:-/mnt/backup}"
+LAST_RUN_FILE="${HOMELAB_LAST_RUN_FILE:-/var/lib/homelab-backup/last-run}"
+DOCS_DIR="${HOMELAB_DOCS_DIR:-$HOME/My-Home-Lab-}"
+STALE_HOURS="${HOMELAB_STALE_HOURS:-36}"
+
+# colours only when printing to a terminal that supports them
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+  B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; N=$'\033[0m'
+else
+  B=""; G=""; Y=""; R=""; N=""
+fi
+
+ok()   { printf '  %s%-15s%s %s\n' "$G" "$1" "$N" "$2"; }
+warn() { printf '  %s%-15s%s %s\n' "$Y" "$1" "$N" "$2"; }
+bad()  { printf '  %s%-15s%s %s\n' "$R" "$1" "$N" "$2"; }
+cmd()  { printf '  %s%-34s%s %s\n' "$B" "$1" "$N" "$2"; }
+
+show_docs() {
+  local f
+  if [ ! -d "$DOCS_DIR" ]; then
+    echo "The documents are not on this server yet. Clone them once:"
+    echo "  git clone https://github.com/Iyour-usernamertI/My-Home-Lab-.git \"$DOCS_DIR\""
+    return 1
+  fi
+  for f in README.md TROUBLESHOOTING.md; do
+    [ -f "$DOCS_DIR/$f" ] || continue
+    printf '\n%s%s%s  (open a section with: less +LINE %s/%s)\n' "$B" "$f" "$N" "$DOCS_DIR" "$f"
+    grep -n '^## ' "$DOCS_DIR/$f" | sed 's/^\([0-9]*\):## /  \1\t/'
+  done
+  echo
+}
+
+sheet() {
+  printf '%sHome lab%s  %s  %s\n' "$B" "$N" "$(hostname)" "$(uptime -p 2>/dev/null)"
+  echo
+  printf '%sStorage%s\n' "$B" "$N"
+  cmd "sudo drives"              "menu: connect, disconnect or check drives"
+  cmd "sudo drives status"       "pools, drives, SMART health, last backup"
+  cmd "sudo hdd-recover"         "after an unplug or power cut: remount, restart containers"
+  cmd "sudo drives power"        "re-apply the drive power settings"
+  cmd "sudo drives replace"      "a drive died: swap it, restore the files from the backup"
+  printf '%sBackup%s\n' "$B" "$N"
+  cmd "sudo homelab-backup"      "run the backup now (about 20 minutes)"
+  printf '  %ssudo tail -f /var/log/homelab-backup.log%s\n' "$B" "$N"
+  printf '  %-34s %s\n' "" "watch the backup (Ctrl+C to leave)"
+  printf '%sChecks%s\n' "$B" "$N"
+  cmd "docker ps"                "what is running (add --format \"table {{.Names}}\\t{{.Status}}\")"
+  cmd "findmnt /mnt/storage"     "is the pool mounted (one path per command)"
+  printf '%sDocs%s  %s\n' "$B" "$N" "$DOCS_DIR"
+  cmd "homelab docs"             "sections of README.md and TROUBLESHOOTING.md"
+  cmd "git -C ~/My-Home-Lab- pull" "refresh them from GitHub"
+  echo
+}
+
+status() {
+  local used size stamp result age_h now ts line n_run n_all down unhealthy cname cstate cpol
+  printf '%sStatus%s\n' "$B" "$N"
+
+  # main pool
+  if command -v findmnt >/dev/null 2>&1 && findmnt -n "$MAIN_POOL" >/dev/null 2>&1; then
+    read -r used size < <(df -h --output=used,size "$MAIN_POOL" 2>/dev/null | awk 'NR==2 {print $1, $2}')
+    ok "Main pool" "mounted, ${used:-?} used of ${size:-?}"
+  else
+    bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo hdd-recover (drive dead? sudo drives replace)"
+  fi
+
+  # backup pool
+  if command -v findmnt >/dev/null 2>&1 && findmnt -n "$BACKUP_POOL" >/dev/null 2>&1; then
+    ok "Backup pool" "mounted"
+  else
+    warn "Backup pool" "not connected (the backup goes to the boot drive)"
+  fi
+
+  # last backup
+  if [ -r "$LAST_RUN_FILE" ]; then
+    IFS='|' read -r stamp result _ _ <"$LAST_RUN_FILE"
+    now=$(date +%s); ts=$(date -d "$stamp" +%s 2>/dev/null || echo "")
+    if [ -n "$ts" ]; then
+      age_h=$(( (now - ts) / 3600 ))
+    else
+      age_h=""
+    fi
+    line="$stamp  $result"
+    [ -n "$age_h" ] && line="$line  (${age_h} h ago)"
+    if [ "$result" != "OK" ]; then
+      bad "Last backup" "$line -> read: sudo tail -20 /var/log/homelab-backup.log"
+    elif [ -n "$age_h" ] && [ "$age_h" -ge "$STALE_HOURS" ]; then
+      warn "Last backup" "$line -> older than ${STALE_HOURS} h"
+    else
+      ok "Last backup" "$line"
+    fi
+  elif [ -e "$(dirname "$LAST_RUN_FILE")" ]; then
+    warn "Last backup" "no result found (check: sudo drives status)"
+  else
+    warn "Last backup" "no backup has run yet"
+  fi
+
+  # containers (a stopped container whose restart policy is "no" was stopped on purpose, so it is ignored)
+  if command -v docker >/dev/null 2>&1 && timeout 5 docker info >/dev/null 2>&1; then
+    n_run=0; n_all=0; down=""
+    while read -r cname cstate cpol; do
+      [ -n "$cname" ] || continue
+      cname=${cname#/}
+      if [ "$cstate" = "running" ]; then
+        n_run=$((n_run + 1)); n_all=$((n_all + 1))
+      elif [ -n "$cpol" ] && [ "$cpol" != "no" ]; then
+        n_all=$((n_all + 1)); down="$down$cname "
+      fi
+    done < <(timeout 10 docker ps -aq 2>/dev/null | xargs -r timeout 10 docker inspect --format '{{.Name}} {{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)
+    unhealthy=$(timeout 5 docker ps --filter health=unhealthy --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')
+    if [ -n "$down" ]; then
+      bad "Containers" "${n_run} of ${n_all} running; not running: ${down% }"
+    elif [ -n "$unhealthy" ]; then
+      warn "Containers" "${n_run} of ${n_all} running; unhealthy: ${unhealthy% }"
+    else
+      ok "Containers" "${n_run} of ${n_all} running"
+    fi
+  else
+    warn "Containers" "cannot read Docker (is Docker running, and are you in the docker group?)"
+  fi
+
+  # boot drive space
+  line=$(df -h --output=pcent,avail / 2>/dev/null | awk 'NR==2 {print $1 " used, " $2 " free"}')
+  [ -n "$line" ] && ok "Boot drive" "$line"
+  echo
+}
+
+case "${1:-}" in
+  docs)   show_docs ;;
+  -h|--help|help)
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' ;;
+  version|--version) echo "homelab $VERSION" ;;
+  "")     sheet; status ;;
+  *)      echo "Unknown option '$1'. Try: homelab, homelab docs" >&2; exit 1 ;;
+esac
 ```
 
 </details>
