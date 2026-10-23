@@ -55,14 +55,14 @@ services:
 volumes:
   model-cache:
 
-
-
-Enviroment variables
-
-UPLOAD_LOCATION=/mnt/storage/immich
-DB_DATA_LOCATION=/home/brandon/immich/postgres
-TZ=America/New_York
-IMMICH_VERSION=release
-DB_PASSWORD=your-password
-DB_USERNAME=your-username
-DB_DATABASE_NAME=immich
+# ---------------------------------------------------------------
+# Environment variables. Do NOT paste these into the YAML above.
+# In Portainer, add them in the "Environment variables" box of the stack.
+# ---------------------------------------------------------------
+# UPLOAD_LOCATION=/mnt/storage/immich
+# DB_DATA_LOCATION=/home/brandon/immich/postgres
+# TZ=America/New_York
+# IMMICH_VERSION=release
+# DB_PASSWORD=your-password
+# DB_USERNAME=your-username
+# DB_DATABASE_NAME=immich

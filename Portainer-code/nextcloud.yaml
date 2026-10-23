@@ -55,7 +55,10 @@ services:
       - /home/brandon/nextcloud/html:/var/www/html
       - /mnt/storage/nextcloud:/data
 
-enviorment variables
-NC_ADMIN_USER=your
-NC_ADMIN_PASSWORD=yours
-NC_DB_PASSWORD=yours
+# ---------------------------------------------------------------
+# Environment variables. Do NOT paste these into the YAML above.
+# In Portainer, add them in the "Environment variables" box of the stack.
+# ---------------------------------------------------------------
+# NC_ADMIN_USER=your
+# NC_ADMIN_PASSWORD=yours
+# NC_DB_PASSWORD=yours
