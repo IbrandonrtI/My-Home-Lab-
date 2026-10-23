@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+# homelab - cheat sheet and live status for the home lab server.
+#
+#   homelab         show the commands I use and the current status
+#   homelab docs    list the sections of the README and TROUBLESHOOTING
+#
+# It only reads information. It never changes anything and needs no sudo.
+# ~/.bashrc runs it when a terminal opens (see the README, section 3.14).
+
+VERSION="1.0"
+MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
+BACKUP_POOL="${HOMELAB_BACKUP_POOL:-/mnt/backup}"
+LAST_RUN_FILE="${HOMELAB_LAST_RUN_FILE:-/var/lib/homelab-backup/last-run}"
+DOCS_DIR="${HOMELAB_DOCS_DIR:-$HOME/My-Home-Lab-}"
+STALE_HOURS="${HOMELAB_STALE_HOURS:-36}"
+
+# colours only when printing to a terminal that supports them
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+  B=$'\033[1m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; N=$'\033[0m'
+else
+  B=""; G=""; Y=""; R=""; N=""
+fi
+
+ok()   { printf '  %s%-15s%s %s\n' "$G" "$1" "$N" "$2"; }
+warn() { printf '  %s%-15s%s %s\n' "$Y" "$1" "$N" "$2"; }
+bad()  { printf '  %s%-15s%s %s\n' "$R" "$1" "$N" "$2"; }
+cmd()  { printf '  %s%-34s%s %s\n' "$B" "$1" "$N" "$2"; }
+
+show_docs() {
+  local f
+  if [ ! -d "$DOCS_DIR" ]; then
+    echo "The documents are not on this server yet. Clone them once:"
+    echo "  git clone https://github.com/IbrandonrtI/My-Home-Lab-.git \"$DOCS_DIR\""
+    return 1
+  fi
+  for f in README.md TROUBLESHOOTING.md; do
+    [ -f "$DOCS_DIR/$f" ] || continue
+    printf '\n%s%s%s  (open a section with: less +LINE %s/%s)\n' "$B" "$f" "$N" "$DOCS_DIR" "$f"
+    grep -n '^## ' "$DOCS_DIR/$f" | sed 's/^\([0-9]*\):## /  \1\t/'
+  done
+  echo
+}
+
+sheet() {
+  printf '%sHome lab%s  %s  %s\n' "$B" "$N" "$(hostname)" "$(uptime -p 2>/dev/null)"
+  echo
+  printf '%sStorage%s\n' "$B" "$N"
+  cmd "sudo drives"              "menu: connect, disconnect or check drives"
+  cmd "sudo drives status"       "pools, drives, SMART health, last backup"
+  cmd "sudo hdd-recover"         "after an unplug or power cut: remount, restart containers"
+  cmd "sudo drives power"        "re-apply the drive power settings"
+  cmd "sudo drives replace"      "a drive died: swap it, restore the files from the backup"
+  printf '%sBackup%s\n' "$B" "$N"
+  cmd "sudo homelab-backup"      "run the backup now (about 20 minutes)"
+  printf '  %ssudo tail -f /var/log/homelab-backup.log%s\n' "$B" "$N"
+  printf '  %-34s %s\n' "" "watch the backup (Ctrl+C to leave)"
+  printf '%sChecks%s\n' "$B" "$N"
+  cmd "docker ps"                "what is running (add --format \"table {{.Names}}\\t{{.Status}}\")"
+  cmd "findmnt /mnt/storage"     "is the pool mounted (one path per command)"
+  printf '%sDocs%s  %s\n' "$B" "$N" "$DOCS_DIR"
+  cmd "homelab docs"             "sections of README.md and TROUBLESHOOTING.md"
+  cmd "git -C ~/My-Home-Lab- pull" "refresh them from GitHub"
+  echo
+}
+
+status() {
+  local used size stamp result age_h now ts line n_run n_all down unhealthy cname cstate cpol
+  printf '%sStatus%s\n' "$B" "$N"
+
+  # main pool
+  if command -v findmnt >/dev/null 2>&1 && findmnt -n "$MAIN_POOL" >/dev/null 2>&1; then
+    read -r used size < <(df -h --output=used,size "$MAIN_POOL" 2>/dev/null | awk 'NR==2 {print $1, $2}')
+    ok "Main pool" "mounted, ${used:-?} used of ${size:-?}"
+  else
+    bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo hdd-recover (drive dead? sudo drives replace)"
+  fi
+
+  # backup pool
+  if command -v findmnt >/dev/null 2>&1 && findmnt -n "$BACKUP_POOL" >/dev/null 2>&1; then
+    ok "Backup pool" "mounted"
+  else
+    warn "Backup pool" "not connected (the backup goes to the boot drive)"
+  fi
+
+  # last backup
+  if [ -r "$LAST_RUN_FILE" ]; then
+    IFS='|' read -r stamp result _ _ <"$LAST_RUN_FILE"
+    now=$(date +%s); ts=$(date -d "$stamp" +%s 2>/dev/null || echo "")
+    if [ -n "$ts" ]; then
+      age_h=$(( (now - ts) / 3600 ))
+    else
+      age_h=""
+    fi
+    line="$stamp  $result"
+    [ -n "$age_h" ] && line="$line  (${age_h} h ago)"
+    if [ "$result" != "OK" ]; then
+      bad "Last backup" "$line -> read: sudo tail -20 /var/log/homelab-backup.log"
+    elif [ -n "$age_h" ] && [ "$age_h" -ge "$STALE_HOURS" ]; then
+      warn "Last backup" "$line -> older than ${STALE_HOURS} h"
+    else
+      ok "Last backup" "$line"
+    fi
+  elif [ -e "$(dirname "$LAST_RUN_FILE")" ]; then
+    warn "Last backup" "no result found (check: sudo drives status)"
+  else
+    warn "Last backup" "no backup has run yet"
+  fi
+
+  # containers (a stopped container whose restart policy is "no" was stopped on purpose, so it is ignored)
+  if command -v docker >/dev/null 2>&1 && timeout 5 docker info >/dev/null 2>&1; then
+    n_run=0; n_all=0; down=""
+    while read -r cname cstate cpol; do
+      [ -n "$cname" ] || continue
+      cname=${cname#/}
+      if [ "$cstate" = "running" ]; then
+        n_run=$((n_run + 1)); n_all=$((n_all + 1))
+      elif [ -n "$cpol" ] && [ "$cpol" != "no" ]; then
+        n_all=$((n_all + 1)); down="$down$cname "
+      fi
+    done < <(timeout 10 docker ps -aq 2>/dev/null | xargs -r timeout 10 docker inspect --format '{{.Name}} {{.State.Status}} {{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)
+    unhealthy=$(timeout 5 docker ps --filter health=unhealthy --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')
+    if [ -n "$down" ]; then
+      bad "Containers" "${n_run} of ${n_all} running; not running: ${down% }"
+    elif [ -n "$unhealthy" ]; then
+      warn "Containers" "${n_run} of ${n_all} running; unhealthy: ${unhealthy% }"
+    else
+      ok "Containers" "${n_run} of ${n_all} running"
+    fi
+  else
+    warn "Containers" "cannot read Docker (is Docker running, and are you in the docker group?)"
+  fi
+
+  # boot drive space
+  line=$(df -h --output=pcent,avail / 2>/dev/null | awk 'NR==2 {print $1 " used, " $2 " free"}')
+  [ -n "$line" ] && ok "Boot drive" "$line"
+  echo
+}
+
+case "${1:-}" in
+  docs)   show_docs ;;
+  -h|--help|help)
+    sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' ;;
+  version|--version) echo "homelab $VERSION" ;;
+  "")     sheet; status ;;
+  *)      echo "Unknown option '$1'. Try: homelab, homelab docs" >&2; exit 1 ;;
+esac
