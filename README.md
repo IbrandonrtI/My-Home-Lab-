@@ -1498,8 +1498,6 @@ If OneDrive manages it, choose one of these before you go on: turn off OneDrive'
 
 **Step 4: the first-run screen.** The screen offers **Virtual files**, **Synchronize everything** and **Choose what to sync**, and shows a local folder (`C:\Users\your-windows-username\Nextcloud` by default). I chose **Synchronize everything**, kept the default folder and clicked **Done**.
 
-![Nextcloud Windows client, first-run screen with the three sync choices](docs/images/nextcloud-windows-1-first-run.png)
-
 > **Heads up.** This first connection downloads the whole server into the `Nextcloud` folder. Any folder you add in step 5 will also appear there, which gives you a second copy of the same files. The note at the end of this subsection explains how to avoid or remove it. A cleaner order, which I haven't tested, is to click **Set up later** here and add only the folder you want in step 5.
 
 **Step 5: add your Documents folder.**
@@ -1511,8 +1509,6 @@ If OneDrive manages it, choose one of these before you go on: turn off OneDrive'
 1. Choose the server folder. Create a new folder on the server and name it `Document sync`. Select it and continue.
 1. The last screen has an option for **virtual files**. I left it on. With virtual files, your files show up in File Explorer but are only downloaded when you open them, which saves disk space. If you want every file stored on the PC at all times, turn it off. You can also right-click a file or folder and use **Always keep on this device**.
 1. Click **Finish**.
-
-![Nextcloud Settings window on Windows, showing the Document sync connection with a green check](docs/images/nextcloud-windows-2-settings.png)
 
 **Step 6: start it with Windows.** In the same Settings window, open the **General** tab and look for the option to launch Nextcloud on system startup. Turn it on, so sync continues after a restart.
 
@@ -1622,8 +1618,6 @@ If your Documents folder isn't covered, use a tool such as Flatseal to grant it,
 1. The **Files** tab opens.
 
 **Verify:** the **Files** tab lists the `Document sync` folder from your PC, with its size and when it last changed.
-
-![Nextcloud iPhone app, Files tab listing the Document sync folder](docs/images/nextcloud-iphone-1-files.png)
 
 **Sending files from the phone.** Tap the **+** button at the bottom right of the Files tab and choose the option to upload files. Pick a file and it is sent to the folder you have open. I didn't test this, and I didn't write out the menu names, because I haven't seen them on my phone.
 
@@ -1934,34 +1928,6 @@ Services I plan to add:
 - **Least privilege.** Each integration gets its own API key (one for Homepage, one for Nextcloud), so any of them can be revoked without affecting the others.
 - **Throttling is a feature.** Nextcloud blocks an address after repeated failed logins. Stop Homepage while you edit its keys so a typo doesn't lock the server out.
 - **Per-device DNS.** Only devices I configured use AdGuard Home, so a guest's phone isn't filtered.
-
-### Repository layout
-
-```
-My-Home-Lab-/
-├── README.md
-├── TROUBLESHOOTING.md
-├── Services-screenshot/
-├── homepage-config/
-│   ├── services.yaml
-│   ├── widgets.yaml
-│   ├── settings.yaml
-│   ├── bookmarks.yaml
-│   └── custom.css
-├── scripts/
-│   ├── drives
-│   ├── hdd-recover
-│   ├── homelab-backup
-│   ├── homelab-backup.conf.example
-│   └── SHA256SUMS
-└── docs/
-    └── images/
-        ├── dashboard-desktop.png
-        ├── dashboard-mobile.png
-        ├── nextcloud-windows-1-first-run.png
-        ├── nextcloud-windows-2-settings.png
-        └── nextcloud-iphone-1-files.png
-```
 
 If something doesn't work, start with [TROUBLESHOOTING.md](TROUBLESHOOTING.md). It lists the problems I hit, with the symptom, cause, fix and a way to check each fix.
 
