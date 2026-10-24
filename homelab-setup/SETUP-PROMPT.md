@@ -56,6 +56,7 @@ It never formats or changes a drive, never stores the password you type, and nev
 | Secrets | Portainer stack variables plus ONE root-only 600 file (`/root/.homelab-setup/secrets.env`) shown once; never in the repo or chat | Brandon |
 | Passwords | One password you type, used for every admin login (Brandon chose this over one-per-app). The installer shows a risk warning | Brandon |
 | Port 53 | May be freed as the README does (stops `systemd-resolved`). It tells the user first. Refused over a Tailscale SSH session | Brandon |
+| DNS on the machine itself | Router DNS in `/etc/resolv.conf`; Tailscale is set to `--accept-dns=false`. Reason: with `systemd-resolved` off, Tailscale rewrites `resolv.conf` to 100.100.100.100 and can lose its upstreams, so names fail after a reboot or update | Brandon |
 | Testing | VM or spare PC. Simulation only here | Brandon |
 | Login screen | One line "Setup N of M steps done: run homelab-setup" until complete | Brandon |
 | Extras | Installs his scripts into `/usr/local`, the cron entries and the login hook. NOT AnyDesk, auto-login or VS Code | Brandon |
@@ -97,7 +98,7 @@ The installer is a list of **steps**. Each step has a `probe()` that checks the 
 9. **Scripts and schedule**: scripts, backup settings, cron lines, login hook.
 10. **Your devices and drives**: data drive, save the secrets, set DNS on devices, Speedtest login, blocklists, weather, reboot test.
 
-## 6. Checklist catalogue (57 steps; the ones that do not apply are hidden)
+## 6. Checklist catalogue (58 steps; the ones that do not apply are hidden)
 
 Group | id | kind | needs | what it checks
 ---|---|---|---|---
@@ -111,6 +112,7 @@ Tailscale | tailscale-login | manual | tailscale-install | `Self.DNSName` presen
 Tailscale | tailscale-https | manual | tailscale-login | `CertDomains` not empty
 Tailscale | tailscale-serve | auto | tailscale-login, tailscale-https | nine serve mappings match
 Network | port53 | auto | docker | nothing but AdGuard on port 53
+Network | dns-stable | auto | tailscale-install, port53 | `/etc/resolv.conf` has a nameserver and no `100.100.100.100` (Tailscale set to `--accept-dns=false`); not shown on the existing server
 Platform | folders | auto | os | `/mnt/storage/{immich,filebrowser,nextcloud}`, `~/nextcloud/{html,db}`, `~/immich/postgres`, `~/speedtest-tracker`, `~/homepage-config`, `~/750GB_HDD`, `/opt/adguard-docker/{conf,work}`
 Platform | secrets | auto | os, restore-configs | secrets file has DB_PASSWORD, NC_DB_PASSWORD, APP_KEY (and matches a restored `config.php`)
 Platform | portainer, portainer-admin, portainer-token, portainer-env | auto | chain | container, admin, API token, local endpoint
@@ -188,7 +190,7 @@ After adding, rebuild `SHA256SUMS`. README and TROUBLESHOOTING stay untouched un
 
 ## 11. Test plan
 
-Simulated here (102 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
+Simulated here (105 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
 
 Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 

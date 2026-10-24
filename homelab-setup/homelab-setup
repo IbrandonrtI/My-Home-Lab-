@@ -1457,6 +1457,10 @@ class Port53(Step):
         act(["docker", "pull", "adguard/adguardhome:v0.107.79"], timeout=900)
         act(["systemctl", "disable", "systemd-resolved"])
         act(["systemctl", "stop", "systemd-resolved"])
+        if have("tailscale"):
+            # Tailscale must not take /etc/resolv.conf over: its own resolver (100.100.100.100) has no upstream after a
+            # reboot or an update and the machine then cannot look up names (your F6 on the server, found again on the VM).
+            act(["tailscale", "set", "--accept-dns=false"])
         if not Opt.dry:
             try:
                 os.remove(P("/etc/resolv.conf"))
@@ -1470,6 +1474,39 @@ class Port53(Step):
             others = [p for p in port53_listeners() if not p.lower().startswith("adguard")]
             if others:
                 raise Abort("Something still uses port 53: %s" % ", ".join(sorted(set(others))))
+
+
+@step
+class DnsStable(Step):
+    id, group, title = "dns-stable", "Network", "This machine keeps looking up names after a reboot (Tailscale is not in charge of DNS)"
+    needs = ("tailscale-install", "port53")
+
+    def applies(self):
+        return not Mode.existing
+
+    def probe(self):
+        txt = read_file(P("/etc/resolv.conf"))
+        return "done" if "nameserver" in txt and "100.100.100.100" not in txt else "todo"
+
+    def run(self):
+        act(["tailscale", "set", "--accept-dns=false"])
+        if Opt.dry:
+            return
+        if "100.100.100.100" in read_file(P("/etc/resolv.conf")):
+            backup = P("/etc/resolv.pre-tailscale-backup.conf")
+            old = read_file(backup)
+            if "nameserver" not in old or "100.100.100.100" in old:
+                old = "nameserver %s\n" % (Ctx.gateway or "1.1.1.1")
+            try:
+                os.remove(P("/etc/resolv.conf"))
+            except OSError:
+                pass
+            write_file(P("/etc/resolv.conf"), old, 0o644)
+        if not FAKE:
+            try:
+                socket.gethostbyname("github.com")
+            except OSError:
+                raise Abort("Names still do not resolve. Check  cat /etc/resolv.conf  (it should show your router) and your network.")
 
 
 # ---------------------------------------------------------------- Platform
