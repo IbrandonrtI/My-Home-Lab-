@@ -1297,7 +1297,9 @@ def do_tailscale_login():
     if not have("tailscale"):
         raise Abort("Tailscale is not installed yet.")
     key = os.environ.get("TS_AUTHKEY", "")
-    args = ["tailscale", "up", "--hostname=" + Ctx.hostname.lower()]
+    # --accept-dns=false is repeated on purpose: once it is set, `tailscale up` refuses to run (and a login after the
+    # machine was removed from the admin page or its key expired would fail) unless every non-default setting is named.
+    args = ["tailscale", "up", "--hostname=" + Ctx.hostname.lower(), "--accept-dns=false"]
     if key:
         args.append("--auth-key=" + key)
     if Opt.dry:
