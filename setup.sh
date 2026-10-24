@@ -3,9 +3,9 @@
 #
 #   git clone https://github.com/your-username/My-Home-Lab-.git
 #   cd My-Home-Lab-
-#   sudo ./setup.sh install --dry-run     # show what it would do, change nothing
-#   sudo ./setup.sh install               # do it (asks first)
-#   sudo ./setup.sh                       # show the checklist
+#   sudo bash setup.sh install --dry-run     # show what it would do, change nothing
+#   sudo bash setup.sh install               # do it (asks first)
+#   sudo bash setup.sh                       # show the checklist
 #
 # All it does is check that Python 3 is there and hand over to homelab-setup/homelab-setup.
 set -e
@@ -16,7 +16,7 @@ if [ ! -f "$PROG" ]; then
   exit 1
 fi
 if [ "$(id -u)" -ne 0 ]; then
-  exec sudo -E "$0" "$@"
+  exec sudo -E bash "$0" "$@"
 fi
 if ! command -v python3 >/dev/null 2>&1; then
   echo "Python 3 is missing. Installing it first ..."
