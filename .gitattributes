@@ -1,0 +1,4 @@
+# keep Unix line endings so the scripts run on Linux even if the repo is edited on Windows
+*.sh text eol=lf
+homelab-setup/homelab-setup text eol=lf
+homelab-drives/* text eol=lf
