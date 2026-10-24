@@ -190,7 +190,7 @@ After adding, rebuild `SHA256SUMS`. README and TROUBLESHOOTING stay untouched un
 
 ## 11. Test plan
 
-Simulated here (106 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
+Simulated here (107 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
 
 Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 

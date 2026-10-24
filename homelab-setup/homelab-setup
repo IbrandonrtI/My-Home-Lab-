@@ -991,6 +991,15 @@ def write_progress(res):
                 os.remove(PROGRESS_FILE)
         else:
             write_file(PROGRESS_FILE, "%d|%d|%d\n" % (done, total, int(time.time())), 0o644)
+        # tells the login screen that having no data drive is expected here (it then shows a grey note, not a red error)
+        marker = PROGRESS_DIR + "/no-data-drive"
+        dd = res.get("data-drive")
+        if State.readonly:
+            pass        # the existing server is only looked at, never changed
+        elif dd is not None and dd.state in ("todo", "skip"):
+            write_file(marker, "no data drive set up\n", 0o644)
+        elif os.path.exists(marker):
+            os.remove(marker)
     except OSError:
         pass
 
