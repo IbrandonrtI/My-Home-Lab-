@@ -187,7 +187,7 @@ After adding, rebuild `SHA256SUMS`. README and TROUBLESHOOTING stay untouched un
 
 ## 11. Test plan
 
-Simulated here (85 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
+Simulated here (93 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
 
 Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 
@@ -197,6 +197,7 @@ Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 2. Beszel `create-user` request body (the installer tries several shapes) and `superuser upsert`.
 3. Portainer treats `env_file: stack.env` correctly when a stack is created through the API with variables.
 4. Portainer auto-creates the local environment on first start.
+   (Found on the first VM run: Portainer 2.39.4 / 2.43 and newer refuse the first admin without a one-time setup token, sent in the `X-Setup-Token` header. The installer now starts Portainer with `--setup-token <random>` and falls back to the `setup_token=` line in `docker logs portainer`. The exact log-line format is still unconfirmed.)
 5. Speedtest Tracker `artisan tinker` command and token ability name.
 6. FileBrowser `PUT /api/users/1` payload.
 7. AdGuard `dns_config` partial update keeps the other settings.

@@ -1259,6 +1259,7 @@ class TailscaleInstalled(Step):
         base = "https://pkgs.tailscale.com/stable/%s/%s" % (distro, suite)
         try:
             os.makedirs(P("/usr/share/keyrings"), exist_ok=True)
+            os.makedirs(P("/etc/apt/sources.list.d"), exist_ok=True)
             with open(P("/usr/share/keyrings/tailscale-archive-keyring.gpg"), "wb") as f:
                 f.write(fetch_bytes(base + ".noarmor.gpg"))
             with open(P("/etc/apt/sources.list.d/tailscale.list"), "wb") as f:
@@ -1590,6 +1591,21 @@ class Portainer:
             raise Abort("Portainer would not deploy stack '%s' (HTTP %s): %s" % (name, st, str(msg)[:400]))
 
 
+def setup_tokens():
+    """Portainer 2.39.4 / 2.43 and newer refuse the first admin without a setup token. Candidates, best first:
+    the one this tool gave Portainer at creation, then the one Portainer printed in its log."""
+    found = []
+    mine = State.data.get("ptoken")
+    if mine:
+        found.append(mine)
+    rc, txt = run(["docker", "logs", "portainer"])
+    txt = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", txt or "")
+    for m in re.finditer(r"setup_token[=:]\s*[\"']?([A-Za-z0-9_\-+/=.]{8,})", txt):
+        if m.group(1) not in found:
+            found.insert(1 if mine else 0, m.group(1))
+    return found
+
+
 @step
 class PortainerRunning(Step):
     id, group, title = "portainer", "Platform", "Portainer is running"
@@ -1603,10 +1619,15 @@ class PortainerRunning(Step):
             act(["docker", "start", "portainer"], check=True)
         elif "portainer" not in containers_all():
             act(["docker", "pull", "portainer/portainer-ce:latest"], timeout=900)
+            # our own setup token (new Portainer versions require one for the first admin); used once, then useless
+            tok = State.data.get("ptoken") or rand_alnum(32)
+            if not Opt.dry:
+                State.data["ptoken"] = tok
+                State.save()
             act(["docker", "run", "-d", "--name", "portainer", "--restart=always",
                  "-p", "9000:9000", "-p", "9443:9443",
                  "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", "portainer_data:/data",
-                 "portainer/portainer-ce:latest"], check=True, timeout=300)
+                 "portainer/portainer-ce:latest", "--setup-token", tok], check=True, timeout=300)
         if not Opt.dry:
             wait_for(Portainer.alive, "Portainer to start", 120)
 
@@ -1624,26 +1645,33 @@ class PortainerAdmin(Step):
         if Opt.dry:
             out("      would create the Portainer admin '%s' with your password" % (Ctx.admin or "admin"))
             return
-        for attempt in (1, 2):
+        last = (0, "")
+        for attempt in (1, 2, 3):
             state = Portainer.admin_state()
             if state == 204:
                 return
-            if state == 303 or attempt == 2:
-                if attempt == 1:
-                    out("      the first-setup window closed; restarting Portainer to reopen it")
-                    docker("restart", "portainer")
-                    wait_for(Portainer.alive, "Portainer to restart", 120)
-                    time.sleep(2 if not FAKE else 0)
-            st, js, _ = http("POST", Portainer.base() + "/api/users/admin/init",
-                             body={"Username": Ctx.admin, "Password": pw}, timeout=30)
-            if st in (200, 201):
-                return
-            if attempt == 1:
+            if state == 303:
+                out("      the first-setup window closed; restarting Portainer to reopen it")
                 docker("restart", "portainer")
                 wait_for(Portainer.alive, "Portainer to restart", 120)
                 time.sleep(2 if not FAKE else 0)
-                continue
-            raise Abort("Portainer refused the admin account (HTTP %s): %s" % (st, str(js)[:200]))
+            for tok in (setup_tokens() or [None]):
+                hdr = {"X-Setup-Token": tok} if tok else {}
+                st, js, _ = http("POST", Portainer.base() + "/api/users/admin/init", headers=hdr,
+                                 body={"Username": Ctx.admin, "Password": pw}, timeout=30)
+                if st in (200, 201):
+                    State.data.pop("ptoken", None)
+                    State.save()
+                    return
+                last = (st, js)
+                if st != 403:
+                    break
+            if attempt < 3:
+                out("      Portainer said no (HTTP %s); restarting it to get a fresh setup window" % last[0])
+                docker("restart", "portainer")
+                wait_for(Portainer.alive, "Portainer to restart", 120)
+                time.sleep(2 if not FAKE else 0)
+        raise Abort("Portainer refused the admin account (HTTP %s): %s" % (last[0], str(last[1])[:200]))
 
 
 @step
