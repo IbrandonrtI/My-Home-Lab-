@@ -2342,6 +2342,7 @@ class WidgetStep(Step):
         if not self.verify(v):
             raise Abort("The new login/key did not pass its test against the service, so I did not write it into Homepage.")
         hp_set_widget(self.card, v)
+        State.note("vf:" + self.id, "")        # it just passed: never let an older failed test hide that
 
     def run(self):
         if self.auto is None:
@@ -2382,16 +2383,22 @@ def auto_beszel():
 def auto_speedtest():
     pw = need_password("to set the Speedtest Tracker login")
     esc = lambda s: s.replace("\\", "\\\\").replace("'", "\\'")
-    code = ("$u = \\App\\Models\\User::first();\n$u->name = '%s';\n$u->email = '%s';\n"
-            "$u->password = \\Illuminate\\Support\\Facades\\Hash::make('%s');\n$u->save();\n"
+    # The container has no "tinker" command, so start the Laravel app from a small PHP script read from stdin.
+    code = ("<?php\nchdir('/app/www');\nrequire '/app/www/vendor/autoload.php';\n"
+            "$app = require '/app/www/bootstrap/app.php';\n"
+            "$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();\n"
+            "$u = App\\Models\\User::first();\n"
+            "if (!$u) { echo \"HLS_ERROR no user exists yet\\n\"; exit(1); }\n"
+            "$u->name = '%s';\n$u->email = '%s';\n"
+            "$u->password = Illuminate\\Support\\Facades\\Hash::make('%s');\n$u->save();\n"
             "echo 'HLS_TOKEN=' . $u->createToken('homepage', ['results:read'])->plainTextToken . \"\\n\";\n"
             % (esc(Ctx.admin), esc(Ctx.email), esc(pw)))
-    rc, txt = run(["docker", "exec", "-u", "abc", "-i", "speedtest-tracker", "php", "/app/www/artisan", "tinker"],
-                  input_text=code, timeout=180)
+    rc, txt = run(["docker", "exec", "-u", "abc", "-i", "speedtest-tracker", "php"], input_text=code, timeout=180)
     m = re.search(r"HLS_TOKEN=(\S+)", txt)
     if not m:
+        why = next((l.strip() for l in txt.splitlines() if re.search(r"rror|xception|HLS_ERROR", l)), txt.strip()[:200])
         raise Abort("I could not create the Speedtest Tracker token (%s). Create one by hand: %s/admin/api-tokens "
-                    "(tick 'Read Results'), then run  sudo homelab-setup fill" % (txt.strip()[-120:], url("speedtest")))
+                    "(tick 'Read Results'), then run  sudo homelab-setup fill" % (why[:200], url("speedtest")))
     Secrets.set("SPEEDTEST_TOKEN", m.group(1))
     return {"key": m.group(1)}
 

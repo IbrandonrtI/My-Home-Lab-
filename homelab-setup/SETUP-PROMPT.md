@@ -137,13 +137,13 @@ Text edits keep the file's comments and order. Widgets that need a key are **str
 | Tailscale | device id from `tailscale status --json` (`Self.ID`); API token **by hand** | api.tailscale.com device endpoint |
 | Beszel | superuser upserted with `docker exec beszel /beszel superuser upsert EMAIL PASSWORD` | PocketBase auth |
 | Netdata | none | `/api/v1/info` |
-| Speedtest Tracker | `artisan tinker` through stdin as user `abc`, token ability `results:read` | not 401/403 |
+| Speedtest Tracker | a PHP script through stdin as user `abc` (no tinker in the image) that boots Laravel, sets the login, and calls `createToken('homepage', ['results:read'])` | not 401/403 |
 | Portainer | token named `homepage`, environment id from the endpoints list | stacks/endpoints call |
 | FileBrowser | first-run password from the container log, then `PUT /api/users/1` to set yours | login |
 | Immich | login, then API key with `server.statistics` | statistics call |
 | Nextcloud | `occ config:app:set serverinfo token` | OCS call with `NC-Token` |
 
-After a failed test the same check is not repeated for 10 minutes (state note `vf:ID`).
+After a failed test the same check is not repeated for 10 minutes (state note `vf:ID`), except that a key that was just written and passed its test clears that note.
 
 ## 8. Secrets and safety rules
 
@@ -187,7 +187,7 @@ After adding, rebuild `SHA256SUMS`. README and TROUBLESHOOTING stay untouched un
 
 ## 11. Test plan
 
-Simulated here (97 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
+Simulated here (98 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
 
 Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 
@@ -198,7 +198,7 @@ Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 3. Portainer treats `env_file: stack.env` correctly when a stack is created through the API with variables.
 4. Portainer auto-creates the local environment on first start.
    (Found on the first VM run: Portainer 2.39.4 / 2.43 and newer refuse the first admin without a one-time setup token, sent in the `X-Setup-Token` header. The installer now starts Portainer with `--setup-token <random>` and falls back to the `setup_token=` line in `docker logs portainer`. The exact log-line format is still unconfirmed.)
-5. Speedtest Tracker `artisan tinker` command and token ability name.
+5. Speedtest Tracker token creation. (First VM run: the image has no `artisan tinker`. The installer now runs a small PHP script on stdin that starts the Laravel app. Whether `createToken` and the ability name `results:read` exist is still unconfirmed.)
 6. FileBrowser `PUT /api/users/1` payload. (First VM run: it returned 400 until `current_password` was added, which newer FileBrowser requires to change the username or password. Fixed, retest.)
 7. AdGuard `dns_config` partial update keeps the other settings.
 8. Nextcloud trusted domains (127 versus LAN address) after first install.
