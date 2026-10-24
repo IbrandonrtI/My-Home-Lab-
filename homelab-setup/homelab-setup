@@ -511,17 +511,31 @@ class Runtime:
 
 
 def need_password(why):
-    """Ask for the shared password once per run, when a step really needs it."""
+    """Ask for the shared password once per run, when a step really needs it.
+    Every typed password is checked: against the Portainer admin when that account exists, otherwise by typing it twice.
+    (A typo here would quietly give some apps a different password than the others.)"""
     if Runtime.password:
         return Runtime.password
     out("")
     say("This step needs your admin password (%s). It is used now and not saved." % why)
-    pw = ask_secret("Admin password")
-    problem = password_problem(pw)
-    if problem:
-        raise Abort(problem)
-    Runtime.password = pw
-    return pw
+    for _ in range(3):
+        pw = ask_secret("Admin password")
+        problem = password_problem(pw)
+        if problem:
+            warn(problem)
+            continue
+        if Portainer.admin_state() == 204:
+            if not Portainer.login(pw):
+                warn("That is not the password of your Portainer admin account (%s). Type the same password you chose "
+                     "at the start." % Ctx.admin)
+                continue
+        elif ask_secret("Type it again") != pw:
+            warn("They did not match.")
+            continue
+        Runtime.password = pw
+        return pw
+    raise Abort("No matching admin password was entered, so I stopped before setting any more logins. "
+                "Run  sudo homelab-setup refresh  to try again.")
 
 
 def password_problem(pw):

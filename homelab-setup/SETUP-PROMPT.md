@@ -148,6 +148,7 @@ After a failed test the same check is not repeated for 10 minutes (state note `v
 ## 8. Secrets and safety rules
 
 - The typed password lives only in memory. Tests assert it is absent from `state.json`, `secrets.env`, the log and everything under `/root` and `/var`. It is also masked in the log if it ever appears in a command line. The three Homepage logins in `services.yaml` keep it in plain text by design, as the working server does today.
+- The password is checked every time it is typed: at the start it is entered twice; on any later run it is verified against the Portainer admin account (or entered twice if that account does not exist yet), because a typo would otherwise give some apps a different password than the rest (found on the first VM run).
 - Known leak: while the Beszel superuser is created, the password is briefly visible in `ps` (the Beszel image has no shell to feed it through stdin).
 - `/root/.homelab-setup/` is mode 700 and `secrets.env` is mode 600. State: `/var/lib/homelab-setup/state.json` (600). Log: `/var/log/homelab-setup.log`. Progress: `/var/lib/homelab/setup-progress`.
 - The installer never runs `mkfs`, `wipefs`, `parted`, `fdisk`, `chattr` or `mount`. Drives are the person's job (`sudo drives`).
@@ -187,7 +188,7 @@ After adding, rebuild `SHA256SUMS`. README and TROUBLESHOOTING stay untouched un
 
 ## 11. Test plan
 
-Simulated here (98 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
+Simulated here (102 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
 
 Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 
