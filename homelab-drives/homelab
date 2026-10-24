@@ -11,7 +11,7 @@
 # It only reads information. It never changes anything and needs no sudo.
 # ~/.bashrc runs it when a terminal opens (see the README, section 3.14).
 
-VERSION="1.6"
+VERSION="1.7"
 MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
 BACKUP_POOL="${HOMELAB_BACKUP_POOL:-/mnt/backup}"
 LAST_RUN_FILE="${HOMELAB_LAST_RUN_FILE:-/var/lib/homelab-backup/last-run}"
@@ -261,6 +261,9 @@ status() {
   if command -v findmnt >/dev/null 2>&1 && findmnt -n "$MAIN_POOL" >/dev/null 2>&1; then
     read -r used size < <(df -h --output=used,size "$MAIN_POOL" 2>/dev/null | awk 'NR==2 {print $1, $2}')
     ok "Main pool" "mounted, ${used:-?} used of ${size:-?}"
+  elif [ -e "$STATE_DIR/no-data-drive" ]; then
+    # written by homelab-setup while no data drive has been set up (or when you skipped that step): not a failure
+    warn "Main pool" "no data drive set up yet (when you have one: sudo drives)"
   else
     bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo hdd-recover (drive dead? sudo drives replace)"
   fi
