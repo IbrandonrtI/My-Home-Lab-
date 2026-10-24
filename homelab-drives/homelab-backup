@@ -9,6 +9,8 @@
 #   4. removes dumps and _deleted folders older than 30 days
 #
 # Settings can be overridden in /etc/homelab-backup.conf (see the guide).
+# The result of each run is saved in /var/lib/homelab-backup/last-run as
+#   date|result|destination|seconds|bytes   (bytes = size of the whole backup folder)
 
 set -u
 set -o pipefail
@@ -52,10 +54,12 @@ log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE"; }
 fail() { ERRORS=$((ERRORS + 1)); NOTES="$NOTES$*; "; log "ERROR: $*"; }
 
 finish() {
-  local result=OK secs=$(( $(date +%s) - START ))
+  local result=OK secs=$(( $(date +%s) - START )) size=""
   [ "$ERRORS" -eq 0 ] || result="FAILED ($ERRORS problem(s): ${NOTES%; })"
+  # size of everything in the backup folder (the login screen shows it); skipped if it takes too long
+  if [ -n "$DEST" ] && [ -d "$DEST" ]; then size=$(timeout 300 du -sb "$DEST" 2>/dev/null | awk '{print $1}'); fi
   mkdir -p "$(dirname "$STATUS_FILE")"
-  printf '%s|%s|%s|%s\n' "$(date '+%F %H:%M')" "$result" "${DEST:-none}" "$secs" >"$STATUS_FILE"
+  printf '%s|%s|%s|%s|%s\n' "$(date '+%F %H:%M')" "$result" "${DEST:-none}" "$secs" "$size" >"$STATUS_FILE"
   log "finished: $result in ${secs}s"
   if [ -f "$LOGFILE" ] && [ "$(stat -c %s "$LOGFILE")" -gt 5242880 ]; then
     tail -n 2000 "$LOGFILE" >"$LOGFILE.tmp" && mv "$LOGFILE.tmp" "$LOGFILE"
