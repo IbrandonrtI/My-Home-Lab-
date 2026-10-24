@@ -1485,6 +1485,18 @@ class Folders(Step):
             mkdirs(P(p), u, g)
 
 
+def restored_nc_password():
+    """The database password from a restored Nextcloud config.php, but only if it belongs to the database user our stack
+    creates ('nextcloud'). Nextcloud makes its own extra database user (oc_...) with a random password on a first install;
+    that one is not ours to reuse."""
+    cfg = read_file(P(Ctx.home + "/nextcloud/html/config/config.php"))
+    user = re.search(r"'dbuser'\s*=>\s*'([^']*)'", cfg)
+    pw = re.search(r"'dbpassword'\s*=>\s*'([^']*)'", cfg)
+    if user and pw and user.group(1) == "nextcloud":
+        return pw.group(1)
+    return None
+
+
 @step
 class SecretsFile(Step):
     id, group, title = "secrets", "Platform", "Passwords and keys generated and saved in one root-only file"
@@ -1494,8 +1506,8 @@ class SecretsFile(Step):
         Secrets.load()
         if not all(Secrets.get(k) for k in ("DB_PASSWORD", "NC_DB_PASSWORD", "APP_KEY")):
             return "na" if Mode.existing else "todo"
-        m = re.search(r"'dbpassword'\s*=>\s*'([^']*)'", read_file(P(Ctx.home + "/nextcloud/html/config/config.php")))
-        if m and m.group(1) != Secrets.get("NC_DB_PASSWORD") and not Mode.existing:
+        old = restored_nc_password()
+        if old and old != Secrets.get("NC_DB_PASSWORD") and not Mode.existing:
             return "todo"            # a restored Nextcloud brought its own database password
         return "done"
 
@@ -1509,10 +1521,9 @@ class SecretsFile(Step):
             if not Secrets.get(k):
                 Secrets.vals[k] = f()
         # a restored Nextcloud keeps its old database password
-        cfg = read_file(P(Ctx.home + "/nextcloud/html/config/config.php"))
-        m = re.search(r"'dbpassword'\s*=>\s*'([^']*)'", cfg)
-        if m:
-            Secrets.vals["NC_DB_PASSWORD"] = m.group(1)
+        old = restored_nc_password()
+        if old:
+            Secrets.vals["NC_DB_PASSWORD"] = old
         Secrets.save()
 
 
@@ -2417,7 +2428,8 @@ def auto_filebrowser():
     if st != 200 or not isinstance(user, dict):
         raise Abort("FileBrowser did not return its admin account (HTTP %s)." % st)
     user["username"], user["password"] = Ctx.admin, pw
-    st, js, _ = http("PUT", api("/api/users/1"), headers=hdr, body={"what": "user", "which": ["all"], "data": user}, timeout=20)
+    st, js, _ = http("PUT", api("/api/users/1"), headers=hdr, body={"what": "user", "which": ["all"], "data": user,
+                                                                    "current_password": m[-1]}, timeout=20)
     if st not in (200, 201, 204):
         raise Abort("FileBrowser would not change the admin login (HTTP %s)." % st)
     return {"username": Ctx.admin, "password": pw}

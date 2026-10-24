@@ -187,7 +187,7 @@ After adding, rebuild `SHA256SUMS`. README and TROUBLESHOOTING stay untouched un
 
 ## 11. Test plan
 
-Simulated here (93 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
+Simulated here (97 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
 
 Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 
@@ -199,12 +199,13 @@ Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 4. Portainer auto-creates the local environment on first start.
    (Found on the first VM run: Portainer 2.39.4 / 2.43 and newer refuse the first admin without a one-time setup token, sent in the `X-Setup-Token` header. The installer now starts Portainer with `--setup-token <random>` and falls back to the `setup_token=` line in `docker logs portainer`. The exact log-line format is still unconfirmed.)
 5. Speedtest Tracker `artisan tinker` command and token ability name.
-6. FileBrowser `PUT /api/users/1` payload.
+6. FileBrowser `PUT /api/users/1` payload. (First VM run: it returned 400 until `current_password` was added, which newer FileBrowser requires to change the username or password. Fixed, retest.)
 7. AdGuard `dns_config` partial update keeps the other settings.
 8. Nextcloud trusted domains (127 versus LAN address) after first install.
-9. Immich restore from database dumps stays manual (a new admin would block it); Nextcloud database restore is untested against a real dump.
-10. Image pull times and Docker Hub rate limits on a fresh network.
-11. Real Mint and Ubuntu Server differences (package names, `ss` output, `resolv.conf` handling).
+9. A restored Nextcloud `config.php` may name an `oc_...` database user (Nextcloud creates one itself on a first install); only a `nextcloud` user's password is reused. Restoring a dump that belongs to an `oc_` user is untested.
+10. Immich restore from database dumps stays manual (a new admin would block it); Nextcloud database restore is untested against a real dump.
+11. Image pull times and Docker Hub rate limits on a fresh network.
+12. Real Mint and Ubuntu Server differences (package names, `ss` output, `resolv.conf` handling).
 
 ## 13. The master prompt
 
