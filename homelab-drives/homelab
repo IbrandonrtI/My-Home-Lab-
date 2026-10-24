@@ -11,7 +11,7 @@
 # It only reads information. It never changes anything and needs no sudo.
 # ~/.bashrc runs it when a terminal opens (see the README, section 3.14).
 
-VERSION="1.5"
+VERSION="1.6"
 MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
 BACKUP_POOL="${HOMELAB_BACKUP_POOL:-/mnt/backup}"
 LAST_RUN_FILE="${HOMELAB_LAST_RUN_FILE:-/var/lib/homelab-backup/last-run}"
@@ -108,6 +108,15 @@ summary_line() {
   fi
 }
 
+setup_line() {   # shown only while homelab-setup still has steps left (it removes the file when all are done)
+  local f="$STATE_DIR/setup-progress" d t _e
+  [ -r "$f" ] || return 0
+  IFS='|' read -r d t _e <"$f"
+  [[ "$d" =~ ^[0-9]+$ && "$t" =~ ^[0-9]+$ ]] || return 0
+  [ "$d" -lt "$t" ] || return 0
+  printf '   %s%s%s  Setup: %d of %d steps done.  Run  %ssudo homelab-setup%s  to see what is left.\n' "$Y" "$S_WARN" "$N" "$d" "$t" "$B" "$N"
+}
+
 hint_line() {
   printf '  %sType%s %shomelab commands%s %sto see every command.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N"
 }
@@ -131,6 +140,7 @@ commands() {
   cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
   cmd "sudo homelab-restore-configs check" "preview putting the saved configs back on a rebuilt server"
   cmd "homelab-check"                  "check the GitHub files before you upload them"
+  command -v homelab-setup >/dev/null 2>&1 && cmd "sudo homelab-setup" "rebuild or finish setting up a machine: checklist, install, refresh"
   section "Docker, everyday"
   cmd "docker ps --format \"table {{.Names}}\\t{{.Status}}\"" "what is running"
   cmd "docker logs --tail 50 NAME"     "the last 50 lines a container printed"
@@ -478,7 +488,7 @@ case "${1:-}" in
           header; commands
           echo; printf '  %sType%s %shomelab%s %sto see the status.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N" ;;
   "")     BUFFERING=1; status; BUFFERING=0
-          header; summary_line
+          header; summary_line; setup_line
           rule "Status"; printf '%s\n' "$STATUS_BUF"
           hint_line ;;
   *)      echo "Unknown option '$1'. Try: homelab, homelab commands, homelab status, homelab docs, homelab secrets" >&2; exit 1 ;;
