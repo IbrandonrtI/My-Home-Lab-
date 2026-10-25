@@ -108,6 +108,15 @@ def term_cols():
     return max(c, 40)
 
 
+def live_cols():
+    """The real window width, with no minimum: the status line must never be longer than the window."""
+    try:
+        c = int(os.environ.get("COLUMNS", "") or shutil.get_terminal_size((80, 24)).columns)
+    except ValueError:
+        c = 80
+    return max(c, 1)
+
+
 def out(msg=""):
     with Live.lock:
         Live.clear()
@@ -297,7 +306,7 @@ class Live:
         """Wipe the status line. If the window was made narrower since it was drawn, the terminal has wrapped the
         line onto several rows: go up to its first row and erase from there (the line is always the last thing on screen)."""
         if cls.shown:
-            cols = term_cols()
+            cols = live_cols()
             rows = 1
             if cols != cls.drawn_cols and cls.drawn_len >= cols:
                 rows = min(-(-cls.drawn_len // cols), 12)
@@ -307,38 +316,45 @@ class Live:
 
     @classmethod
     def line(cls, cols):
+        """The status line, never longer than cols - 1 characters (so it can never wrap)."""
         spin = cls.FRAMES[cls.frame % len(cls.FRAMES)]
-        bar = ""
-        if cls.total:
-            width = 10 if cols < 90 else 14
-            n = min(cls.total, max(cls.done, 0))
-            filled = int(round(width * n / float(cls.total)))
-            bar = "%s%s%s%s%s%s  %d of %d" % (G, cls.FULL * filled, D, cls.EMPTY * (width - filled), N, "", n, cls.total)
-            bar_plain = " " * (width + 2 + len("%d of %d" % (n, cls.total)))
-        else:
-            bar_plain = ""
         clock = fmt_time(time.time() - (cls.t_step if cls.own_clock or not cls.t_all else cls.t_all))
-        tail_plain = ("   " + bar_plain if bar_plain else "") + "   " + clock
-        tail = ("   " + bar if bar else "") + "   " + D + clock + N
-        room = cols - 1 - len("  x ") - len(tail_plain)
-        title = cls.title
-        text = cls.note
-        avail = room - len(title) - 4                     # what is left for the detail after "  . "
-        if text and len(text) > avail:
-            text = (text[:avail - 3] + "...") if avail >= 15 else ""
-        note = ("  " + D + S_DOT + " " + text + N) if text else ""
-        note_plain = ("  " + S_DOT + " " + text) if text else ""
-        if len(title) > room:
-            title = title[:max(room - 3, 1)] + "..."
-        pad = " " * max(room - len(title) - len(note_plain), 0)
-        return "  %s%s%s %s%s%s%s%s" % (C, spin, N, title, note, pad, tail, "")
+        n = min(cls.total, max(cls.done, 0)) if cls.total else 0
+        count = ("%d of %d" % (n, cls.total)) if cls.total else ""
+        if cols >= 46:
+            width = 10 if cols < 90 else 14
+            bar = ""
+            bar_plain = ""
+            if cls.total:
+                filled = int(round(width * n / float(cls.total)))
+                bar = "%s%s%s%s%s  %s" % (G, cls.FULL * filled, D, cls.EMPTY * (width - filled), N, count)
+                bar_plain = " " * (width + 2 + len(count))
+            tail_plain = ("   " + bar_plain if bar_plain else "") + "   " + clock
+            tail = ("   " + bar if bar else "") + "   " + D + clock + N
+            room = cols - 1 - len("  x ") - len(tail_plain)
+            title = cls.title
+            text = cls.note
+            avail = room - len(title) - 4                 # what is left for the detail after "  . "
+            if text and len(text) > avail:
+                text = (text[:avail - 3] + "...") if avail >= 15 else ""
+            note = ("  " + D + S_DOT + " " + text + N) if text else ""
+            note_plain = ("  " + S_DOT + " " + text) if text else ""
+            if len(title) > room:
+                title = title[:max(room - 3, 1)] + "..."
+            pad = " " * max(room - len(title) - len(note_plain), 0)
+            return "  %s%s%s %s%s%s%s" % (C, spin, N, title, note, pad, tail)
+        # a very narrow window: spinner, counter and time only (or just the spinner)
+        short = "  %s %s %s" % (spin, count.replace(" of ", "/"), clock) if count else "  %s %s" % (spin, clock)
+        if len(short) > cols - 1:
+            short = "  " + spin
+        return short[:max(cols - 1, 1)]
 
     @classmethod
     def draw(cls):
         if not (cls.enabled and cls.active) or cls.paused:
             return
         cls.clear()
-        cols = term_cols()
+        cols = live_cols()
         text = cls.line(cols)
         sys.stdout.write(text)
         sys.stdout.flush()
@@ -3539,9 +3555,13 @@ def welcome():
         "If it stops, run the same command again: finished steps are skipped.")
     out("")
     say("Have ready:")
-    say("%s a password manager, to save the passwords the installer generates" % S_DOT, 4)
-    say("%s a free Tailscale account (tailscale.com), to sign in once in a browser" % S_DOT, 4)
-    say("%s about 20 GB of free space on this machine" % S_DOT, 4)
+    for item in ("a password manager, to save the passwords the installer generates",
+                 "a free Tailscale account (tailscale.com), to sign in once in a browser",
+                 "about 20 GB of free space on this machine"):
+        lines = styled(item, 6)
+        out("    %s %s" % (S_DOT, lines[0][6:]))          # bullet, then the text lines up under itself
+        for l in lines[1:]:
+            out(l)
 
 
 def cmd_install():
