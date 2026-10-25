@@ -96,7 +96,7 @@ The installer is a list of **steps**. Each step has a `probe()` that checks the 
 7. **Logins and keys**: AdGuard first-run and upstream DNS; Immich admin; Nextcloud finished, trusted domains, optional database restore; Beszel hub account and agent key.
 8. **Homepage**: config files for this machine, then each widget (see section 7).
 9. **Scripts and schedule**: scripts, backup settings, cron lines, login hook.
-10. **Your devices and drives**: data drive, save the secrets, set DNS on devices, Speedtest login, blocklists, weather, reboot test.
+10. **Your devices and drives**: data drive, save the secrets, set DNS on devices, first Speedtest run, blocklists, weather, reboot test. All of these except "save the secrets" tick themselves when the installer can see they are true (see the catalogue).
 
 ## 6. Checklist catalogue (58 steps; the ones that do not apply are hidden)
 
@@ -124,8 +124,13 @@ Homepage | w-adguard, w-beszel, w-netdata, w-speedtest, w-portainer, w-filebrows
 Homepage | w-tailscale | manual | tailscale-login | needs an API token you create (no API to mint one)
 Scripts | scripts, backup-conf, cron, cron-backup, login-hook | auto | scripts | installed copies match the repo; cron lines present; hook in `.bashrc`
 Devices | data-drive | manual (optional) | | `/mnt/storage` is a mount point
-Devices | secrets-saved, devices-dns, speedtest-login, reboot-test | ack | | you confirm with `done ID`
-Devices | blocklists, weather | ack (optional) | | confirm or `skip ID`
+Devices | secrets-saved | ack | | only you can know: confirm with `done secrets-saved`
+Devices | devices-dns | ack, self-checking | adguard-setup | AdGuard's `/control/stats` `top_clients` has an address that is not loopback, this machine, link-local or a Docker network (172.16.0.0/12, unless the LAN itself is in it). Uses the AdGuard login saved in the Homepage widget
+Devices | speedtest-first | ack, self-checking | w-speedtest | `GET /api/v1/results/latest` with the widget token answers 200 (a first test has run). Replaces the old "you logged in" step, because the installer already sets that login
+Devices | reboot-test | ack, self-checking | stack-homepage | 16 containers running and `/proc/sys/kernel/random/boot_id` differs from the one recorded the first time the lab was seen running (`boot_seen` in state)
+Devices | blocklists | ack (optional), self-checking | adguard-setup | three or more `enabled: true` entries under `filters:` in `AdGuardHome.yaml` (a new install has one or two on)
+Devices | weather | ack (optional), self-checking | homepage-files | `openmeteo` latitude/longitude in `widgets.yaml` differ from the repo default (40.7128, -74.0060)
+Self-checking steps are looked at on every checklist run. Once one is seen as true it is remembered (`autodone` in state), so it does not flip back. `done ID` / `skip ID` still work for all of them.
 
 Run `sudo homelab-setup` for the live version.
 
@@ -190,7 +195,7 @@ After adding, rebuild `SHA256SUMS`. README and TROUBLESHOOTING stay untouched un
 
 ## 11. Test plan
 
-Simulated here (107 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
+Simulated here (121 checks, all passing): full install on a blank Mint machine; second run changes nothing; dry-run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and done from the LAN; Docker/Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the existing server in read-only mode (43 of 43 steps, nothing written); the login screen line (71 checks).
 
 Not provable without a real machine: see section 12 and `VM-TEST-GUIDE.md`.
 

@@ -2744,22 +2744,122 @@ class LoginHook(Step):
 
 
 # ================================================================ things only you can do
+EXPECTED_CONTAINERS = 16
+WEATHER_DEFAULT = (40.7128, -74.0060)
+
+
+def boot_id():
+    return os.environ.get("HLS_BOOT_ID") or read_file("/proc/sys/kernel/random/boot_id").strip()
+
+
+def chk_weather():
+    txt = read_file(P(Ctx.home + "/homepage-config/widgets.yaml"))
+    m = re.search(r"openmeteo:(.*?)(?:\n- |\Z)", txt, re.S)
+    if not m:
+        return False
+    lat = re.search(r"latitude:\s*(-?[0-9.]+)", m.group(1))
+    lon = re.search(r"longitude:\s*(-?[0-9.]+)", m.group(1))
+    if not (lat and lon):
+        return False
+    try:
+        return (float(lat.group(1)), float(lon.group(1))) != WEATHER_DEFAULT
+    except ValueError:
+        return False
+
+
+def chk_blocklists():
+    """AdGuard Home starts with at most two lists on; three or more enabled means you added some."""
+    on, inside = 0, False
+    for line in adguard_yaml().split("\n"):
+        if re.match(r"^filters:\s*$", line):
+            inside = True
+            continue
+        if inside and re.match(r"^\S", line):
+            break
+        if inside and re.match(r"^\s+(-\s+)?enabled:\s*true\s*$", line):
+            on += 1
+    return on >= 3
+
+
+def chk_devices_dns():
+    """AdGuard Home has answered DNS questions from a device that is not this machine or a Docker network."""
+    user, pw = hp_get("adguard-card", "username"), hp_get("adguard-card", "password")
+    if is_placeholder(user) or is_placeholder(pw):
+        return False
+    st, js, _ = http("GET", url("adguard", "/control/stats"), headers=basic(user, pw), timeout=15)
+    if st != 200 or not isinstance(js, dict):
+        return False
+    import ipaddress
+    docker_net = ipaddress.ip_network("172.16.0.0/12")
+    try:
+        lan_in_docker = ipaddress.ip_address(Ctx.lan) in docker_net
+    except ValueError:
+        lan_in_docker = False
+    for item in js.get("top_clients") or []:
+        for ip in (item.keys() if isinstance(item, dict) else []):
+            try:
+                a = ipaddress.ip_address(ip)
+            except ValueError:
+                return True
+            if a.is_loopback or a.is_link_local or ip == Ctx.lan:
+                continue
+            if a in docker_net and not lan_in_docker:
+                continue
+            return True
+    return False
+
+
+def chk_speedtest():
+    key = hp_get("speedtest-card", "key")
+    if is_placeholder(key):
+        return False
+    st, _, _ = http("GET", url("speedtest", "/api/v1/results/latest"),
+                    headers={"Authorization": "Bearer " + key, "Accept": "application/json"}, timeout=15)
+    return st == 200
+
+
+def chk_reboot():
+    """All containers are up and the machine has restarted since I first saw the lab running."""
+    n = len([l for l in run(["docker", "ps", "-q"])[1].split("\n") if l.strip()])
+    if n < EXPECTED_CONTAINERS:
+        return False
+    seen, cur = State.data.get("boot_seen"), boot_id()
+    if not seen:
+        State.data["boot_seen"] = cur
+        State.save()
+        return False
+    return seen != cur
+
+
 class AckStep(Step):
     kind = "ack"
     group = "Your devices and drives"
 
-    def __init__(self, sid, title, text, optional=False, needs=()):
+    def __init__(self, sid, title, text, optional=False, needs=(), auto=None):
         self.id, self.title, self.text, self.optional, self.needs = sid, title, text, optional, tuple(needs)
+        self.auto = auto
 
     def applies(self):
         return not Mode.existing
 
     def probe(self):
+        if not self.auto:
+            return "todo"
+        if State.data.setdefault("autodone", {}).get(self.id):
+            return "done"
+        if self.auto():
+            State.data["autodone"][self.id] = time.strftime("%F %T")
+            State.save()
+            return "done"
         return "todo"
 
+    def detail(self):
+        return "checked by me" if self.auto else ""
+
     def help(self):
-        return self.text + "  When it is done, run:  sudo homelab-setup done %s%s" % (
-            self.id, ("   (or skip it: sudo homelab-setup skip %s)" % self.id) if self.optional else "")
+        extra = "  (I check this myself each time you run  sudo homelab-setup refresh ; you can also tick it: " if self.auto else "  When it is done, run:  "
+        return self.text + extra + "sudo homelab-setup done %s%s" % (
+            self.id, ("   (or skip it: sudo homelab-setup skip %s)" % self.id) if self.optional else "") + (")" if self.auto and not self.optional else "")
 
 
 def _register_acks():
@@ -2769,19 +2869,23 @@ def _register_acks():
                 "/root/.homelab-setup/secrets.env (root only). Also store the admin password you chose."),
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device set DNS by hand: preferred = this machine's address (the LAN address shown by  homelab ), "
-                "alternate = 8.8.8.8 (or empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > i > Configure DNS."),
-        AckStep("speedtest-login", "You logged in to Speedtest Tracker with your email and password",
-                "Open the Speedtest Tracker address (port 8088) and log in with your email and admin password. If that fails, "
-                "the app's default login is admin@example.com / password - log in and change it NOW."),
+                "alternate = 8.8.8.8 (or empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > i > Configure DNS.",
+                needs=("adguard-setup",), auto=chk_devices_dns),
+        AckStep("speedtest-first", "Speedtest Tracker has run its first speed test",
+                "Open the Speedtest Tracker address (port 8088), log in with your email and admin password, and click the Speedtest "
+                "button. The Homepage card fills in after that. If the login fails, the app's default login is "
+                "admin@example.com / password - log in and change it NOW.",
+                needs=("w-speedtest",), auto=chk_speedtest),
         AckStep("blocklists", "AdGuard Home blocklists added",
                 "In AdGuard Home: Filters > DNS blocklists > Add blocklist > Choose from the list. Your list: AdGuard DNS filter, "
-                "AdAway, HaGeZi Pro, OISD Big, Peter Lowe's, Steven Black's, and others you liked.", optional=True),
+                "AdAway, HaGeZi Pro, OISD Big, Peter Lowe's, Steven Black's, and others you liked.", optional=True,
+                needs=("adguard-setup",), auto=chk_blocklists),
         AckStep("weather", "Homepage weather location set",
                 "Edit  %s/homepage-config/widgets.yaml : set latitude and longitude under openmeteo (the repo default is New York)."
-                % "~", optional=True),
+                % "~", optional=True, needs=("homepage-files",), auto=chk_weather),
         AckStep("reboot-test", "Rebooted once and everything came back",
                 "Run  sudo reboot , wait two minutes, SSH in again. The login screen should show all containers up, "
-                "and  docker ps  should list them."),
+                "and  docker ps  should list them.", needs=("stack-homepage",), auto=chk_reboot),
     ]
     for s in items:
         STEPS.append(s)
