@@ -3556,10 +3556,22 @@ def cmd_install():
         if not Ctx.email:
             Ctx.email = "you@example.com"
     res = evaluate()
-    todo = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
+    open_auto = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
+
+    def runs_now(s, seen=()):
+        """True when everything this step needs is done or will be done by the installer itself in this run."""
+        for n in s.needs:
+            if res[n].state in ("done", "na", "skip"):
+                continue
+            d = BY_ID[n]
+            if n in seen or not (d.kind == "auto" or n in DURING_INSTALL) or not runs_now(d, seen + (s.id,)):
+                return False
+        return True
+    todo = [s for s in open_auto if runs_now(s)]
+    later = [s for s in open_auto if s not in todo]          # wait for a step that only the person can do
     by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"
                and not (s.id == "weather" and (Opt.dry or State.data["answers"].get("weather")))]   # set from the city answer
-    if not todo and not by_hand:
+    if not todo and not by_hand and not later:
         out("")
         say("Nothing to do: all steps are complete.")
         show_checklist(res, "Setup")
@@ -3573,6 +3585,10 @@ def cmd_install():
         n = len([s for s in todo if s.group == g])
         if n:
             out("   %s%-22s%s %2d  %s%s%s" % (B, g, N, n, D, GROUP_BLURB.get(g, ""), N))
+    if later:
+        out("")
+        say("%d more %s by itself once the steps that need you are done: %s" % (
+            len(later), "step runs" if len(later) == 1 else "steps run", "; ".join(s.title for s in later)))
     if by_hand:
         out("")
         say("%d steps need you:" % len(by_hand))
@@ -3580,6 +3596,8 @@ def cmd_install():
         for s in by_hand:
             if s.id in DURING_INSTALL:
                 tag = "during the install"
+            elif s.id == "secrets-saved":
+                tag = "at the end of the install, when you press Enter after copying them"
             elif getattr(s, "auto", None):
                 tag = "afterwards, detected automatically once done"
             else:
