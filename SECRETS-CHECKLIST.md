@@ -4,9 +4,9 @@ This page lists every password and key the home lab needs. It holds **no values*
 
 On the server, `homelab secrets` prints the short version of this list and checks what it can confirm (a key is set, a database dump is recent, the backup holds the saved configs). It never shows a value.
 
-How to use this page: copy it into your password manager's notes, tick each line when the item is stored there, and check the list again after any password change.
+How to use this page: copy it into the password manager's notes, tick each line when the item is stored there, and review the list again after any password change.
 
-## Stored in my password manager
+## Items to store in a password manager
 
 | Done | Secret | Used by | Where a copy lives on the server | If it is lost |
 | :--- | :--- | :--- | :--- | :--- |
