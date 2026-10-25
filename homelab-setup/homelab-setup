@@ -28,6 +28,7 @@ import socket
 import string
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -108,7 +109,10 @@ def term_cols():
 
 
 def out(msg=""):
-    print(msg, flush=True)
+    with Live.lock:
+        Live.clear()
+        print(msg, flush=True)
+        Live.draw()
 
 
 def rule(title):
@@ -200,6 +204,153 @@ def log(msg):
         pass
 
 
+# ---------------------------------------------------------------- live progress line
+def fmt_time(sec):
+    sec = int(sec)
+    if sec < 60:
+        return "%ds" % sec
+    if sec < 3600:
+        return "%dm %02ds" % (sec // 60, sec % 60)
+    return "%dh %02dm" % (sec // 3600, (sec % 3600) // 60)
+
+
+class Live:
+    """One status line at the bottom of the screen while a step runs: a spinner, the step, a detail
+    (for example which image is downloading), a bar for the whole install and the elapsed time.
+    It is only drawn on a real terminal (HLS_LIVE=1 forces it for tests). Every normal line printed
+    through out() first wipes the status line and draws it again below, so nothing overlaps.
+    When there is no terminal (a pipe, a log file) nothing is animated: each step prints a plain line instead."""
+    lock = threading.RLock()
+    enabled = ((sys.stdout.isatty() and os.environ.get("TERM", "dumb") != "dumb") or os.environ.get("HLS_LIVE") == "1")
+    FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if _utf else "|/-\\"
+    FULL, EMPTY = ("█", "░") if _utf else ("#", "-")
+    active = False          # a step is running and the line is shown
+    paused = 0              # >0 while a question or an external program owns the screen
+    shown = False           # the status line is currently on screen
+    title = ""
+    note = ""
+    t_step = 0.0
+    t_all = None            # start of the whole run (for the total elapsed time)
+    total = 0
+    done = 0
+    frame = 0
+    thread = None
+    stop = False
+    own_clock = False       # show this step's own time, not the time of the whole run
+
+    @classmethod
+    def begin_run(cls, total):
+        with cls.lock:
+            cls.total, cls.done = total, 0
+            cls.t_all = time.time()
+
+    @classmethod
+    def elapsed_total(cls):
+        return time.time() - cls.t_all if cls.t_all else 0.0
+
+    @classmethod
+    def begin(cls, title, own_clock=False):
+        with cls.lock:
+            cls.title, cls.note, cls.t_step = title, "", time.time()
+            cls.own_clock = own_clock
+            if not cls.enabled:
+                return
+            cls.active = True
+            cls.stop = False
+            if cls.thread is None or not cls.thread.is_alive():
+                cls.thread = threading.Thread(target=cls._loop, daemon=True)
+                cls.thread.start()
+            cls.draw()
+
+    @classmethod
+    def end(cls):
+        """Stop the line and return how many seconds the step took."""
+        with cls.lock:
+            cls.clear()
+            cls.active = False
+            return time.time() - cls.t_step
+
+    @classmethod
+    def set_note(cls, text):
+        with cls.lock:
+            cls.note = text
+            cls.draw()
+
+    @classmethod
+    def advance(cls):
+        with cls.lock:
+            cls.done += 1
+
+    @classmethod
+    def _loop(cls):
+        while not cls.stop:
+            time.sleep(0.12)
+            with cls.lock:
+                if cls.active and not cls.paused:
+                    cls.frame += 1
+                    cls.draw()
+
+    @classmethod
+    def clear(cls):
+        if cls.shown:
+            sys.stdout.write("\r\033[K")
+            sys.stdout.flush()
+            cls.shown = False
+
+    @classmethod
+    def line(cls, cols):
+        spin = cls.FRAMES[cls.frame % len(cls.FRAMES)]
+        bar = ""
+        if cls.total:
+            width = 10 if cols < 90 else 14
+            n = min(cls.total, max(cls.done, 0))
+            filled = int(round(width * n / float(cls.total)))
+            bar = "%s%s%s%s%s%s  %d of %d" % (G, cls.FULL * filled, D, cls.EMPTY * (width - filled), N, "", n, cls.total)
+            bar_plain = " " * (width + 2 + len("%d of %d" % (n, cls.total)))
+        else:
+            bar_plain = ""
+        clock = fmt_time(time.time() - (cls.t_step if cls.own_clock or not cls.t_all else cls.t_all))
+        tail_plain = ("   " + bar_plain if bar_plain else "") + "   " + clock
+        tail = ("   " + bar if bar else "") + "   " + D + clock + N
+        room = cols - 1 - len("  x ") - len(tail_plain)
+        title = cls.title
+        text = cls.note
+        avail = room - len(title) - 4                     # what is left for the detail after "  . "
+        if text and len(text) > avail:
+            text = (text[:avail - 3] + "...") if avail >= 15 else ""
+        note = ("  " + D + S_DOT + " " + text + N) if text else ""
+        note_plain = ("  " + S_DOT + " " + text) if text else ""
+        if len(title) > room:
+            title = title[:max(room - 3, 1)] + "..."
+        pad = " " * max(room - len(title) - len(note_plain), 0)
+        return "  %s%s%s %s%s%s%s%s" % (C, spin, N, title, note, pad, tail, "")
+
+    @classmethod
+    def draw(cls):
+        if not (cls.enabled and cls.active) or cls.paused:
+            return
+        cls.clear()
+        sys.stdout.write(cls.line(term_cols()))
+        sys.stdout.flush()
+        cls.shown = True
+
+    class _Paused:
+        def __enter__(self):
+            with Live.lock:
+                Live.clear()
+                Live.paused += 1
+
+        def __exit__(self, *a):
+            with Live.lock:
+                Live.paused -= 1
+                Live.draw()
+
+    @classmethod
+    def pause(cls):
+        """Hand the screen to a question or to another program for a while."""
+        return cls._Paused()
+
+
 class Abort(Exception):
     """A step that cannot continue. The message is shown to the person."""
 
@@ -212,6 +363,7 @@ class Opt:
     no_restore = False
     force_existing = False
     all = False
+    details = False
     repo = None
 
 
@@ -379,11 +531,16 @@ def wait_for(fn, what, timeout=300, every=3, quiet=False):
         except Exception:
             v = None
         if v:
+            if n and Live.active:
+                Live.set_note("")
             return v
         if time.time() > end:
             raise Abort("Timed out after %d seconds waiting for %s." % (timeout, what))
         if not quiet and n == 0:
-            out("      waiting for %s ..." % what)
+            if Live.active:
+                Live.set_note("waiting for %s" % what)
+            else:
+                out("      waiting for %s ..." % what)
         n += 1
         time.sleep(every if not FAKE else 0.05)
 
@@ -409,6 +566,11 @@ def stdin_line():
 def ask(prompt, default=""):
     if Opt.yes and default != "":
         return default
+    with Live.pause():
+        return _ask(prompt, default)
+
+
+def _ask(prompt, default=""):
     try:
         if interactive():
             v = input("  %s%s: " % (prompt, (" [%s]" % default) if default else ""))
@@ -426,6 +588,11 @@ def ask(prompt, default=""):
 
 
 def ask_secret(prompt):
+    with Live.pause():
+        return _ask_secret(prompt)
+
+
+def _ask_secret(prompt):
     try:
         if interactive():
             return getpass.getpass("  %s: " % prompt)
@@ -1099,9 +1266,12 @@ def write_progress(res):
         pass
 
 
-def show_checklist(res, title="Home lab setup", show_help=True, show_all=False):
+def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
+    """Compact by default: one line per step. `--details` adds the full instructions of every open step."""
+    if show_help is None:
+        show_help = Opt.details
     done, total = counts(res)
-    rule("%s %s %s %s  %d of %d steps done" % (title, S_DOT, Ctx.hostname, S_DOT, done, total))
+    rule("%s %s %s %s %d of %d steps done" % (title, S_DOT, Ctx.hostname, S_DOT, done, total))
     waiting = False
     for g in GROUPS:
         items = [s for s in STEPS if s.group == g and res[s.id].state != "na"]
@@ -1127,11 +1297,16 @@ def show_checklist(res, title="Home lab setup", show_help=True, show_all=False):
                 out("   %s%s %s%s" % (D, S_WAIT, s.title, N))
                 continue
             col, sym = (R, S_BAD) if r.state == "failed" else (Y, S_TODO)
-            out("   %s%s%s %s" % (col, sym, N, s.title))
+            tag = ""
+            if s.kind == "manual":
+                tag = "  %syou do this%s" % (D, N)
+            elif s.kind == "ack":
+                tag = "  %sdetected automatically%s" % (D, N)
+            out("   %s%s%s %s%s" % (col, sym, N, s.title, tag))
+            if r.state == "failed" and r.detail:
+                for l in wrap("Last attempt failed: " + r.detail, 9):
+                    out("%s%s%s" % (R, l, N))
             if show_help:
-                if r.state == "failed" and r.detail:
-                    for l in wrap("Last attempt failed: " + r.detail, 9):
-                        out("%s%s%s" % (R, l, N))
                 h = s.help()
                 if h:
                     for l in styled(h, 9):
@@ -1142,6 +1317,8 @@ def show_checklist(res, title="Home lab setup", show_help=True, show_all=False):
         out("")
     if done >= total:
         out("  %s%s All steps are complete.%s" % (G, S_OK, N))
+    elif not show_help:
+        out("  %sInstructions for every open step: sudo homelab-setup --details%s" % (D, N))
     out("")
 
 
@@ -1172,12 +1349,16 @@ def run_pass(res, selected=None):
             continue
         if selected and s.id not in selected:
             continue
-        out("  %s %s" % (S_DOT, s.title))
+        if Opt.dry or not Live.enabled:
+            out("  %s %s%s" % (S_DOT, s.title, ("  %s(step %d of %d)%s" % (D, min(Live.done + 1, Live.total), Live.total, N)) if Live.total else ""))
+        if not Opt.dry:
+            Live.begin(s.title)
         try:
             s.run()
             State.note("err:" + s.id, "")
             now = "done" if Opt.dry else s.probe()
         except Abort as e:
+            Live.end()
             msg = str(e)
             State.note("err:" + s.id, msg.splitlines()[0][:300] if msg else "failed")
             bad("%s: %s" % (s.title, msg))
@@ -1185,11 +1366,14 @@ def run_pass(res, selected=None):
             res[s.id] = Result("failed", msg.splitlines()[0][:300])
             continue
         except Exception as e:
+            Live.end()
             State.note("err:" + s.id, "unexpected error: %r" % (e,))
             bad("%s: unexpected error: %r" % (s.title, e))
             log("CRASH %s: %r" % (s.id, e))
             res[s.id] = Result("failed", "unexpected error")
             continue
+        secs = Live.end()
+        Live.advance()
         if Opt.dry:
             res[s.id] = Result("done", "(dry run)")
             unblock(res, dry=True)
@@ -1197,7 +1381,7 @@ def run_pass(res, selected=None):
         if now in ("done", "na"):
             res[s.id] = Result("done", s.detail())
             gained += 1
-            good("%s" % s.title)
+            good("%s%s" % (s.title, ("  %s(%s)%s" % (D, fmt_time(secs), N)) if secs >= 5 else ""))
         else:
             State.note("err:" + s.id, "The step ran, but its check still reports it as not done")
             res[s.id] = Result("failed", "The step ran, but its check still reports it as not done")
@@ -1414,35 +1598,39 @@ def do_tailscale_login():
             lines.append(line.rstrip())
     th = threading.Thread(target=reader, daemon=True)
     th.start()
-    while time.time() < end:
-        if not shown:
-            for l in lines:
-                m = re.search(r"https://\S+", l)
-                if m and "login" in m.group(0) or (m and "/a/" in m.group(0)):
-                    out("")
-                    out("      %s%s%s" % (B, m.group(0), N))
-                    out("")
-                    shown = True
-                    break
-        Ctx.refresh_tailscale()
-        if Ctx.fqdn:
-            good("Tailscale is connected as %s" % Ctx.fqdn)
-            try:
-                proc.terminate()
-            except OSError:
-                pass
-            return True
-        if proc.poll() is not None and not Ctx.fqdn:
-            time.sleep(0.5 if not FAKE else 0.05)
+    Live.begin("Waiting for you to approve this machine in Tailscale (open the link above)", own_clock=True)
+    try:
+        while time.time() < end:
+            if not shown:
+                for l in lines:
+                    m = re.search(r"https://\S+", l)
+                    if m and "login" in m.group(0) or (m and "/a/" in m.group(0)):
+                        out("")
+                        out("      %s%s%s" % (U, m.group(0), N))
+                        out("")
+                        shown = True
+                        break
             Ctx.refresh_tailscale()
             if Ctx.fqdn:
+                good("Tailscale is connected as %s" % Ctx.fqdn)
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
                 return True
-            raise Abort("Tailscale stopped without logging in:\n" + "\n".join(lines[-5:]))
-        time.sleep(2 if not FAKE else 0.05)
-    try:
-        proc.terminate()
-    except OSError:
-        pass
+            if proc.poll() is not None and not Ctx.fqdn:
+                time.sleep(0.5 if not FAKE else 0.05)
+                Ctx.refresh_tailscale()
+                if Ctx.fqdn:
+                    return True
+                raise Abort("Tailscale stopped without logging in:\n" + "\n".join(lines[-5:]))
+            time.sleep(2 if not FAKE else 0.05)
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+    finally:
+        Live.end()
     raise Abort("The Tailscale login was not completed within 15 minutes. Run `sudo homelab-setup fill` to try again.")
 
 
@@ -1483,6 +1671,9 @@ class TailscaleHttps(Step):
         return ("Open https://login.tailscale.com/admin/dns, make sure MagicDNS is on, then scroll to HTTPS Certificates and choose Enable HTTPS. The installer detects the change on the next `sudo homelab-setup refresh`.")
 
     def fill(self):
+        if Opt.dry:
+            out("      would ask for MagicDNS and HTTPS certificates to be turned on in the Tailscale admin page")
+            return True
         say(self.help())
         ask("Press Enter when it is done")
         return self.probe() == "done"
@@ -1892,10 +2083,9 @@ class PortainerEnv(Step):
 # ================================================================ the nine stacks
 def prepull(images):
     """Pull the images one at a time (ghcr.io throttles parallel pulls)."""
-    for img in images:
-        have_it = docker("image", "inspect", img)[0] == 0
-        if have_it:
-            continue
+    todo = [i for i in images if docker("image", "inspect", i)[0] != 0]
+    for n, img in enumerate(todo, 1):
+        Live.set_note("downloading %d of %d: %s" % (n, len(todo), img.split("/")[-1].split(":")[0]))
         for attempt in range(1, 5):
             rc, txt = act(["docker", "pull", img], timeout=1800)
             if rc == 0 or Opt.dry:
@@ -2077,7 +2267,8 @@ class RestoreConfigs(Step):
         env = dict(os.environ)
         if ROOT:
             env["HRC_ROOT"] = ROOT                      # tests only: restore into the fake root
-        rc = subprocess.run(["bash", tool, path], env=env).returncode
+        with Live.pause():
+            rc = subprocess.run(["bash", tool, path], env=env).returncode
         if rc != 0:
             raise Abort("The restore tool stopped (code %s). Nothing was deleted. Run `sudo homelab-setup refresh` to try again." % rc)
         State.mark("restore-configs")
@@ -2109,7 +2300,8 @@ class RestoreData(Step):
             out("      would copy %.0f GB from %s to /mnt/storage with rsync" % (size, path))
             return
         out("      copying %.0f GB (this can take a long time; you can leave it running) ..." % size)
-        rc = subprocess.run(["rsync", "-aH", "--numeric-ids", "--info=progress2", "--exclude=/lost+found", path, dest]).returncode
+        with Live.pause():
+            rc = subprocess.run(["rsync", "-aH", "--numeric-ids", "--info=progress2", "--exclude=/lost+found", path, dest]).returncode
         if rc not in (0, 24):
             raise Abort("rsync stopped with code %s. Run `sudo homelab-setup refresh` to continue where it stopped." % rc)
         State.mark("restore-data")
@@ -3175,10 +3367,19 @@ def preflight():
 
 
 def final_report(res):
-    show_checklist(res, "Setup")
+    """End of install: how it went, the generated passwords (then wait for Enter), the checklist, the next step."""
+    done, total = counts(res)
+    failed = [s for s in STEPS if res[s.id].state == "failed"]
+    rule("Install finished")
+    good("Finished in %s. %d of %d steps are done." % (fmt_time(Live.elapsed_total()), done, total))
+    if failed:
+        bad("%d step(s) failed: %s. `sudo homelab-setup refresh` tries them again." % (
+            len(failed), "; ".join(s.title for s in failed[:3]) + (" ..." if len(failed) > 3 else "")))
+    if 0 < http("GET", url("homepage"), timeout=10)[0] < 500:
+        good("Your lab is running. Open Homepage: %s" % mark(url("homepage")))
     Secrets.load()
     keys = [k for k in Secrets.vals]
-    if keys and not Opt.dry and not State.data.get("secrets_announced"):
+    if keys and not State.data.get("secrets_announced"):
         State.data["secrets_announced"] = time.strftime("%F %T")
         State.save()
         rule("Generated passwords and keys")
@@ -3191,8 +3392,12 @@ def final_report(res):
         say("Show them again at any time:\n$ sudo homelab-setup secrets")
         say("The admin password you chose is not stored anywhere. Keep it in your password manager.")
         out("")
-    if not Opt.dry:
-        next_step_section(res)
+        if interactive() and not Opt.yes:
+            ask("Press Enter when they are saved to see what is left")
+            State.data["secrets_shown"] = time.strftime("%F %T")        # ticks "passwords copied into your password manager"
+            State.save()
+    show_checklist(res, "Setup")
+    next_step_section(res)
 
 
 SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguard", "AdGuard Home"), ("beszel", "Beszel"),
@@ -3294,6 +3499,34 @@ def cmd_checklist():
     next_step_section(res)
 
 
+DURING_INSTALL = ("tailscale-login", "tailscale-https")
+
+GROUP_BLURB = {
+    "System": "updates, helper programs and Docker",
+    "Tailscale": "the private network that reaches the lab from anywhere",
+    "Network": "keeps DNS working and frees port 53 for AdGuard Home",
+    "Platform": "folders, generated passwords and Portainer, which deploys the apps",
+    "Services": "downloads and starts the apps (the longest part)",
+    "Logins and keys": "creates the admin accounts and API keys inside the apps",
+    "Homepage": "connects the dashboard widgets to the apps",
+    "Scripts and schedule": "helper commands, scheduled jobs and the login screen",
+    "Your devices and drives": "things only you can do",
+}
+
+
+def welcome():
+    say("This turns this machine into a home lab: Docker, Tailscale and nine apps (Homepage, Portainer, AdGuard Home, "
+        "Beszel, Netdata, Speedtest Tracker, FileBrowser, Immich and Nextcloud), with their logins and dashboard widgets.")
+    out("")
+    say("It takes roughly 30 to 60 minutes and downloads about 10 GB. You can leave it running; it only asks when it needs you. "
+        "If it stops, run the same command again: finished steps are skipped.")
+    out("")
+    say("Have ready:")
+    say("%s a password manager, to save the passwords the installer generates" % S_DOT, 4)
+    say("%s a free Tailscale account (tailscale.com), to sign in once in a browser" % S_DOT, 4)
+    say("%s about 20 GB of free space on this machine" % S_DOT, 4)
+
+
 def cmd_install():
     load_all()
     if Mode.existing and not Opt.force_existing:
@@ -3304,6 +3537,10 @@ def cmd_install():
         show_checklist(res)
         return
     rule("Home lab installer %s %s" % (S_DOT, "dry run - nothing will be changed" if Opt.dry else "v" + VERSION))
+    if not State.ran("install-started"):
+        welcome()
+    else:
+        say("An earlier install was started on this machine. It continues where it stopped; finished steps are skipped.")
     preflight()
     if not Opt.dry:
         if not (State.data["answers"].get("admin") and State.data["answers"].get("email")):
@@ -3329,24 +3566,32 @@ def cmd_install():
         next_step_section(res)
         return
     rule("Planned steps")
-    for s in todo:
-        out("   %s %s" % (S_DOT, s.title))
+    during = [s for s in by_hand if s.id in DURING_INSTALL]
+    say("%d steps run automatically, in this order:" % len(todo))
+    out("")
+    for g in GROUPS:
+        n = len([s for s in todo if s.group == g])
+        if n:
+            out("   %s%-22s%s %2d  %s%s%s" % (B, g, N, n, D, GROUP_BLURB.get(g, ""), N))
     if by_hand:
-        detected = len([s for s in by_hand if getattr(s, "auto", None)])
         out("")
-        say("%d steps run automatically. %d steps need you; the installer walks you through them%s:" % (
-            len(todo), len(by_hand),
-            (" (%d of them are detected automatically once done)" % detected) if detected else ""))
+        say("%d steps need you:" % len(by_hand))
         out("")
         for s in by_hand:
-            tag = "  %s(detected automatically)%s" % (D, N) if getattr(s, "auto", None) else ""
-            out("   %s%s%s %s%s" % (Y, S_TODO, N, s.title, tag))
+            if s.id in DURING_INSTALL:
+                tag = "during the install"
+            elif getattr(s, "auto", None):
+                tag = "afterwards, detected automatically once done"
+            else:
+                tag = "afterwards"
+            out("   %s%s%s %s  %s(%s)%s" % (Y, S_TODO, N, s.title, D, tag, N))
     out("")
     if not Opt.dry and not Opt.yes:
         if not typed("yes", "Type yes to start (nothing has been changed yet)"):
             raise Abort("Stopped. Nothing was changed.")
     if not Opt.dry:
         State.mark("install-started")
+    Live.begin_run(len(todo) + len(during))
     run_install(res)
     res = evaluate()
     write_progress(res)
@@ -3370,6 +3615,7 @@ def run_install(res):
             try:
                 if s.fill():
                     res[s.id] = Result("done", s.detail())
+                    Live.advance()
                     unblock(res, dry=Opt.dry)
             except Abort as e:
                 bad(str(e))
@@ -3391,6 +3637,7 @@ def cmd_refresh():
     if not State.exists():
         raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
     res = evaluate()
+    Live.begin_run(len([s for s in STEPS if s.kind == "auto" and res[s.id].state in ("todo", "failed", "blocked")]))
     rule("Checking and continuing")
     for _ in range(4):
         gained = run_pass(res)
@@ -3481,7 +3728,7 @@ HELP = """homelab-setup %s: set up this machine as a home lab from the GitHub re
 Usage: sudo homelab-setup [command]
 
 Commands:
-  (none)                   show the checklist: what is done and what is left
+  (none)                   show the checklist: what is done and what is left (add --details for full instructions)
   install                  set everything up (asks first; safe to run again)
   install --dry-run        show the plan and change nothing
   refresh                  re-check and continue every step that is now possible
@@ -3532,6 +3779,8 @@ def main(argv):
             pass
         elif a in ("--all", "-a"):
             Opt.all = True
+        elif a in ("--details", "-d"):
+            Opt.details = True
         elif a.startswith("-"):
             out("Unknown option %s. Try: homelab-setup help" % a)
             return 1
@@ -3564,10 +3813,12 @@ def main(argv):
         elif cmd == "verify":
             cmd_verify()
     except Abort as e:
+        Live.end()
         out("")
         bad(str(e))
         return 1
     except KeyboardInterrupt:
+        Live.end()
         out("")
         say("Stopped. Finished steps stay finished; run the same command again to continue.")
         return 130

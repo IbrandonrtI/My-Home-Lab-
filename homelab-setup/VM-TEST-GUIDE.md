@@ -35,7 +35,7 @@ sudo bash setup.sh install --dry-run
 
 Use `sudo bash setup.sh`, not `./setup.sh`: files uploaded through the GitHub web page lose their "executable" mark.
 
-Expected result: no questions are asked. The installer prints the planned steps (how many run automatically and how many need a person) and "would run ..." lines. Nothing is installed. The preview omits the steps that wait behind the Tailscale login, and it may print "Tailscale is not installed yet"; this only reflects that nothing has been installed.
+Expected result: no questions are asked. The installer prints a welcome screen, then the planned steps grouped (how many run automatically in each group, and the steps that need a person) and "would run ..." lines. Nothing is installed. The preview omits the steps that wait behind the Tailscale login, and it may print "Tailscale is not installed yet"; this only reflects that nothing has been installed.
 
 ## Round 2: the real install
 
@@ -47,15 +47,17 @@ sudo bash setup.sh install
 
 What to expect, in order:
 
-1. Questions: name, email address, time zone, a city for the weather card (a list is shown when several cities match), LAN address, then the shared administrator password (12 or more letters and digits, typed twice). Enter the **email address** carefully: it is the login for Immich, Beszel and Speedtest Tracker.
-2. "Type yes to start".
-3. Updates, Docker, Tailscale.
-4. **Tailscale shows a login link.** Open it in a browser on another device, log in and approve the machine.
-5. **The installer asks for HTTPS certificates to be enabled** in the Tailscale admin page (https://login.tailscale.com/admin/dns) if they are not on yet. Enable them, then press Enter.
-6. The installer asks before freeing port 53. Answer `y`.
-7. Portainer, then the nine stacks. The first time this downloads about 10 GB of images; Nextcloud's first install can take up to 15 minutes.
-8. A list of generated passwords. On a test VM they are disposable. On a real machine, copy them into a password manager and never paste them into a chat or an issue.
-9. A checklist of the remaining steps, ending with a **Next step** section: the one step to do next and its command. After each step run `sudo homelab-setup refresh`; the Next step section moves on until everything is complete. When all steps are done it is replaced by a **System check** that confirms every container and service is up.
+1. A welcome screen (what is installed, 30 to 60 minutes, about 10 GB, what to have ready).
+2. Questions: name, email address, time zone, a city for the weather card (a list is shown when several cities match), LAN address, then the shared administrator password (12 or more letters and digits, typed twice). Enter the **email address** carefully: it is the login for Immich, Beszel and Speedtest Tracker.
+3. The planned steps, grouped, then "Type yes to start".
+4. Updates, Docker, Tailscale. While a step runs, a status line at the bottom shows a spinner, the step, the image being downloaded, a bar for the whole install (`n of m`) and the elapsed time. Finished steps stay above it as `✓` lines.
+5. **Tailscale shows a login link.** Open it in a browser on another device, log in and approve the machine. The status line shows how long it has been waiting.
+6. **The installer asks for HTTPS certificates to be enabled** in the Tailscale admin page (https://login.tailscale.com/admin/dns) if they are not on yet. Enable them, then press Enter.
+7. The installer asks before freeing port 53. Answer `y`.
+8. Portainer, then the nine stacks. The first time this downloads about 10 GB of images; Nextcloud's first install can take up to 15 minutes.
+9. **Install finished**: time taken, steps done and the Homepage address.
+10. **Generated passwords and keys**, shown once. On a test VM they are disposable. On a real machine, copy them into a password manager and never paste them into a chat or an issue. The installer waits for Enter; pressing it ticks the "passwords copied" step.
+11. A compact checklist (one line per step; `you do this` or `detected automatically` on the open ones), then a **Next step** section: the one step to do next, its instructions and its command. After each step run `sudo homelab-setup refresh`; the Next step section moves on until everything is complete. When all steps are done it is replaced by a **System check** that confirms every container and service is up. `sudo homelab-setup --details` shows the full instructions of every open step.
 
 A fresh machine shows **56 steps**. After a clean install about 49 are done; the rest are the manual and self-checking items below. Every command and link in the remaining-steps list is highlighted (bold cyan for commands, underlined cyan for links) when the terminal supports colour.
 
@@ -75,7 +77,7 @@ Perform the action itself; the next `sudo homelab-setup` or `refresh` detects it
 |---|---|
 | Devices use AdGuard Home | set a device's DNS server to the machine's address and browse for a short while |
 | Speedtest Tracker has run its first test | log in on port 8088 and start a test |
-| Passwords copied | run `sudo homelab-setup secrets` (the step ticks once the passwords have been shown; the installer cannot check that they were saved) |
+| Passwords copied | press Enter at the end of the install, after the passwords are shown (or run `sudo homelab-setup secrets` later); the installer cannot check that they were saved |
 | Rebooted once and everything came back | `sudo reboot`, wait, and confirm all 16 containers are up |
 
 Done by the installer during the install: the weather city (asked in the questions) and the AdGuard Home blocklists (HaGeZi Pro and Peter Lowe's).
