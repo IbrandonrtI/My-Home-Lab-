@@ -86,11 +86,13 @@ PH_KEY = "your-own-key"
 PH_MAIL = "your-email@example.com"
 
 # ---------------------------------------------------------------- look (same style as the homelab command)
-_tty = sys.stdout.isatty() and not os.environ.get("NO_COLOR") and os.environ.get("TERM", "dumb") != "dumb"
+_tty = ((sys.stdout.isatty() or os.environ.get("HLS_COLOR") == "1")          # HLS_COLOR=1 forces colour (tests)
+        and not os.environ.get("NO_COLOR") and os.environ.get("TERM", "dumb") != "dumb")
 if _tty:
     B, D, G, Y, R, N = "\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[31m", "\033[0m"
+    C, U = "\033[1;36m", "\033[4;36m"          # commands (bold cyan) and links (underlined cyan)
 else:
-    B = D = G = Y = R = N = ""
+    B = D = G = Y = R = N = C = U = ""
 _loc = (os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or "")
 _utf = bool(re.search(r"utf-?8", _loc, re.I))
 S_OK, S_TODO, S_BAD, S_WAIT, S_NA, S_RULE, S_DOT = (
@@ -117,10 +119,19 @@ def rule(title):
     out("")
 
 
+NBSP = "\u00a0"
+_MARK = re.compile(r"`([^`]+)`|(https?://[^\s)`]*[^\s).,;:`])")
+
+
+def _protect(text):
+    """Keep a `command` on one line: its spaces become non-breaking until the line is drawn."""
+    return re.sub(r"`([^`]+)`", lambda m: "`" + m.group(1).replace(" ", NBSP) + "`", text)
+
+
 def wrap(text, indent, width=None):
     width = (width or min(term_cols(), 100)) - indent
     lines = []
-    for para in text.split("\n"):
+    for para in _protect(text).split("\n"):
         if not para.strip():
             lines.append("")
             continue
@@ -135,8 +146,31 @@ def wrap(text, indent, width=None):
     return [" " * indent + l if l else "" for l in lines]
 
 
+def mark(line, base=""):
+    """Highlight `commands` and links in a finished line. `base` is the colour to return to afterwards."""
+    def sub(m):
+        if m.group(1) is not None:
+            txt = m.group(1)
+            return (N + C + txt + N + base) if _tty else "`" + txt + "`"
+        return (N + U + m.group(2) + N + base) if _tty else m.group(2)
+    return _MARK.sub(sub, line).replace(NBSP, " ")
+
+
+def styled(text, indent, base=""):
+    """Wrap text and highlight commands and links. A paragraph that starts with "$ " is a command line,
+    shown on its own line and never wrapped."""
+    out_lines = []
+    for para in text.split("\n"):
+        if para.startswith("$ "):
+            out_lines.append(" " * indent + "%s$%s %s%s%s" % (D, N, C, para[2:], N))
+            continue
+        for l in wrap(para, indent):
+            out_lines.append((base + mark(l, base) + N) if base else mark(l))
+    return out_lines
+
+
 def say(msg, indent=2):
-    for l in wrap(msg, indent):
+    for l in styled(msg, indent):
         out(l)
 
 
@@ -145,12 +179,12 @@ def good(msg):
 
 
 def warn(msg):
-    for i, l in enumerate(wrap(msg, 4)):
+    for i, l in enumerate(styled(msg, 4)):
         out(("  %s!%s " % (Y, N) + l[4:]) if i == 0 else l)
 
 
 def bad(msg):
-    for i, l in enumerate(wrap(msg, 4)):
+    for i, l in enumerate(styled(msg, 4)):
         out(("  %s%s%s " % (R, S_BAD, N) + l[4:]) if i == 0 else l)
 
 
@@ -347,7 +381,7 @@ def wait_for(fn, what, timeout=300, every=3, quiet=False):
         if v:
             return v
         if time.time() > end:
-            raise Abort("Waited %d seconds for %s, but it did not happen." % (timeout, what))
+            raise Abort("Timed out after %d seconds waiting for %s." % (timeout, what))
         if not quiet and n == 0:
             out("      waiting for %s ..." % what)
         n += 1
@@ -387,7 +421,7 @@ def ask(prompt, default=""):
             v = v.rstrip("\n")
             out("")
     except EOFError:
-        raise Abort("I needed an answer to: %s  (no input was available)" % prompt)
+        raise Abort("An answer is required for: %s (no input was available)." % prompt)
     return v.strip() or default
 
 
@@ -403,7 +437,7 @@ def ask_secret(prompt):
         out("")
         return v.rstrip("\n")
     except EOFError:
-        raise Abort("I needed an answer to: %s  (no input was available)" % prompt)
+        raise Abort("An answer is required for: %s (no input was available)." % prompt)
 
 
 def yesno(prompt, default=False):
@@ -423,7 +457,7 @@ def typed(word, prompt):
 
 # ================================================================ state, answers, secrets
 class State:
-    """Non-secret facts: what the person told me, which one-time actions ran, what was acknowledged."""
+    """Non-secret facts: the answers given, which one-time actions ran, and what was acknowledged."""
     data = {}
 
     @classmethod
@@ -498,14 +532,14 @@ class Secrets:
             return
         os.makedirs(SECRET_DIR, exist_ok=True)
         os.chmod(SECRET_DIR, 0o700)
-        body = ["# homelab-setup secrets - root only (mode 600). Copy these into your password manager.",
-                "# Do not put this file in GitHub. Do not paste it in a chat."]
+        body = ["# homelab-setup secrets (root only, mode 600). Copy these into a password manager.",
+                "# Never commit this file to a repository and never share it."]
         body += ["%s=%s" % (k, cls.vals[k]) for k in sorted(cls.vals)]
         write_file(SECRET_FILE, "\n".join(body) + "\n", 0o600)
 
 
 class Runtime:
-    """Lives only in memory while the program runs. The typed password is never written to a file by this tool."""
+    """Lives only in memory while the program runs. The typed password is never written to a file by the installer."""
     password = None
     hide = []          # other secret words that must never reach the log file
 
@@ -517,7 +551,7 @@ def need_password(why):
     if Runtime.password:
         return Runtime.password
     out("")
-    say("This step needs your admin password (%s). It is used now and not saved." % why)
+    say("This step needs the admin password (%s). It is used for this run only and is not saved." % why)
     for _ in range(3):
         pw = ask_secret("Admin password")
         problem = password_problem(pw)
@@ -526,23 +560,21 @@ def need_password(why):
             continue
         if Portainer.admin_state() == 204:
             if not Portainer.login(pw):
-                warn("That is not the password of your Portainer admin account (%s). Type the same password you chose "
-                     "at the start." % Ctx.admin)
+                warn("That is not the password of the Portainer admin account (%s). Enter the password chosen at the start of the installation." % Ctx.admin)
                 continue
         elif ask_secret("Type it again") != pw:
-            warn("They did not match.")
+            warn("The two entries did not match.")
             continue
         Runtime.password = pw
         return pw
-    raise Abort("No matching admin password was entered, so I stopped before setting any more logins. "
-                "Run  sudo homelab-setup refresh  to try again.")
+    raise Abort("No matching admin password was entered. Setup stopped before configuring any further logins. Run `sudo homelab-setup refresh` to try again.")
 
 
 def password_problem(pw):
     if len(pw) < 12:
         return "The password must be at least 12 characters (Portainer requires it)."
     if not re.fullmatch(r"[A-Za-z0-9]+", pw):
-        return "Use letters and numbers only. Other characters can break the stack files and the Homepage config."
+        return "Use letters and digits only. Other characters can break the stack files and the Homepage configuration."
     return ""
 
 
@@ -677,7 +709,7 @@ def stack_up(name):
 
 
 def is_existing():
-    """A machine that already runs the lab (set up by hand, not by this tool)."""
+    """A machine that already runs the lab (set up by hand, not by the installer)."""
     if State.exists() and State.ran("install-started"):
         return False
     run_now = containers_running()
@@ -719,7 +751,7 @@ def stack_text(name):
     fn = STACKS[name][0]
     text = read_file(repo_file("Portainer-code", fn))
     if not text:
-        raise Abort("The repo file Portainer-code/%s is missing (looked in %s)." % (fn, Ctx.repo))
+        raise Abort("The repository file Portainer-code/%s is missing (looked in %s)." % (fn, Ctx.repo))
     text = subst(text)
     if name == "speedtest-tracker":
         key = Secrets.get("APP_KEY")
@@ -809,7 +841,7 @@ def hp_ranges(lines, card_id):
 
 
 def hp_template_widget(card_id):
-    """The widget block for a card, as the repo has it, adapted to this machine."""
+    "The widget block for a card, as the repository has it, adapted to this machine."
     text = subst(read_file(repo_file("homepage-config", "services.yaml")))
     lines = text.split("\n")
     r = hp_ranges(lines, card_id)
@@ -849,7 +881,7 @@ def hp_set_widget(card_id, values):
         raise Abort("Card %s is not in %s." % (card_id, path))
     block = hp_template_widget(card_id)
     if not block:
-        raise Abort("The repo has no widget block for %s." % card_id)
+        raise Abort("The repository has no widget block for %s." % card_id)
     new = []
     for l in block:
         m = re.match(r"^(\s+)([A-Za-z]+):\s*(.*)$", l)
@@ -887,7 +919,7 @@ class Step:
     id = ""
     group = ""
     title = ""
-    kind = "auto"            # auto: I do it.  manual: you do it.  ack: you confirm it
+    kind = "auto"            # auto: the installer does it.  manual: you do it.  ack: you confirm it, or it is detected
     needs = ()
     optional = False
 
@@ -901,7 +933,7 @@ class Step:
         return ""
 
     def run(self):
-        raise Abort("This step is done by hand.")
+        raise Abort("This step must be completed manually.")
 
     def help(self):
         return ""
@@ -948,10 +980,10 @@ def evaluate():
             res[s.id] = Result("na")
             continue
         if State.data["skip"].get(s.id):
-            res[s.id] = Result("skip", "skipped by you")
+            res[s.id] = Result("skip", "skipped")
             continue
         if State.data["ack"].get(s.id):
-            res[s.id] = Result("done", "confirmed by you")
+            res[s.id] = Result("done", "confirmed")
             continue
         waits = [BY_ID[n].title for n in s.needs if res[n].state not in ("done", "na", "skip")]
         if waits:
@@ -1035,29 +1067,29 @@ def show_checklist(res, title="Home lab setup", show_help=True, show_all=False):
             out("   %s%s%s %s" % (col, sym, N, s.title))
             if show_help:
                 if r.state == "failed" and r.detail:
-                    for l in wrap("Last try: " + r.detail, 9):
+                    for l in wrap("Last attempt failed: " + r.detail, 9):
                         out("%s%s%s" % (R, l, N))
                 h = s.help()
                 if h:
-                    for l in wrap(h, 9):
-                        out("%s%s%s" % (D, l, N))
+                    for l in styled(h, 9):
+                        out(l)
         out("")
     if waiting:
-        out("  %sDim lines wait for the steps above them.%s" % (D, N))
+        out("  %sDimmed steps wait for the steps above them.%s" % (D, N))
         out("")
     if done >= total:
-        out("  %s%s Everything on the list is done.%s" % (G, S_OK, N))
+        out("  %s%s All steps are complete.%s" % (G, S_OK, N))
     else:
         nxt = next((s for s in topo() if res[s.id].state in ("todo", "failed")), None)
         if nxt is not None:
             if nxt.kind == "auto":
-                say("Next: I can do \"%s\". Run:  sudo homelab-setup refresh" % nxt.title)
+                say("Next step: \"%s\" runs automatically.\n$ sudo homelab-setup refresh" % nxt.title)
             elif nxt.kind == "ack":
-                say("Next: when you have done \"%s\", run:  sudo homelab-setup done %s" % (nxt.title, nxt.id))
+                say("Next step: \"%s\". When it is done, run:\n$ sudo homelab-setup done %s" % (nxt.title, nxt.id))
             else:
-                say("Next: \"%s\". Run:  sudo homelab-setup fill   (it walks you through it)" % nxt.title)
+                say("Next step: \"%s\". Start the walk-through:\n$ sudo homelab-setup fill" % nxt.title)
         else:
-            say("Waiting on earlier steps. Run:  sudo homelab-setup refresh")
+            say("Waiting on earlier steps. Run `sudo homelab-setup refresh`.")
     out("")
 
 
@@ -1110,9 +1142,9 @@ def run_pass(res, selected=None):
             gained += 1
             good("%s" % s.title)
         else:
-            State.note("err:" + s.id, "I ran it, but the check still says it is not done")
-            res[s.id] = Result("failed", "I ran it, but the check still says it is not done")
-            bad("%s: I ran it, but the check still says it is not done." % s.title)
+            State.note("err:" + s.id, "The step ran, but its check still reports it as not done")
+            res[s.id] = Result("failed", "The step ran, but its check still reports it as not done")
+            bad("%s: the step ran, but its check still reports it as not done." % s.title)
         # steps that were waiting may be ready now
         unblock(res)
     return gained
@@ -1163,8 +1195,7 @@ class OsSupported(Step):
         return Ctx.os_name
 
     def help(self):
-        return ("This tool is tested for Ubuntu 22.04/24.04, Linux Mint 21/22 and Debian 12/13. "
-                "You have: %s. Use a supported system." % Ctx.os_name)
+        return ("homelab-setup supports Ubuntu 22.04/24.04, Linux Mint 21/22 and Debian 12/13. Detected: %s." % Ctx.os_name)
 
 
 @step
@@ -1225,10 +1256,10 @@ class DockerInstalled(Step):
         distro = "debian" if Ctx.os_id == "debian" else "ubuntu"
         suite = Ctx.os_codename
         if not suite:
-            raise Abort("I could not read the release name from /etc/os-release.")
+            raise Abort("Could not read the release name from /etc/os-release.")
         if pkg_installed("docker.io") or pkg_installed("docker-compose") or pkg_installed("podman-docker"):
             if containers_all():
-                raise Abort("Another Docker package is installed and it has containers. I will not remove it. Remove it by hand first.")
+                raise Abort("Another Docker package is installed and has containers. The installer does not remove it. Remove it manually first.")
             act(["apt-get", "remove", "-y", "-q", "docker.io", "docker-compose", "podman-docker", "containerd", "runc"],
                 env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
         if Opt.dry:
@@ -1238,7 +1269,7 @@ class DockerInstalled(Step):
         try:
             key = fetch_bytes("https://download.docker.com/linux/%s/gpg" % distro)
         except Exception as e:
-            raise Abort("I could not download Docker's signing key (%s). Check the internet connection." % e)
+            raise Abort("Could not download Docker's signing key (%s). Check the internet connection." % e)
         with open(P("/etc/apt/keyrings/docker.asc"), "wb") as f:
             f.write(key)
         os.chmod(P("/etc/apt/keyrings/docker.asc"), 0o644)
@@ -1293,8 +1324,7 @@ class TailscaleInstalled(Step):
         except Abort:
             raise
         except Exception as e:
-            raise Abort("Tailscale's package repository did not work (%s). Install Tailscale by hand "
-                        "(https://tailscale.com/download), then run this again." % e)
+            raise Abort("Tailscale's package repository did not work (%s). Install Tailscale manually (https://tailscale.com/download), then run `sudo homelab-setup install` again." % e)
         act(["systemctl", "enable", "--now", "tailscaled"])
 
 
@@ -1315,7 +1345,7 @@ def do_tailscale_login():
         out("      would run: sudo tailscale up   (shows a link; you open it and log in)")
         return True
     out("")
-    say("Tailscale needs you to log in. A link will appear. Open it in any browser, log in, and approve this machine.")
+    say("Tailscale needs a login. Open the link below in any browser, sign in and approve this machine.")
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     shown = False
     end = time.time() + float(os.environ.get("HLS_TS_WAIT", "900"))
@@ -1356,7 +1386,7 @@ def do_tailscale_login():
         proc.terminate()
     except OSError:
         pass
-    raise Abort("Tailscale login was not finished in 15 minutes. Run:  sudo homelab-setup fill")
+    raise Abort("The Tailscale login was not completed within 15 minutes. Run `sudo homelab-setup fill` to try again.")
 
 
 @step
@@ -1373,8 +1403,7 @@ class TailscaleLogin(Step):
         return Ctx.fqdn
 
     def help(self):
-        return ("Run:  sudo homelab-setup fill   - it shows a login link, you open it and approve the machine. "
-                "(Or:  sudo tailscale up  )")
+        return ("Start the walk-through, open the login link it shows and approve this machine:\n$ sudo homelab-setup fill")
 
     def fill(self):
         return do_tailscale_login()
@@ -1391,8 +1420,7 @@ class TailscaleHttps(Step):
         return "done" if js.get("CertDomains") else "todo"
 
     def help(self):
-        return ("In a browser open https://login.tailscale.com/admin/dns . Make sure MagicDNS is on, scroll to "
-                "HTTPS Certificates and press Enable HTTPS. Then run:  sudo homelab-setup refresh")
+        return ("Open https://login.tailscale.com/admin/dns, make sure MagicDNS is on, then scroll to HTTPS Certificates and choose Enable HTTPS. The installer detects the change on the next `sudo homelab-setup refresh`.")
 
     def fill(self):
         say(self.help())
@@ -1454,23 +1482,20 @@ class Port53(Step):
 
     def run(self):
         if ssh_peers_over_tailscale():
-            raise Abort("You are connected through Tailscale. This step restarts Tailscale and would drop your session. "
-                        "Connect with  ssh %s@%s  (the local address) and run  sudo homelab-setup refresh  again." %
+            raise Abort("This session is connected through Tailscale, and this step restarts Tailscale, which would end the session. Connect over the local network instead (`ssh %s@%s`) and run `sudo homelab-setup refresh` again." %
                         (Ctx.user, Ctx.lan))
         gw = Ctx.gateway or "1.1.1.1"
         out("")
-        say("To let AdGuard Home answer DNS, I must stop the built-in DNS helper (systemd-resolved), which holds port 53. "
-            "While I do this, this computer asks your router (%s) for names. Your DNS design stays the same: "
-            "AdGuard Home on this machine, set on each device by hand." % gw)
+        say("AdGuard Home needs port 53, which the built-in DNS resolver (systemd-resolved) currently holds. The resolver will be stopped and disabled. This machine will then ask your router (%s) for names. AdGuard Home runs on this machine, and you point each device at it by hand." % gw)
         if not Opt.dry and not Opt.yes and not yesno("Free port 53 now?", False):
-            raise Abort("You chose not to free port 53. Run  sudo homelab-setup refresh  when you are ready.")
+            raise Abort("Port 53 was left unchanged. Run `sudo homelab-setup refresh` when you are ready.")
         # pull the image first, while DNS still works
         act(["docker", "pull", "adguard/adguardhome:v0.107.79"], timeout=900)
         act(["systemctl", "disable", "systemd-resolved"])
         act(["systemctl", "stop", "systemd-resolved"])
         if have("tailscale"):
-            # Tailscale must not take /etc/resolv.conf over: its own resolver (100.100.100.100) has no upstream after a
-            # reboot or an update and the machine then cannot look up names (your F6 on the server, found again on the VM).
+            # Tailscale must not take /etc/resolv.conf over: with systemd-resolved off, its own resolver (100.100.100.100)
+            # can lose its upstream servers after a reboot or an update, and the machine then cannot look up names.
             act(["tailscale", "set", "--accept-dns=false"])
         if not Opt.dry:
             try:
@@ -1489,7 +1514,7 @@ class Port53(Step):
 
 @step
 class DnsStable(Step):
-    id, group, title = "dns-stable", "Network", "This machine keeps looking up names after a reboot (Tailscale is not in charge of DNS)"
+    id, group, title = "dns-stable", "Network", "DNS keeps working after a reboot (Tailscale does not manage DNS)"
     needs = ("tailscale-install", "port53")
 
     def applies(self):
@@ -1517,7 +1542,7 @@ class DnsStable(Step):
             try:
                 socket.gethostbyname("github.com")
             except OSError:
-                raise Abort("Names still do not resolve. Check  cat /etc/resolv.conf  (it should show your router) and your network.")
+                raise Abort("Name resolution still fails. Check `cat /etc/resolv.conf` (it should list your router) and the network connection.")
 
 
 # ---------------------------------------------------------------- Platform
@@ -1661,12 +1686,12 @@ class Portainer:
                                  body={"name": name, "stackFileContent": text, "env": envl}, timeout=900)
         if st not in (200, 201):
             msg = js.get("details") or js.get("message") if isinstance(js, dict) else str(js)
-            raise Abort("Portainer would not deploy stack '%s' (HTTP %s): %s" % (name, st, str(msg)[:400]))
+            raise Abort("Portainer refused to deploy stack '%s' (HTTP %s): %s" % (name, st, str(msg)[:400]))
 
 
 def setup_tokens():
     """Portainer 2.39.4 / 2.43 and newer refuse the first admin without a setup token. Candidates, best first:
-    the one this tool gave Portainer at creation, then the one Portainer printed in its log."""
+    the one the installer gave Portainer at creation, then the one Portainer printed in its log."""
     found = []
     mine = State.data.get("ptoken")
     if mine:
@@ -1740,7 +1765,7 @@ class PortainerAdmin(Step):
                 if st != 403:
                     break
             if attempt < 3:
-                out("      Portainer said no (HTTP %s); restarting it to get a fresh setup window" % last[0])
+                out("      Portainer refused (HTTP %s); restarting it to open a fresh setup window" % last[0])
                 docker("restart", "portainer")
                 wait_for(Portainer.alive, "Portainer to restart", 120)
                 time.sleep(2 if not FAKE else 0)
@@ -1749,7 +1774,7 @@ class PortainerAdmin(Step):
 
 @step
 class PortainerToken(Step):
-    id, group, title = "portainer-token", "Platform", "Access token for this tool saved (so it can manage stacks)"
+    id, group, title = "portainer-token", "Platform", "Portainer access token for the installer saved (used to deploy stacks)"
     needs = ("portainer-admin",)
 
     def probe(self):
@@ -1765,15 +1790,14 @@ class PortainerToken(Step):
             return
         pw = need_password("to create the Portainer access token")
         if not Portainer.login(pw):
-            raise Abort("Portainer would not log in as '%s' with that password. If the account already exists with a "
-                        "different password, run:  sudo homelab-setup fill" % Ctx.admin)
+            raise Abort("Portainer rejected the login for '%s'. If the account already exists with a different password, run `sudo homelab-setup fill`." % Ctx.admin)
         st, me, _ = Portainer.call("GET", "/api/users/me", auth="jwt")
         if st != 200:
             raise Abort("Portainer did not return the account details (HTTP %s)." % st)
         st, js, _ = Portainer.call("POST", "/api/users/%s/tokens" % me["Id"], auth="jwt",
                                    body={"description": "homelab-setup", "password": pw})
         if st not in (200, 201) or not isinstance(js, dict) or not js.get("rawAPIKey"):
-            raise Abort("Portainer would not create an access token (HTTP %s)." % st)
+            raise Abort("Portainer refused to create an access token (HTTP %s)." % st)
         Secrets.set("PORTAINER_TOKEN", js["rawAPIKey"])
 
 
@@ -1802,7 +1826,7 @@ class PortainerEnv(Step):
                                    form={"Name": "local", "EndpointCreationType": "1"}, timeout=60)
         Portainer._env_id = None
         if st not in (200, 201) or not Portainer.endpoint_id():
-            raise Abort("Portainer would not add the local Docker environment (HTTP %s): %s" % (st, str(js)[:200]))
+            raise Abort("Portainer refused to add the local Docker environment (HTTP %s): %s" % (st, str(js)[:200]))
 
 
 # ================================================================ the nine stacks
@@ -1914,19 +1938,17 @@ def ask_restore_plan():
     found = find_backups()
     if not found:
         out("")
-        say("No backup was found, so every service starts empty. (If you have one, plug it in or pass  --backup FOLDER  "
-            "and run  sudo homelab-setup install  again before the services are deployed.)")
+        say("No backup found: every service will start empty. To restore from a backup, connect it (or pass `--backup FOLDER`) and run `sudo homelab-setup install` again before the services are deployed.")
         State.save()
         return
     path = found[0]
     out("")
-    say("I found a backup of the lab here: %s" % path.replace(ROOT, ""))
+    say("Backup found: %s" % path.replace(ROOT, ""))
     if len(found) > 1:
         say("(Other candidates: %s)" % ", ".join(f.replace(ROOT, "") for f in found[1:]))
     users = os.listdir((path + "/boot-configs/home")) if os.path.isdir((path + "/boot-configs/home")) else []
     if users and Ctx.user not in users:
-        warn("The backup's files belong to the user %s, but this machine's user is %s. Restoring would write into "
-             "/home/%s. I will NOT restore the saved settings. (Create a user named %s to restore them.)"
+        warn("The backup belongs to the user %s, but this machine's user is %s. Restoring would write into /home/%s, so the saved settings are not restored. Create a user named %s to restore them."
              % (", ".join(users), Ctx.user, users[0], users[0]))
         cfg = False
     else:
@@ -1952,7 +1974,7 @@ class RestoreConfigs(Step):
         path = restore_choice()["path"]
         tool = repo_file("homelab-drives", "homelab-restore-configs")
         if not os.path.exists(tool):
-            raise Abort("homelab-restore-configs is missing from the repo copy.")
+            raise Abort("homelab-restore-configs is missing from the repository copy.")
         if Opt.dry:
             out("      would run the safe restore tool on %s (it shows a preview and asks you to type RESTORE)" % path)
             return
@@ -1961,7 +1983,7 @@ class RestoreConfigs(Step):
             env["HRC_ROOT"] = ROOT                      # tests only: restore into the fake root
         rc = subprocess.run(["bash", tool, path], env=env).returncode
         if rc != 0:
-            raise Abort("The restore tool stopped (code %s). Nothing was deleted. Run  sudo homelab-setup refresh  to try again." % rc)
+            raise Abort("The restore tool stopped (code %s). Nothing was deleted. Run `sudo homelab-setup refresh` to try again." % rc)
         State.mark("restore-configs")
 
 
@@ -1982,7 +2004,7 @@ class RestoreData(Step):
         for sub in ("immich", "nextcloud"):
             d = dest + sub
             if os.path.isdir(d) and any(os.scandir(d)):
-                raise Abort("%s already has files. I will not copy over them. Move them away or skip the restore." % d.replace(ROOT, ""))
+                raise Abort("%s already contains files and will not be overwritten. Move them away or skip the restore." % d.replace(ROOT, ""))
         size = dir_size_gb(path)
         free = shutil.disk_usage(dest).free / 1073741824.0
         if free < size + 5:
@@ -1993,7 +2015,7 @@ class RestoreData(Step):
         out("      copying %.0f GB (this can take a long time; you can leave it running) ..." % size)
         rc = subprocess.run(["rsync", "-aH", "--numeric-ids", "--info=progress2", "--exclude=/lost+found", path, dest]).returncode
         if rc not in (0, 24):
-            raise Abort("rsync stopped with code %s. Run  sudo homelab-setup refresh  to continue where it stopped." % rc)
+            raise Abort("rsync stopped with code %s. Run `sudo homelab-setup refresh` to continue where it stopped." % rc)
         State.mark("restore-data")
 
 
@@ -2029,7 +2051,7 @@ class HomepageFiles(Step):
             if not os.path.exists(dst):
                 body = subst(read_file(repo_file("homepage-config", f)))
                 if not body:
-                    raise Abort("The repo file homepage-config/%s is missing." % f)
+                    raise Abort("The repository file homepage-config/%s is missing." % f)
                 if f == "services.yaml":
                     body = hp_strip_widgets(body)
                 write_file(dst, body, 0o644, (Ctx.uid, Ctx.gid))
@@ -2068,7 +2090,7 @@ class AdGuardSetup(Step):
                          body={"web": {"ip": "0.0.0.0", "port": 3000}, "dns": {"ip": "0.0.0.0", "port": 53},
                                "username": Ctx.admin, "password": pw, "language": "en"}, timeout=60)
         if st == 422:
-            raise Abort("AdGuard Home says the password is too weak. Use a longer one.")
+            raise Abort("AdGuard Home rejected the password as too weak. Use a longer one.")
         if st not in (200, 201):
             raise Abort("AdGuard Home refused the setup (HTTP %s): %s" % (st, str(js)[:200]))
         wait_for(lambda: http("GET", url("adguard", "/control/status"), headers=adguard_auth(), timeout=10)[0] == 200,
@@ -2089,8 +2111,7 @@ class AdGuardDns(Step):
         return "done" if "dns.quad9.net" in adguard_yaml() else "todo"
 
     def help(self):
-        return ("In AdGuard Home: Settings > DNS settings. Upstream DNS servers: %s. Bootstrap: %s. Parallel/load-balance on, "
-                "DNSSEC on. Then run  sudo homelab-setup done adguard-dns" % (", ".join(DNS_UP), ", ".join(DNS_BOOT)))
+        return ("In AdGuard Home go to Settings > DNS settings. Upstream DNS servers: %s. Bootstrap: %s. Enable parallel requests and DNSSEC. Then run:\n$ sudo homelab-setup done adguard-dns" % (", ".join(DNS_UP), ", ".join(DNS_BOOT)))
 
     def run(self):
         if Opt.dry:
@@ -2120,11 +2141,9 @@ class ImmichAdmin(Step):
 
     def run(self):
         if immich_restored():
-            raise Abort("Your backup has Immich database dumps, so I will NOT create a new admin (that would block the "
-                        "restore). Open %s and choose 'Restore from backup' on the first screen, pick the newest dump, "
-                        "then run  sudo homelab-setup refresh" % url("immich"))
+            raise Abort("The backup contains Immich database dumps, so no new admin account is created (it would block the restore). Open %s, choose 'Restore from backup' on the first screen and pick the newest dump. Then run `sudo homelab-setup refresh`." % url("immich"))
         if not Ctx.email:
-            raise Abort("I need your email address. Run  sudo homelab-setup install  and answer the questions.")
+            raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
         if Opt.dry:
             out("      would create the Immich admin %s <%s>" % (Ctx.admin, Ctx.email))
             return
@@ -2204,8 +2223,8 @@ class NextcloudRestoreDb(Step):
         if Opt.dry:
             out("      would load %s into the new Nextcloud database" % dump)
             return
-        if not typed("RESTORE", "Type RESTORE to replace the new, empty Nextcloud database with %s: " % os.path.basename(dump)):
-            raise Abort("Not confirmed. Run  sudo homelab-setup refresh  when you want to load it.")
+        if not typed("RESTORE", "Type RESTORE to replace the new, empty Nextcloud database with %s" % os.path.basename(dump)):
+            raise Abort("Not confirmed. Run `sudo homelab-setup refresh` when you want to load the dump.")
         docker("stop", "nextcloud", "nextcloud_cron")
         psql = ["exec", "-i", "nextcloud_db", "psql", "-U", "nextcloud", "-v", "ON_ERROR_STOP=1"]
         run(["docker"] + psql + ["-d", "postgres", "-c", "DROP DATABASE IF EXISTS nextcloud"], check=True)
@@ -2242,11 +2261,11 @@ class BeszelUser(Step):
         return "done" if beszel_first_run() is False else "todo"
 
     def help(self):
-        return "Open %s, create the account with your email and your admin password. Then run  sudo homelab-setup refresh" % url("beszel")
+        return "Open %s and create the account with your email address and the admin password. Then run `sudo homelab-setup refresh`." % url("beszel")
 
     def run(self):
         if not Ctx.email:
-            raise Abort("I need your email address. Run  sudo homelab-setup install  and answer the questions.")
+            raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
         if Opt.dry:
             out("      would create the Beszel hub account for %s" % Ctx.email)
             return
@@ -2259,7 +2278,7 @@ class BeszelUser(Step):
             st, js, _ = http("POST", url("beszel", "/api/beszel/create-user"), body=b, timeout=30)
             if st in (200, 201, 204) and beszel_first_run() is False:
                 return
-        raise Abort("I could not create the Beszel account automatically. %s" % self.help())
+        raise Abort("The Beszel account could not be created automatically. %s" % self.help())
 
 
 @step
@@ -2280,7 +2299,7 @@ class BeszelAgentKey(Step):
         pw = need_password("to log in to the Beszel hub")
         tok = beszel_login(Ctx.email, pw)
         if not tok:
-            raise Abort("The Beszel hub would not log in as %s with that password. Run  sudo homelab-setup fill" % Ctx.email)
+            raise Abort("The Beszel hub rejected the login for %s. Run `sudo homelab-setup fill`." % Ctx.email)
         hdr = {"Authorization": tok}
         st, js, _ = http("GET", url("beszel", "/api/beszel/info"), headers=hdr, timeout=20)
         if st != 200:
@@ -2398,11 +2417,11 @@ class WidgetStep(Step):
     def help(self):
         if self.help_text:
             return self.help_text
-        return "I could not create this one by myself. Run:  sudo homelab-setup fill"
+        return "This could not be created automatically. Run `sudo homelab-setup fill`."
 
     def _write(self, v):
         if not self.verify(v):
-            raise Abort("The new login/key did not pass its test against the service, so I did not write it into Homepage.")
+            raise Abort("The new login or key failed its test against the service, so it was not written to the Homepage configuration.")
         hp_set_widget(self.card, v)
         State.note("vf:" + self.id, "")        # it just passed: never let an older failed test hide that
 
@@ -2423,7 +2442,7 @@ class WidgetStep(Step):
         if callable(getattr(self, "prefill", None)):
             cur.update(self.prefill())
         if not self.verify(cur):
-            bad("That did not work when I tested it against the service. Nothing was written. Check it and try again.")
+            bad("The service rejected it during the test. Nothing was written. Check the value and try again.")
             return False
         hp_set_widget(self.card, cur)
         good("%s tested and saved in the Homepage config." % self.title)
@@ -2459,8 +2478,7 @@ def auto_speedtest():
     m = re.search(r"HLS_TOKEN=(\S+)", txt)
     if not m:
         why = next((l.strip() for l in txt.splitlines() if re.search(r"rror|xception|HLS_ERROR", l)), txt.strip()[:200])
-        raise Abort("I could not create the Speedtest Tracker token (%s). Create one by hand: %s/admin/api-tokens "
-                    "(tick 'Read Results'), then run  sudo homelab-setup fill" % (why[:200], url("speedtest")))
+        raise Abort("The Speedtest Tracker token could not be created (%s). Create one manually at %s/admin/api-tokens (enable 'Read Results'), then run `sudo homelab-setup fill`." % (why[:200], url("speedtest")))
     Secrets.set("SPEEDTEST_TOKEN", m.group(1))
     return {"key": m.group(1)}
 
@@ -2468,12 +2486,12 @@ def auto_speedtest():
 def auto_portainer():
     pw = need_password("to create the Portainer token for Homepage")
     if not Portainer.login(pw):
-        raise Abort("Portainer would not log in as %s with that password." % Ctx.admin)
+        raise Abort("Portainer rejected the login for %s." % Ctx.admin)
     st, me, _ = Portainer.call("GET", "/api/users/me", auth="jwt")
     st, js, _ = Portainer.call("POST", "/api/users/%s/tokens" % me["Id"], auth="jwt",
                                body={"description": "homepage", "password": pw})
     if st not in (200, 201) or not js.get("rawAPIKey"):
-        raise Abort("Portainer would not create the Homepage token (HTTP %s)." % st)
+        raise Abort("Portainer refused to create the Homepage token (HTTP %s)." % st)
     Secrets.set("PORTAINER_HOMEPAGE_TOKEN", js["rawAPIKey"])
     return {"key": js["rawAPIKey"], "env": str(Portainer.endpoint_id() or 1)}
 
@@ -2487,11 +2505,10 @@ def auto_filebrowser():
     rc, logs = docker("logs", "filebrowser-filebrowser-1")
     m = re.findall(r"randomly generated password:\s*(\S+)", logs) or re.findall(r"password:\s*(\S+)", logs)
     if not m:
-        raise Abort("FileBrowser's first password is not in its log any more. Open %s and log in as admin, then run  "
-                    "sudo homelab-setup fill" % url("filebrowser"))
+        raise Abort("FileBrowser's initial password is no longer in its log. Open %s, log in as admin, then run `sudo homelab-setup fill`." % url("filebrowser"))
     st, tok, _ = http("POST", api("/api/login"), body={"username": "admin", "password": m[-1]}, timeout=10)
     if st != 200 or not isinstance(tok, str):
-        raise Abort("FileBrowser would not accept the password from its log. Run  sudo homelab-setup fill")
+        raise Abort("FileBrowser rejected the password found in its log. Run `sudo homelab-setup fill`.")
     hdr = {"X-Auth": tok.strip()}
     st, user, _ = http("GET", api("/api/users/1"), headers=hdr, timeout=10)
     if st != 200 or not isinstance(user, dict):
@@ -2500,22 +2517,21 @@ def auto_filebrowser():
     st, js, _ = http("PUT", api("/api/users/1"), headers=hdr, body={"what": "user", "which": ["all"], "data": user,
                                                                     "current_password": m[-1]}, timeout=20)
     if st not in (200, 201, 204):
-        raise Abort("FileBrowser would not change the admin login (HTTP %s)." % st)
+        raise Abort("FileBrowser refused to change the admin login (HTTP %s)." % st)
     return {"username": Ctx.admin, "password": pw}
 
 
 def auto_immich():
     if immich_restored():
-        raise Abort("Your Immich was restored from a backup. Create the key by hand: Immich > Account Settings > API Keys "
-                    "(permission server.statistics), then run  sudo homelab-setup fill")
+        raise Abort("Immich was restored from a backup, so the key must be created manually: Immich > Account Settings > API Keys (permission server.statistics). Then run `sudo homelab-setup fill`.")
     pw = need_password("to log in to Immich and create the Homepage key")
     st, js, _ = http("POST", url("immich", "/api/auth/login"), body={"email": Ctx.email, "password": pw}, timeout=30)
     if st not in (200, 201) or not isinstance(js, dict) or not js.get("accessToken"):
-        raise Abort("Immich would not log in as %s with that password. Run  sudo homelab-setup fill" % Ctx.email)
+        raise Abort("Immich rejected the login for %s. Run `sudo homelab-setup fill`." % Ctx.email)
     st, js, _ = http("POST", url("immich", "/api/api-keys"), headers={"Authorization": "Bearer " + js["accessToken"]},
                      body={"name": "homepage", "permissions": ["server.statistics"]}, timeout=30)
     if st not in (200, 201) or not isinstance(js, dict) or not js.get("secret"):
-        raise Abort("Immich would not create the API key (HTTP %s)." % st)
+        raise Abort("Immich refused to create the API key (HTTP %s)." % st)
     Secrets.set("IMMICH_HOMEPAGE_KEY", js["secret"])
     return {"key": js["secret"]}
 
@@ -2543,9 +2559,7 @@ def _register_widgets():
         TailscaleWidget("w-tailscale", "tailscale-card", "Tailscale widget (machine ID and API access token)",
                         ("tailscale-login",), ["deviceid", "key"], v_tailscale, None,
                         [("key", "Tailscale API access token (starts with tskey-api-)", True)], kind="manual",
-                        help_text="Create an API access token at https://login.tailscale.com/admin/settings/keys "
-                                  "(Generate access token). Then run  sudo homelab-setup fill  and paste it there. "
-                                  "The machine ID is filled in for you."),
+                        help_text="Create an API access token at https://login.tailscale.com/admin/settings/keys (Generate access token), then start the walk-through and paste it:\n$ sudo homelab-setup fill\nThe machine ID is filled in automatically."),
         mk("w-beszel", "beszel-card", "Beszel widget login (a Beszel superuser)", ("beszel-user",), ["username", "password"],
            v_beszel, auto_beszel, [("username", "Beszel superuser email", False), ("password", "Beszel superuser password", True)]),
         mk("w-netdata", "netdata-card", "Netdata widget", ("stack-netdata",), [], v_netdata, lambda: {}),
@@ -2591,7 +2605,7 @@ def installed_copy(name, where):
 
 @step
 class ScriptsInstalled(Step):
-    id, group, title = "scripts", "Scripts and schedule", "Your tools installed (homelab, homelab-update, drives, backup, ...)"
+    id, group, title = "scripts", "Scripts and schedule", "Helper commands installed (homelab, homelab-update, drives, backup, ...)"
     needs = ("packages",)
 
     def _wanted(self):
@@ -2612,7 +2626,7 @@ class ScriptsInstalled(Step):
     def run(self):
         for n, d, body in self._wanted():
             if not body:
-                raise Abort("The repo copy of %s is missing (looked in %s)." % (n, Ctx.repo))
+                raise Abort("The repository copy of %s is missing (looked in %s)." % (n, Ctx.repo))
             dst = P(d + "/" + n)
             if os.path.exists(dst) and read_file(dst) == body:
                 continue
@@ -2695,9 +2709,7 @@ class DataDrive(Step):
         return "done" if os.path.ismount(P("/mnt/storage")) or os.environ.get("HLS_MOUNTED") == "1" else "todo"
 
     def help(self):
-        return ("Right now /mnt/storage is a plain folder on the boot drive (fine for trying things). To use a real drive, "
-                "plug it in and run:  sudo drives   (it asks before it touches anything; this installer never formats a drive). "
-                "Then run  sudo homelab-setup refresh  to turn on the daily backup. Or skip this: sudo homelab-setup skip data-drive")
+        return ("/mnt/storage is currently a plain folder on the boot drive, which is fine for testing. To use a dedicated drive, connect it and run the drive tool. It asks before changing anything, and the installer itself never formats a drive:\n$ sudo drives\nThen turn on the daily backup:\n$ sudo homelab-setup refresh\nTo skip this step:\n$ sudo homelab-setup skip data-drive")
 
 
 @step
@@ -2819,7 +2831,7 @@ def chk_speedtest():
 
 
 def chk_reboot():
-    """All containers are up and the machine has restarted since I first saw the lab running."""
+    """All containers are up and the machine has restarted since the lab was first seen running."""
     n = len([l for l in run(["docker", "ps", "-q"])[1].split("\n") if l.strip()])
     if n < EXPECTED_CONTAINERS:
         return False
@@ -2854,38 +2866,39 @@ class AckStep(Step):
         return "todo"
 
     def detail(self):
-        return "checked by me" if self.auto else ""
+        return "detected automatically" if self.auto else ""
 
     def help(self):
-        extra = "  (I check this myself each time you run  sudo homelab-setup refresh ; you can also tick it: " if self.auto else "  When it is done, run:  "
-        return self.text + extra + "sudo homelab-setup done %s%s" % (
-            self.id, ("   (or skip it: sudo homelab-setup skip %s)" % self.id) if self.optional else "") + (")" if self.auto and not self.optional else "")
+        if self.auto:
+            tail = ("This step is detected automatically each time `sudo homelab-setup refresh` runs. "
+                    "To mark it as done manually:")
+        else:
+            tail = "When it is done, run:"
+        text = "%s\n%s\n$ sudo homelab-setup done %s" % (self.text, tail, self.id)
+        if self.optional:
+            text += "\nTo skip it:\n$ sudo homelab-setup skip %s" % self.id
+        return text
 
 
 def _register_acks():
     items = [
         AckStep("secrets-saved", "Generated passwords copied into your password manager",
-                "Run  sudo homelab-setup secrets  and copy everything into your password manager. The file is kept at "
-                "/root/.homelab-setup/secrets.env (root only). Also store the admin password you chose."),
+                "Show the generated passwords and keys, copy them into your password manager, and store the admin password you chose there as well. They are kept in /root/.homelab-setup/secrets.env (root only).\n$ sudo homelab-setup secrets"),
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
-                "On each device set DNS by hand: preferred = this machine's address (the LAN address shown by  homelab ), "
-                "alternate = 8.8.8.8 (or empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > i > Configure DNS.",
+                "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
                 needs=("adguard-setup",), auto=chk_devices_dns),
         AckStep("speedtest-first", "Speedtest Tracker has run its first speed test",
-                "Open the Speedtest Tracker address (port 8088), log in with your email and admin password, and click the Speedtest "
-                "button. The Homepage card fills in after that. If the login fails, the app's default login is "
-                "admin@example.com / password - log in and change it NOW.",
+                "Open Speedtest Tracker (port 8088), log in with your email address and the admin password, and click Speedtest. The Homepage card fills in afterwards. If the login fails, the application's default login is admin@example.com / password: log in with it and change it immediately.",
                 needs=("w-speedtest",), auto=chk_speedtest),
         AckStep("blocklists", "AdGuard Home blocklists added",
-                "In AdGuard Home: Filters > DNS blocklists > Add blocklist > Choose from the list. Your list: AdGuard DNS filter, "
-                "AdAway, HaGeZi Pro, OISD Big, Peter Lowe's, Steven Black's, and others you liked.", optional=True,
+                "In AdGuard Home go to Filters > DNS blocklists > Add blocklist > Choose from the list. Common choices: AdGuard DNS filter, AdAway, HaGeZi Pro, OISD Big, Peter Lowe's and Steven Black's.", optional=True,
                 needs=("adguard-setup",), auto=chk_blocklists),
         AckStep("weather", "Homepage weather location set",
-                "Edit  %s/homepage-config/widgets.yaml : set latitude and longitude under openmeteo (the repo default is New York)."
-                % "~", optional=True, needs=("homepage-files",), auto=chk_weather),
+                "Set the weather location: edit ~/homepage-config/widgets.yaml and change latitude and longitude under openmeteo "
+                "(the default is New York).\n$ nano ~/homepage-config/widgets.yaml",
+                optional=True, needs=("homepage-files",), auto=chk_weather),
         AckStep("reboot-test", "Rebooted once and everything came back",
-                "Run  sudo reboot , wait two minutes, SSH in again. The login screen should show all containers up, "
-                "and  docker ps  should list them.", needs=("stack-homepage",), auto=chk_reboot),
+                "Reboot once and confirm that everything comes back: after about two minutes, log in again. The login screen should show all containers running, and `docker ps` should list them.\n$ sudo reboot", needs=("stack-homepage",), auto=chk_reboot),
     ]
     for s in items:
         STEPS.append(s)
@@ -2914,23 +2927,23 @@ def load_all():
 
 def password_warning():
     out("")
-    warn("You chose ONE password for every admin login (Portainer, AdGuard Home, Beszel, Immich, Nextcloud, FileBrowser, "
-         "Speedtest Tracker). If one service leaks it, all of them are open. Homepage's config file also keeps some of "
-         "these logins in plain text, as it does today. Use a long password you use nowhere else, and keep it in a "
-         "password manager.")
+    warn("One password is used for every admin login (Portainer, AdGuard Home, Beszel, Immich, Nextcloud, FileBrowser, "
+         "Speedtest Tracker). If one service leaks it, all of them are exposed. Homepage's configuration file also stores "
+         "some of these logins in plain text. Use a long password that you use nowhere else and keep it in a password "
+         "manager.")
 
 
 def ask_answers():
     a = State.data["answers"]
     out("")
-    say("I need a few answers first. Nothing is sent anywhere; they only fill in the config files on this machine.")
+    say("A few answers are needed first. They stay on this machine and only fill in its configuration files.")
     out("")
     a["admin"] = ask("Admin name for every service", a.get("admin") or Ctx.user.capitalize())
-    a["email"] = ask("Your email address (used as the login for Immich and Beszel)", a.get("email", ""))
+    a["email"] = ask("Email address (login for Immich, Beszel and Speedtest Tracker)", a.get("email", ""))
     while not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", a["email"]):
-        a["email"] = ask("That does not look like an email address. Try again", "")
+        a["email"] = ask("That is not a valid email address. Enter it again", "")
     a["tz"] = ask("Time zone", a.get("tz") or Ctx.tz)
-    a["lan"] = ask("This machine's address on your network (it should be reserved in your router)", a.get("lan") or Ctx.lan)
+    a["lan"] = ask("This machine's LAN address (reserve it in your router so it does not change)", a.get("lan") or Ctx.lan)
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", a["lan"]):
         raise Abort("That is not an IPv4 address.")
     State.save()
@@ -2939,13 +2952,13 @@ def ask_answers():
         password_warning()
         out("")
         for _ in range(3):
-            p1 = ask_secret("Choose the admin password (12+ letters and numbers, typed once, never saved)")
+            p1 = ask_secret("Choose the admin password (12 or more letters and digits; it is not saved)")
             problem = password_problem(p1)
             if problem:
                 warn(problem)
                 continue
             if ask_secret("Type it again") != p1:
-                warn("They did not match.")
+                warn("The two entries did not match.")
                 continue
             Runtime.password = p1
             break
@@ -2959,17 +2972,17 @@ def preflight():
         raise Abort(OsSupported().help())
     good("Operating system: %s" % Ctx.os_name)
     if not Ctx.lan:
-        raise Abort("I could not find this machine's network address. Connect it to the network and try again.")
+        raise Abort("Could not detect this machine's network address. Connect it to the network and try again.")
     good("Network address: %s" % Ctx.lan)
     try:
         socket.getaddrinfo("download.docker.com", 443)
         good("Internet reachable")
     except OSError:
         if not FAKE:
-            raise Abort("I cannot reach the internet (download.docker.com did not resolve). Check the network and try again.")
+            raise Abort("No internet access (download.docker.com did not resolve). Check the network and try again.")
     free = shutil.disk_usage(P("/") if os.path.isdir(P("/")) else "/").free / 1073741824.0
     if free < 20:
-        warn("Only %.0f GB free on the boot drive. The services need about 20 GB (more with your photos)." % free)
+        warn("Only %.0f GB free on the boot drive. The services need about 20 GB (more with photos)." % free)
     else:
         good("Free space on the boot drive: %.0f GB" % free)
 
@@ -2979,15 +2992,15 @@ def final_report(res):
     Secrets.load()
     keys = [k for k in Secrets.vals]
     if keys and not Opt.dry:
-        rule("Passwords and keys I generated")
-        say("These are kept in %s (root only). Copy them into your password manager now. "
-            "They are NOT in GitHub and I will not show them in a chat." % SECRET_FILE.replace(ROOT, ""))
+        rule("Generated passwords and keys")
+        say("Stored in %s (root only). Copy them into your password manager now. "
+            "This file stays on this machine and is never part of the repository." % SECRET_FILE.replace(ROOT, ""))
         out("")
         for k in sorted(Secrets.vals):
             out("   %-28s %s" % (k, Secrets.vals[k]))
         out("")
-        say("Show them again any time with:  sudo homelab-setup secrets")
-        say("The admin password you typed is NOT in this list. It lives in your head and your password manager.")
+        say("Show them again at any time:\n$ sudo homelab-setup secrets")
+        say("The admin password you chose is not stored anywhere. Keep it in your password manager.")
         out("")
 
 
@@ -2995,7 +3008,7 @@ def cmd_checklist():
     load_all()
     res = evaluate()
     if Mode.existing:
-        say("This machine already runs the lab (it was built by hand), so nothing here is changed by this tool.")
+        say("This machine already runs the lab (set up by hand). The installer only reads it and changes nothing.")
     show_checklist(res, show_all=Opt.all)
     write_progress(res)
 
@@ -3004,8 +3017,8 @@ def cmd_install():
     load_all()
     if Mode.existing and not Opt.force_existing:
         out("")
-        say("This machine already runs the lab. To protect it, I will not install anything. Here is its checklist "
-            "(read only). To really run the installer on it, add --force-existing.")
+        say("This machine already runs the lab, so nothing is installed. Its checklist is shown read-only. "
+            "To run the installer on it anyway, add `--force-existing`.")
         res = evaluate()
         show_checklist(res)
         return
@@ -3026,17 +3039,23 @@ def cmd_install():
             Ctx.email = "you@example.com"
     res = evaluate()
     todo = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
-    rule("What I will do")
+    rule("Planned steps")
     for s in todo:
         out("   %s %s" % (S_DOT, s.title))
     by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"]
     if by_hand:
+        detected = len([s for s in by_hand if getattr(s, "auto", None)])
         out("")
-        say("Things only you can do (I will walk you through them): " + "; ".join(s.title for s in by_hand[:6]) +
-            ("; ..." if len(by_hand) > 6 else ""))
+        say("%d steps run automatically. %d steps need you; the installer walks you through them%s:" % (
+            len(todo), len(by_hand),
+            (" (%d of them are detected automatically once done)" % detected) if detected else ""))
+        out("")
+        for s in by_hand:
+            tag = "  %s(detected automatically)%s" % (D, N) if getattr(s, "auto", None) else ""
+            out("   %s%s%s %s%s" % (Y, S_TODO, N, s.title, tag))
     out("")
     if not Opt.dry and not Opt.yes:
-        if not typed("yes", "Type yes to start (nothing has been changed yet): "):
+        if not typed("yes", "Type yes to start (nothing has been changed yet)"):
             raise Abort("Stopped. Nothing was changed.")
     if not Opt.dry:
         State.mark("install-started")
@@ -3047,7 +3066,7 @@ def cmd_install():
         final_report(res)
     else:
         out("")
-        say("That was a dry run. Nothing was changed.")
+        say("This was a dry run. Nothing was changed.")
 
 
 def run_install(res):
@@ -3076,13 +3095,13 @@ def run_install(res):
 def cmd_refresh():
     load_all()
     if Mode.existing:
-        say("This machine already runs the lab, so I only check it. Here is the checklist (read only).")
+        say("This machine already runs the lab. Its checklist is shown read-only.")
         res = evaluate()
         show_checklist(res)
         write_progress(res)
         return
     if not State.exists():
-        raise Abort("The installer has not run on this machine yet. Run:  sudo homelab-setup install")
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
     res = evaluate()
     rule("Checking and continuing")
     for _ in range(4):
@@ -3120,9 +3139,9 @@ def cmd_fill():
         except Abort as e:
             bad(str(e))
     if not did:
-        say("Nothing is waiting for you right now. Run  sudo homelab-setup refresh  to continue the automatic steps.")
+        say("No manual steps are waiting. Run `sudo homelab-setup refresh` to continue the automatic steps.")
     else:
-        say("Run  sudo homelab-setup refresh  to continue.")
+        say("Run `sudo homelab-setup refresh` to continue.")
 
 
 def cmd_mark(kind, sid):
@@ -3138,14 +3157,14 @@ def cmd_mark(kind, sid):
 def cmd_secrets():
     Secrets.load()
     if not Secrets.vals:
-        say("No generated secrets are saved on this machine.")
+        say("No generated passwords or keys are stored on this machine.")
         return
     say("Saved in %s (root only):" % SECRET_FILE.replace(ROOT, ""))
     out("")
     for k in sorted(Secrets.vals):
         out("   %-28s %s" % (k, Secrets.vals[k]))
     out("")
-    say("The admin password you typed is not here. Keep it in your password manager.")
+    say("The admin password you chose is not stored. Keep it in your password manager.")
 
 
 def cmd_progress():
@@ -3164,19 +3183,22 @@ def cmd_progress():
     out("%d of %d steps done" % (done, total))
 
 
-HELP = """homelab-setup %s - build this machine into the home lab from the GitHub repo.
+HELP = """homelab-setup %s: set up this machine as a home lab from the GitHub repository.
 
-  sudo homelab-setup                  show the checklist (what is done, what is left)
-  sudo homelab-setup install          set everything up (asks first; safe to run again)
-  sudo homelab-setup install --dry-run   show what it would do and change nothing
-  sudo homelab-setup refresh          check again and continue whatever is now possible
-  sudo homelab-setup fill             walk through the logins and keys that need you
-  sudo homelab-setup done STEP        mark a by-hand step as done      (skip STEP = not wanted)
-  sudo homelab-setup secrets          show the passwords and keys it generated
-  homelab-setup progress | version | help
+Usage: sudo homelab-setup [command]
+
+Commands:
+  (none)                   show the checklist: what is done and what is left
+  install                  set everything up (asks first; safe to run again)
+  install --dry-run        show the plan and change nothing
+  refresh                  re-check and continue every step that is now possible
+  fill                     walk through the logins and keys that need you
+  done STEP | skip STEP    mark a manual step as done, or as not wanted
+  secrets                  show the generated passwords and keys
+  progress | version | help
 
 Options for install:  --yes  --backup FOLDER  --no-restore  --repo FOLDER  --force-existing
-It never formats or changes a drive, and it never saves the admin password you type.
+The installer never formats or modifies a drive and never saves the admin password.
 """
 
 
@@ -3251,7 +3273,7 @@ def main(argv):
         return 1
     except KeyboardInterrupt:
         out("")
-        say("Stopped. Everything that was finished stays finished; run the same command again to continue.")
+        say("Stopped. Finished steps stay finished; run the same command again to continue.")
         return 130
     return 0
 

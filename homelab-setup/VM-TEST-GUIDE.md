@@ -1,26 +1,26 @@
 # Testing homelab-setup on a virtual machine
 
-Goal: prove the installer on a real, disposable Linux machine before you trust it. Everything here is undone by reverting a snapshot, or by the "Start over" block at the end, so nothing needs undo commands.
+Purpose: verify the installer on a real, disposable Linux machine before it is used for anything that matters. Everything in this guide can be undone by reverting a snapshot or by running the "Start over" block at the end.
 
-Do **not** run this on the real server `pc`. (If you do, it detects the running lab and only shows a read-only checklist.)
+Do **not** run this on the production server `pc`. (If it is run there by mistake, the installer detects the running lab and shows a read-only checklist only.)
 
-## What to prepare (about 30 minutes, once)
+## Preparation (about 30 minutes, once)
 
 | Item | Suggested value |
 |---|---|
-| VM program | VirtualBox or VMware Workstation Player on your PC (or a spare PC) |
+| VM program | VirtualBox or VMware Workstation Player on a PC (or a spare PC) |
 | OS | Linux Mint 22 Cinnamon or Xfce, or Ubuntu Server 24.04 |
 | Memory | 8 GB (Immich's machine-learning container needs about 4 GB) |
 | Disk | 60 GB or more, dynamically allocated |
-| Network | **Bridged** (so the VM gets its own address on your router) |
+| Network | **Bridged** (so the VM gets its own address on the router) |
 | Name of the machine | something that is not `pc`, for example `homelabtest` |
-| Tailscale account | a **separate test account** is safest, so the VM never touches your real tailnet |
+| Tailscale account | a **separate test account** is recommended, so the VM never touches the production tailnet |
 
 1. Install the OS, update nothing yet, and reboot once.
-2. Take a snapshot called `clean` (power the VM off first if your program fails to restore snapshots taken while running).
-3. In your router, note the VM's address. For a real test you can leave it as DHCP.
+2. Take a snapshot called `clean` (power the VM off first if the VM program fails to restore snapshots taken while running).
+3. Note the VM's address in the router. For a test, DHCP is sufficient.
 
-If you cannot restore a snapshot, use the "Start over" block at the end instead.
+If snapshots cannot be restored, use the "Start over without a snapshot" block at the end instead.
 
 ## Round 1: dry run (changes nothing)
 
@@ -35,7 +35,7 @@ sudo bash setup.sh install --dry-run
 
 Use `sudo bash setup.sh`, not `./setup.sh`: files uploaded through the GitHub web page lose their "executable" mark.
 
-Expected: it asks no questions, prints the list of what it would do and "would run ..." lines. Nothing is installed. The preview skips the steps that wait behind the Tailscale login, and it may print "Tailscale is not installed yet"; that is only because nothing was installed.
+Expected result: no questions are asked. The installer prints the planned steps (how many run automatically and how many need a person) and "would run ..." lines. Nothing is installed. The preview omits the steps that wait behind the Tailscale login, and it may print "Tailscale is not installed yet"; this only reflects that nothing has been installed.
 
 ## Round 2: the real install
 
@@ -47,51 +47,51 @@ sudo bash setup.sh install
 
 What to expect, in order:
 
-1. Questions: name, email, time zone, LAN address, then the shared admin password (12 or more letters and digits, typed twice). Type the **email** carefully: it is the login for Immich, Beszel, Speedtest Tracker and Nextcloud.
+1. Questions: name, email address, time zone, LAN address, then the shared administrator password (12 or more letters and digits, typed twice). Enter the **email address** carefully: it is the login for Immich, Beszel and Speedtest Tracker.
 2. "Type yes to start".
 3. Updates, Docker, Tailscale.
-4. **Tailscale shows a link.** Open it on your PC, log in, approve the machine.
-5. **It asks you to turn on HTTPS certificates** in the Tailscale admin page (login.tailscale.com/admin/dns) if they are not on yet. Do that, then press Enter.
-6. It asks before freeing port 53. Answer `y`.
+4. **Tailscale shows a login link.** Open it in a browser on another device, log in and approve the machine.
+5. **The installer asks for HTTPS certificates to be enabled** in the Tailscale admin page (https://login.tailscale.com/admin/dns) if they are not on yet. Enable them, then press Enter.
+6. The installer asks before freeing port 53. Answer `y`.
 7. Portainer, then the nine stacks. The first time this downloads about 10 GB of images; Nextcloud's first install can take up to 15 minutes.
-8. A list of generated passwords. They are for the test VM only. On a real machine, copy them into your password manager and never paste them into a chat.
-9. A checklist of what is left for you.
+8. A list of generated passwords. On a test VM they are disposable. On a real machine, copy them into a password manager and never paste them into a chat or an issue.
+9. A checklist of the remaining steps.
 
-A fresh machine shows **55 steps**. After a clean install about 46 are done and the rest are the by-hand and self-checking items below.
+A fresh machine shows **55 steps**. After a clean install about 46 are done; the rest are the manual and self-checking items below. Every command and link in the remaining-steps list is highlighted (bold cyan for commands, underlined cyan for links) when the terminal supports colour.
 
 Then:
 
 ```
 sudo homelab-setup            # the checklist
-sudo homelab-setup fill       # walks through the Tailscale API token and other by-hand keys
-sudo homelab-setup refresh    # re-scans after you do a step
+sudo homelab-setup fill       # walks through the Tailscale API token and other manual keys
+sudo homelab-setup refresh    # re-scans after a step has been completed
 ```
 
 ### Steps that tick themselves
 
-You do the real thing; the next `sudo homelab-setup` or `refresh` notices and ticks it. You do not need to run `done`.
+Perform the action itself; the next `sudo homelab-setup` or `refresh` detects it and marks the step done. Running `done` is not required.
 
 | Step | What makes it tick |
 |---|---|
 | Homepage weather location | change `latitude` / `longitude` under `openmeteo` in `~/homepage-config/widgets.yaml` |
 | AdGuard Home blocklists | turn on three or more lists in AdGuard Home (Filters, DNS blocklists) |
-| Your devices use AdGuard Home | set a device's DNS to the machine's address and browse a little |
-| Speedtest Tracker has run its first test | log in on port 8088 and click Speedtest |
-| Rebooted once and everything came back | `sudo reboot`, wait, and make sure all 16 containers are up |
+| Devices use AdGuard Home | set a device's DNS server to the machine's address and browse for a short while |
+| Speedtest Tracker has run its first test | log in on port 8088 and start a test |
+| Rebooted once and everything came back | `sudo reboot`, wait, and confirm all 16 containers are up |
 
-Still by hand: the Tailscale widget API token (`sudo homelab-setup fill`), "passwords copied into your password manager" (`sudo homelab-setup done secrets-saved`), and the data drive (plug one in and run `sudo drives`, or `sudo homelab-setup skip data-drive`).
+Still manual: the Tailscale widget API token (`sudo homelab-setup fill`), the confirmation that the passwords are stored in a password manager (`sudo homelab-setup done secrets-saved`), and the data drive (connect one and run `sudo drives`, or run `sudo homelab-setup skip data-drive`).
 
-## Round 3: what to check
+## Round 3: verification
 
-Quick list: Homepage, Portainer (all 9 stacks listed and editable), AdGuard Home, Beszel (the agent shows up), Netdata, Speedtest Tracker (log in with your email and the shared password; the Homepage card shows an error until the first test has run, that is normal), FileBrowser, Immich (log in, create a test upload), Nextcloud (log in, no "trusted domain" error).
+Check each of the following: Homepage; Portainer (all 9 stacks listed and editable); AdGuard Home; Beszel (the agent is listed); Netdata; Speedtest Tracker (log in with the email address and the shared password; the Homepage card shows an error until the first test has run, which is expected); FileBrowser; Immich (log in, create a test upload); Nextcloud (log in, no "trusted domain" error).
 
 On the VM:
 
 ```
 docker ps --format '{{.Names}}'   # 16 containers
-cat /etc/resolv.conf              # only your router (nameserver 192.168.x.1), never 100.100.100.100
+cat /etc/resolv.conf              # only the router (nameserver 192.168.x.1), never 100.100.100.100
 homelab                           # the login screen, with the setup progress line
-sudo homelab-setup install        # second run: should change nothing
+sudo homelab-setup install        # second run: changes nothing
 sudo reboot                       # then run homelab, docker ps and cat /etc/resolv.conf again
 ```
 
@@ -100,29 +100,29 @@ With no data drive, the login screen shows a grey "no data drive set up yet" lin
 ### Opening the Homepage and the Tailscale links
 
 - **On the VM itself** use the LAN address: `http://<vm-address>:3001`. A machine cannot open its own Tailscale Serve addresses (`https://<vm-name>.<tailnet>.ts.net:1000` and so on); that is normal and not a bug. The installer also keeps Tailscale away from DNS on purpose (`--accept-dns=false`), so the VM does not look up `.ts.net` names at all.
-- **To test the Tailscale links you need a second device on the same tailnet.** If you used a separate test account, share the VM with your real account: Tailscale admin page, the `...` next to the machine, Share, generate an invite link, open it in a browser logged in to your real account, accept it, and keep Tailscale running on that PC. Then open `https://<vm-name>.<tailnet>.ts.net:1000` there. The first page can take about 30 seconds while the HTTPS certificate is issued.
-- When you are done, remove the shared machine from your real account.
+- **Testing the Tailscale links requires a second device on the same tailnet.** With a separate test account, share the VM with the production account: in the Tailscale admin page open the `...` menu next to the machine, choose Share, generate an invite link, open it in a browser signed in to the production account, accept it, and keep Tailscale running on that PC. Then open `https://<vm-name>.<tailnet>.ts.net:1000` there. The first page can take about 30 seconds while the HTTPS certificate is issued.
+- When testing is finished, remove the shared machine from the production account.
 
 ## Round 4: restore test (optional)
 
-Plug a copy of your backup (or a USB drive with a few photos laid out like the backup) into the VM, then start over (below) and run `sudo bash setup.sh install --backup /path/to/backup`. Use a user named `brandon` for this round, because settings from another user's backup are deliberately refused.
+Connect a copy of a backup (or a USB drive with a few photos laid out like the backup) to the VM, start over (below) and run `sudo bash setup.sh install --backup /path/to/backup`. Use a user named `brandon` for this round, because settings from another user's backup are deliberately refused.
 
 ## If something fails
 
-The installer never leaves you guessing: the step shows a red cross and the reason. You can always run `sudo homelab-setup install` again; finished steps are skipped. Use `install`, not `refresh`, to continue after a failure: `install` also shows the Tailscale login link when one is needed.
+A failed step shows a red cross and the reason. `sudo homelab-setup install` can always be run again; finished steps are skipped. Use `install`, not `refresh`, to continue after a failure: `install` also shows the Tailscale login link when one is needed.
 
-Send me:
+Information to include in a bug report:
 
-1. The text of the failing step from `sudo homelab-setup` (not the secrets).
-2. The last 60 lines of `/var/log/homelab-setup.log` (the typed password is masked there; check for anything else you consider private first).
-3. The VM's OS and version.
+1. The text of the failing step from `sudo homelab-setup` (never the secrets).
+2. The last 60 lines of `/var/log/homelab-setup.log` (the typed password is masked there; review the lines for anything else private before sharing).
+3. The VM's operating system and version.
 4. For a widget that does not work: its name and what Homepage shows.
 
 ## Start over without a snapshot
 
-Use this only on the test VM. It removes everything the installer made: containers, images, Docker data, the Tailscale login, the service folders, the scripts, the cron lines, the login-screen hook and the installer's own state. It leaves the cloned `My-Home-Lab-` folder, a few small tools the installer installed (curl, rsync, hdparm and similar) and your Mint updates.
+Use this only on the test VM. It removes everything the installer created: containers, images, Docker data, the Tailscale login, the service folders, the scripts, the cron lines, the login-screen hook and the installer's own state. It leaves the cloned `My-Home-Lab-` folder, a few small tools the installer installed (curl, rsync, hdparm and similar) and the system updates.
 
-Terminal: the VM. Check first that `hostname` is not `pc`.
+Terminal: the VM. First confirm that `hostname` does not print `pc`.
 
 ```
 sudo docker ps -aq | xargs -r sudo docker rm -f
@@ -140,7 +140,7 @@ sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 sudo apt-get autoremove -y
 ```
 
-Then, in the Tailscale admin page, delete the old machine (otherwise the next one is named `homelabtest-1`), pull the newest files and test again:
+Then delete the old machine in the Tailscale admin page (otherwise the next one is named `homelabtest-1`), pull the newest files and test again:
 
 ```
 cd ~/My-Home-Lab-
@@ -150,5 +150,5 @@ sudo bash setup.sh install --dry-run
 
 ## When you are done
 
-- Delete the VM's entry in the Tailscale admin machines page, and remove any shared copy from your real account.
+- Delete the VM's entry in the Tailscale admin machines page, and remove any shared copy from the production account.
 - Revert to the snapshot `clean`, or use the block above, to start over.
