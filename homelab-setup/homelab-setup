@@ -2354,6 +2354,9 @@ class HomepageFiles(Step):
                     raise Abort("The repository file homepage-config/%s is missing." % f)
                 if f == "services.yaml":
                     body = hp_strip_widgets(body)
+                if f == "widgets.yaml":
+                    # the first resources pill is named after the machine it was written on ("ProDesk"); use this machine's name
+                    body = re.sub(r"(- resources:\n\s+label:) ProDesk\b", lambda m: "%s %s" % (m.group(1), Ctx.hostname), body, count=1)
                 if f == "widgets.yaml" and State.data["answers"].get("weather"):
                     w = State.data["answers"]["weather"]
                     new = weather_apply(body, w)
@@ -3408,6 +3411,8 @@ def final_report(res):
             ask("Press Enter when they are saved to see what is left")
             State.data["secrets_shown"] = time.strftime("%F %T")        # ticks "passwords copied into your password manager"
             State.save()
+            res = evaluate()
+            write_progress(res)
     show_checklist(res, "Setup")
     next_step_section(res)
 
