@@ -47,7 +47,7 @@ sudo bash setup.sh install
 
 What to expect, in order:
 
-1. Questions: name, email address, time zone, LAN address, then the shared administrator password (12 or more letters and digits, typed twice). Enter the **email address** carefully: it is the login for Immich, Beszel and Speedtest Tracker.
+1. Questions: name, email address, time zone, a city for the weather card (a list is shown when several cities match), LAN address, then the shared administrator password (12 or more letters and digits, typed twice). Enter the **email address** carefully: it is the login for Immich, Beszel and Speedtest Tracker.
 2. "Type yes to start".
 3. Updates, Docker, Tailscale.
 4. **Tailscale shows a login link.** Open it in a browser on another device, log in and approve the machine.
@@ -55,9 +55,9 @@ What to expect, in order:
 6. The installer asks before freeing port 53. Answer `y`.
 7. Portainer, then the nine stacks. The first time this downloads about 10 GB of images; Nextcloud's first install can take up to 15 minutes.
 8. A list of generated passwords. On a test VM they are disposable. On a real machine, copy them into a password manager and never paste them into a chat or an issue.
-9. A checklist of the remaining steps.
+9. A checklist of the remaining steps, ending with a **Next step** section: the one step to do next and its command. After each step run `sudo homelab-setup refresh`; the Next step section moves on until everything is complete. When all steps are done it is replaced by a **System check** that confirms every container and service is up.
 
-A fresh machine shows **55 steps**. After a clean install about 46 are done; the rest are the manual and self-checking items below. Every command and link in the remaining-steps list is highlighted (bold cyan for commands, underlined cyan for links) when the terminal supports colour.
+A fresh machine shows **56 steps**. After a clean install about 49 are done; the rest are the manual and self-checking items below. Every command and link in the remaining-steps list is highlighted (bold cyan for commands, underlined cyan for links) when the terminal supports colour.
 
 Then:
 
@@ -73,17 +73,20 @@ Perform the action itself; the next `sudo homelab-setup` or `refresh` detects it
 
 | Step | What makes it tick |
 |---|---|
-| Homepage weather location | change `latitude` / `longitude` under `openmeteo` in `~/homepage-config/widgets.yaml` |
-| AdGuard Home blocklists | turn on three or more lists in AdGuard Home (Filters, DNS blocklists) |
 | Devices use AdGuard Home | set a device's DNS server to the machine's address and browse for a short while |
 | Speedtest Tracker has run its first test | log in on port 8088 and start a test |
+| Passwords copied | run `sudo homelab-setup secrets` (the step ticks once the passwords have been shown; the installer cannot check that they were saved) |
 | Rebooted once and everything came back | `sudo reboot`, wait, and confirm all 16 containers are up |
 
-Still manual: the Tailscale widget API token (`sudo homelab-setup fill`), the confirmation that the passwords are stored in a password manager (`sudo homelab-setup done secrets-saved`), and the data drive (connect one and run `sudo drives`, or run `sudo homelab-setup skip data-drive`).
+Done by the installer during the install: the weather city (asked in the questions) and the AdGuard Home blocklists (HaGeZi Pro and Peter Lowe's).
+
+Still manual: the Tailscale widget API token (`sudo homelab-setup fill`) and the data drive (connect one and run `sudo drives`, or run `sudo homelab-setup skip data-drive`).
+
+A background check runs every 10 minutes, so the self-checking steps tick without running anything; `sudo homelab-setup refresh` runs the same check on demand. Do not use `done` on a self-checking step during testing: it skips the real detection this round is meant to verify.
 
 ## Round 3: verification
 
-Check each of the following: Homepage; Portainer (all 9 stacks listed and editable); AdGuard Home; Beszel (the agent is listed); Netdata; Speedtest Tracker (log in with the email address and the shared password; the Homepage card shows an error until the first test has run, which is expected); FileBrowser; Immich (log in, create a test upload); Nextcloud (log in, no "trusted domain" error).
+FileBrowser shows the folders `boot-drive` and `main-storage` (and `backup` once a backup drive is connected). Check each of the following: Homepage; Portainer (all 9 stacks listed and editable); AdGuard Home; Beszel (the agent is listed); Netdata; Speedtest Tracker (log in with the email address and the shared password; the Homepage card shows an error until the first test has run, which is expected); FileBrowser; Immich (log in, create a test upload); Nextcloud (log in, no "trusted domain" error).
 
 On the VM:
 
@@ -91,7 +94,8 @@ On the VM:
 docker ps --format '{{.Names}}'   # 16 containers
 cat /etc/resolv.conf              # only the router (nameserver 192.168.x.1), never 100.100.100.100
 homelab                           # the login screen, with the setup progress line
-sudo homelab-setup install        # second run: changes nothing
+sudo homelab-setup verify         # system check: containers, Tailscale, DNS and every service address
+sudo homelab-setup install        # second run: prints "Nothing to do: all steps are complete"
 sudo reboot                       # then run homelab, docker ps and cat /etc/resolv.conf again
 ```
 

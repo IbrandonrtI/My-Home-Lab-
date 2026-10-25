@@ -679,6 +679,39 @@ def detect_tz():
     return read_file(P("/etc/timezone")).strip() or "UTC"
 
 
+WEATHER_CITY_DEFAULT = "New York"
+
+
+def geocode_city(query):
+    """Look a city up with Open-Meteo's free geocoding service (no key needed).
+    Returns a list of {name, region, country, lat, lon} (empty = no such city), or None when the service cannot be reached."""
+    base = os.environ.get("HLS_GEOCODE_API", "https://geocoding-api.open-meteo.com")
+    st, js, _ = http("GET", base + "/v1/search?count=5&language=en&format=json&name=" + urllib.parse.quote(query), timeout=15)
+    if st != 200 or not isinstance(js, dict):
+        return None
+    found = []
+    for r in js.get("results") or []:
+        try:
+            found.append({"name": str(r["name"]), "region": str(r.get("admin1") or ""), "country": str(r.get("country") or ""),
+                          "lat": float(r["latitude"]), "lon": float(r["longitude"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return found
+
+
+def weather_apply(text, w):
+    """Put a chosen city (name, lat, lon) into the openmeteo block of widgets.yaml. Returns the new text, or None if the block is missing."""
+    m = re.search(r"(openmeteo:)(.*?)(\n- |\Z)", text, re.S)
+    if not m:
+        return None
+    block = m.group(2)
+    label = w["name"].replace("\\", "").replace('"', "")
+    block = re.sub(r"(\n\s+label:).*", lambda x: '%s "%s"' % (x.group(1), label), block, count=1)
+    block = re.sub(r"(\n\s+latitude:).*", lambda x: "%s %.4f" % (x.group(1), w["lat"]), block, count=1)
+    block = re.sub(r"(\n\s+longitude:).*", lambda x: "%s %.4f" % (x.group(1), w["lon"]), block, count=1)
+    return text[:m.start(2)] + block + text[m.end(2):]
+
+
 def ts_status():
     if not have("tailscale"):
         return None
@@ -736,6 +769,7 @@ def subst(text):
     if Ctx.lan:
         pairs += [(OLD_LAN, Ctx.lan), (PH_LAN, Ctx.lan)]
     pairs += [("/home/" + OLD_USER, Ctx.home)]
+    pairs += [("Browse and manage files on the 750GB HDD", "Browse and manage files on this machine's drives")]
     for a, b in pairs:
         text = text.replace(a, b)
     text = re.sub(r'(PUID:\s*)"\d+"', r'\g<1>"%s"' % Ctx.uid, text)
@@ -747,12 +781,38 @@ def repo_file(*parts):
     return os.path.join(Ctx.repo, *parts)
 
 
+def backup_mounted():
+    """The backup pool (/mnt/backup) is a real mount point (a backup drive has been connected with `sudo drives`)."""
+    return os.path.ismount(P("/mnt/backup")) or os.environ.get("HLS_MOUNTED_BACKUP") == "1"
+
+
+def filebrowser_mounts():
+    """(host folder, folder name inside FileBrowser) for this machine's drives. The names describe the role of the drive,
+    not the hardware of the original server (which used 750GB_HDD and hdd)."""
+    m = [(Ctx.home + "/750GB_HDD", "/srv/boot-drive"), ("/mnt/storage/filebrowser", "/srv/main-storage")]
+    if backup_mounted():
+        m.append(("/mnt/backup", "/srv/backup"))
+    return m
+
+
+def filebrowser_volumes(text):
+    """Replace the two drive folders of the original server's FileBrowser stack with this machine's drives."""
+    m = re.search(r"(\n    volumes:\n)((?:      - .*(?:\n|$))+)", text)
+    if not m or "/srv/hdd" not in m.group(2):
+        return text          # the stack file was changed: leave it as it is
+    keep = [l for l in m.group(2).splitlines() if "/srv/hdd" not in l and "/srv/750GB_HDD" not in l]
+    new = ['      - "%s:%s"' % d for d in filebrowser_mounts()] + keep
+    return text[:m.start(2)] + "\n".join(new) + "\n" + text[m.end(2):]
+
+
 def stack_text(name):
     fn = STACKS[name][0]
     text = read_file(repo_file("Portainer-code", fn))
     if not text:
         raise Abort("The repository file Portainer-code/%s is missing (looked in %s)." % (fn, Ctx.repo))
     text = subst(text)
+    if name == "filebrowser":
+        text = filebrowser_volumes(text)
     if name == "speedtest-tracker":
         key = Secrets.get("APP_KEY")
         text = re.sub(r'(APP_KEY:\s*)"[^"]*"', lambda m: '%s"%s"' % (m.group(1), key), text)
@@ -938,6 +998,9 @@ class Step:
     def help(self):
         return ""
 
+    def fill_help(self):
+        return self.help()   # the text shown at the start of this step inside `sudo homelab-setup fill`
+
     def fill(self):
         return False         # interactive walk-through; True when something was done
 
@@ -1079,18 +1142,12 @@ def show_checklist(res, title="Home lab setup", show_help=True, show_all=False):
         out("")
     if done >= total:
         out("  %s%s All steps are complete.%s" % (G, S_OK, N))
-    else:
-        nxt = next((s for s in topo() if res[s.id].state in ("todo", "failed")), None)
-        if nxt is not None:
-            if nxt.kind == "auto":
-                say("Next step: \"%s\" runs automatically.\n$ sudo homelab-setup refresh" % nxt.title)
-            elif nxt.kind == "ack":
-                say("Next step: \"%s\". When it is done, run:\n$ sudo homelab-setup done %s" % (nxt.title, nxt.id))
-            else:
-                say("Next step: \"%s\". Start the walk-through:\n$ sudo homelab-setup fill" % nxt.title)
-        else:
-            say("Waiting on earlier steps. Run `sudo homelab-setup refresh`.")
     out("")
+
+
+def pick_next(res):
+    "The step to do next: the first one in dependency order that is not done."
+    return next((s for s in topo() if res[s.id].state in ("todo", "failed")), None)
 
 
 def unblock(res, dry=False):
@@ -1333,6 +1390,9 @@ def do_tailscale_login():
     Ctx.refresh_tailscale()
     if Ctx.fqdn:
         return True
+    if Opt.dry:
+        out("      would run: sudo tailscale up   (shows a login link; open it in a browser and approve this machine)")
+        return True
     if not have("tailscale"):
         raise Abort("Tailscale is not installed yet.")
     key = os.environ.get("TS_AUTHKEY", "")
@@ -1341,9 +1401,6 @@ def do_tailscale_login():
     args = ["tailscale", "up", "--hostname=" + Ctx.hostname.lower(), "--accept-dns=false"]
     if key:
         args.append("--auth-key=" + key)
-    if Opt.dry:
-        out("      would run: sudo tailscale up   (shows a link; you open it and log in)")
-        return True
     out("")
     say("Tailscale needs a login. Open the link below in any browser, sign in and approve this machine.")
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -1404,6 +1461,9 @@ class TailscaleLogin(Step):
 
     def help(self):
         return ("Start the walk-through, open the login link it shows and approve this machine:\n$ sudo homelab-setup fill")
+
+    def fill_help(self):
+        return "A login link is shown below. Open it in a browser, sign in and approve this machine."
 
     def fill(self):
         return do_tailscale_login()
@@ -1725,7 +1785,7 @@ class PortainerRunning(Step):
             act(["docker", "run", "-d", "--name", "portainer", "--restart=always",
                  "-p", "9000:9000", "-p", "9443:9443",
                  "-v", "/var/run/docker.sock:/var/run/docker.sock", "-v", "portainer_data:/data",
-                 "portainer/portainer-ce:latest", "--setup-token", tok], check=True, timeout=300)
+                 "portainer/portainer-ce:latest", "--setup-token", "<random token>" if Opt.dry else tok], check=True, timeout=300)
         if not Opt.dry:
             wait_for(Portainer.alive, "Portainer to start", 120)
 
@@ -1741,7 +1801,7 @@ class PortainerAdmin(Step):
     def run(self):
         pw = need_password("to create the Portainer admin account") if not Opt.dry else None
         if Opt.dry:
-            out("      would create the Portainer admin '%s' with your password" % (Ctx.admin or "admin"))
+            out("      would create the Portainer admin '%s' with the password entered at install" % (Ctx.admin or "admin"))
             return
         last = (0, "")
         for attempt in (1, 2, 3):
@@ -1896,6 +1956,42 @@ def _register_stacks():
 
 
 _register_stacks()
+
+def filebrowser_destinations():
+    """The folders FileBrowser has mounted right now (read from the running container)."""
+    rc, txt = docker("inspect", "-f", "{{range .Mounts}}{{.Destination}} {{end}}", "filebrowser-filebrowser-1", timeout=30)
+    return set(txt.split()) if rc == 0 else set()
+
+
+@step
+class FileBrowserDrives(Step):
+    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows this machine's drives (boot-drive, main-storage, backup when connected)"
+    needs = ("stack-filebrowser",)
+
+    def applies(self):
+        return not Mode.existing
+
+    def probe(self):
+        want = {d for _, d in filebrowser_mounts()}
+        have = {d for d in filebrowser_destinations() if d.startswith("/srv/")}
+        return "done" if have == want else "todo"
+
+    def detail(self):
+        return ", ".join(d.replace("/srv/", "") for _, d in filebrowser_mounts())
+
+    def help(self):
+        return ("FileBrowser lists the drives that are connected now. After connecting or removing a drive with `sudo drives`, "
+                "run this to update it (FileBrowser restarts for a few seconds):\n$ sudo homelab-setup refresh")
+
+    def run(self):
+        text = stack_text("filebrowser")
+        if Opt.dry:
+            out("      would redeploy FileBrowser with: %s" % ", ".join(d.replace("/srv/", "") for _, d in filebrowser_mounts()))
+            return
+        Portainer.deploy("filebrowser", text, stack_env("filebrowser"))
+        wait_for(lambda: stack_up("filebrowser"), "FileBrowser to restart", 120)
+        wait_for(lambda: self.probe() == "done", "FileBrowser to show the drives", 60)
+
 
 
 # ================================================================ restore from a backup (only when one is found and you said yes)
@@ -2054,6 +2150,13 @@ class HomepageFiles(Step):
                     raise Abort("The repository file homepage-config/%s is missing." % f)
                 if f == "services.yaml":
                     body = hp_strip_widgets(body)
+                if f == "widgets.yaml" and State.data["answers"].get("weather"):
+                    w = State.data["answers"]["weather"]
+                    new = weather_apply(body, w)
+                    if new is not None:
+                        body = new
+                        State.data["weather_set"] = w["name"]
+                        State.save()
                 write_file(dst, body, 0o644, (Ctx.uid, Ctx.gid))
             elif f in ("services.yaml", "bookmarks.yaml"):
                 old = read_file(dst)
@@ -2145,7 +2248,7 @@ class ImmichAdmin(Step):
         if not Ctx.email:
             raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
         if Opt.dry:
-            out("      would create the Immich admin %s <%s>" % (Ctx.admin, Ctx.email))
+            out("      would create the Immich admin %s with the email address entered at install" % Ctx.admin)
             return
         pw = need_password("to create the Immich admin account")
         wait_for(lambda: http("GET", url("immich", "/api/server/ping"), timeout=8)[0] == 200, "Immich to answer", 300)
@@ -2267,7 +2370,7 @@ class BeszelUser(Step):
         if not Ctx.email:
             raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
         if Opt.dry:
-            out("      would create the Beszel hub account for %s" % Ctx.email)
+            out("      would create the Beszel hub account for the email address entered at install")
             return
         pw = need_password("to create the Beszel hub account")
         wait_for(lambda: beszel_first_run() is not None, "Beszel to answer", 120)
@@ -2378,13 +2481,14 @@ def v_nextcloud(v):
 class WidgetStep(Step):
     group = "Homepage"
 
-    def __init__(self, sid, card, title, needs, fields, verify, auto=None, prompts=None, kind="auto", help_text="", pre=None):
+    def __init__(self, sid, card, title, needs, fields, verify, auto=None, prompts=None, kind="auto", help_text="", pre=None, fill_text=""):
         self.id, self.card, self.title = sid, card, title
         self.needs = tuple(needs) + ("homepage-files",)
         self.fields, self.verify, self.auto = fields, verify, auto
         self.prompts = prompts or []
         self.kind = kind
         self.help_text = help_text
+        self.fill_text = fill_text
         self.pre = pre or {}
 
     def values(self):
@@ -2418,6 +2522,9 @@ class WidgetStep(Step):
         if self.help_text:
             return self.help_text
         return "This could not be created automatically. Run `sudo homelab-setup fill`."
+
+    def fill_help(self):
+        return self.fill_text or self.help()
 
     def _write(self, v):
         if not self.verify(v):
@@ -2559,7 +2666,8 @@ def _register_widgets():
         TailscaleWidget("w-tailscale", "tailscale-card", "Tailscale widget (machine ID and API access token)",
                         ("tailscale-login",), ["deviceid", "key"], v_tailscale, None,
                         [("key", "Tailscale API access token (starts with tskey-api-)", True)], kind="manual",
-                        help_text="Create an API access token at https://login.tailscale.com/admin/settings/keys (Generate access token), then start the walk-through and paste it:\n$ sudo homelab-setup fill\nThe machine ID is filled in automatically."),
+                        help_text="Create an API access token at https://login.tailscale.com/admin/settings/keys (Generate access token), then start the walk-through and paste it:\n$ sudo homelab-setup fill\nThe machine ID is filled in automatically.",
+                        fill_text="Create an API access token at https://login.tailscale.com/admin/settings/keys (Generate access token), then paste it below. The machine ID is filled in automatically."),
         mk("w-beszel", "beszel-card", "Beszel widget login (a Beszel superuser)", ("beszel-user",), ["username", "password"],
            v_beszel, auto_beszel, [("username", "Beszel superuser email", False), ("password", "Beszel superuser password", True)]),
         mk("w-netdata", "netdata-card", "Netdata widget", ("stack-netdata",), [], v_netdata, lambda: {}),
@@ -2765,6 +2873,8 @@ def boot_id():
 
 
 def chk_weather():
+    if State.data.get("weather_set"):
+        return True          # a city was chosen at install and written into widgets.yaml
     txt = read_file(P(Ctx.home + "/homepage-config/widgets.yaml"))
     m = re.search(r"openmeteo:(.*?)(?:\n- |\Z)", txt, re.S)
     if not m:
@@ -2870,8 +2980,8 @@ class AckStep(Step):
 
     def help(self):
         if self.auto:
-            tail = ("This step is detected automatically each time `sudo homelab-setup refresh` runs. "
-                    "To mark it as done manually:")
+            tail = ("This step is detected automatically (a check runs every 10 minutes and each time "
+                    "`sudo homelab-setup refresh` runs). To mark it as done manually:")
         else:
             tail = "When it is done, run:"
         text = "%s\n%s\n$ sudo homelab-setup done %s" % (self.text, tail, self.id)
@@ -2883,18 +2993,16 @@ class AckStep(Step):
 def _register_acks():
     items = [
         AckStep("secrets-saved", "Generated passwords copied into your password manager",
-                "Show the generated passwords and keys, copy them into your password manager, and store the admin password you chose there as well. They are kept in /root/.homelab-setup/secrets.env (root only).\n$ sudo homelab-setup secrets"),
+                "Show the generated passwords and keys, copy them into your password manager, and store the admin password you chose there as well. They are kept in /root/.homelab-setup/secrets.env (root only). The step is marked done once this command has been run; the installer cannot check that the passwords were saved.\n$ sudo homelab-setup secrets",
+                auto=lambda: bool(State.data.get("secrets_shown"))),
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
                 needs=("adguard-setup",), auto=chk_devices_dns),
         AckStep("speedtest-first", "Speedtest Tracker has run its first speed test",
                 "Open Speedtest Tracker (port 8088), log in with your email address and the admin password, and click Speedtest. The Homepage card fills in afterwards. If the login fails, the application's default login is admin@example.com / password: log in with it and change it immediately.",
                 needs=("w-speedtest",), auto=chk_speedtest),
-        AckStep("blocklists", "AdGuard Home blocklists added",
-                "In AdGuard Home go to Filters > DNS blocklists > Add blocklist > Choose from the list. Common choices: AdGuard DNS filter, AdAway, HaGeZi Pro, OISD Big, Peter Lowe's and Steven Black's.", optional=True,
-                needs=("adguard-setup",), auto=chk_blocklists),
         AckStep("weather", "Homepage weather location set",
-                "Set the weather location: edit ~/homepage-config/widgets.yaml and change latitude and longitude under openmeteo "
+                "The weather city is asked during install. If it was not set (the city lookup was unavailable), edit ~/homepage-config/widgets.yaml and change latitude and longitude under openmeteo "
                 "(the default is New York).\n$ nano ~/homepage-config/widgets.yaml",
                 optional=True, needs=("homepage-files",), auto=chk_weather),
         AckStep("reboot-test", "Rebooted once and everything came back",
@@ -2903,6 +3011,55 @@ def _register_acks():
     for s in items:
         STEPS.append(s)
         BY_ID[s.id] = s
+
+
+BLOCKLISTS = [
+    ("HaGeZi's Pro Blocklist", "https://adguardteam.github.io/HostlistsRegistry/assets/filter_48.txt"),
+    ("Peter Lowe's Blocklist", "https://adguardteam.github.io/HostlistsRegistry/assets/filter_3.txt"),
+]
+
+
+@step
+class Blocklists(Step):
+    id, group, title = "blocklists", "Logins and keys", "AdGuard Home blocklists added (HaGeZi Pro, Peter Lowe's)"
+    needs = ("adguard-setup",)
+    optional = True
+
+    def applies(self):
+        return not Mode.existing
+
+    def probe(self):
+        return "done" if chk_blocklists() else "todo"
+
+    def detail(self):
+        return "three or more lists on"
+
+    def help(self):
+        return ("In AdGuard Home go to Filters > DNS blocklists > Add blocklist > Choose from the list. Common choices: AdGuard DNS filter, AdAway, HaGeZi Pro, OISD Big, Peter Lowe's and Steven Black's. Then run:\n"
+                "$ sudo homelab-setup done blocklists\nTo skip it:\n$ sudo homelab-setup skip blocklists")
+
+    def run(self):
+        if Opt.dry:
+            out("      would add %s through AdGuard Home's API" % " and ".join(n for n, _ in BLOCKLISTS))
+            return
+        need_password("to add the blocklists in AdGuard Home")
+        st, js, _ = http("GET", url("adguard", "/control/filtering/status"), headers=adguard_auth(), timeout=30)
+        if st != 200 or not isinstance(js, dict):
+            raise Abort("AdGuard Home did not return its blocklists (HTTP %s)." % st)
+        have_lists = {f.get("url"): f for f in (js.get("filters") or []) if isinstance(f, dict)}
+        for name, link in BLOCKLISTS:
+            cur = have_lists.get(link)
+            if cur is None:
+                st, js2, _ = http("POST", url("adguard", "/control/filtering/add_url"), headers=adguard_auth(), timeout=180,
+                                  body={"name": name, "url": link, "whitelist": False})
+                if st != 200:
+                    raise Abort("AdGuard Home refused the blocklist '%s' (HTTP %s): %s" % (name, st, str(js2)[:200]))
+            elif not cur.get("enabled"):
+                st, js2, _ = http("POST", url("adguard", "/control/filtering/set_url"), headers=adguard_auth(), timeout=180,
+                                  body={"url": link, "whitelist": False, "data": {"name": name, "url": link, "enabled": True}})
+                if st != 200:
+                    raise Abort("AdGuard Home refused to turn on the blocklist '%s' (HTTP %s)." % (name, st))
+        wait_for(chk_blocklists, "AdGuard Home to save the blocklists", 60)
 
 
 _register_acks()
@@ -2933,6 +3090,35 @@ def password_warning():
          "manager.")
 
 
+def ask_weather(a):
+    """Ask for a city, look up its coordinates and keep them for the Homepage weather card.
+    If the lookup is not possible the card keeps the repository default and the weather step stays on the list."""
+    if a.get("weather"):
+        return
+    default = WEATHER_CITY_DEFAULT
+    for _ in range(3):
+        q = ask("City for the Homepage weather card", default)
+        found = geocode_city(q)
+        if found is None:
+            warn("The city lookup (geocoding-api.open-meteo.com) did not answer. The weather card keeps its default "
+                 "location (New York). It can be changed later in ~/homepage-config/widgets.yaml.")
+            return
+        if not found:
+            warn("No city named '%s' was found. Try the name alone, without a state or country." % q)
+            continue
+        pick = found[0]
+        if len(found) > 1:
+            out("")
+            for i, f in enumerate(found, 1):
+                out("   %d  %s" % (i, ", ".join(x for x in (f["name"], f["region"], f["country"]) if x)))
+            n = ask("Which one? Enter its number", "1")
+            pick = found[int(n) - 1] if n.isdigit() and 1 <= int(n) <= len(found) else found[0]
+        a["weather"] = pick
+        good("Weather location: %s" % ", ".join(x for x in (pick["name"], pick["region"], pick["country"]) if x))
+        return
+    warn("No weather city was chosen. The card keeps its default location (New York).")
+
+
 def ask_answers():
     a = State.data["answers"]
     out("")
@@ -2943,6 +3129,7 @@ def ask_answers():
     while not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", a["email"]):
         a["email"] = ask("That is not a valid email address. Enter it again", "")
     a["tz"] = ask("Time zone", a.get("tz") or Ctx.tz)
+    ask_weather(a)
     a["lan"] = ask("This machine's LAN address (reserve it in your router so it does not change)", a.get("lan") or Ctx.lan)
     if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", a["lan"]):
         raise Abort("That is not an IPv4 address.")
@@ -2991,7 +3178,9 @@ def final_report(res):
     show_checklist(res, "Setup")
     Secrets.load()
     keys = [k for k in Secrets.vals]
-    if keys and not Opt.dry:
+    if keys and not Opt.dry and not State.data.get("secrets_announced"):
+        State.data["secrets_announced"] = time.strftime("%F %T")
+        State.save()
         rule("Generated passwords and keys")
         say("Stored in %s (root only). Copy them into your password manager now. "
             "This file stays on this machine and is never part of the repository." % SECRET_FILE.replace(ROOT, ""))
@@ -3002,6 +3191,97 @@ def final_report(res):
         say("Show them again at any time:\n$ sudo homelab-setup secrets")
         say("The admin password you chose is not stored anywhere. Keep it in your password manager.")
         out("")
+    if not Opt.dry:
+        next_step_section(res)
+
+
+SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguard", "AdGuard Home"), ("beszel", "Beszel"),
+                  ("netdata", "Netdata"), ("speedtest", "Speedtest Tracker"), ("filebrowser", "FileBrowser"),
+                  ("immich", "Immich"), ("nextcloud", "Nextcloud")]
+
+
+def system_check():
+    """Look at the running system and report whether everything is up. Returns the number of problems."""
+    rule("System check")
+    problems = []
+    names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1]]
+    up = containers_running()
+    missing = [c for c in names if c not in up]
+    if missing:
+        bad("Containers: %d of %d running. Not running: %s" % (len(names) - len(missing), len(names), ", ".join(missing)))
+        problems.append("containers")
+    else:
+        good("Containers: %d of %d running" % (len(names), len(names)))
+    Ctx.refresh_tailscale()
+    if Ctx.fqdn:
+        good("Tailscale: connected as %s" % Ctx.fqdn)
+    else:
+        bad("Tailscale: not connected")
+        problems.append("tailscale")
+    resolv = read_file(P("/etc/resolv.conf"))
+    if "nameserver" in resolv and "100.100.100.100" not in resolv:
+        good("DNS: this machine uses its router (Tailscale does not manage DNS)")
+    else:
+        bad("DNS: /etc/resolv.conf is empty or points at Tailscale (100.100.100.100). Run `sudo homelab-setup refresh`.")
+        problems.append("dns")
+    out("")
+    out("  %sServices on the local network%s" % (B, N))
+    for key, label in SERVICE_LABELS:
+        st = http("GET", url(key), timeout=10)[0]
+        if 0 < st < 500:
+            out("  %s%s%s %-18s %s" % (G, S_OK, N, label, mark(url(key))))
+        else:
+            out("  %s%s%s %-18s %s  (no answer)" % (R, S_BAD, N, label, mark(url(key))))
+            problems.append(key)
+    if Ctx.fqdn:
+        out("")
+        out("  %sServices over Tailscale%s %s(use these from your other devices; a machine cannot open its own Tailscale addresses)%s" % (B, N, D, N))
+        for port, key in SERVE:
+            label = dict(SERVICE_LABELS)[key]
+            out("    %-18s %s" % (label, mark("https://%s:%d" % (Ctx.fqdn, port))))
+    out("")
+    if problems:
+        say("%d problem(s) found. Run:\n$ sudo homelab-setup refresh" % len(problems))
+    else:
+        good("Everything is up and running. Open Homepage: %s" % mark(url("homepage")))
+    out("")
+    return len(problems)
+
+
+def next_step_section(res):
+    """The last thing on screen: the one command to run next, or the system check when everything is done."""
+    if Mode.existing:
+        return
+    done, total = counts(res)
+    if done >= total:
+        system_check()
+        return
+    rule("Next step")
+    nxt = pick_next(res)
+    if nxt is None:
+        say("The remaining steps are waiting for earlier ones. Run:\n$ sudo homelab-setup refresh")
+        out("")
+        return
+    out("  %s%s%s" % (B, nxt.title, N))
+    r = res[nxt.id]
+    if r.state == "failed" and r.detail:
+        for l in wrap("Last attempt failed: " + r.detail, 4):
+            out("%s%s%s" % (R, l, N))
+    if nxt.kind == "auto":
+        say("This step runs automatically. Run:\n$ sudo homelab-setup refresh", 4)
+    else:
+        say(nxt.help(), 4)
+        out("")
+        say("%d of %d steps are done. After each step, check progress with:\n$ sudo homelab-setup refresh" % (done, total))
+    out("")
+
+
+def cmd_verify():
+    load_all()
+    if Mode.existing and not Opt.force_existing:
+        say("This machine already runs the lab. The system check is for machines set up by the installer.")
+        return
+    system_check()
 
 
 def cmd_checklist():
@@ -3011,6 +3291,7 @@ def cmd_checklist():
         say("This machine already runs the lab (set up by hand). The installer only reads it and changes nothing.")
     show_checklist(res, show_all=Opt.all)
     write_progress(res)
+    next_step_section(res)
 
 
 def cmd_install():
@@ -3039,10 +3320,17 @@ def cmd_install():
             Ctx.email = "you@example.com"
     res = evaluate()
     todo = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
+    by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"
+               and not (s.id == "weather" and (Opt.dry or State.data["answers"].get("weather")))]   # set from the city answer
+    if not todo and not by_hand:
+        out("")
+        say("Nothing to do: all steps are complete.")
+        show_checklist(res, "Setup")
+        next_step_section(res)
+        return
     rule("Planned steps")
     for s in todo:
         out("   %s %s" % (S_DOT, s.title))
-    by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"]
     if by_hand:
         detected = len([s for s in by_hand if getattr(s, "auto", None)])
         out("")
@@ -3111,6 +3399,7 @@ def cmd_refresh():
             break
     write_progress(res)
     show_checklist(res)
+    next_step_section(res)
 
 
 def cmd_fill():
@@ -3126,7 +3415,7 @@ def cmd_fill():
         if type(s).fill is Step.fill:
             continue
         out("  %s%s%s" % (B, s.title, N))
-        h = s.help()
+        h = s.fill_help()
         if h:
             say(h, 4)
         if not yesno("Do this one now?", True):
@@ -3155,7 +3444,7 @@ def cmd_mark(kind, sid):
 
 
 def cmd_secrets():
-    Secrets.load()
+    load_all()
     if not Secrets.vals:
         say("No generated passwords or keys are stored on this machine.")
         return
@@ -3165,6 +3454,10 @@ def cmd_secrets():
         out("   %-28s %s" % (k, Secrets.vals[k]))
     out("")
     say("The admin password you chose is not stored. Keep it in your password manager.")
+    if not State.readonly:
+        State.data["secrets_shown"] = State.data.get("secrets_shown") or time.strftime("%F %T")
+        State.save()
+        write_progress(evaluate())
 
 
 def cmd_progress():
@@ -3192,6 +3485,7 @@ Commands:
   install                  set everything up (asks first; safe to run again)
   install --dry-run        show the plan and change nothing
   refresh                  re-check and continue every step that is now possible
+  verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
@@ -3245,7 +3539,7 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress"):
+    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
@@ -3267,6 +3561,8 @@ def main(argv):
             cmd_secrets()
         elif cmd == "progress":
             cmd_progress()
+        elif cmd == "verify":
+            cmd_verify()
     except Abort as e:
         out("")
         bad(str(e))

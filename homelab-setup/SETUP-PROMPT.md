@@ -66,7 +66,12 @@ The installer never formats or changes a drive, never stores the administrator p
 | Install source | The repository clone the installer was started from; the path is saved so later runs use the same copy | Avoids two diverging copies |
 | Python | Python 3 standard library only, 3.7 or newer | Present on Linux Mint and Ubuntu Server without extra packages |
 | Backup schedule | The daily backup cron entry (06:00) is added only once `/mnt/storage` is a real mount point; it is dropped from the checklist when the data drive is skipped | The backup script refuses to run onto the boot drive |
-| Weather | Defaults to the repository value (New York); changing it is a self-checking step | The location is personal |
+| Weather | A city is asked at install and looked up with Open-Meteo's free geocoding service (no key). The coordinates are written into `widgets.yaml`. If the service cannot be reached, the repository default (New York) stays and the weather step remains on the list until the coordinates are changed by hand | The location is personal, and typing a city is easier than editing coordinates |
+| AdGuard Home blocklists | Added by the installer through AdGuard Home's API: HaGeZi's Pro Blocklist and Peter Lowe's Blocklist, on top of the defaults. A list that is already present is not duplicated; a disabled one is switched on | Removes a manual step; the lists can be changed in AdGuard Home at any time |
+| FileBrowser folders | Named by the role of the drive: `boot-drive` (the `~/750GB_HDD` folder on the boot drive), `main-storage` (`/mnt/storage/filebrowser`) and, when a backup drive is connected, `backup` (`/mnt/backup`, read and write). The installer rewrites the stack file when it deploys FileBrowser on a new machine; the repository file `Portainer-code/filebrowser.yaml` (the production server's `hdd` and `750GB_HDD` names) is not changed. The `filebrowser-drives` step compares the folders FileBrowser has mounted with the drives present and redeploys the stack through Portainer on `refresh` when a drive is connected or removed | The original names describe the original hardware; backup access from FileBrowser was already part of the design |
+| Final screen | Every `install`, `refresh` and checklist run ends with a **Next step** section (the one step to do next, with its command). When all steps are complete it becomes a **System check** (containers, Tailscale, DNS, every service address). `sudo homelab-setup verify` runs the system check at any time | The next command is always the last thing on the screen |
+| Passwords step | `secrets-saved` is marked when `sudo homelab-setup secrets` has been run. The installer cannot verify that the passwords were saved elsewhere | A manual-only step could not be checked at all |
+| Secrets display | The generated-passwords block is printed once at the end of the first install (`secrets_announced` in the state file); later runs do not print it again | Avoids repeating secrets on screen |
 
 ## 4. Value substitution
 
@@ -95,20 +100,20 @@ The installer is a list of **steps**. Each step has a `probe()` that reports `do
 
 Phases, in order:
 
-1. **Questions** (once): administrator name, email address, time zone, LAN address, then the shared password (12 or more letters and digits, typed twice, kept in memory only), then the restore choice if a backup is found.
+1. **Questions** (once): administrator name, email address, time zone, a city for the weather card (looked up online; several matches are listed for a choice), LAN address, then the shared password (12 or more letters and digits, typed twice, kept in memory only), then the restore choice if a backup is found.
 2. **System**: `apt update` and `upgrade`, helper packages, Docker (from Docker's apt repository, deb822 format), docker group membership.
 3. **Tailscale**: installation from `pkgs.tailscale.com`, login through a link (or `TS_AUTHKEY`), MagicDNS and HTTPS certificates enabled in the Tailscale admin page, then `tailscale serve` maps HTTPS ports 1000 to 1008 to the LAN ports.
 4. **Network**: free port 53 for AdGuard Home (explained, confirmed, refused over Tailscale SSH); keep Tailscale from managing DNS.
 5. **Platform**: folders with the correct owners, the secrets file, Portainer, its admin account, an API token for the installer, the local Docker environment, optional restore of settings and data.
 6. **Services**: the nine stacks. Images are pulled one at a time with retries on Docker Hub rate limits; stacks are deployed through the Portainer API; each is checked until its containers run.
-7. **Logins and keys**: AdGuard Home first run and upstream DNS; Immich administrator; Nextcloud installation, trusted domains and optional database restore; Beszel hub account and agent key.
+7. **Logins and keys**: AdGuard Home first run, upstream DNS and blocklists; Immich administrator; Nextcloud installation, trusted domains and optional database restore; Beszel hub account and agent key.
 8. **Homepage**: configuration files for this machine, then each widget (section 9).
 9. **Scripts and schedule**: scripts, backup settings, cron lines, login hook.
 10. **Devices and drives**: data drive, saved secrets, client DNS, first Speedtest run, blocklists, weather, reboot test.
 
 ## 6. Checklist catalogue
 
-58 steps are defined. Steps that do not apply to a machine are hidden, so a fresh machine shows 55 and the existing server shows 43.
+59 steps are defined. Steps that do not apply to a machine are hidden, so a fresh machine shows 56 and the existing server shows 43.
 
 Group | id | kind | needs | what the probe checks
 ---|---|---|---|---
@@ -127,21 +132,22 @@ Platform | folders | auto | os | `/mnt/storage/{immich,filebrowser,nextcloud}`, 
 Platform | secrets | auto | os, restore-configs | the secrets file has `DB_PASSWORD`, `NC_DB_PASSWORD` and `APP_KEY` (and matches a restored `config.php`)
 Platform | portainer, portainer-admin, portainer-token, portainer-env | auto | chain | container, admin account, API token, local environment
 Platform | restore-configs, restore-data | auto | folders | only when a restore was chosen
+Services | filebrowser-drives | auto | stack-filebrowser | the folders mounted in the FileBrowser container (`docker inspect`) are exactly `/srv/boot-drive`, `/srv/main-storage` and, when `/mnt/backup` is a mount point, `/srv/backup`. Not shown on the existing server
 Services | stack-adguard, -beszel, -netdata, -speedtest-tracker, -filebrowser, -immich, -nextcloud, -homepage, -beszel-agent | auto | portainer-env and per-stack needs | containers are running
+Logins and keys | blocklists | auto (optional) | adguard-setup | three or more `enabled: true` entries under `filters:` in `AdGuardHome.yaml`; the step adds HaGeZi Pro and Peter Lowe's through `/control/filtering/add_url` (or switches a disabled copy on with `set_url`). Not shown on the existing server
 Logins and keys | adguard-setup, adguard-dns, immich-admin, nextcloud-ready, nextcloud-config, nextcloud-restore-db, beszel-user, beszel-agent-key | auto | the stack | login or API answers
 Homepage | homepage-files | auto | folders, tailscale-login, restore-configs | configuration files rendered for this machine
 Homepage | w-adguard, w-beszel, w-netdata, w-speedtest, w-portainer, w-filebrowser, w-immich, w-nextcloud | auto | the application | the widget works against the live application
 Homepage | w-tailscale | manual | tailscale-login | needs an API token created by hand (no API can create one)
 Scripts and schedule | scripts, backup-conf, cron, cron-backup, login-hook | auto | scripts | installed copies match the repository; cron lines present; hook in `.bashrc`
 Your devices and drives | data-drive | manual (optional) | | `/mnt/storage` is a mount point
-Your devices and drives | secrets-saved | ack | | cannot be detected; confirm with `done secrets-saved`
+Your devices and drives | secrets-saved | ack, self-checking | | `sudo homelab-setup secrets` has been run (`secrets_shown` in the state file). The installer cannot confirm that the passwords were saved
 Your devices and drives | devices-dns | ack, self-checking | adguard-setup | AdGuard Home's `/control/stats` `top_clients` contains an address that is not loopback, link-local, this machine or a Docker network (172.16.0.0/12, unless the LAN itself is in that range). Uses the AdGuard login saved in the Homepage widget
 Your devices and drives | speedtest-first | ack, self-checking | w-speedtest | `GET /api/v1/results/latest` with the widget token answers 200 (a first test has run). Replaces a manual "log in" step, because the installer already sets that login
 Your devices and drives | reboot-test | ack, self-checking | stack-homepage | 16 containers are running and `/proc/sys/kernel/random/boot_id` differs from the value recorded the first time the lab was seen running (`boot_seen` in the state file)
-Your devices and drives | blocklists | ack (optional), self-checking | adguard-setup | three or more `enabled: true` entries under `filters:` in `AdGuardHome.yaml` (a new install has one or two)
-Your devices and drives | weather | ack (optional), self-checking | homepage-files | the `openmeteo` latitude and longitude in `widgets.yaml` differ from the repository default (40.7128, -74.0060)
+Your devices and drives | weather | ack (optional), self-checking | homepage-files | a city was written into `widgets.yaml` at install (`weather_set` in the state file), or the `openmeteo` latitude and longitude differ from the repository default (40.7128, -74.0060)
 
-Self-checking steps are evaluated on every checklist run. Once one is seen to be true it is remembered (`autodone` in the state file) and does not revert. `done ID` and `skip ID` also work for every one of them.
+Self-checking steps are evaluated on every checklist run. Once one is seen to be true it is remembered (`autodone` in the state file) and does not revert. A cron job runs `homelab-setup progress` every 10 minutes, which evaluates every probe, so these steps tick by themselves without `refresh`. `done ID` and `skip ID` also work for every one of them.
 
 `sudo homelab-setup` displays the live checklist.
 
@@ -149,6 +155,8 @@ Self-checking steps are evaluated on every checklist run. Once one is seen to be
 
 - `evaluate()` assigns each step a state in this order: not applicable, skipped, confirmed, blocked (a required step is not done), then the result of `probe()`.
 - A step that failed shows the last error beneath it until it succeeds.
+- Each run ends with a **Next step** section: the title of the first step that is not done, its instructions and its command, then `sudo homelab-setup refresh` to check progress. When every step is complete the section is replaced by a **System check**: containers (16 expected, including Portainer), Tailscale, DNS, and a live request to every service on its local address, followed by the Tailscale addresses. `sudo homelab-setup verify` shows it on demand.
+- `install` on a machine whose steps are all complete prints "Nothing to do: all steps are complete" and asks nothing.
 - The summary line (`N of M steps done`) is written to `/var/lib/homelab/setup-progress` for the login screen, and removed when everything is done.
 - When the data-drive step is not done or is skipped, the installer writes `/var/lib/homelab/no-data-drive`. The `homelab` login script then shows a grey "no data drive set up yet" line in place of a red "NOT MOUNTED" error. The marker is never written in read-only mode.
 - `refresh` runs the installed copy at `/usr/local/sbin/homelab-setup`, which replaces itself during the run; a new build therefore takes effect on the following run.
@@ -204,6 +212,7 @@ sudo homelab-setup                 show the checklist
 sudo homelab-setup install         set everything up (asks first, safe to re-run)
 sudo homelab-setup install --dry-run
 sudo homelab-setup refresh         re-scan and continue whatever is now possible
+sudo homelab-setup verify          system check: every container and service answering
 sudo homelab-setup fill            walk through the keys and logins that need a person
 sudo homelab-setup done STEP       confirm a manual step       (skip STEP: not wanted)
 sudo homelab-setup secrets         show the generated passwords
@@ -230,7 +239,7 @@ homelab-drives/SHA256SUMS
 
 Simulation tests (run against a fake machine; environment hooks `HLS_ROOT`, `HLS_FAKE`, `HLS_USER`, `HLS_LAN`, `HLS_GATEWAY`, `HLS_HOST`, `HLS_TS_API`, `HLS_TS_WAIT`, `HLS_NO_THROTTLE`, `HLS_FETCH_FAIL`, `HLS_BOOT_ID`, `HLS_COLOR`, `HLS_MOUNTED`):
 
-- **Installer suite (124 checks):** full install on a blank Mint machine; second run changes nothing; dry run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and freed from the LAN; DNS stays stable and Tailscale login works again after `--accept-dns=false`; Docker and Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the self-checking steps; highlighted commands and links.
+- **Installer suite (155 checks):** full install on a blank Mint machine; second run changes nothing; dry run changes nothing; password rules and no leak into files or logs; port 53 refused over Tailscale SSH and freed from the LAN; DNS stays stable and Tailscale login works again after `--accept-dns=false`; Docker and Tailscale key download failure and recovery; `apt` failure; Portainer first-login window closed; Portainer with no local environment; Beszel account created three ways; Speedtest token failure; a wrong Tailscale key refused; Docker Hub throttle; restore of settings, photos and a Nextcloud dump; restore not confirmed; backup from another user; no backup and `--no-restore`; the weather city question (lookup unreachable, unknown name, several matches); blocklists added through the API, refused by AdGuard Home and a disabled list switched on; the self-checking steps; the passwords step; a second run that has nothing to do; dry-run output; FileBrowser folders following a backup drive that appears and disappears; the Next step section and the System check (including a stopped container); highlighted commands and links.
 - **Login screen suite (74 checks):** the `homelab` script's setup line and the no-data-drive note.
 - **Existing server:** read-only run on a simulated production server (43 of 43 steps, nothing written).
 
@@ -244,8 +253,9 @@ Not yet verified on a real machine:
 2. Restore of saved settings, photos and a Nextcloud database dump from a real backup. A restored Nextcloud `config.php` may name an `oc_...` database user (Nextcloud creates one itself on a first install); only the password of a user named `nextcloud` is reused. Restoring a dump that belongs to an `oc_` user is untested.
 3. Immich restore from database dumps remains manual (a new administrator would block it).
 4. The daily backup schedule onto a real mounted drive.
-5. The five self-checking steps against real AdGuard Home and Speedtest Tracker responses (they are verified only against simulated services).
-6. Image pull times and Docker Hub rate limits on a fresh network.
+5. The self-checking steps (devices using AdGuard Home, first speed test, reboot) against real AdGuard Home and Speedtest Tracker responses (verified only against simulated services).
+6. AdGuard Home's `/control/filtering/add_url` and `set_url` calls and Open-Meteo's geocoding response format against the real services (verified only against simulated services).
+7. Image pull times and Docker Hub rate limits on a fresh network.
 
 ## 14. Maintenance guide
 
