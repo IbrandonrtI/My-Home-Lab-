@@ -227,6 +227,8 @@ class Live:
     active = False          # a step is running and the line is shown
     paused = 0              # >0 while a question or an external program owns the screen
     shown = False           # the status line is currently on screen
+    drawn_len = 0           # visible length and window width of the line as it was drawn
+    drawn_cols = 0
     title = ""
     note = ""
     t_step = 0.0
@@ -292,8 +294,14 @@ class Live:
 
     @classmethod
     def clear(cls):
+        """Wipe the status line. If the window was made narrower since it was drawn, the terminal has wrapped the
+        line onto several rows: go up to its first row and erase from there (the line is always the last thing on screen)."""
         if cls.shown:
-            sys.stdout.write("\r\033[K")
+            cols = term_cols()
+            rows = 1
+            if cols != cls.drawn_cols and cls.drawn_len >= cols:
+                rows = min(-(-cls.drawn_len // cols), 12)
+            sys.stdout.write("\r" + ("\033[%dA" % (rows - 1) if rows > 1 else "") + "\033[J")
             sys.stdout.flush()
             cls.shown = False
 
@@ -330,8 +338,12 @@ class Live:
         if not (cls.enabled and cls.active) or cls.paused:
             return
         cls.clear()
-        sys.stdout.write(cls.line(term_cols()))
+        cols = term_cols()
+        text = cls.line(cols)
+        sys.stdout.write(text)
         sys.stdout.flush()
+        cls.drawn_len = len(re.sub(r"\033\[[0-9;]*m", "", text))
+        cls.drawn_cols = cols
         cls.shown = True
 
     class _Paused:
