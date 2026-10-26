@@ -1,0 +1,67 @@
+# Runs the repo checks on every push to main and on pull requests. Read-only.
+name: checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Scripts, installer, YAML and documents
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the check tools
+        run: pip install ruff==0.16.9 pyyaml==6.0.3
+
+      - name: Shell syntax and shellcheck (scripts/, setup.sh, tools/ and tests/)
+        run: |
+          set -eu
+          files="setup.sh tools/build.sh $(ls tests/*.sh)"
+          for f in scripts/*; do
+            case "$f" in
+              scripts/*.example) continue ;;
+            esac
+            if head -n 1 "$f" | grep -q 'bash'; then files="$files $f"; fi
+          done
+          for f in $files; do bash -n "$f"; done
+          shellcheck -S warning $files
+
+      - name: The installer is the exact join of src/
+        run: bash tools/build.sh --check
+
+      - name: Python lint (installer and tests)
+        run: ruff check installer/homelab-setup tests scripts/homelab-check
+
+      - name: Repository check (links, YAML, code blocks, secrets)
+        run: python3 scripts/homelab-check .
+
+      - name: Markdown lint
+        run: npx --yes markdownlint-cli2@0.23.2 "**/*.md" "#node_modules"
+
+  tests:
+    name: Simulation tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the test tools
+        run: pip install pyyaml==6.0.3
+
+      - name: Run every test
+        run: bash tests/run_all.sh
