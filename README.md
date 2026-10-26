@@ -4,7 +4,7 @@
 
 This home lab runs on a small HP mini PC and does ad blocking for the whole network, runs my containers, monitors the machine, stores files and phone photos, and has one dashboard that links to everything. I reach all of it from anywhere through Tailscale, and nothing is open to the public internet.
 
-There is an installer that rebuilds the whole thing on a new Linux Mint or Ubuntu machine, and there are step on how to create it in the guides, including the things that broke along the way.
+I also wrote an installer that rebuilds the whole thing on a new Linux Mint or Ubuntu machine. The guides cover every step, including the things that broke along the way.
 
 ![The Homepage dashboard on a desktop monitor: cards for each service with live status dots and widgets](docs/images/Homepage-desktop.jpg)
 
@@ -22,7 +22,7 @@ sudo bash setup.sh install --dry-run     # shows what it would do, changes nothi
 sudo bash setup.sh install               # asks a few questions, then builds the lab
 ```
 
-[INSTALL.md](INSTALL.md) shows what you'll see and what is left to do by hand afterwards. If you'd rather build it step by step, follow the [build guide](docs/build-guide.md).
+[INSTALL.md](INSTALL.md) shows what you'll see and what's left for you to do afterwards. If you'd rather build it step by step, follow the [build guide](docs/build-guide.md).
 
 > **Placeholders.** Every name and address in this repo is a placeholder: `your-username` (the Linux user), `192.168.X.X` (the server's address at home) and `your-tailnet.ts.net` (your Tailscale network). Passwords and keys are written as `your-own-key`. The installer and the guides say where your own values go.
 
@@ -36,7 +36,7 @@ sudo bash setup.sh install               # asks a few questions, then builds the
 - **A daily backup with a 30-day undo.** `rsync` copies the data and the boot drive's config files at 6:00 every morning. Files I delete or replace are kept in dated folders for 30 days, and the Nextcloud database is dumped every day.
 - **Photos and files.** Immich backs up the phone photos, Nextcloud stores files, and Nextcloud can show the Immich library.
 - **Monitoring.** Beszel, Netdata and Speedtest Tracker feed widgets on the dashboard.
-- **A Command list at every login.** A new terminal prints commands, a few suggested commands for whatever needs attention, and a live status: pools, last backup, containers and free space.
+- **A command list at every login.** A new terminal prints commands, a few suggested commands for whatever needs attention, and a live status: pools, last backup, containers and free space.
 - **A custom dashboard.** Frosted-glass cards, status dots, live widgets, and a layout that works from a phone to a big monitor. `homelab theme` changes the background and card colours, and `homelab bookmark` adds bookmarks with their logos ([build guide, section 14.5](docs/build-guide.md#145-change-the-look-and-add-bookmarks)).
 
 ## Architecture
@@ -162,7 +162,7 @@ flowchart TB
 | Computer | HP ProDesk 600 G3 Desktop Mini, Intel Core i5-7500T (4 cores) |
 | Memory | 8GB DDR4-2400 (one SO-DIMM, one slot free) |
 | Boot drive | 750GB 2.5-inch 5400 rpm hard drive in the internal bay (SATA) |
-| Data drive | 1TB 2.5-inch 5400 rpm hard drive on a generic SATA to USB 3.0 adapter. It is `MAIN1`, the first drive of the main pool |
+| Data drive | 1TB 2.5-inch 5400 rpm hard drive on a generic SATA to USB 3.0 adapter. It's `MAIN1`, the first drive of the main pool |
 | Power | Genuine HP 65W adapter |
 | Display | DisplayPort dummy plug (EDID emulator), so the headless machine behaves as if a monitor is attached |
 | Network | Wired Ethernet, with a fixed address reserved in the router |
@@ -186,15 +186,15 @@ Tested with: Linux Mint 22.3, mergerfs 2.33.5, Docker 29.9, Tailscale 1.104, Hom
 
 ## Guides
 
-| Guide | What's Here |
+| Guide | What's in it |
 | :--- | :--- |
 | [INSTALL.md](INSTALL.md) | Install the whole lab with the installer, and how the installer works |
-| [Build guide](docs/build-guide.md) | The same lab but one service at a time |
+| [Build guide](docs/build-guide.md) | The same lab, built one service at a time |
 | [Storage guide](docs/storage.md) | Drive pools, the daily backup, recovery, replacing a dead drive |
 | [Nextcloud clients](docs/nextcloud-clients.md) | Syncing Windows, Linux, macOS, iPhone and Android with Nextcloud |
 | [Maintenance](docs/maintenance.md) | Health checks, power cuts, rebuilding after the boot drive dies |
 | [Updating](docs/updating.md) | How I update each service and the system, and how to roll back |
-| [Troubleshooting](docs/troubleshooting.md) | Multiple problems I ran into, each with the symptom, cause, fix and a check |
+| [Troubleshooting](docs/troubleshooting.md) | Every problem I ran into, each with the symptom, cause, fix and a check |
 | [Secrets checklist](docs/secrets-checklist.md) | Every password and key, where it lives and how to get it back |
 | [History](docs/history/lenovo-migration.md) | How I first built it and moved it off an old laptop |
 
@@ -213,7 +213,16 @@ Mostly Linux, Docker and networking the hard way. I set up a DNS filter and free
 
 ## Security
 
-No port is forwarded, secrets stay out of Git, and each integration has its own key. The weak spots (the `docker` group, the Docker socket, unencrypted backups, FileBrowser being abandoned) are listed in [Security](docs/security.md).
+No port is forwarded, secrets stay out of Git, and each integration has its own key. Everything is reached through Tailscale, and the image versions are pinned so nothing changes unless I change it.
+
+It's not perfect, and these are the weak spots I know about:
+
+- Portainer and Homepage both mount the Docker socket, so anyone who gets into them can control Docker. Both stay behind Tailscale with strong passwords.
+- The backups and the boot drive aren't encrypted. That's fine for a machine at home, but not if it could be stolen.
+- FileBrowser's project was archived, so it won't get security fixes. It's only reachable over Tailscale.
+- Anyone in the `docker` group is effectively root.
+
+If a secret ever leaks, I change it in the service first. Deleting it from Git isn't enough, because the old commit still has it. The [secrets checklist](docs/secrets-checklist.md) lists every secret and how to get it back.
 
 ## What's where
 
