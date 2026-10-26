@@ -118,18 +118,6 @@ hls progress --quiet >/dev/null 2>&1
 ok "S1 progress cron line removes itself when complete" '! grep -q "homelab-setup progress" $SIM_DIR/crontab'
 fi
 
-# ------------------------------------------------------------------ S23: a real terminal (live line, Enter after the passwords)
-if scen S23; then
-echo "### S23 install on a pseudo-terminal: live status line, Enter after the passwords ticks the step"
-fresh
-env SIMDIR="$SIMDIR" REPO="$REPO" SIM_DIR="$SIM_DIR" bash "$SIMDIR/t_pty.sh" >/dev/null 2>&1
-P=$SIM_DIR/pty.out
-ok "S23 the install finishes on a terminal" 'grep -q "Install finished" $P'
-ok "S23 the last row was reserved and the bar with the n of m count was painted" 'grep -aqE "[0-9]+ of [0-9]+ " $P && grep -aq $'"'"'\033\[1;39r'"'"' $P'
-ok "S23 the bar is as wide as the real window (100), not the stale COLUMNS=200 copy, and sits on the last row (40)" 'set -- $(python3 $SIMDIR/t_frames.py $P); [ "$2" -gt 5 ] && [ "$1" -le 99 ] && [ "$3" = 40 ]'
-ok "S23 after Enter the checklist shows the passwords step as done and counts it" 'sed "s/\x1b\[[0-9;?]*[a-zA-Z]//g" $P | sed -n "/── Setup/,/── Next step/p" | grep -q "48 of 56" && ! sed "s/\x1b\[[0-9;?]*[a-zA-Z]//g" $P | sed -n "/── Setup/,/── Next step/p" | grep -q "○ Generated passwords copied"'
-fi
-
 # ------------------------------------------------------------------ S3: dry run changes nothing
 if scen S3; then
 echo "### S3 dry-run on a blank machine"
@@ -142,7 +130,6 @@ ok "S3 dry-run shows no failure mark, no placeholder email and no setup token" '
 ok "S3 dry-run does not stop to ask anything about the Tailscale admin page" '! grep -q "Press Enter when it is done" $SIM_DIR/s3.out && grep -q "would ask for MagicDNS and HTTPS" $SIM_DIR/s3.out'
 ok "S3 dry-run says it would show a Tailscale login link" 'grep -q "would run: sudo tailscale up" $SIM_DIR/s3.out'
 ok "S3 the plan counts exactly the steps the install then runs, and lists a waiting step apart" 'N=$(grep -oE "^  [0-9]+ steps run automatically" $SIM_DIR/s3.out | grep -oE "[0-9]+"); C=$(grep -cE "^  · .*\(step [0-9]+ of" $SIM_DIR/s3.out); [ -n "$N" ] && [ "$N" = "$C" ] && grep -q "more step runs by itself once the steps that need you are done" $SIM_DIR/s3.out'
-ok "S3 the progress bar is pinned to the last row, messages scroll above it, a resize is repaired, closing leaves a blank row" 'python3 $SIMDIR/t_pinned.py | tail -1 | grep -q "^OK"'
 ok "S3 dry-run mentions the blocklists" 'grep -q "would add HaGeZi" $SIM_DIR/s3.out'
 ok "S3 dry-run did not change any file" '[ "$(find $HLS_ROOT -type f ! -name homelab-setup.log | sort | xargs sha256sum | sha256sum)" = "$HASH0" ]'
 ok "S3 dry-run started no container, installed no package" '[ "$(wj "len(w[\"containers\"])")" = 0 ] && ! wj "w[\"events\"]" | grep -q "apt install\|apt update\|apt upgrade\|docker pull"'

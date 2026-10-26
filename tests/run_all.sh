@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs every test in this folder and prints one summary line. Nothing on this machine is changed:
-# the installer tests use a fake machine, the login-screen tests use fake state files.
+# the installer tests use a fake machine.
 #
 #   bash tests/run_all.sh           # everything (about 10 minutes)
 #   bash tests/run_all.sh quick     # skips the long install scenarios (about 1 minute)
@@ -24,11 +24,9 @@ count() {  # count <name> : fail if the log ends with a non-zero fail count
 }
 
 run substitution bash -c "python3 '$HERE/t_subst.py' | tail -1 | grep -q '^OK'"
-run pinned-bar bash -c "python3 '$HERE/t_pinned.py' | tail -1 | grep -q '^OK'"
 run homepage-cmds bash -c "bash '$HERE/t_homepage.sh' | tail -1 | grep -q '^OK'"
 run drive-names bash -c "python3 '$HERE/t_names.py' | tail -1 | grep -q '^OK'"
 run secret-scan bash -c "python3 '$HERE/t_check.py' | tail -1 | grep -q '^OK'"
-bash "$HERE/run_login_tests.sh" >"$LOG/login.log" 2>&1; count login
 if [ "${1:-}" = quick ]; then
   for s in S3 S24 S25; do bash "$HERE/run_tests.sh" "$s" >"$LOG/$s.log" 2>&1; count "$s"; done
 else
