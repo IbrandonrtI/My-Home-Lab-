@@ -2,6 +2,7 @@
 
 # ================================================================ commands
 def ensure_root():
+    """Start the installer again under sudo when it was not started as root."""
     if FAKE or os.geteuid() == 0:
         return
     if not have("sudo"):
@@ -10,6 +11,7 @@ def ensure_root():
 
 
 def load_all():
+    """Load the state file, the saved secrets and this machine's facts."""
     State.load()
     Secrets.load()
     Ctx.detect()
@@ -18,6 +20,7 @@ def load_all():
 
 
 def password_warning():
+    """Explain that one password is used for every login."""
     out("")
     warn("One password is used for every admin login (Portainer, AdGuard Home, Beszel, Immich, Nextcloud, FileBrowser, "
          "Speedtest Tracker). If one service leaks it, all of them are exposed. Homepage's configuration file also stores "
@@ -55,6 +58,7 @@ def ask_weather(a):
 
 
 def ask_answers():
+    """Ask the first questions of an install: admin name, email, time zone, city, LAN address and the password."""
     a = State.data["answers"]
     out("")
     say("A few answers are needed first. They stay on this machine and only fill in its configuration files.")
@@ -89,6 +93,7 @@ def ask_answers():
 
 
 def preflight():
+    """Check that the machine can run the install."""
     out("")
     if OsSupported().probe() != "done":
         raise Abort(OsSupported().help())
@@ -122,7 +127,7 @@ def final_report(res):
     if 0 < http("GET", url("homepage"), timeout=10)[0] < 500:
         good("Your lab is running. Open Homepage: %s" % mark(url("homepage")))
     Secrets.load()
-    keys = [k for k in Secrets.vals]
+    keys = list(Secrets.vals)
     if keys and not State.data.get("secrets_announced"):
         State.data["secrets_announced"] = time.strftime("%F %T")
         State.save()
@@ -228,6 +233,7 @@ def next_step_section(res):
 
 
 def cmd_verify():
+    """`verify`: run the system check."""
     load_all()
     if Mode.existing and not Opt.force_existing:
         say("This machine already runs the lab. The system check is for machines set up by the installer.")
@@ -236,6 +242,7 @@ def cmd_verify():
 
 
 def cmd_checklist():
+    """Show the checklist."""
     load_all()
     res = evaluate()
     if Mode.existing:
@@ -261,6 +268,7 @@ GROUP_BLURB = {
 
 
 def welcome():
+    """Print the welcome screen."""
     say("This turns this machine into a home lab: Docker, Tailscale and nine apps (Homepage, Portainer, AdGuard Home, "
         "Beszel, Netdata, Speedtest Tracker, FileBrowser, Immich and Nextcloud), with their logins and dashboard widgets.")
     out("")
@@ -278,6 +286,7 @@ def welcome():
 
 
 def cmd_install():
+    """`install`: plan, ask, then build the lab."""
     load_all()
     if Mode.existing and not Opt.force_existing:
         out("")
@@ -371,6 +380,7 @@ def cmd_install():
 
 
 def run_install(res):
+    """Run the install: the early system steps, then the two steps a person must do, then up to four more passes."""
     early = {"os", "apt-upgrade", "packages", "docker", "docker-group", "tailscale-install"}
     rule("Installing")
     run_pass(res, early)
@@ -395,6 +405,7 @@ def run_install(res):
 
 
 def cmd_refresh():
+    """`refresh`: check every step again and do what is now possible."""
     load_all()
     if Mode.existing:
         say("This machine already runs the lab. Its checklist is shown read-only.")
@@ -438,6 +449,7 @@ def cmd_filebrowser():
 
 
 def cmd_fill():
+    """`fill`: enter the keys that cannot be created automatically."""
     load_all()
     res = evaluate()
     did = False
@@ -469,6 +481,7 @@ def cmd_fill():
 
 
 def cmd_mark(kind, sid):
+    """`done` or `skip`: mark a step by hand."""
     load_all()
     if sid not in BY_ID:
         raise Abort("There is no step called '%s'. Names: %s" % (sid, ", ".join(s.id for s in STEPS if s.kind == "ack" or s.optional)))
@@ -479,6 +492,7 @@ def cmd_mark(kind, sid):
 
 
 def cmd_secrets():
+    """`secrets`: show the generated passwords and keys."""
     load_all()
     if not Secrets.vals:
         say("No generated passwords or keys are stored on this machine.")
@@ -496,6 +510,7 @@ def cmd_secrets():
 
 
 def cmd_progress():
+    """`progress`: write the progress counts for the login screen."""
     load_all()
     res = evaluate()
     write_progress(res)
@@ -533,6 +548,7 @@ The installer never formats or modifies a drive and never saves the admin passwo
 
 
 def main(argv):
+    """Read the command line and run the command."""
     import signal
     try:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)

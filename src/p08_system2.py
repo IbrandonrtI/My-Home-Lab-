@@ -7,12 +7,14 @@ SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"),
 
 
 def render_script(name):
+    """A script from scripts/ ready to install (the user name filled in)."""
     text = read_file(repo_file("scripts", name))
     # the scripts look the lab's user up by themselves (the first normal user); the installed copy names this machine's user
     return text.replace("$(getent passwd 1000 | cut -d: -f1)", Ctx.user)
 
 
 def installed_copy(name, where):
+    """Path of the installed copy of a script, or None when it is not installed."""
     p = P(where + "/" + name)
     if os.path.exists(p):
         return p
@@ -73,15 +75,18 @@ CRON_BACKUP = ("homelab-backup", "0 6 * * * /usr/local/sbin/homelab-backup")
 
 
 def crontab_text():
+    """Root's crontab as text ('' when there is none)."""
     rc, txt = run(["crontab", "-l"])
     return txt if rc == 0 else ""
 
 
 def crontab_active(txt):
+    """The crontab without comments and blank lines."""
     return "\n".join(l for l in txt.splitlines() if l.strip() and not l.strip().startswith("#"))
 
 
 def crontab_add(lines):
+    """Add lines to root's crontab unless the same line is already active; the old crontab is saved first."""
     cur = crontab_text()
     if Opt.dry:
         for _, l in lines:
@@ -178,10 +183,12 @@ WEATHER_DEFAULT = (40.7128, -74.0060)
 
 
 def boot_id():
+    """An id that changes at every boot."""
     return os.environ.get("HLS_BOOT_ID") or read_file("/proc/sys/kernel/random/boot_id").strip()
 
 
 def chk_weather():
+    """True when the weather widget has coordinates."""
     if State.data.get("weather_set"):
         return True          # a city was chosen at install and written into widgets.yaml
     txt = read_file(P(Ctx.home + "/homepage-config/widgets.yaml"))
@@ -241,6 +248,7 @@ def chk_devices_dns():
 
 
 def chk_speedtest():
+    """True when Speedtest Tracker's widget has a real key."""
     key = hp_get("speedtest-card", "key")
     if is_placeholder(key):
         return False
@@ -300,6 +308,7 @@ class AckStep(Step):
 
 
 def _register_acks():
+    """Create the checklist steps that only a person can confirm."""
     items = [
         AckStep("secrets-saved", "Generated passwords copied into your password manager",
                 "Show the generated passwords and keys, copy them into your password manager, and store the admin password you chose there as well. They are kept in /root/.homelab-setup/secrets.env (root only). The step is marked done once this command has been run; the installer cannot check that the passwords were saved.\n$ sudo homelab-setup secrets",

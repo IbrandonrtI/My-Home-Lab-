@@ -42,6 +42,7 @@ HOST_OVERRIDE = os.environ.get("HLS_HOST", "")              # tests: where the s
 
 
 def P(path):
+    """Path of `path` inside the machine's root folder (the real root, or the fake one under test)."""
     return ROOT + path
 
 
@@ -137,6 +138,7 @@ def window_rows():
 
 
 def term_cols():
+    """Width of the terminal in columns, at least 40."""
     return max(window_cols(), 40)
 
 
@@ -146,12 +148,14 @@ def live_cols():
 
 
 def out(msg=""):
+    """Print one line, keeping the pinned progress bar on the bottom row."""
     with Live.lock:
         Live.sync()
         print(msg, flush=True)
 
 
 def rule(title):
+    """Print a section heading."""
     w = min(term_cols(), 76)
     n = max(w - len(title) - 8, 3)
     out("")
@@ -169,6 +173,7 @@ def _protect(text):
 
 
 def wrap(text, indent, width=None):
+    """Wrap `text` to the terminal width with `indent` spaces in front of every line."""
     width = (width or min(term_cols(), 100)) - indent
     lines = []
     for para in _protect(text).split("\n"):
@@ -210,25 +215,30 @@ def styled(text, indent, base=""):
 
 
 def say(msg, indent=2):
+    """Print a plain message, wrapped and indented."""
     for l in styled(msg, indent):
         out(l)
 
 
 def good(msg):
+    """Print a message marked as done (green tick)."""
     out("  %s%s%s %s" % (G, S_OK, N, msg))
 
 
 def warn(msg):
+    """Print a message marked as a warning."""
     for i, l in enumerate(styled(msg, 4)):
         out(("  %s!%s " % (Y, N) + l[4:]) if i == 0 else l)
 
 
 def bad(msg):
+    """Print a message marked as a failure (red cross)."""
     for i, l in enumerate(styled(msg, 4)):
         out(("  %s%s%s " % (R, S_BAD, N) + l[4:]) if i == 0 else l)
 
 
 def log(msg):
+    """Append a line to the installer's log file, with the administrator password masked."""
     try:
         for word in [Runtime.password] + list(Runtime.hide):
             if word and len(word) >= 6:
@@ -242,6 +252,7 @@ def log(msg):
 
 # ---------------------------------------------------------------- live progress line
 def fmt_time(sec):
+    """Seconds as a short text such as '45s' or '3m 10s'."""
     sec = int(sec)
     if sec < 60:
         return "%ds" % sec
@@ -486,6 +497,7 @@ class Abort(Exception):
 
 # ---------------------------------------------------------------- global switches
 class Opt:
+    """Command-line options."""
     dry = False
     yes = False
     backup = None
@@ -524,20 +536,24 @@ def act(args, **kw):
 
 
 def have(cmd):
+    """True when the command exists on this machine."""
     return shutil.which(cmd) is not None
 
 
 def docker(*args, **kw):
+    """Run a docker command and return (exit code, output)."""
     return run(["docker"] + list(args), **kw)
 
 
 def apt_install(pkgs):
+    """Install packages with apt without asking questions (does nothing in a dry run)."""
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
     act(["apt-get", "install", "-y", "-q"] + list(pkgs), env=env, check=True, timeout=1800)
 
 
 # ---------------------------------------------------------------- files
 def read_file(path, default=""):
+    """Contents of a text file, or `default` when it cannot be read."""
     try:
         with open(path) as f:
             return f.read()
@@ -546,6 +562,7 @@ def read_file(path, default=""):
 
 
 def write_file(path, text, mode=None, owner=None):
+    """Write a text file (atomically, with the given mode and owner); a dry run only says what would be written."""
     if Opt.dry:
         out("      would write: %s" % path)
         return
@@ -561,11 +578,12 @@ def write_file(path, text, mode=None, owner=None):
 
 
 def chown(path, uid, gid, recursive=False):
+    """Change the owner of a path, and of everything under it when `recursive` is set."""
     if FAKE or Opt.dry:
         return
     try:
         if recursive and os.path.isdir(path):
-            for dp, dn, fn in os.walk(path):
+            for dp, _dirs, fn in os.walk(path):
                 os.chown(dp, uid, gid)
                 for n in fn:
                     try:
@@ -578,6 +596,7 @@ def chown(path, uid, gid, recursive=False):
 
 
 def mkdirs(path, uid=None, gid=None, mode=0o755):
+    """Create a folder and its parents with the given owner and mode."""
     if Opt.dry:
         if not os.path.isdir(path):
             out("      would create folder: %s" % path)
@@ -592,6 +611,7 @@ def mkdirs(path, uid=None, gid=None, mode=0o755):
 
 
 def sha(path):
+    """SHA-256 of a file as hex text, or '' when it cannot be read."""
     try:
         return hashlib.sha256(open(path, "rb").read()).hexdigest()
     except OSError:
@@ -603,14 +623,17 @@ ALNUM = string.ascii_letters + string.digits
 
 
 def rand_alnum(n=24):
+    """A random password of letters and digits."""
     return "".join(pysecrets.choice(ALNUM) for _ in range(n))
 
 
 def rand_hex(n=24):
+    """A random hex string of 2*n characters."""
     return pysecrets.token_hex(n)
 
 
 def rand_app_key():
+    """A random 32-byte application key in the 'base64:...' form Laravel apps expect."""
     return "base64:" + base64.b64encode(pysecrets.token_bytes(32)).decode()
 
 
@@ -676,6 +699,7 @@ def wait_for(fn, what, timeout=300, every=3, quiet=False):
 
 # ---------------------------------------------------------------- questions
 def interactive():
+    """True when a person is typing at a terminal."""
     return sys.stdin.isatty()
 
 
@@ -693,6 +717,7 @@ def stdin_line():
 
 
 def ask(prompt, default=""):
+    """Ask a question; with --yes the default is used without asking."""
     if Opt.yes and default != "":
         return default
     with Live.pause():
@@ -700,6 +725,7 @@ def ask(prompt, default=""):
 
 
 def _ask(prompt, default=""):
+    """Read one answer from the terminal (or from standard input when it is not a terminal)."""
     try:
         if interactive():
             v = input("  %s%s: " % (prompt, (" [%s]" % default) if default else ""))
@@ -717,11 +743,13 @@ def _ask(prompt, default=""):
 
 
 def ask_secret(prompt):
+    """Ask for a secret without echoing it."""
     with Live.pause():
         return _ask_secret(prompt)
 
 
 def _ask_secret(prompt):
+    """Read one secret from the terminal without echo."""
     try:
         if interactive():
             return getpass.getpass("  %s: " % prompt)
@@ -737,6 +765,7 @@ def _ask_secret(prompt):
 
 
 def yesno(prompt, default=False):
+    """Ask a yes/no question; --yes answers yes."""
     if Opt.yes:
         return True
     v = ask(prompt + (" [Y/n]" if default else " [y/N]"), "").lower()
@@ -746,6 +775,7 @@ def yesno(prompt, default=False):
 
 
 def typed(word, prompt):
+    """True when the person typed exactly `word` (used for the confirmations that cannot be undone)."""
     if Opt.yes:
         return True
     return ask(prompt).strip() == word

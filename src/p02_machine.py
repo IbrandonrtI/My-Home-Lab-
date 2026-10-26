@@ -116,6 +116,7 @@ def need_password(why):
 
 
 def password_problem(pw):
+    """Why `pw` is not acceptable as the administrator password, or an empty text when it is fine."""
     if len(pw) < 12:
         return "The password must be at least 12 characters (Portainer requires it)."
     if not re.fullmatch(r"[A-Za-z0-9]+", pw):
@@ -183,6 +184,7 @@ class Ctx:
 
 
 def detect_user():
+    """The normal user who ran sudo (the owner of the lab folders)."""
     if os.environ.get("HLS_USER"):
         return os.environ["HLS_USER"]
     u = os.environ.get("SUDO_USER")
@@ -196,6 +198,7 @@ def detect_user():
 
 
 def detect_lan():
+    """This machine's address on the home network."""
     if os.environ.get("HLS_LAN"):
         return os.environ["HLS_LAN"]
     rc, txt = run(["ip", "-4", "route", "get", "1.1.1.1"])
@@ -210,6 +213,7 @@ def detect_lan():
 
 
 def detect_gateway():
+    """The router's address."""
     if os.environ.get("HLS_GATEWAY"):
         return os.environ["HLS_GATEWAY"]
     rc, txt = run(["ip", "-4", "route", "show", "default"])
@@ -218,6 +222,7 @@ def detect_gateway():
 
 
 def detect_tz():
+    """The machine's time zone name."""
     rc, txt = run(["timedatectl", "show", "-p", "Timezone", "--value"])
     if rc == 0 and txt.strip():
         return txt.strip()
@@ -258,6 +263,7 @@ def weather_apply(text, w):
 
 
 def ts_status():
+    """Tailscale's status as a dict, or None when Tailscale is not installed or does not answer."""
     if not have("tailscale"):
         return None
     rc, txt = run(["tailscale", "status", "--json"], timeout=15)
@@ -271,16 +277,19 @@ def ts_status():
 
 # ================================================================ docker facts
 def containers_running():
+    """Names of the containers that are running."""
     rc, txt = docker("ps", "--format", "{{.Names}}", timeout=30)
     return set(txt.split()) if rc == 0 else set()
 
 
 def containers_all():
+    """Names of all containers, running or not."""
     rc, txt = docker("ps", "-a", "--format", "{{.Names}}", timeout=30)
     return set(txt.split()) if rc == 0 else set()
 
 
 def stack_up(name):
+    """True when every container of the stack is running."""
     need = STACKS[name][1]
     run_now = containers_running()
     return all(c in run_now for c in need)
@@ -296,10 +305,12 @@ def is_existing():
 
 
 def svc_host():
+    """Address used to reach the services from this machine."""
     return HOST_OVERRIDE or Ctx.lan or "127.0.0.1"
 
 
 def url(service, path=""):
+    """Local web address of a service, with an optional path."""
     return "http://%s:%d%s" % (svc_host(), PORTS[service], path)
 
 
@@ -323,6 +334,7 @@ def subst(text):
 
 
 def repo_file(*parts):
+    """Path of a file inside the repository the installer was started from."""
     return os.path.join(Ctx.repo, *parts)
 
 
@@ -353,6 +365,7 @@ def clean_folder_name(text):
 
 
 def drive_name_overrides():
+    """Drive names chosen in /etc/homelab-drive-names ('LABEL=Name' per line)."""
     names = {}
     for line in read_file(P(DRIVE_NAMES_FILE)).splitlines():
         line = line.strip()
@@ -457,6 +470,7 @@ def filebrowser_volumes(text):
 
 
 def stack_text(name):
+    """The stack file for `name` with this machine's values filled in."""
     fn = STACKS[name][0]
     text = read_file(repo_file("stacks", fn))
     if not text:
@@ -474,6 +488,7 @@ def stack_text(name):
 
 
 def stack_env(name):
+    """The variables Portainer needs for the stack, as (name, value) pairs."""
     if name == "immich":
         return [("UPLOAD_LOCATION", "/mnt/storage/immich"), ("DB_DATA_LOCATION", Ctx.home + "/immich/postgres"),
                 ("TZ", Ctx.tz), ("IMMICH_VERSION", "release"), ("DB_PASSWORD", Secrets.get("DB_PASSWORD")),
@@ -485,6 +500,7 @@ def stack_env(name):
 
 
 def images_in(text):
+    """The image names used in a stack file."""
     imgs = []
     for m in re.finditer(r"^\s*image:\s*(\S+)", text, re.M):
         img = m.group(1).replace("${IMMICH_VERSION:-release}", "release")

@@ -2,21 +2,25 @@
 
 # ================================================================ Homepage widgets: create the key, TEST it, then write it
 def basic(user, pw):
+    """Basic-authentication header for a user name and password."""
     return {"Authorization": "Basic " + base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()}
 
 
 def v_adguard(v):
+    """Test the AdGuard Home login with a live request."""
     st, _, _ = http("GET", url("adguard", "/control/status"), headers=basic(v["username"], v["password"]), timeout=10)
     return st == 200
 
 
 def v_tailscale(v):
+    """Test the Tailscale API key with a live request."""
     base = os.environ.get("HLS_TS_API", "https://api.tailscale.com")
     st, _, _ = http("GET", "%s/api/v2/device/%s" % (base, v["deviceid"]), headers=basic(v["key"], ""), timeout=20)
     return st == 200
 
 
 def v_beszel(v):
+    """Test the Beszel login with a live request."""
     for path in ("/api/collections/_superusers/auth-with-password", "/api/admins/auth-with-password"):
         st, js, _ = http("POST", url("beszel", path), body={"identity": v["username"], "password": v["password"]}, timeout=15)
         if st == 200 and isinstance(js, dict) and js.get("token"):
@@ -25,16 +29,19 @@ def v_beszel(v):
 
 
 def v_netdata(v):
+    """Test that Netdata answers."""
     return http("GET", url("netdata", "/api/v1/info"), timeout=10)[0] == 200
 
 
 def v_speedtest(v):
+    """Test the Speedtest Tracker token with a live request."""
     st, _, _ = http("GET", url("speedtest", "/api/v1/results/latest"),
                     headers={"Authorization": "Bearer " + v["key"], "Accept": "application/json"}, timeout=15)
     return st not in (0, 401, 403)
 
 
 def v_portainer(v):
+    """Test the Portainer key with a live request."""
     st, _, _ = http("GET", url("portainer", "/api/users/me"), headers={"X-API-Key": v["key"]}, timeout=10)
     if st != 200:
         return False
@@ -43,16 +50,19 @@ def v_portainer(v):
 
 
 def v_filebrowser(v):
+    """Test the FileBrowser login with a live request."""
     st, _, _ = http("POST", url("filebrowser", "/api/login"), body={"username": v["username"], "password": v["password"]}, timeout=10)
     return st == 200
 
 
 def v_immich(v):
+    """Test the Immich key with a live request."""
     st, _, _ = http("GET", url("immich", "/api/server/statistics"), headers={"x-api-key": v["key"]}, timeout=15)
     return st == 200
 
 
 def v_nextcloud(v):
+    """Test the Nextcloud token with a live request."""
     st, js, _ = http("GET", url("nextcloud", "/ocs/v2.php/apps/serverinfo/api/v1/info?format=json"),
                      headers={"NC-Token": v["key"], "OCS-APIRequest": "true", "Accept": "application/json"}, timeout=30)
     return st == 200 and isinstance(js, dict) and (js.get("ocs") or {}).get("meta", {}).get("statuscode") == 200
@@ -137,10 +147,12 @@ class WidgetStep(Step):
 
 
 def auto_adguard():
+    """Values for the AdGuard Home widget."""
     return {"username": Ctx.admin, "password": need_password("for the AdGuard Home widget")}
 
 
 def auto_beszel():
+    """Create the Beszel superuser and return the values for its widget."""
     pw = need_password("to create the Beszel superuser (the Homepage widget needs one)")
     rc, txt = docker("exec", "beszel", "/beszel", "superuser", "upsert", Ctx.email, pw, timeout=60)
     if rc != 0:
@@ -149,6 +161,7 @@ def auto_beszel():
 
 
 def auto_speedtest():
+    """Create the Speedtest Tracker login and token and return the values for its widget."""
     pw = need_password("to set the Speedtest Tracker login")
     esc = lambda s: s.replace("\\", "\\\\").replace("'", "\\'")
     # The container has no "tinker" command, so start the Laravel app from a small PHP script read from stdin.
@@ -171,6 +184,7 @@ def auto_speedtest():
 
 
 def auto_portainer():
+    """Create a Portainer token and return the values for its widget."""
     pw = need_password("to create the Portainer token for Homepage")
     if not Portainer.login(pw):
         raise Abort("Portainer rejected the login for %s." % Ctx.admin)
@@ -184,6 +198,7 @@ def auto_portainer():
 
 
 def auto_filebrowser():
+    """Set the FileBrowser login and return the values for its widget."""
     pw = need_password("to set the FileBrowser login")
     api = lambda p: url("filebrowser", p)
     st, tok, _ = http("POST", api("/api/login"), body={"username": Ctx.admin, "password": pw}, timeout=10)
@@ -209,6 +224,7 @@ def auto_filebrowser():
 
 
 def auto_immich():
+    """Create an Immich API key and return the values for its widget."""
     if immich_restored():
         raise Abort("Immich was restored from a backup, so the key must be created manually: Immich > Account Settings > API Keys (permission server.statistics). Then run `sudo homelab-setup fill`.")
     pw = need_password("to log in to Immich and create the Homepage key")
@@ -224,6 +240,7 @@ def auto_immich():
 
 
 def auto_nextcloud():
+    """Create a Nextcloud token and return the values for its widget."""
     tok = rand_hex(24)
     rc, txt = occ("config:app:set", "serverinfo", "token", "--value=" + tok)
     if rc != 0:
@@ -233,12 +250,14 @@ def auto_nextcloud():
 
 
 class TailscaleWidget(WidgetStep):
+    """The Homepage Tailscale widget, which needs a key made by hand."""
     def prefill(self):
         Ctx.refresh_tailscale()
         return {"deviceid": Ctx.ts_id}
 
 
 def _register_widgets():
+    """Create one checklist step per Homepage widget."""
     mk = WidgetStep
     items = [
         mk("w-adguard", "adguard-card", "AdGuard Home widget login", ("adguard-setup",), ["username", "password"],

@@ -1,10 +1,12 @@
 
 
 class Mode:
+    """How the machine was classified: new, or an existing lab."""
     existing = False          # this machine already runs the lab (built by hand)
 
 
 def fetch_bytes(u, timeout=60):
+    """Download a file and return its bytes."""
     if FAKE:
         if os.environ.get("HLS_FETCH_FAIL"):
             raise OSError("simulated download failure")
@@ -15,6 +17,7 @@ def fetch_bytes(u, timeout=60):
 
 
 def pkg_installed(name):
+    """True when the apt package is installed."""
     rc, txt = run(["dpkg-query", "-W", "-f=${Status}", name])
     return rc == 0 and "install ok installed" in txt
 
@@ -323,6 +326,7 @@ class ServeMappings(Step):
 
 # ---------------------------------------------------------------- Network: port 53
 def port53_listeners():
+    """Names of the processes that listen on port 53."""
     rc, txt = run(["ss", "-H", "-tulpn", "sport = :53"])
     procs = []
     for line in txt.splitlines():
@@ -407,6 +411,7 @@ class DnsStable(Step):
 
 # ---------------------------------------------------------------- Platform
 def folder_plan():
+    """The folders the lab needs, as (path, owner id, group id) tuples."""
     h = Ctx.home
     u, g = Ctx.uid, Ctx.gid
     return [

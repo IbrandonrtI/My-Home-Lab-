@@ -2,10 +2,12 @@
 
 # ================================================================ restore from a backup (only when one is found and you said yes)
 def restore_choice():
+    """What the person chose to restore from a backup (saved in the state file)."""
     return State.data.get("restore", {})
 
 
 def find_backups():
+    """Folders that look like a backup of an earlier lab (they hold main/ and boot-configs/)."""
     import glob
     cands = []
     if Opt.backup:
@@ -22,6 +24,7 @@ def find_backups():
 
 
 def dir_size_gb(path):
+    """Size of a folder in gigabytes."""
     rc, txt = run(["du", "-sb", path], timeout=300)
     try:
         return int(txt.split()[0]) / 1073741824.0
@@ -124,6 +127,7 @@ class RestoreData(Step):
 
 
 def immich_restored():
+    """True when data was restored from a backup and Immich's own database dumps are present."""
     import glob
     return bool(restore_choice().get("data")) and bool(glob.glob(P("/mnt/storage/immich/backups/*")))
 
@@ -178,10 +182,12 @@ class HomepageFiles(Step):
 
 # ================================================================ AdGuard Home
 def adguard_yaml():
+    """Contents of AdGuard Home's settings file."""
     return read_file(P("/opt/adguard-docker/conf/AdGuardHome.yaml"))
 
 
 def adguard_auth():
+    """Basic-authentication header for AdGuard Home's API."""
     pw = Runtime.password or ""
     tok = base64.b64encode(("%s:%s" % (Ctx.admin, pw)).encode()).decode()
     return {"Authorization": "Basic " + tok}
@@ -241,6 +247,7 @@ class AdGuardDns(Step):
 
 # ================================================================ Immich
 def immich_initialized():
+    """True when Immich has finished its first-run setup."""
     st, js, _ = http("GET", url("immich", "/api/server/config"), timeout=10)
     return st == 200 and isinstance(js, dict) and bool(js.get("isInitialized"))
 
@@ -271,6 +278,7 @@ class ImmichAdmin(Step):
 
 # ================================================================ Nextcloud
 def nc_installed():
+    """True when Nextcloud has finished installing itself."""
     st, js, _ = http("GET", url("nextcloud", "/status.php"), timeout=10)
     return st == 200 and isinstance(js, dict) and js.get("installed") is True
 
@@ -279,6 +287,7 @@ FORCED_NC_KEYS = ("overwritehost", "overwriteprotocol")
 
 
 def occ(*args, stdin=None):
+    """Run Nextcloud's `occ` command inside its container."""
     return docker("exec", "-u", "www-data", "nextcloud", "php", "occ", *args, timeout=300)
 
 
@@ -361,6 +370,7 @@ class NextcloudRestoreDb(Step):
 
 # ================================================================ Beszel
 def beszel_first_run():
+    """True while Beszel has no user yet."""
     st, js, _ = http("GET", url("beszel", "/api/beszel/first-run"), timeout=10)
     if st == 200 and isinstance(js, dict):
         return bool(js.get("firstRun"))
@@ -368,6 +378,7 @@ def beszel_first_run():
 
 
 def beszel_login(email, pw):
+    """Log in to Beszel and return its answer."""
     st, js, _ = http("POST", url("beszel", "/api/collections/users/auth-with-password"),
                      body={"identity": email, "password": pw}, timeout=20)
     return js.get("token") if st == 200 and isinstance(js, dict) else None

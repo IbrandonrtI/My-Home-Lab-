@@ -2,6 +2,7 @@
 
 # ================================================================ Portainer
 class Portainer:
+    """Portainer's web API (login, token, stacks)."""
     jwt = None
     _env_id = None
 
@@ -262,6 +263,7 @@ class StackStep(Step):
 
 
 def _register_stacks():
+    """Create one checklist step per Portainer stack."""
     base = ("portainer-env", "folders")
     spec = [
         ("adguard", base + ("port53", "restore-configs"), "AdGuard Home stack (DNS ad blocking)"),

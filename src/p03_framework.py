@@ -14,14 +14,17 @@ HP_CARDS = {   # card id -> (widget type, the fields that hold secrets)
 
 
 def hp_dir():
+    """The Homepage configuration folder."""
     return Ctx.home + "/homepage-config"
 
 
 def hp_path(name="services.yaml"):
+    """Path of one Homepage configuration file."""
     return P(hp_dir() + "/" + name)
 
 
 def _indent(line):
+    """Number of leading spaces of a line."""
     return len(line) - len(line.lstrip(" "))
 
 
@@ -69,6 +72,7 @@ def hp_template_widget(card_id):
 
 
 def hp_get(card_id, field, path=None):
+    """Value of a field of one Homepage card, or None when it is not there."""
     lines = read_file(path or hp_path()).split("\n")
     r = hp_ranges(lines, card_id)
     if not r or r[2] is None:
@@ -81,12 +85,14 @@ def hp_get(card_id, field, path=None):
 
 
 def hp_has_widget(card_id):
+    """True when the card has a widget block."""
     lines = read_file(hp_path()).split("\n")
     r = hp_ranges(lines, card_id)
     return bool(r and r[2] is not None)
 
 
 def is_placeholder(v):
+    """True when a Homepage value is still a placeholder (empty, your-own-key, X.X ...)."""
     return v is None or v == "" or PH_KEY in v or PH_MAIL in v or "X.X" in v or v in ("yours",)
 
 
@@ -128,12 +134,14 @@ def hp_strip_widgets(text):
 
 # ================================================================ steps and the checklist
 class Result:
+    """The state of one step: done, todo, blocked, skip or na, with a detail text."""
     def __init__(self, state, detail=""):
         self.state = state       # done | todo | blocked | failed | na | skip
         self.detail = detail
 
 
 class Step:
+    """One checklist step: `probe()` says whether it is done, `run()` does it."""
     id = ""
     group = ""
     title = ""
@@ -168,6 +176,7 @@ BY_ID = {}
 
 
 def step(cls):
+    """Class decorator: register a checklist step."""
     inst = cls()
     STEPS.append(inst)
     BY_ID[inst.id] = inst
@@ -195,6 +204,7 @@ def topo():
 
 
 def evaluate():
+    """Check every step and return {step id: Result}, in dependency order."""
     res = {}
     for s in topo():
         if not s.applies():
@@ -228,12 +238,14 @@ def evaluate():
 
 
 def counts(res):
+    """(steps done, steps that apply) from a set of results."""
     total = sum(1 for r in res.values() if r.state != "na")
     done = sum(1 for r in res.values() if r.state in ("done", "skip"))
     return done, total
 
 
 def write_progress(res):
+    """Save the progress counts for the login screen (does nothing in a dry run)."""
     if Opt.dry:
         return
     done, total = counts(res)
@@ -319,6 +331,7 @@ def pick_next(res):
 
 
 def unblock(res, dry=False):
+    """Turn steps that were blocked into 'todo' once the steps they need are done."""
     for t in STEPS:
         if res[t.id].state == "blocked" and all(res[n].state in ("done", "na", "skip") for n in t.needs):
             if dry:
