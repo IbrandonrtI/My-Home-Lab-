@@ -474,4 +474,56 @@ echo "### S25 subst(): placeholders become this machine's values; HOMELAB_OLD_* 
 ok "S25 placeholders, the earlier server's values (when given) and the empty case" 'python3 $SIMDIR/t_subst.py | tail -1 | grep -q "^OK"'
 fi
 
+# ------------------------------------------------------------------ S26: Nextcloud answers on the local address too
+if scen S26; then
+echo "### S26 Nextcloud is not forced to the Tailscale address; a forced address saved earlier is removed"
+ok "S26 the stack has no OVERWRITEHOST or OVERWRITEPROTOCOL, and keeps the proxy list and the command-line address" 'python3 - <<PY
+import yaml
+e = yaml.safe_load(open("$SIMDIR/../stacks/nextcloud.yaml"))["services"]["app"]["environment"]
+assert "OVERWRITEHOST" not in e and "OVERWRITEPROTOCOL" not in e, e
+assert "TRUSTED_PROXIES" in e and "OVERWRITECLIURL" in e and "NEXTCLOUD_TRUSTED_DOMAINS" in e
+PY'
+fresh; approve_in 3; setw nc.conf.overwritehost '"pc.your-tailnet.ts.net:1005"'; setw nc.conf.overwriteprotocol '"https"'
+install_in "" y | hls install > $SIM_DIR/s26.out 2>&1
+ok "S26 install finished" '[ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
+ok "S26 the forced host and protocol saved earlier were removed" '[ "$(wj "\"overwritehost\" in w[\"nc\"][\"conf\"] or \"overwriteprotocol\" in w[\"nc\"][\"conf\"]")" = False ]'
+ok "S26 the trusted domains still hold this machine's address and its Tailscale name" 'wj "list(w[\"nc\"][\"domains\"].values())" | grep -q 192.168.50.23'
+fi
+
+# ------------------------------------------------------------------ S27: FileBrowser shows one folder per drive, named after the drive
+if scen S27; then
+echo "### S27 FileBrowser: the system drive and every main and backup drive get a folder named after the drive"
+fresh; approve_in 3
+mkdir -p $HLS_ROOT/mnt/disks/MAIN1 $HLS_ROOT/mnt/disks/MAIN2 $HLS_ROOT/mnt/disks/BACKUP1 $HLS_ROOT/etc
+cat > $SIM_DIR/disks.txt <<DISKS
+/|/dev/sda2|sda|Samsung_SSD_860|250059350016|
+/mnt/disks/MAIN1|/dev/sdb1|sdb|TOSHIBA_DT01ACA100|1000204886016|MAIN1
+/mnt/disks/MAIN2|/dev/sdc1|sdc|TOSHIBA_DT01ACA100|1000204886016|MAIN2
+/mnt/disks/BACKUP1|/dev/sdd1|sdd|WDC_WD10EZEX|1000204886016|BACKUP1
+DISKS
+export HLS_MOUNTED_DISKS="MAIN1 MAIN2 BACKUP1"
+install_in "" y | hls install > $SIM_DIR/s27.out 2>&1
+M='wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]"'
+ok "S27 install finished with 16 containers" '[ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
+ok "S27 the folder of the system drive is named after the drive (model and size)" 'eval "$M" | grep -q "/srv/Samsung SSD 860 250 GB"'
+ok "S27 two identical drives are told apart by their mount name" 'eval "$M" | grep -q "/srv/main-storage/TOSHIBA DT01ACA100 1 TB (MAIN1)" && eval "$M" | grep -q "/srv/main-storage/TOSHIBA DT01ACA100 1 TB (MAIN2)"'
+ok "S27 a backup drive gets a folder under backup-storage" 'eval "$M" | grep -q "/srv/backup-storage/WDC WD10EZEX 1 TB"'
+ok "S27 no old fixed folder names are left" '! eval "$M" | grep -q "/srv/boot-drive" && ! eval "$M" | grep -q "/srv/hdd" && ! eval "$M" | grep -q "/srv/750GB_HDD"'
+ok "S27 the checklist counts the FileBrowser step as done" '! hls 2>&1 | grep -q "○ FileBrowser shows this"'
+echo "mix: a name you chose wins, and a drive that goes away loses its folder"
+printf '# my names\nMAIN1=1TB HDD\nBACKUP1= Backup: drive/one \n' > $HLS_ROOT/etc/homelab-drive-names
+ok "S27 after naming a drive, the checklist says FileBrowser is out of date" 'hls 2>&1 | grep -q "○ FileBrowser shows this"'
+export HLS_MOUNTED_DISKS="MAIN1 BACKUP1"
+hls filebrowser > $SIM_DIR/s27b.out 2>&1
+ok "S27 homelab-setup filebrowser applied the chosen names (unsafe characters removed)" 'eval "$M" | grep -q "/srv/main-storage/1TB HDD" && eval "$M" | grep -q "/srv/backup-storage/Backup drive one"'
+ok "S27 the drive that went away has no folder any more" '! eval "$M" | grep -q "MAIN2" && ! eval "$M" | grep -q "main-storage/TOSHIBA"'
+hls filebrowser > $SIM_DIR/s27c.out 2>&1
+ok "S27 a second run says nothing is to do" 'grep -q "already shows" $SIM_DIR/s27c.out'
+export HLS_MOUNTED_DISKS=""
+rm -rf $HLS_ROOT/mnt/disks; rm -f $SIM_DIR/disks.txt
+hls filebrowser > $SIM_DIR/s27d.out 2>&1
+ok "S27 with no data drive the old main-storage share on the boot drive is back, and the system drive falls back to boot-drive" 'eval "$M" | grep -q "/srv/main-storage" && eval "$M" | grep -q "/srv/boot-drive" && ! eval "$M" | grep -q "backup-storage"'
+unset HLS_MOUNTED_DISKS
+fi
+
 echo; echo "TOTAL pass=$PASS fail=$FAIL"

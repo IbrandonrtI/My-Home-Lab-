@@ -25,6 +25,8 @@ count() {  # count <name> : fail if the log ends with a non-zero fail count
 
 run substitution bash -c "python3 '$HERE/t_subst.py' | tail -1 | grep -q '^OK'"
 run pinned-bar bash -c "python3 '$HERE/t_pinned.py' | tail -1 | grep -q '^OK'"
+run homepage-cmds bash -c "bash '$HERE/t_homepage.sh' | tail -1 | grep -q '^OK'"
+run drive-names bash -c "python3 '$HERE/t_names.py' | tail -1 | grep -q '^OK'"
 run secret-scan bash -c "python3 '$HERE/t_check.py' | tail -1 | grep -q '^OK'"
 bash "$HERE/run_login_tests.sh" >"$LOG/login.log" 2>&1; count login
 if [ "${1:-}" = quick ]; then

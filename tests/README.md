@@ -14,10 +14,12 @@ Needs `python3`, `bash`, and `pyte` (`pip install pyte`) for the terminal-emulat
 
 | File | What it is |
 | --- | --- |
-| `run_tests.sh` | The installer scenarios S1 to S25: full install, dry run, failures, restore, existing server, and more. |
+| `run_tests.sh` | The installer scenarios S1 to S27: full install, dry run, failures, restore, existing server, and more. |
 | `run_login_tests.sh` | Checks of the login screen against fake state files. |
 | `t_subst.py` | Unit test for the placeholder substitution (`subst()`). |
+| `t_names.py` | Unit test for the drive names FileBrowser uses (sizes such as 1 TB, odd characters, duplicate names, the names file). |
 | `t_check.py` | Unit test for the secret scan in `scripts/homelab-check` (real-looking values are reported, placeholders are not). |
+| `t_homepage.sh` | `homelab theme` and `homelab bookmark` in a temporary copy of the Homepage files, with a local web server playing Brandfetch. |
 | `t_pinned.py` | The progress bar stays on the bottom row (checked in a terminal emulator). |
 | `t_pty.sh`, `t_pty.py`, `t_frames.py` | An install on a pseudo-terminal, and a reader for saved captures. |
 | `start.sh` | Builds the fake machine and defines the `hls`, `fresh`, `wj` and `setw` helpers. |

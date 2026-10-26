@@ -296,7 +296,7 @@ def docker():
             if any("Mounts" in a for a in args):
                 if n not in w["containers"]:
                     die("Error: No such object: " + n, 1)
-                out(" ".join(w["containers"][n].get("mounts", [])))
+                out("".join(m + "|" for m in w["containers"][n].get("mounts", [])))   # the template ends every destination with |
                 return
             out("healthy" if running(w, n) else "unhealthy")
             return
@@ -335,6 +335,8 @@ def docker_exec(w):
                 N["domains"][cmd[4]] = val
             else:
                 N["conf"][key] = val
+        elif sub == "config:system:delete":
+            N["conf"].pop(cmd[3], None)
         elif sub == "config:system:get":
             key = cmd[3]
             if key == "trusted_domains":

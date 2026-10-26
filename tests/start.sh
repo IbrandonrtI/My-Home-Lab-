@@ -24,6 +24,7 @@ UBUNTU_CODENAME=noble
 EOF
 echo 'nameserver 127.0.0.53' > "$R/etc/resolv.conf"
 for c in apt-get dpkg-query dpkg systemctl ss ip timedatectl crontab usermod id; do ln -sf "$SIMSRC/fakecmd.py" "$SIM_DIR/bin-always/$c"; done
+for c in findmnt lsblk; do ln -sf "$SIMSRC/fakedisks.sh" "$SIM_DIR/bin-always/$c"; done
 for t in python3 bash sh env cat ls rsync du df gzip gunzip zcat mkdir rm cp mv chmod chown sleep date head tail grep sed awk hostname stat find tr sort uniq wc dirname basename readlink ln touch tee diff cmp expr true false test timeout xargs cut od base64 seq sha256sum md5sum; do
   p=$(command -v $t 2>/dev/null); [ -n "$p" ] && ln -sf "$p" "$SIM_DIR/sys-bin/$t"
 done

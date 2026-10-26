@@ -28,7 +28,7 @@ D
 }
 runh(){ bash "$H" "$@" 2>&1; }
 reset; out=$(runh)
-check "version 1.8" '[ "$(runh version)" = "homelab 1.8" ]'
+check "version 2.0" '[ "$(runh version)" = "homelab 2.0" ]'
 check "backup size shown in GB" 'echo "$out" | grep -q "Backup size .*61GB in the backup, next run 06:00 (in "'
 check "temps shown" 'echo "$out" | grep -q "Drive temps .*boot 41°C, MAIN1 38°C"'
 check "updates shown" 'echo "$out" | grep -q "Updates .*12 system update(s)"'
@@ -62,8 +62,8 @@ check "login screen: header line" 'echo "$out" | head -3 | grep -q "Home lab  ·
 check "login screen: summary line (problem, pool not mounted)" 'echo "$out" | grep -q "✗  1 problem needs you.  Details in Status below."'
 check "login screen: Status section present" 'echo "$out" | grep -q "── Status ──" && echo "$out" | grep -q "Main pool"'
 check "login screen: hint to type homelab commands, after the status" '[ "$(echo "$out" | grep -n "homelab commands" | cut -d: -f1)" -gt "$(echo "$out" | grep -n "Boot drive" | cut -d: -f1)" ] && echo "$out" | grep -q "Type homelab commands to see every command."'
-check "login screen: the long command list is NOT shown" '! echo "$out" | grep -q "── Storage" && ! echo "$out" | grep -q "sudo drives status" && ! echo "$out" | grep -q "docker logs"'
-check "login screen is short (under 22 lines)" '[ "$(echo "$out" | wc -l)" -lt 22 ]'
+check "login screen: the long command list is NOT shown" '! echo "$out" | grep -q "── Storage" && ! echo "$out" | grep -q "── Docker, everyday" && ! echo "$out" | grep -q "menu: connect"'
+check "login screen is short (under 32 lines, with the suggestions)" '[ "$(echo "$out" | wc -l)" -lt 32 ]'
 check "commands screen: header line, no status block" 'echo "$outc" | head -3 | grep -q "Home lab  ·  .*  ·  up" && ! echo "$outc" | grep -q "── Status ──" && ! echo "$outc" | grep -q "Main pool"'
 check "commands screen: every section heading" 'for t in Storage Backup "Container updates" "Rebuild and safety" "Docker, everyday" "Network and system" "This screen and the guides"; do echo "$outc" | grep -q "── $t ──" || exit 1; done'
 check "commands screen: container update commands" 'for c in "sudo homelab-update " "sudo homelab-update check" "homelab-update list" "sudo homelab-update clean"; do echo "$outc" | grep -q "$c" || exit 1; done'
@@ -122,4 +122,34 @@ reset; out=$(runh commands); check "commands list hides it when not installed" '
 reset; out=$(runh status); check "pool missing, no marker -> red NOT MOUNTED (real failures stay loud)" 'echo "$out" | grep -q "NOT MOUNTED"'
 reset; printf 'no data drive set up\n' >$T/state/no-data-drive; out=$(runh status); check "pool missing + marker -> grey note, no NOT MOUNTED" '! echo "$out" | grep -q "NOT MOUNTED" && echo "$out" | grep -q "no data drive set up yet"'
 reset; printf 'no data drive set up\n' >$T/state/no-data-drive; out=$(runh); check "login screen with marker is not red because of the pool" '! echo "$out" | grep -q "problem needs you" '
+# ---- Suggested Commands (new in 1.9)
+reset; out=$(runh)
+check "Suggested Commands block is on the login screen" 'echo "$out" | grep -q "── Suggested Commands ──"'
+check "Suggested Commands sits above the hint line and below Status" '[ "$(echo "$out" | grep -n "── Status ──" | cut -d: -f1)" -lt "$(echo "$out" | grep -n "── Suggested Commands ──" | cut -d: -f1)" ] && [ "$(echo "$out" | grep -n "── Suggested Commands ──" | cut -d: -f1)" -lt "$(echo "$out" | grep -n "Type homelab commands" | cut -d: -f1)" ]'
+check "at most four suggestions" '[ "$(echo "$out" | sed -n "/── Suggested Commands ──/,/Type homelab commands/p" | grep -c "^   [a-z]")" -le 4 ]'
+check "pending system updates suggest apt" 'echo "$out" | sed -n "/── Suggested Commands ──/,$ p" | grep -q "sudo apt update"'
+reset; printf 'no data drive set up\n' >$T/state/no-data-drive; printf '9|23|%s\n' $NOW >$T/state/setup-progress; out=$(runh)
+check "open setup steps suggest refresh first" 'echo "$out" | sed -n "/── Suggested Commands ──/,$ p" | grep -m1 "^   " | grep -q "sudo homelab-setup refresh"'
+check "the refresh suggestion says how many steps are left" 'echo "$out" | grep -q "sudo homelab-setup refresh .*14 steps left"'
+reset; printf 'no data drive set up\n' >$T/state/no-data-drive; out=$(runh)
+check "no data drive suggests sudo drives" 'echo "$out" | sed -n "/── Suggested Commands ──/,$ p" | grep -q "^   sudo drives  "'
+reset; printf 'no data drive set up\n' >$T/state/no-data-drive; printf '%s|OK|/bk|55|1\n' "$(date -d '3 days ago' '+%F %H:%M')" >$T/last-run; out=$(runh)
+check "an old backup suggests running one" 'echo "$out" | sed -n "/── Suggested Commands ──/,$ p" | grep -q "sudo homelab-backup"'
+reset; printf 'no data drive set up\n' >$T/state/no-data-drive; printf '/dead exited always 0 2026-01-01T00:00:00Z\n' >$T/fd/inspect; out=$(runh)
+check "a stopped container is the first suggestion" 'echo "$out" | sed -n "/── Suggested Commands ──/,$ p" | grep -m1 "^   " | grep -q "docker ps -a"'
+reset; printf 'no data drive set up\n' >$T/state/no-data-drive; printf '0|%s\n' $NOW >$T/state/apt; printf '%s\n' $NOW >$T/state/image-updates; out=$(runh)
+check "when all is fine, everyday commands fill the list" 'echo "$out" | sed -n "/── Suggested Commands ──/,$ p" | grep -q "homelab commands"'
+reset; out=$(HOMELAB_SUGGEST_MAX=2 runh)
+check "the number of suggestions can be changed" '[ "$(echo "$out" | sed -n "/── Suggested Commands ──/,/Type homelab commands/p" | grep -c "^   [a-z]")" -le 2 ]'
+reset; out=$(runh status)
+check "the status screen has no suggestions" '! echo "$out" | grep -q "Suggested Commands"'
+reset; printf '#!/bin/bash\n' >$T/bin/homelab-setup; chmod +x $T/bin/homelab-setup; out=$(runh commands)
+check "commands list: refresh, details and verify when homelab-setup is installed" 'echo "$out" | grep -q "sudo homelab-setup refresh" && echo "$out" | grep -q "sudo homelab-setup --details" && echo "$out" | grep -q "sudo homelab-setup verify" && echo "$out" | grep -q "sudo homelab-setup done STEP"'
+out=$(COLUMNS=60 runh)
+check "narrow window: suggestions still fit" '[ "$(echo "$out" | grep "── " | python3 -c "import sys;print(max(len(l.rstrip(chr(10))) for l in sys.stdin))")" -le 60 ]'
+reset; printf 'no data drive set up\n' >$T/state/no-data-drive; printf '0|%s\n' $NOW >$T/state/apt; printf '%s\n' $NOW >$T/state/image-updates; mkdir -p $T/hp; out=$(HOMELAB_HOMEPAGE_DIR=$T/hp runh)
+check "with a Homepage folder, theme and bookmark are suggested when little else is" 'echo "$out" | sed -n "/── Suggested Commands ──/,$ p" | grep -q "homelab theme" && echo "$out" | grep -q "homelab bookmark add NAME URL"'
+reset; out=$(HOMELAB_HOMEPAGE_DIR=$T/none runh)
+check "without a Homepage folder they are not suggested" '! echo "$out" | grep -q "homelab bookmark add"'
+reset; out=$(runh commands); check "the commands list has the Homepage dashboard group" 'echo "$out" | grep -q "── Homepage dashboard" && echo "$out" | grep -q "homelab bookmark add NAME URL" && echo "$out" | grep -q "homelab theme background URL"'
 echo "TOTAL pass=$PASS fail=$FAIL"
