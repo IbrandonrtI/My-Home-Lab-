@@ -54,7 +54,7 @@ If you unplug a drive on purpose, don't just pull the cable. Open `sudo drives`,
 
 This is my plan for the day the boot drive (the one with Linux on it) fails, or I want to start over on a clean install. The idea: **GitHub gives me the tools, the backup gives me the data, and my password manager gives me the secrets.** Nothing gets typed from memory.
 
-> **Status: written from the design and checked on a fake file tree, but never rehearsed on a real rebuild.** The parts that touch real services (the two database restores) follow the official [Immich](https://docs.immich.app/administration/backup-and-restore) and [Nextcloud](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/restore.html) restore guides. Treat the first real run as a rehearsal: go slowly, one step at a time, and don't touch the old drives until the end.
+> **Status: I wrote this up in advance and tried it on a fake file tree, but I've never done a real rebuild.** The parts that touch real services (the two database restores) follow the official [Immich](https://docs.immich.app/administration/backup-and-restore) and [Nextcloud](https://docs.nextcloud.com/server/stable/admin_manual/maintenance/restore.html) restore guides. Treat the first real run as a rehearsal: go slowly, one step at a time, and don't touch the old drives until the end.
 
 **What survives a dead boot drive**
 
@@ -149,7 +149,7 @@ Every container should be `Up` or `healthy`. Log in to Immich and Nextcloud and 
 
 ## Updating
 
-Every service has its own written update procedure in [the updating guide](updating.md): what can be updated, what to check first and how to undo each update. The short version:
+Every service has its own update steps in the [updating guide](updating.md): what can be updated, what to check first and how to undo each update. The short version:
 
 - **Containers:** make a fresh backup first (`sudo homelab-backup`, wait for `finished: OK`). Change the version on the stack's `image:` line, pull the new image in the terminal, then open the stack in Portainer and click **Update the stack**. Update one service at a time, and Immich and Nextcloud on their own. Don't skip major versions of Nextcloud. Go one major version at a time.
 - **Before you click Update the stack,** check that the container has no anonymous volume, because its data can be lost on the update ([B6](troubleshooting.md#b6-a-container-starts-empty-after-update-the-stack)).

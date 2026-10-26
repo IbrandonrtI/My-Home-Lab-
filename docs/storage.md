@@ -32,7 +32,7 @@ The time zone should be yours, because the 6:00 backup runs on the server's cloc
 
 ## 2. Install the scripts
 
-The scripts are in the [`scripts/`](../scripts/) folder of this repository. The folder holds the commands `drives`, `homelab-backup`, `hdd-recover` and `homelab`, a few helpers (`homelab-sample`, `homelab-update`, `homelab-restore-configs` and `homelab-check`), and the example settings file `homelab-backup.conf.example`. (If you used the installer, it has already put these on the server; this part is for building by hand.) Clone the repository on the server and install two of the commands now (`hdd-recover` comes in [step 8](#8-the-recovery-command) and `homelab` in [step 14](#14-the-cheat-sheet-at-login)):
+The scripts are in the [`scripts/`](../scripts/) folder of this repository. The folder holds the commands `drives`, `homelab-backup`, `hdd-recover` and `homelab`, a few helpers (`homelab-sample`, `homelab-update`, `homelab-restore-configs` and `homelab-check`), and the example settings file `homelab-backup.conf.example`. (If you used the installer, these are already on the server. This part is for setting it up yourself.) Clone the repository on the server and install two of the commands now (`hdd-recover` comes in [step 8](#8-the-recovery-command) and `homelab` in [step 14](#14-the-cheat-sheet-at-login)):
 
 ```bash
 sudo apt install -y git
@@ -92,9 +92,9 @@ sudo DRIVES_TEST=1 drives test-cleanup
 sudo drives status
 ```
 
-**Don't skip `test-cleanup`.** If you do, the practice pool stays mounted. The last command should look exactly like it did in 3.2.
+**Don't skip `test-cleanup`.** If you do, the practice pool stays mounted. The last command should look exactly like it did in [step 2](#2-install-the-scripts).
 
-Here is what a good result looks like. I put two 200 MB files of random data in a practice pool of two fake drives (one file landed on each). I disconnected `TMAIN1`, which held one of them, and chose to copy its files first. The script printed `Verified: every file from TMAIN1 is also on TMAIN2.`, and `sha256sum` gave identical checksums for both files before and after.
+Here's what a good result looks like. I put two 200 MB files of random data in a practice pool of two fake drives (one file landed on each). I disconnected `TMAIN1`, which held one of them, and chose to copy its files first. The script printed `Verified: every file from TMAIN1 is also on TMAIN2.`, and `sha256sum` gave identical checksums for both files before and after.
 
 You can repeat the practice with a real, spare USB stick (**it will be erased**). Test mode lists only unused drives, and the boot drive and your data drive never appear in the list.
 
@@ -364,9 +364,9 @@ The first line lists one folder per day. The second restores something you delet
 
 ## 10. Verify the storage setup
 
-Run the four `docker exec ... df` checks from 3.4. Then run two tests:
+Run the four `docker exec ... df` checks from [step 4](#4-add-the-first-main-drive). Then run two tests:
 
-- **Reboot:** run `sudo reboot`. After about three minutes, run these one at a time, and the pool and drive should be mounted and the containers up with no help from you:
+- **Reboot:** run `sudo reboot`. After about three minutes, run these one at a time. The pool and the drive should be mounted and the containers up without any help from you:
 
 ```bash
 findmnt /mnt/storage
@@ -394,7 +394,7 @@ sudo drives status
 | See the commands and the status again | `homelab` |
 | List the sections of the README and the guides | `homelab docs` |
 
-**Before you unplug a drive on purpose,** open `sudo drives` and choose **3** (Disconnect a drive), then unplug when it says it is safe. Don't just pull the cable.
+**Before you unplug a drive on purpose,** open `sudo drives` and choose **3** (Disconnect a drive), then unplug when it says it's safe. Don't just pull the cable.
 
 **Adding a second main drive:** choose **2** and **Main storage**. The new drive is labelled `MAIN2`. New files go to whichever drive has more free space, and existing files stay where they are.
 
@@ -406,7 +406,7 @@ What the script refuses or double-checks:
 - Erasing needs the exact device name and then the word `ERASE`.
 - It won't remove the last main drive. Removing the last backup drive needs the word `REMOVE`.
 - Before removing a drive that holds files, it offers to copy them to another drive of the same pool first, and it checks that every file arrived.
-- Every change snapshots `/etc/fstab` first and puts it back if a mount fails. If something goes wrong half way, the containers it stopped stay stopped, and it tells you to run `sudo hdd-recover`.
+- Before every change it saves a copy of `/etc/fstab`, and it puts that copy back if a mount fails. If something goes wrong half way, the containers it stopped stay stopped, and it tells you to run `sudo hdd-recover`.
 
 ## 12. Adding the backup drive
 
@@ -536,7 +536,7 @@ Settings, for the rare case you need them, are environment variables: `HOMELAB_M
 
 ## 15. Replace a dead drive
 
-Use this when a pool drive is gone for good: it won't spin up, it isn't found any more, and `sudo hdd-recover` can't bring it back. The command is `sudo drives replace` (or choose **8** in the `sudo drives` menu). It needs two things: a **new drive** (it will be erased) and a **backup copy** (the daily backup, 3.9).
+Use this when a pool drive is gone for good: it won't spin up, it isn't found any more, and `sudo hdd-recover` can't bring it back. The command is `sudo drives replace` (or choose **8** in the `sudo drives` menu). It needs two things: a **new drive** (it will be erased) and a **backup copy** (the daily backup, [step 9](#9-the-daily-backup)).
 
 > **Tested with fake drives and one USB-stick rehearsal.** I ran 58 automatic checks on practice drives (one drive dying, one of two dying, refusing to continue, a dead backup drive, two dead drives). I also rehearsed it on my server: one of two practice drives "died", a real 8 GB USB stick took its place, the 2 missing files (100 MB) came back, and their SHA-256 checksums matched the ones I saved before. I haven't yet used it on a real failed drive. Do the rehearsal at the end of this section once before you depend on it. Version 1.1 of `drives` is the first one that has this command: `sudo drives version` should print `drives 1.1`.
 
@@ -581,7 +581,7 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
    sudo drives replace
    ```
 
-   Here is the middle of a run from my practice drives (practice labels start with a `T`, so the dead drive is `TMAIN1`; on the real server it is `MAIN1`):
+   Here's the middle of a run from my practice drives (practice labels start with a `T`, so the dead drive is `TMAIN1`; on the real server it is `MAIN1`):
 
    ```text
    Pool drives that cannot be found:
@@ -621,7 +621,7 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
    sudo homelab-backup
    ```
 
-**If you type something other than `RESTORE`,** nothing is copied and the containers stay stopped. Come back to it later with `sudo drives restore`. It does the preview, the question, the copy and the check again, and then starts the containers. It is safe to run several times: once everything is back it says `Nothing is missing`.
+**If you type something other than `RESTORE`,** nothing is copied and the containers stay stopped. Come back to it later with `sudo drives restore`. It does the preview, the question, the copy and the check again, and then starts the containers. It's safe to run several times: once everything is back it says `Nothing is missing`.
 
 **If two main drives are dead,** replace them one at a time. After the first one, the pool can't start until the second is replaced too, so the tool tells you to run `sudo drives replace` again. The files are restored after the last one.
 

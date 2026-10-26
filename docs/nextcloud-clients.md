@@ -196,7 +196,7 @@ Limits: it only uploads. Files that change on the server aren't copied back to t
 
 - **The app says it can't reach the server.** Tailscale is off or disconnected on that device. Open Tailscale, connect, and try again.
 - **The address is rejected.** It has to start with `https://`, end with `:1005` and have nothing after it. Use the Tailscale address on a phone or laptop that leaves the house. The local `http://192.168.X.X:8082` address only works at home, on the same network, and without `https` (see [build guide, section 11.2](build-guide.md#112-deploy-the-stack)).
-- **The login fails a few times.** Nextcloud blocks an address after repeated failed logins (see [Security](security.md)). Wait a few minutes before you try again.
+- **The login fails a few times.** Nextcloud blocks an address after repeated failed logins. Wait a few minutes before you try again.
 - **Files don't show up in the browser.** In the desktop app, open Settings and look for an error message under the connection. It names the file or the problem.
 - **A folder won't sync because of an overlap.** Nextcloud's docs say a server folder can only sync to one local folder, and that the client can refuse a folder inside one that already syncs. On my setup the client accepted `Document sync` next to the main connection, but that's what made the second copy described in [part 2](#2-windows). Look at the connections list for the overlap and remove the one you don't need, using **Remove folder sync connection** from the three-dot menu. That stops syncing that folder.
 

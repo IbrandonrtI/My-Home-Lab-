@@ -159,7 +159,7 @@ Use the date of your own backup file in the `tar` line.
 
 **Status: written from the documentation, not yet run on my server.** The stack pins Homepage to a version tag, for example `ghcr.io/gethomepage/homepage:v2.6.0`. When a newer one appears:
 
-1. Do the four checks in [Before you update anything](#before-you-update-anything). Homepage's settings are in `/home/your-username/homepage-config`, which the daily backup covers.
+1. Do the five checks in [Before you update anything](#before-you-update-anything). Homepage's settings are in `/home/your-username/homepage-config`, which the daily backup covers.
 2. Read the release notes. The v2.6.0 notes mention changes to how `$` is handled in secrets, so check the notes when your keys contain a dollar sign.
 3. Download the image of the new version (replace `vX.Y.Z` with it):
 
@@ -195,7 +195,7 @@ Use the date of your own backup file in the `tar` line.
    ```
 
    You want a line that starts with `bind /home/your-username/speedtest-tracker -> /config`. A line that starts with `volume` and a long name means an anonymous volume. In that case, do the fix in [B6](troubleshooting.md#b6-a-container-starts-empty-after-update-the-stack) first (copy the data, add the `volumes:` lines), and only then update.
-3. Make a copy by hand anyway. It is cheap, and it is what saved my data:
+3. Make a copy yourself anyway. It is cheap, and it is what saved my data:
 
    ```bash
    docker cp speedtest-tracker:/config ~/speedtest-config-backup-$(date +%F)
@@ -256,7 +256,7 @@ docker start speedtest-tracker
 
 **Status: written from the documentation, not yet run on my server.** Version 0.21.1 was released on 2026-10-22. The notes mention that some memory fields are being replaced by new fields that carry byte values, and that the new fields are filled in by a hub 0.21.1 or newer. Beszel's guides don't state an update order. My reasoning is that the hub should be updated first so it understands everything the newer agent sends. That is my inference, not a rule from the project.
 
-1. Do the four checks in [Before you update anything](#before-you-update-anything). The Beszel hub's data is in the `beszel_beszel_data` volume, which the daily backup covers. Beszel's guide also mentions the hub's own backup feature as an extra copy.
+1. Do the five checks in [Before you update anything](#before-you-update-anything). The Beszel hub's data is in the `beszel_beszel_data` volume, which the daily backup covers. Beszel's guide also mentions the hub's own backup feature as an extra copy.
 2. Download both images of the new version (replace `X.Y` with it, for example the next minor version after the one in the stack files):
 
    ```bash
@@ -342,7 +342,7 @@ Immich's own rules, from its upgrade page:
 
 Steps:
 
-1. Do the four checks in [Before you update anything](#before-you-update-anything), including the fresh backup.
+1. Do the five checks in [Before you update anything](#before-you-update-anything), including the fresh backup.
 2. Make a fresh database dump. Immich also writes its own dump every night at 2:00 into the `backups` folder of the photo folder and keeps the last 14. Create one now: in the Immich web page, open **Administration**, then **Job Queues**, click **Create job**, choose **Create Database Dump** and confirm. Then check that it appeared:
 
    ```bash
@@ -384,11 +384,11 @@ Steps:
 
 **Status: written from the documentation, not yet run on my server.** The stack runs the Nextcloud 35 line. It also has `postgres:16-alpine` (the database), `redis:alpine` (the cache) and a second container, `nextcloud_cron`, that uses the same Nextcloud image.
 
-**The one rule that matters.** The Docker image docs say it is only possible to upgrade one major version at a time (for example 35 to 36, never 35 straight to 37). The stack therefore pins the major version in both image lines (`nextcloud:35-apache`, for the `nextcloud` and the `nextcloud_cron` service), so a re-pull never starts a major upgrade by itself. (An older version of this lab used `nextcloud:apache`, which always points at the newest major version.)
+**The one rule that matters.** The Docker image docs say you can only upgrade one major version at a time (for example 35 to 36, never 35 straight to 37). The stack therefore pins the major version in both image lines (`nextcloud:35-apache`, for the `nextcloud` and the `nextcloud_cron` service), so a re-pull never starts a major upgrade by itself. (An older version of this lab used `nextcloud:apache`, which always points at the newest major version.)
 
 **A normal update inside the same major version (for example 35.0.2 to 35.0.3):**
 
-1. Do the four checks in [Before you update anything](#before-you-update-anything). The backup includes a fresh dump of the Nextcloud database, and that is your safety net, because Nextcloud can't go back to an older version.
+1. Do the five checks in [Before you update anything](#before-you-update-anything). The backup includes a fresh dump of the Nextcloud database, and that is your safety net, because Nextcloud can't go back to an older version.
 2. Write down the current state:
 
    ```bash
@@ -436,7 +436,7 @@ Steps:
 
 **What to expect:** restarting Docker stops all containers. The `restart` settings in my stacks bring them back, but every service is down for a minute or two, and Immich and Nextcloud take longer to turn healthy. Pick a quiet time and update Docker on its own, not together with anything else.
 
-1. Do the four checks in [Before you update anything](#before-you-update-anything).
+1. Do the five checks in [Before you update anything](#before-you-update-anything).
 2. See what apt offers:
 
    ```bash
@@ -465,7 +465,7 @@ Steps:
 
 ## Tailscale
 
-**Status: an automatic Tailscale update broke DNS on my server once.** The Machines page in the Tailscale admin console showed `pc` on a newer version, so the machine had updated itself. Right after that, the server couldn't look up names (`SERVFAIL` from `100.100.100.100`) and the Tailscale card on Homepage turned red. The cause and the fix are in [F6](troubleshooting.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update). The steps below are written from Tailscale's documentation, which says an update through a package manager is done by that manager and also names `tailscale update`. I haven't run them.
+**Status: an automatic Tailscale update broke DNS on my server once.** The Machines page in the Tailscale admin console showed `pc` on a newer version, so the machine had updated itself. Right after that, the server couldn't look up names (`SERVFAIL` from `100.100.100.100`) and the Tailscale card on Homepage turned red. The cause and the fix are in [F6](troubleshooting.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update). The steps below come from Tailscale's documentation, which says to update through your package manager if that's how you installed it (it also has a `tailscale update` command). I haven't run them.
 
 **Important:** use the local address for this, not the Tailscale one. A restart of Tailscale drops a session that is running over Tailscale ([E7](troubleshooting.md#e7-an-ssh-session-over-tailscale-drops-when-tailscale-restarts)). From the Windows PC:
 
@@ -514,7 +514,7 @@ If the Serve list is empty after an update, re-create the nine entries from the 
 
 **Status: written from general apt practice, not yet run for this purpose on my server.** This covers the operating system and everything installed with `apt`, such as `mergerfs`, `smartmontools` and the kernel.
 
-1. Do the four checks in [Before you update anything](#before-you-update-anything).
+1. Do the five checks in [Before you update anything](#before-you-update-anything).
 2. Update Docker and Tailscale first, on their own, by following [Docker Engine](#docker-engine) and [Tailscale](#tailscale). That way their restarts don't hide in a large update.
 3. See what is waiting:
 

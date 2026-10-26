@@ -1,6 +1,6 @@
 # Build guide
 
-This is how I built the lab by hand, one service at a time, in the order that worked for me. The installer (`setup.sh`, see [INSTALL.md](../INSTALL.md)) does the same steps for you. Use this guide if you want to see what the installer does, build only part of the lab, or fix something by hand.
+This is how I built the lab, one service at a time, in the order that worked for me. The installer (`setup.sh`, see [INSTALL.md](../INSTALL.md)) does the same steps for you. Use this guide if you want to see what the installer does, build only part of the lab, or fix something yourself.
 
 > **About the placeholders.** Every address and name here is a placeholder: `your-username` (the Linux user), `192.168.X.X` (the server's address on your home network) and `your-tailnet.ts.net` (your Tailscale network name). Passwords, keys and tokens are written as `your-own-key`. Swap in your own values, and keep the real ones out of Git.
 
@@ -187,7 +187,7 @@ From another device, install AnyDesk and connect with the ID and password. The D
 
 ## 3. Docker
 
-Installed from Docker's official apt repository. Linux Mint doesn't have its own entry in Docker's repository list, so use Mint's Ubuntu base name instead. For Mint 22 that is `noble` (Ubuntu 24.04). Using the wrong name makes the install fail with a "held broken packages" error.
+I installed Docker from Docker's own apt repository. Its list has no entry for Linux Mint, so use the name of the Ubuntu release Mint is based on. For Mint 22 that's `noble` (Ubuntu 24.04). The wrong name makes the install fail with a "held broken packages" error.
 
 ```bash
 sudo install -m 0755 -d /etc/apt/keyrings
@@ -200,7 +200,7 @@ sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-ce-rootless-extras docker-buildx-plugin
 ```
 
-Allow running `docker` without `sudo`, then reboot so the group change applies:
+Add yourself to the `docker` group so you can run `docker` without `sudo`, then reboot so it takes effect:
 
 ```bash
 sudo usermod -aG docker "$USER"
@@ -265,7 +265,7 @@ Port 9000 is plain HTTP and is the one Tailscale will forward to. Portainer's ow
 
 ## 5. Tailscale
 
-Tailscale builds a private network between your devices. Combined with Tailscale Serve, every service gets a trusted HTTPS address that only your devices can reach, with no port forwarding and no public exposure.
+Tailscale builds a private network between your devices. With Tailscale Serve on top, every service gets its own HTTPS address that only your devices can reach. There's no port forwarding and nothing is public.
 
 Install it on the server:
 
@@ -276,7 +276,7 @@ sudo sh tailscale-install.sh
 sudo tailscale up
 ```
 
-Tailscale's own instructions pipe the script straight into `sh`. Downloading it first lets you read what you are about to run as root.
+Tailscale's own instructions pipe the script straight into `sh`. Downloading it first lets you read what you're about to run as root.
 
 Open the sign-in link it prints, in a browser that is signed in to your Tailscale account. The machine appears in the [admin console](https://login.tailscale.com/admin/machines) under its hostname (`pc`). Also install the Tailscale app on your PC and phone, and sign in to the same account.
 
@@ -363,7 +363,7 @@ Open `http://192.168.X.X:3000` and go through the wizard:
 1. Create an admin username and password.
 1. Finish the wizard and log in.
 
-My upstream servers are DNS-over-HTTPS from Quad9, Cloudflare and Google, with DNSSEC on. I enabled twelve blocklists: AdGuard DNS filter, AdAway Default Blocklist, AdGuard DNS Popup Hosts, HaGeZi's Pro, OISD Big, Peter Lowe's, Steven Black's, Dandelion Sprout's Game Console Adblock, HaGeZi's Allowlist Referral, HaGeZi's Apple Tracker, ShadowWhisperer's Dating List and Dandelion Sprout's Anti-Malware list. If a list ever blocks your upstream DNS providers, the fix is in [troubleshooting guide](troubleshooting.md).
+My upstream servers are DNS-over-HTTPS from Quad9, Cloudflare and Google, with DNSSEC on. I enabled twelve blocklists: AdGuard DNS filter, AdAway Default Blocklist, AdGuard DNS Popup Hosts, HaGeZi's Pro, OISD Big, Peter Lowe's, Steven Black's, Dandelion Sprout's Game Console Adblock, HaGeZi's Allowlist Referral, HaGeZi's Apple Tracker, ShadowWhisperer's Dating List and Dandelion Sprout's Anti-Malware list. If a list ever blocks your upstream DNS providers, look in the [troubleshooting guide](troubleshooting.md).
 
 **Check it:**
 
@@ -377,7 +377,7 @@ The container should be running, AdGuardHome should own port 53, and the lookup 
 
 ### 6.4 Point your devices at it
 
-My router wouldn't let me change its DNS setting, so I set the DNS server on each device by hand. Devices you don't change aren't filtered.
+My router wouldn't let me change its DNS setting, so I set the DNS server on each device myself. Devices you don't change aren't filtered.
 
 **Windows 11 (Ethernet):**
 
@@ -445,7 +445,7 @@ Open `http://192.168.X.X:19999`. The dashboard may offer to connect to Netdata C
 docker exec netdata-netdata-1 cat /var/lib/netdata/netdata_random_session_id
 ```
 
-If the page offers a way to continue without signing in, you can use the local dashboard as it is.
+If the page offers a way to continue without signing in, you can just use the local dashboard.
 
 **Check it:** `docker ps` shows `netdata-netdata-1` as `healthy`, and the dashboard shows live charts.
 
@@ -617,7 +617,7 @@ The second command should print `true`.
 
 ### 12.3 Check that Nextcloud can reach Immich
 
-Do this before involving the app, so a problem is easy to place. It uses PHP, which is always inside the Nextcloud container:
+Do this before you touch the app, so you know where any problem is. It uses PHP, which is always inside the Nextcloud container:
 
 ```bash
 docker exec -u www-data nextcloud php -r 'echo file_get_contents("http://192.168.X.X:2283/api/server/ping");'
@@ -819,11 +819,11 @@ docker logs homepage --tail 30
 docker exec homepage df -h /mnt/storage
 ```
 
-The cards should show green status dots and live widgets. The second command should show the data drive (about 916G). The Netdata card may leave a `Parse Error` line in the log even though the card is green. That is harmless, and the explanation is in [troubleshooting guide](troubleshooting.md).
+The cards should show green status dots and live widgets. The second command should show the data drive (about 916G). The Netdata card may leave a `Parse Error` line in the log even though the card is green. That's harmless, and the explanation is in the [troubleshooting guide](troubleshooting.md).
 
 ### 14.5 Change the look and add bookmarks
 
-Homepage has no page for this in the browser, so two terminal commands do it. Run them as your normal user, **without `sudo`** (they refuse to run as root, so the files don't become root's). They change the files in `~/homepage-config`; the previous `settings.yaml` and `custom.css` are saved as `*.before-theme` the first time.
+Homepage has no settings page for this, so I made two terminal commands for it. Run them as your normal user, **without `sudo`** (they refuse to run as root, so the files don't become root's). They change the files in `~/homepage-config`; the previous `settings.yaml` and `custom.css` are saved as `*.before-theme` the first time.
 
 ```bash
 homelab theme                         # shows the current look and the options
@@ -831,7 +831,7 @@ homelab theme background https://example.com/picture.jpg   # or a file on this m
 homelab theme brightness 50           # how dark the picture is (0 to 100)
 homelab theme cards blue 40           # card colour (name or #hex) and how solid it is (0 to 100)
 homelab theme accent adguard blue     # one service's glow and edge colour (or: all)
-homelab theme reset                   # the shipped look again
+homelab theme reset                   # back to the original look
 ```
 
 A picture from the web is downloaded once and kept in `~/homepage-config/images`, so the dashboard works without the internet. The colour settings are written into a marked block at the end of `custom.css`; `homelab theme reset` removes exactly that block and nothing else.
