@@ -100,21 +100,32 @@ S_OK, S_TODO, S_BAD, S_WAIT, S_NA, S_RULE, S_DOT = (
     ("✓", "○", "✗", "·", "–", "─", "·") if _utf else ("+", "o", "x", ".", "-", "-", "-"))
 
 
-def term_cols():
+def window_cols():
+    """The real width of the window. The terminal itself is asked first: the COLUMNS variable is only a copy made
+    when the shell started (and `sudo` passes it on), so it goes stale as soon as the window is resized.
+    HLS_COLS forces a width (tests)."""
+    forced = os.environ.get("HLS_COLS", "")
+    if forced.isdigit():
+        return int(forced)
+    for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
+        try:
+            if stream is not None and stream.isatty():
+                return os.get_terminal_size(stream.fileno()).columns
+        except (OSError, ValueError):
+            pass
     try:
-        c = int(os.environ.get("COLUMNS", "") or shutil.get_terminal_size((80, 24)).columns)
+        return int(os.environ.get("COLUMNS", "") or 80)
     except ValueError:
-        c = 80
-    return max(c, 40)
+        return 80
+
+
+def term_cols():
+    return max(window_cols(), 40)
 
 
 def live_cols():
-    """The real window width, with no minimum: the status line must never be longer than the window."""
-    try:
-        c = int(os.environ.get("COLUMNS", "") or shutil.get_terminal_size((80, 24)).columns)
-    except ValueError:
-        c = 80
-    return max(c, 1)
+    """The window width with no minimum: the status line must never be longer than the window."""
+    return max(window_cols(), 1)
 
 
 def out(msg=""):
@@ -238,6 +249,9 @@ class Live:
     shown = False           # the status line is currently on screen
     drawn_len = 0           # visible length and window width of the line as it was drawn
     drawn_cols = 0
+    seen_cols = 0           # last window width seen, and until when to wait after it changed
+    settle_until = 0.0
+    SETTLE = 0.5
     title = ""
     note = ""
     t_step = 0.0
@@ -264,6 +278,8 @@ class Live:
         with cls.lock:
             cls.title, cls.note, cls.t_step = title, "", time.time()
             cls.own_clock = own_clock
+            cls.seen_cols = live_cols()
+            cls.settle_until = 0.0
             if not cls.enabled:
                 return
             cls.active = True
@@ -302,15 +318,23 @@ class Live:
                     cls.draw()
 
     @classmethod
-    def clear(cls):
-        """Wipe the status line. If the window was made narrower since it was drawn, the terminal has wrapped the
-        line onto several rows: go up to its first row and erase from there (the line is always the last thing on screen)."""
+    def abandon(cls):
+        """The window changed width after the line was drawn, so the terminal has re-wrapped it and nothing can be
+        erased reliably. Leave that one stale line where it is and continue on a new line."""
         if cls.shown:
             cols = live_cols()
-            rows = 1
-            if cols != cls.drawn_cols and cls.drawn_len >= cols:
-                rows = min(-(-cls.drawn_len // cols), 12)
+            rows = min(-(-cls.drawn_len // cols), 12) if cols < cls.drawn_len else 1
             sys.stdout.write("\r" + ("\033[%dA" % (rows - 1) if rows > 1 else "") + "\033[J")
+            sys.stdout.flush()
+            cls.shown = False
+
+    @classmethod
+    def clear(cls):
+        if cls.shown:
+            if live_cols() != cls.drawn_cols:
+                cls.abandon()
+                return
+            sys.stdout.write("\r\033[K")
             sys.stdout.flush()
             cls.shown = False
 
@@ -353,8 +377,16 @@ class Live:
     def draw(cls):
         if not (cls.enabled and cls.active) or cls.paused:
             return
-        cls.clear()
         cols = live_cols()
+        now = time.time()
+        if cols != cls.seen_cols:                       # the window is being resized: draw nothing until it has settled
+            cls.seen_cols = cols
+            cls.settle_until = now + cls.SETTLE
+        if cls.shown and cols != cls.drawn_cols:
+            cls.abandon()
+        if now < cls.settle_until:
+            return
+        cls.clear()
         text = cls.line(cols)
         sys.stdout.write(text)
         sys.stdout.flush()
