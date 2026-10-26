@@ -15,7 +15,7 @@ What it checks:
     (every file listed, every file present, every checksum right)
   - the installer: installer/homelab-setup compiles, and (with src/ present) is the exact join of src/p0*.py
   - YAML: every .yaml/.yml file, and every yaml code block in the Markdown files
-  - Markdown (README.md, CHANGELOG.md, CONTRIBUTING.md and docs/**): balanced code fences, links to headings (#...),
+  - Markdown (README.md, INSTALL.md and docs/**): balanced code fences, links to headings (#...),
     links to files and images (relative to the file that contains them), links between the guides, bash code blocks (bash -n)
   - secrets: app keys, tokens, private keys and password lines that look real (a line can opt out with
     the words "homelab-check: ignore"; the made-up passwords in tests/ are not reported)
