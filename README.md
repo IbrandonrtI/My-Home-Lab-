@@ -9,8 +9,7 @@ git clone https://github.com/IbrandonrtI/My-Home-Lab-.git
 cd My-Home-Lab-
 sudo bash setup.sh install --dry-run     # shows what it would do, changes nothing
 sudo bash setup.sh install               # asks a few questions, then builds the lab
-```
-
+``` 
 [![checks](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml/badge.svg)](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml)
 
 This home lab runs on a small HP mini PC and does ad blocking for the whole network, runs my containers, monitors the machine, stores files and phone photos, and has one dashboard that links to everything. I reach all of it from anywhere through Tailscale, and nothing is open to the public internet.
@@ -222,6 +221,26 @@ It's not perfect, and these are the weak spots I know about:
 - Anyone in the `docker` group is effectively root.
 
 If a secret ever leaks, I change it in the service first. Deleting it from Git isn't enough, because the old commit still has it. The [secrets checklist](docs/secrets-checklist.md) lists every secret and how to get it back.
+
+## Uninstall
+if you want to uninstall the whole project and files run these command: 
+```bash
+sudo docker ps -aq | xargs -r sudo docker rm -f
+sudo docker system prune -a --volumes -f
+sudo tailscale logout
+sudo crontab -r
+sed -i '/# >>> homelab login display >>>/,/# <<< homelab login display <<</d' ~/.bashrc
+sudo rm -rf ~/nextcloud ~/immich ~/speedtest-tracker ~/homepage-config ~/750GB_HDD /opt/adguard-docker /mnt/storage/immich /mnt/storage/filebrowser /mnt/storage/nextcloud
+sudo rm -rf /root/.homelab-setup /var/lib/homelab-setup /var/lib/homelab /var/log/homelab-setup.log /etc/homelab-backup.conf
+sudo rm -f /usr/local/sbin/{drives,homelab-backup,homelab-update,homelab-restore-configs,homelab-sample,homelab-setup} /usr/local/bin/{hdd-recover,homelab,homelab-check}
+sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale
+sudo rm -rf /var/lib/docker /var/lib/containerd /var/lib/tailscale /etc/apt/keyrings/docker.asc /etc/apt/sources.list.d/docker.sources /etc/apt/sources.list.d/tailscale.list /usr/share/keyrings/tailscale-archive-keyring.gpg
+sudo systemctl enable --now systemd-resolved
+sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+sudo apt-get autoremove -y
+cd ~
+rm -rf ~/My-Home-Lab-
+``` 
 
 ## What's where
 
