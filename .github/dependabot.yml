@@ -1,8 +1,0 @@
-# Keeps the versions of the GitHub Actions used in .github/workflows/checks.yml up to date.
-# Dependabot opens a pull request; the checks run on it before it is merged.
-version: 2
-updates:
-  - package-ecosystem: github-actions
-    directory: /
-    schedule:
-      interval: monthly
