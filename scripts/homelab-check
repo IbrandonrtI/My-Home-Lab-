@@ -1,0 +1,481 @@
+#!/usr/bin/env python3
+"""homelab-check - check the repository files before you upload them (or after you pull them).
+
+It only reads files. It never changes anything and needs no sudo.
+
+  homelab-check [FOLDER]                      check a folder (default: ~/My-Home-Lab-)
+  homelab-check --private-words WORDS FOLDER  also fail if any Markdown file contains a line of the file WORDS
+                                              (one word or text per line, for example your real address;
+                                              --readme-clean is the old name of this option)
+  homelab-check version | help
+
+What it checks:
+  - line endings: Windows line endings (CRLF) in scripts, YAML, Markdown and text files
+  - scripts (scripts/): syntax (bash -n), shellcheck if it is installed, and SHA256SUMS
+    (every file listed, every file present, every checksum right)
+  - the installer: installer/homelab-setup compiles, and (with src/ present) is the exact join of src/p0*.py
+  - YAML: every .yaml/.yml file, and every yaml code block in the Markdown files
+  - Markdown (README.md, CHANGELOG.md, CONTRIBUTING.md and docs/**): balanced code fences, links to headings (#...),
+    links to files and images (relative to the file that contains them), links between the guides, bash code blocks (bash -n)
+  - secrets: app keys, tokens, private keys and password lines that look real (a line can opt out with
+    the words "homelab-check: ignore"; the made-up passwords in tests/ are not reported)
+  - a .gitattributes file
+
+Exit status: 0 = no problems (warnings are allowed), 1 = at least one problem.
+"""
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+VERSION = "2.0"
+TEXT_EXT = {".md", ".yaml", ".yml", ".css", ".txt", ".conf", ".example", ".json", ".sh", ".cfg", ".ini"}
+SKIP_DIRS = {".git", "node_modules", "__pycache__"}
+# A matched VALUE (not the whole line) counts as a placeholder when it looks like one.
+PLACEHOLDER = re.compile(r"^(your|yours|changeme|replace|example|xxxx|x{4,}|\$\{|\$\()|your-|-here$|^<", re.I)
+
+SECRET_PATTERNS = [
+    ("an app key (base64:...)", re.compile(r"base64:[A-Za-z0-9+/=]{30,}")),
+    ("a Tailscale key", re.compile(r"tskey-[a-z]+-[A-Za-z0-9]{12,}")),
+    ("a GitHub token", re.compile(r"\b(ghp_|gho_|ghs_|github_pat_)[A-Za-z0-9_]{20,}")),
+    ("an AWS key id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("a private key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("a password or key line", re.compile(
+        r"(?i)(?<![/.\w-])[A-Z0-9_]*(PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|APP_?KEY)[\"']?\s*[:=]\s*[\"']?([A-Za-z0-9+_\-][A-Za-z0-9+/_\-]{11,})")),
+]
+
+
+class Report:
+    def __init__(self):
+        self.items = []  # (level, area, text)
+
+    def error(self, area, text):
+        self.items.append(("PROBLEM", area, text))
+
+    def warn(self, area, text):
+        self.items.append(("warning", area, text))
+
+    def ok(self, area, text):
+        self.items.append(("ok", area, text))
+
+    def count(self, level):
+        return sum(1 for i in self.items if i[0] == level)
+
+
+def color_on():
+    return sys.stdout.isatty() and os.environ.get("TERM", "dumb") != "dumb" and "NO_COLOR" not in os.environ
+
+
+def paint(level, s):
+    if not color_on():
+        return s
+    code = {"PROBLEM": "31", "warning": "33", "ok": "32"}.get(level, "0")
+    return "\033[%sm%s\033[0m" % (code, s)
+
+
+def read_text(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    return data
+
+
+def is_text(path, data):
+    if os.path.splitext(path)[1].lower() in (".png", ".jpg", ".jpeg", ".gif", ".zip", ".gz", ".pdf", ".ico"):
+        return False
+    return b"\x00" not in data[:4096]
+
+
+def walk(root):
+    out = []
+    for d, dirs, files in os.walk(root):
+        dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS)
+        for f in sorted(files):
+            out.append(os.path.join(d, f))
+    return out
+
+
+def rel(root, p):
+    return os.path.relpath(p, root)
+
+
+def mask(s):
+    return s[:4] + "..." + "(%d characters)" % len(s) if len(s) > 8 else "..."
+
+
+# ---------------------------------------------------------------- checks
+def check_line_endings(root, files, r):
+    bad = 0
+    for p in files:
+        data = read_text(p)
+        if not is_text(p, data):
+            continue
+        n = data.count(b"\r")
+        if n:
+            bad += 1
+            r.error("line endings", "%s has %d Windows line ending(s) (CR). Save it with Unix (LF) line endings." % (rel(root, p), n))
+    if not bad:
+        r.ok("line endings", "no Windows line endings in any text file")
+
+
+def check_scripts(root, r):
+    d = os.path.join(root, "scripts")
+    if not os.path.isdir(d):
+        r.warn("scripts", "no scripts folder here, script checks skipped")
+        return
+    scripts = []
+    for f in sorted(os.listdir(d)):
+        p = os.path.join(d, f)
+        if not os.path.isfile(p):
+            continue
+        with open(p, "rb") as fh:
+            first = fh.readline()
+        if first.startswith(b"#!") and (b"bash" in first or b"/sh" in first):
+            scripts.append(p)
+    bad = 0
+    for p in scripts:
+        res = subprocess.run(["bash", "-n", p], capture_output=True, text=True)
+        if res.returncode != 0:
+            bad += 1
+            r.error("scripts", "%s has a syntax error: %s" % (rel(root, p), res.stderr.strip().splitlines()[0] if res.stderr.strip() else "bash -n failed"))
+    if scripts and not bad:
+        r.ok("scripts", "%d scripts pass the syntax check (bash -n)" % len(scripts))
+    sc = shutil.which("shellcheck")
+    if not sc:
+        r.warn("scripts", "shellcheck is not installed, skipped (sudo apt install shellcheck)")
+    elif scripts:
+        res = subprocess.run([sc, "-S", "warning"] + scripts, capture_output=True, text=True)
+        if res.returncode == 0:
+            r.ok("scripts", "shellcheck found nothing")
+        else:
+            r.warn("scripts", "shellcheck reports warnings (run: shellcheck -S warning scripts/*)")
+    # SHA256SUMS
+    sums = os.path.join(d, "SHA256SUMS")
+    if not os.path.isfile(sums):
+        r.error("checksums", "scripts/SHA256SUMS is missing")
+        return
+    listed = {}
+    for line in read_text(sums).decode("utf-8", "replace").splitlines():
+        if not line.strip():
+            continue
+        m = re.match(r"^([0-9a-f]{64})\s+\*?(.+)$", line)
+        if not m:
+            r.error("checksums", "SHA256SUMS has a line that is not a checksum: %r" % line[:60])
+            continue
+        listed[m.group(2).strip()] = m.group(1)
+    present = [f for f in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d, f)) and f != "SHA256SUMS" and not f.startswith(".")]
+    problems = 0
+    for f in present:
+        if f not in listed:
+            problems += 1
+            r.error("checksums", "%s is in scripts/ but not in SHA256SUMS. Add its line." % f)
+    for f, h in listed.items():
+        p = os.path.join(d, f)
+        if not os.path.isfile(p):
+            problems += 1
+            r.error("checksums", "SHA256SUMS lists %s but the file is missing" % f)
+            continue
+        if hashlib.sha256(read_text(p)).hexdigest() != h:
+            problems += 1
+            r.error("checksums", "%s does not match its line in SHA256SUMS (the file changed: rebuild the list with: cd scripts && sha256sum $(ls | grep -v SHA256SUMS) > SHA256SUMS)" % f)
+    if not problems:
+        r.ok("checksums", "SHA256SUMS lists %d files and all checksums match" % len(listed))
+
+
+def yaml_module():
+    try:
+        import yaml  # type: ignore
+        return yaml
+    except Exception:
+        return None
+
+
+def check_yaml_files(root, files, r):
+    yaml = yaml_module()
+    ys = [p for p in files if p.lower().endswith((".yaml", ".yml"))]
+    if not yaml:
+        r.warn("yaml", "PyYAML is not installed, YAML checks skipped (sudo apt install python3-yaml)")
+        return
+    bad = 0
+    for p in ys:
+        text = read_text(p).decode("utf-8", "replace").replace("\r\n", "\n")
+        try:
+            list(yaml.safe_load_all(text))
+        except Exception as e:  # noqa: BLE001
+            bad += 1
+            first = str(e).strip().splitlines()[0] if str(e).strip() else "parse error"
+            mark = getattr(e, "problem_mark", None)
+            where = " (line %d)" % (mark.line + 1) if mark else ""
+            r.error("yaml", "%s does not parse%s: %s" % (rel(root, p), where, first))
+    if ys and not bad:
+        r.ok("yaml", "%d YAML files parse" % len(ys))
+
+
+# ---- markdown
+def slug(h):
+    h = re.sub(r"[`*]", "", h.strip().lower())
+    h = re.sub(r"[^\w\- ]", "", h)
+    return h.replace(" ", "-")
+
+
+def split_markdown(text):
+    """Return (text without fenced code, list of (lang, body, start_line), balanced?)."""
+    lines = text.split("\n")
+    blocks = []
+    keep = []
+    i = 0
+    balanced = True
+    while i < len(lines):
+        m = re.match(r"^(\s*)(`{3,})\s*(\S*)\s*$", lines[i])
+        if m:
+            fence = m.group(2)
+            j = i + 1
+            body = []
+            closed = False
+            while j < len(lines):
+                if re.match(r"^\s*" + fence + r"\s*$", lines[j]):
+                    closed = True
+                    break
+                body.append(lines[j])
+                j += 1
+            if not closed:
+                balanced = False
+            blocks.append((m.group(3) or "", "\n".join(body), i + 1))
+            keep.append("")
+            i = j + 1
+        else:
+            keep.append(lines[i])
+            i += 1
+    return "\n".join(keep), blocks, balanced
+
+
+def md_info(path):
+    text = read_text(path).decode("utf-8", "replace")
+    plain, blocks, balanced = split_markdown(text)
+    heads = {}
+    for m in re.finditer(r"^(#{1,6})\s+(.*)$", plain, re.M):
+        s = slug(m.group(2))
+        n = heads.get(s, 0)
+        heads[s] = n + 1
+    anchors = set()
+    for s, n in heads.items():
+        anchors.add(s)
+        for k in range(1, n):
+            anchors.add("%s-%d" % (s, k))
+    return {"text": text, "plain": plain, "blocks": blocks, "balanced": balanced, "anchors": anchors}
+
+
+def markdown_files(root):
+    out = []
+    for p in walk(root):
+        if p.lower().endswith(".md"):
+            out.append(p)
+    return out
+
+
+def check_markdown(root, r):
+    mds = markdown_files(root)
+    if not mds:
+        r.warn("markdown", "no Markdown files here, Markdown checks skipped")
+        return {}
+    info = {os.path.abspath(p): md_info(p) for p in mds}
+    yaml = yaml_module()
+    for p in mds:
+        name = rel(root, p)
+        base = os.path.dirname(os.path.abspath(p))
+        mi = info[os.path.abspath(p)]
+        bad = 0
+        if not mi["balanced"]:
+            bad += 1
+            r.error(name, "a code fence (```) is opened and never closed")
+        # links
+        for m in re.finditer(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", mi["plain"]):
+            u = m.group(1)
+            if u.startswith(("mailto:", "tel:")):
+                continue
+            if u.startswith("#"):
+                if u[1:] not in mi["anchors"]:
+                    bad += 1
+                    r.error(name, "link to a heading that does not exist: %s" % u)
+                continue
+            gm = re.match(r"https://github\.com/[^/]+/[^/]+/blob/[^/]+/([^?#]+)", u)
+            if gm:
+                if not os.path.exists(os.path.join(root, gm.group(1))):
+                    bad += 1
+                    r.error(name, "link points to a file that is not in the repository: %s" % gm.group(1))
+                continue
+            if re.match(r"^[a-z]+://", u):
+                continue
+            path, _, frag = u.partition("#")
+            target = os.path.abspath(os.path.join(base, path)) if path else os.path.abspath(p)
+            if path and not os.path.exists(target):
+                bad += 1
+                r.error(name, "link to a file that does not exist: %s" % path)
+            elif frag and target in info and frag not in info[target]["anchors"]:
+                bad += 1
+                r.error(name, "link to a heading that does not exist in %s: #%s" % (path, frag))
+        # code blocks
+        nb = 0
+        for lang, body, line in mi["blocks"]:
+            if lang == "bash":
+                nb += 1
+                tf = tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False)
+                tf.write(body + "\n")
+                tf.close()
+                res = subprocess.run(["bash", "-n", tf.name], capture_output=True, text=True)
+                os.unlink(tf.name)
+                if res.returncode != 0:
+                    bad += 1
+                    msg = res.stderr.strip().splitlines()[0].split(": ", 1)[-1] if res.stderr.strip() else "syntax error"
+                    r.error(name, "bash code block at line %d has a syntax error: %s" % (line, msg))
+            elif lang in ("yaml", "yml") and yaml:
+                nb += 1
+                try:
+                    list(yaml.safe_load_all(body))
+                except Exception as e:  # noqa: BLE001
+                    bad += 1
+                    r.error(name, "yaml code block at line %d does not parse: %s" % (line, str(e).strip().splitlines()[0]))
+        if not bad:
+            r.ok(name, "fences balanced, all links resolve, %d bash/yaml code blocks are valid" % nb)
+    return info
+
+
+def check_installer(root, r):
+    prog = os.path.join(root, "installer", "homelab-setup")
+    if not os.path.isfile(prog):
+        r.warn("installer", "no installer/homelab-setup here, installer checks skipped")
+        return
+    res = subprocess.run([sys.executable, "-c", "import sys; compile(open(sys.argv[1]).read(), sys.argv[1], 'exec')", prog],
+                         capture_output=True, text=True)
+    if res.returncode != 0:
+        r.error("installer", "installer/homelab-setup does not compile: %s" % (res.stderr.strip().splitlines() or ["error"])[-1])
+        return
+    r.ok("installer", "installer/homelab-setup compiles")
+    parts = sorted(f for f in os.listdir(os.path.join(root, "src"))) if os.path.isdir(os.path.join(root, "src")) else []
+    parts = [f for f in parts if re.match(r"^p\d\d_.*\.py$", f)]
+    if not parts:
+        return
+    joined = b"".join(read_text(os.path.join(root, "src", f)) for f in parts)
+    if joined != read_text(prog):
+        r.error("installer", "installer/homelab-setup is not the join of src/p*.py. Rebuild it with: bash tools/build.sh")
+    else:
+        r.ok("installer", "installer/homelab-setup is exactly the join of the %d files in src/" % len(parts))
+
+
+def check_secrets(root, files, r):
+    found = 0
+    for p in files:
+        data = read_text(p)
+        if not is_text(p, data):
+            continue
+        for n, line in enumerate(data.decode("utf-8", "replace").split("\n"), 1):
+            for what, rx in SECRET_PATTERNS:
+                m = rx.search(line)
+                if not m:
+                    continue
+                val = m.group(2) if rx.groups >= 2 else m.group(0)
+                if "homelab-check: ignore" in line:
+                    continue
+                if rx.groups >= 2 and (PLACEHOLDER.search(val) or line[m.end():].startswith("(")):
+                    continue   # a placeholder, or a function call such as need_password(...)
+                if rx.groups >= 2 and rel(root, p).startswith("tests" + os.sep):
+                    continue   # the tests use made-up passwords on purpose
+                found += 1
+                r.error("secrets", "%s line %d looks like %s (%s). Replace it with a placeholder." % (rel(root, p), n, what, mask(val)))
+                break
+    if not found:
+        r.ok("secrets", "no keys, tokens or passwords that look real")
+
+
+def check_private(root, words_file, r):
+    mds = markdown_files(root)
+    try:
+        words = [w.rstrip("\n") for w in open(words_file, encoding="utf-8") if w.strip()]
+    except OSError as e:
+        r.error("private-words", "cannot read the words file %s: %s" % (words_file, e))
+        return
+    hits = 0
+    for p in mds:
+        text = read_text(p).decode("utf-8", "replace").split("\n")
+        for w in words:
+            for n, line in enumerate(text, 1):
+                if w in line:
+                    hits += 1
+                    r.error("private-words", "%s line %d contains \"%s\"" % (rel(root, p), n, w))
+    if not hits:
+        r.ok("private-words", "none of the %d words in your list appear in the Markdown files" % len(words))
+
+
+def check_repo_files(root, r):
+    if os.path.isfile(os.path.join(root, ".gitattributes")):
+        r.ok("repository", ".gitattributes is present")
+    else:
+        r.warn("repository", ".gitattributes is missing (it keeps line endings as LF: * text=auto eol=lf)")
+
+
+def run(root, readme_words):
+    r = Report()
+    files = walk(root)
+    check_repo_files(root, r)
+    check_line_endings(root, files, r)
+    check_scripts(root, r)
+    check_yaml_files(root, files, r)
+    check_installer(root, r)
+    check_markdown(root, r)
+    check_secrets(root, files, r)
+    if readme_words:
+        check_private(root, readme_words, r)
+    return r
+
+
+def main(argv):
+    args = argv[1:]
+    if args and args[0] in ("version", "--version"):
+        print("homelab-check " + VERSION)
+        return 0
+    if args and args[0] in ("help", "--help", "-h"):
+        print(__doc__.strip("\n"))
+        return 0
+    words = None
+    folder = None
+    i = 0
+    while i < len(args):
+        if args[i] in ("--private-words", "--readme-clean"):
+            if i + 1 >= len(args):
+                print("ERROR: --private-words needs a file name", file=sys.stderr)
+                return 2
+            words = args[i + 1]
+            i += 2
+        elif folder is None:
+            folder = args[i]
+            i += 1
+        else:
+            print("ERROR: too many arguments. Try: homelab-check help", file=sys.stderr)
+            return 2
+    root = os.path.abspath(os.path.expanduser(folder or os.environ.get("HOMELAB_DOCS_DIR", "~/My-Home-Lab-")))
+    if not os.path.isdir(root):
+        print("ERROR: %s is not a folder. Give the folder with README.md in it." % root, file=sys.stderr)
+        return 2
+    if not any(os.path.exists(os.path.join(root, f)) for f in ("README.md", "scripts", "stacks")):
+        print("ERROR: %s does not look like the repository (no README.md, scripts or stacks)." % root, file=sys.stderr)
+        return 2
+    print("Checking %s" % root)
+    r = run(root, words)
+    area = None
+    for level, a, text in r.items:
+        if a != area:
+            print("\n%s" % a)
+            area = a
+        tag = {"ok": "ok     ", "PROBLEM": "PROBLEM", "warning": "warning"}[level]
+        print("  %s  %s" % (paint(level, tag), text))
+    e, w = r.count("PROBLEM"), r.count("warning")
+    print("\n%s" % paint("PROBLEM" if e else "ok", "%d problem(s), %d warning(s)" % (e, w)))
+    if e:
+        print("Fix the problems before you upload these files.")
+    return 1 if e else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
