@@ -5,7 +5,7 @@ Run this command to install this repo and homelab setup.
 On a new Linux Mint 22 or Ubuntu 24.04 machine with internet (about 30 to 60 minutes and 10 GB of downloads):
 
 ```bash
-sudo apt update && sudo apt install -y git
+sudo apt update && sudo apt upgrade && sudo apt install -y git
 git clone https://github.com/IbrandonrtI/My-Home-Lab-.git
 cd My-Home-Lab-
 sudo bash setup.sh install --dry-run     # shows what it would do, changes nothing
