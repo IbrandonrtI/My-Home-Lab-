@@ -1,0 +1,25 @@
+# Beszel agent: reports this machine's CPU, memory, disk and network to the hub.
+# Stack name in Portainer: beszel-agent
+# Port:    45876 (host network). The hub connects to it.
+# Create the values first: in the hub choose Add System, then copy the key and token it shows.
+# KEY and TOKEN below are placeholders (the installer fills them in; by hand, paste your own).
+# The agent must run the same version line as the hub (0.21).
+services:
+  beszel-agent:
+    image: henrygd/beszel-agent:0.21
+    container_name: beszel-agent
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - beszel_agent_data:/var/lib/beszel-agent
+      # monitor other disks / partitions by mounting a folder in /extra-filesystems
+      # - /mnt/disk/.beszel:/extra-filesystems/sda1:ro
+    environment:
+      LISTEN: 45876
+      KEY: 'your-own-key'
+      TOKEN: your-own-key
+      HUB_URL: http://192.168.X.X:8090
+
+volumes:
+  beszel_agent_data:

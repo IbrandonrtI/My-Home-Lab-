@@ -1,0 +1,17 @@
+# Beszel hub: server health graphs (the agent is the separate stack beszel-agent).
+# Stack name in Portainer: beszel
+# Port:    8090 (web interface).
+# Data:    named volume beszel_data (Docker names it beszel_beszel_data).
+# Variables: none.
+services:
+  beszel:
+    image: henrygd/beszel:0.21
+    container_name: beszel
+    restart: unless-stopped
+    ports:
+      - 8090:8090
+    volumes:
+      - beszel_data:/beszel_data
+
+volumes:
+  beszel_data:

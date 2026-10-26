@@ -1,0 +1,22 @@
+# Speedtest Tracker: internet speed tests on a schedule, with history.
+# Stack name in Portainer: speedtest-tracker
+# Port:    8088 (web interface).
+# Folder:  /home/your-username/speedtest-tracker (create it first; owned by the user with uid 1000).
+# APP_KEY: generate your own with  openssl rand -base64 32  and put base64: in front of the result.
+# First login: admin@example.com / password. Change both straight away.
+services:
+  speedtest-tracker:
+    image: lscr.io/linuxserver/speedtest-tracker:1.15.1
+    container_name: speedtest-tracker
+    restart: unless-stopped
+    ports:
+      - "8088:80"
+    volumes:
+      - /home/your-username/speedtest-tracker:/config
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      APP_KEY: "base64:your-own-key"      # replace with your own key
+      APP_DEBUG: "false"
+      APP_URL: "http://192.168.X.X:8088"
+      DB_CONNECTION: sqlite

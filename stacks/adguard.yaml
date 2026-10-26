@@ -1,0 +1,15 @@
+# AdGuard Home: network-wide DNS filter.
+# Stack name in Portainer: adguard
+# Ports:   53 (DNS) and 3000 (web interface), both on the host network.
+# Folders: /opt/adguard-docker/{work,conf} on the boot drive (create them first).
+# Needs:   port 53 free (systemd-resolved turned off, see docs/build-guide.md).
+# Variables: none.
+services:
+  adguard:
+    image: adguard/adguardhome:v0.107.79
+    container_name: adguardhome
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /opt/adguard-docker/work:/opt/adguardhome/work
+      - /opt/adguard-docker/conf:/opt/adguardhome/conf
