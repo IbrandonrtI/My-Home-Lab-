@@ -1,4 +1,4 @@
-# Files that must never be committed: real values and generated files.
+# Real values and generated files stay out of Git.
 secrets.env
 *.env
 !stack.env.example
