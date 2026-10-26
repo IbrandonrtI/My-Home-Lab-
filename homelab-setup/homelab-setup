@@ -13,6 +13,7 @@
 # It never formats or changes a drive. It never stores the password you type.
 # Python 3 standard library only.
 
+import atexit
 import base64
 import datetime
 import getpass
@@ -247,11 +248,7 @@ class Live:
     active = False          # a step is running and the line is shown
     paused = 0              # >0 while a question or an external program owns the screen
     shown = False           # the status line is currently on screen
-    drawn_len = 0           # visible length and window width of the line as it was drawn
-    drawn_cols = 0
-    seen_cols = 0           # last window width seen, and until when to wait after it changed
-    settle_until = 0.0
-    SETTLE = 0.5
+    echo_saved = None       # terminal settings to put back (typing is not echoed while the line is shown)
     title = ""
     note = ""
     t_step = 0.0
@@ -278,11 +275,10 @@ class Live:
         with cls.lock:
             cls.title, cls.note, cls.t_step = title, "", time.time()
             cls.own_clock = own_clock
-            cls.seen_cols = live_cols()
-            cls.settle_until = 0.0
             if not cls.enabled:
                 return
             cls.active = True
+            cls._echo(False)
             cls.stop = False
             if cls.thread is None or not cls.thread.is_alive():
                 cls.thread = threading.Thread(target=cls._loop, daemon=True)
@@ -295,6 +291,7 @@ class Live:
         with cls.lock:
             cls.clear()
             cls.active = False
+            cls._echo(True)
             return time.time() - cls.t_step
 
     @classmethod
@@ -318,25 +315,46 @@ class Live:
                     cls.draw()
 
     @classmethod
-    def abandon(cls):
-        """The window changed width after the line was drawn, so the terminal has re-wrapped it and nothing can be
-        erased reliably. Leave that one stale line where it is and continue on a new line."""
+    def _echo(cls, on):
+        """While the line is shown, keys the person types must not be printed over it, so the echo is switched off
+        and put back when the line goes away (or when a question needs it)."""
+        try:
+            import termios
+            if not sys.stdin.isatty():
+                return
+            if on:
+                if cls.echo_saved is not None:
+                    termios.tcsetattr(0, termios.TCSANOW, cls.echo_saved)
+                    cls.echo_saved = None
+            elif cls.echo_saved is None:
+                saved = termios.tcgetattr(0)
+                new = list(saved)
+                new[3] &= ~termios.ECHO
+                termios.tcsetattr(0, termios.TCSANOW, new)
+                cls.echo_saved = saved
+        except Exception:
+            pass
+
+    @classmethod
+    def clear(cls):
+        """Take the status line off the screen. The cursor always rests at the start of that line, so wiping from there
+        to the end of the screen removes it however the window was resized (a re-wrapped line included)."""
         if cls.shown:
-            cols = live_cols()
-            rows = min(-(-cls.drawn_len // cols), 12) if cols < cls.drawn_len else 1
-            sys.stdout.write("\r" + ("\033[%dA" % (rows - 1) if rows > 1 else "") + "\033[J")
+            sys.stdout.write("\r\033[J\033[?25h")
             sys.stdout.flush()
             cls.shown = False
 
     @classmethod
-    def clear(cls):
-        if cls.shown:
-            if live_cols() != cls.drawn_cols:
-                cls.abandon()
-                return
-            sys.stdout.write("\r\033[K")
-            sys.stdout.flush()
-            cls.shown = False
+    def restore(cls):
+        """On the way out, in every case: the cursor and the typing echo come back."""
+        try:
+            if cls.shown:
+                sys.stdout.write("\r\033[J\033[?25h")
+                sys.stdout.flush()
+                cls.shown = False
+        except Exception:
+            pass
+        cls._echo(True)
 
     @classmethod
     def line(cls, cols):
@@ -375,23 +393,13 @@ class Live:
 
     @classmethod
     def draw(cls):
+        """Draw the line from the start of its row, switch off wrapping so it can never spill onto a second row, wipe
+        whatever an older (wider) copy left to the right or below, and put the cursor back at the start of the row."""
         if not (cls.enabled and cls.active) or cls.paused:
             return
-        cols = live_cols()
-        now = time.time()
-        if cols != cls.seen_cols:                       # the window is being resized: draw nothing until it has settled
-            cls.seen_cols = cols
-            cls.settle_until = now + cls.SETTLE
-        if cls.shown and cols != cls.drawn_cols:
-            cls.abandon()
-        if now < cls.settle_until:
-            return
-        cls.clear()
-        text = cls.line(cols)
-        sys.stdout.write(text)
+        text = cls.line(live_cols())
+        sys.stdout.write("\r\033[?25l\033[?7l" + text + "\033[J\033[?7h\r")
         sys.stdout.flush()
-        cls.drawn_len = len(re.sub(r"\033\[[0-9;]*m", "", text))
-        cls.drawn_cols = cols
         cls.shown = True
 
     class _Paused:
@@ -399,16 +407,28 @@ class Live:
             with Live.lock:
                 Live.clear()
                 Live.paused += 1
+                if Live.active and Live.echo_saved is not None:
+                    try:                               # keys typed while the line was running are not answers
+                        import termios
+                        termios.tcflush(0, termios.TCIFLUSH)
+                    except Exception:
+                        pass
+                Live._echo(True)
 
         def __exit__(self, *a):
             with Live.lock:
                 Live.paused -= 1
+                if Live.active and not Live.paused:
+                    Live._echo(False)
                 Live.draw()
 
     @classmethod
     def pause(cls):
         """Hand the screen to a question or to another program for a while."""
         return cls._Paused()
+
+
+atexit.register(Live.restore)              # never leave the terminal with the cursor hidden or its echo switched off
 
 
 class Abort(Exception):
