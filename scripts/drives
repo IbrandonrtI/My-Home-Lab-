@@ -13,7 +13,7 @@ set -u
 set -o pipefail
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-VERSION="1.2"
+VERSION="1.3"
 TEST_MODE="${DRIVES_TEST:-0}"
 # Owner of the top folder of a new main drive: DRIVES_OWNER, else the user who ran sudo, else the first normal user (uid 1000).
 OWNER="${DRIVES_OWNER:-${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}}"
@@ -1022,6 +1022,15 @@ test_cleanup() {
   say "Test setup removed."
 }
 
+# ---------- FileBrowser ----------
+# FileBrowser shows one folder for every connected drive. After a drive was connected, removed or moved, the installed
+# helper updates those folders (FileBrowser restarts for a few seconds). Without homelab-setup (a hand-built server) nothing happens.
+sync_filebrowser() {
+  [ "$TEST_MODE" = 1 ] && return 0
+  command -v homelab-setup >/dev/null 2>&1 || return 0
+  homelab-setup filebrowser 9>&- || note "FileBrowser's drive folders were not updated. Later, run:  sudo homelab-setup filebrowser"
+}
+
 # ---------- menu ----------
 menu() {
   local c
@@ -1041,13 +1050,13 @@ menu() {
     c=$(ask "Choose: ")
     case "$c" in
       1) status_flow ;;
-      2) connect_flow ;;
-      3) disconnect_flow ;;
-      4) move_flow ;;
-      5) adopt_flow ;;
+      2) connect_flow; sync_filebrowser ;;
+      3) disconnect_flow; sync_filebrowser ;;
+      4) move_flow; sync_filebrowser ;;
+      5) adopt_flow; sync_filebrowser ;;
       6) power_all ;;
-      7) recover_flow ;;
-      8) replace_flow ;;
+      7) recover_flow; sync_filebrowser ;;
+      8) replace_flow; sync_filebrowser ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -1062,14 +1071,14 @@ main() {
   case "${1:-menu}" in
     menu)         menu ;;
     status)       status_flow ;;
-    connect)      connect_flow ;;
-    disconnect)   disconnect_flow ;;
-    move)         move_flow ;;
-    adopt)        adopt_flow ;;
+    connect)      connect_flow; sync_filebrowser ;;
+    disconnect)   disconnect_flow; sync_filebrowser ;;
+    move)         move_flow; sync_filebrowser ;;
+    adopt)        adopt_flow; sync_filebrowser ;;
     power)        power_all ;;
-    recover)      recover_flow ;;
-    replace)      replace_flow ;;
-    restore)      restore_flow ;;
+    recover)      recover_flow; sync_filebrowser ;;
+    replace)      replace_flow; sync_filebrowser ;;
+    restore)      restore_flow; sync_filebrowser ;;
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;

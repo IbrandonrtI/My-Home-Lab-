@@ -3,15 +3,20 @@
 #
 #   homelab           login screen: a summary and the current status
 #   homelab commands  every command I use, in groups
+#                     (the login screen also shows "Suggested Commands": up to four that fit the current state)
 #   homelab status    only the status block
 #   homelab docs    list the sections of the README and of the guides in docs/
 #   homelab secrets rebuild check: what must be in your password manager, and what the
 #                   server can confirm (values are never shown; sudo gives a fuller check)
 #
-# It only reads information. It never changes anything and needs no sudo.
+#   homelab theme     change the Homepage dashboard's background and card colours (homelab theme shows how)
+#   homelab bookmark  add, list or remove bookmarks on the dashboard; logos come from Brandfetch as SVG files
+#
+# Apart from theme and bookmark (which edit the Homepage files in your own home folder), it only reads
+# information. It never needs sudo.
 # ~/.bashrc runs it when a terminal opens (the installer adds that line; see docs/build-guide.md).
 
-VERSION="1.8"
+VERSION="2.0"
 MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
 BACKUP_POOL="${HOMELAB_BACKUP_POOL:-/mnt/backup}"
 LAST_RUN_FILE="${HOMELAB_LAST_RUN_FILE:-/var/lib/homelab-backup/last-run}"
@@ -75,6 +80,34 @@ flush_cmds() {
 }
 section() { flush_cmds; rule "$1"; }
 
+# Suggested commands: status() and setup_line() add entries (priority 1 = most urgent), suggestions() prints the best few.
+SUGG=()
+suggest() {   # suggest PRIORITY COMMAND WHY  (the same command is kept only once)
+  local e
+  for e in "${SUGG[@]}"; do [[ "$e" == *"|$2|"* ]] && return 0; done
+  SUGG+=("$1|$2|$3")
+}
+suggestions() {
+  local max="${HOMELAB_SUGGEST_MAX:-4}" n=0 c why
+  # fill up with everyday commands when little needs doing
+  if [ -d "$HOMEPAGE_DIR" ]; then
+    suggest 8 "homelab theme" "change the dashboard's background and card colours"
+    suggest 8 "homelab bookmark add NAME URL" "add a bookmark to the dashboard, with its logo"
+  fi
+  suggest 9 "sudo homelab-update check" "look online for newer container images"
+  suggest 9 "sudo drives status" "pools, drives, temperatures and the last backup"
+  suggest 9 "homelab commands" "every command, in groups"
+  suggest 9 "homelab docs" "list the sections of the guides"
+  rule "Suggested Commands"
+  while IFS='|' read -r _p c why; do
+    [ -n "$c" ] || continue
+    [ "$n" -ge "$max" ] && break
+    cmd "$c" "$why"; n=$((n + 1))
+  done < <(printf '%s\n' "${SUGG[@]}" | sort -t'|' -k1,1n -s)
+  flush_cmds
+  echo
+}
+
 show_docs() {
   local f
   if [ ! -d "$DOCS_DIR" ]; then
@@ -117,6 +150,8 @@ setup_line() {   # shown only while homelab-setup still has steps left (it remov
   [[ "$d" =~ ^[0-9]+$ && "$t" =~ ^[0-9]+$ ]] || return 0
   [ "$d" -lt "$t" ] || return 0
   printf '   %s%s%s  Setup: %d of %d steps done.  Run  %ssudo homelab-setup%s  to see what is left.\n' "$Y" "$S_WARN" "$N" "$d" "$t" "$B" "$N"
+  suggest 2 "sudo homelab-setup refresh" "carry on with setup ($(( t - d )) steps left)"
+  suggest 2 "sudo homelab-setup" "see the checklist and the next step"
 }
 
 hint_line() {
@@ -142,7 +177,26 @@ commands() {
   cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
   cmd "sudo homelab-restore-configs check" "preview putting the saved configs back on a rebuilt server"
   cmd "homelab-check"                  "check the GitHub files before you upload them"
-  command -v homelab-setup >/dev/null 2>&1 && cmd "sudo homelab-setup" "rebuild or finish setting up a machine: checklist, install, refresh"
+  if command -v homelab-setup >/dev/null 2>&1; then
+    section "Setup checklist"
+    cmd "sudo homelab-setup"             "the checklist: what is done and what is left"
+    cmd "sudo homelab-setup refresh"     "re-check, and continue every step that is now possible"
+    cmd "sudo homelab-setup --details"   "the full instructions of every open step"
+    cmd "sudo homelab-setup verify"      "check that every container and service is up"
+    cmd "sudo homelab-setup fill"        "walk through the logins and keys that need you"
+    cmd "sudo homelab-setup done STEP"   "mark a step you did by hand as done (not for the automatic ones)"
+    cmd "sudo homelab-setup skip STEP"   "mark an optional step as not wanted"
+    cmd "sudo homelab-setup install"     "set everything up, or carry on after a failed step (safe to repeat)"
+    cmd "sudo homelab-setup secrets"     "show the generated passwords and keys once more"
+  fi
+  section "Homepage dashboard"
+  cmd "homelab theme"                  "show the look, and how to change the background and card colours"
+  cmd "homelab theme background URL"   "a new background picture (a web address or a file on this machine)"
+  cmd "homelab theme cards blue 40"    "card colour, and how solid the cards are (0 to 100)"
+  cmd "homelab theme reset"            "the shipped look again"
+  cmd "homelab bookmark add NAME URL"  "add a bookmark; its logo is downloaded as an SVG from Brandfetch"
+  cmd "homelab bookmark list"          "the bookmarks on the dashboard"
+  cmd "homelab bookmark remove NAME"   "take a bookmark away"
   section "Docker, everyday"
   cmd "docker ps --format \"table {{.Names}}\\t{{.Status}}\"" "what is running"
   cmd "docker logs --tail 50 NAME"     "the last 50 lines a container printed"
@@ -161,6 +215,507 @@ commands() {
   cmd "homelab docs"                   "sections of the README and the guides in docs/"
   cmd "git -C ~/My-Home-Lab- pull"     "refresh the guides from GitHub"
   flush_cmds
+}
+
+# ---- homelab theme / homelab bookmark: edit the Homepage files in your own home folder (never needs sudo) ----
+HOMEPAGE_DIR="${HOMELAB_HOMEPAGE_DIR:-$HOME/homepage-config}"
+homepage_edit() {
+  if [ "$(id -u)" -eq 0 ] && [ -z "${HOMELAB_ALLOW_ROOT:-}" ]; then
+    echo "Run this without sudo, as the user who owns $HOMEPAGE_DIR (sudo would make the files belong to root)." >&2
+    return 1
+  fi
+  command -v python3 >/dev/null 2>&1 || { echo "python3 is needed for this command (sudo apt install python3)." >&2; return 1; }
+  HP_DIR="$HOMEPAGE_DIR" HP_DOCS_DIR="$DOCS_DIR" python3 - "$@" <<'PY'
+import os
+import re
+import shutil
+import signal
+import sys
+import urllib.error
+import urllib.request
+from urllib.parse import urlparse
+
+HP = os.environ["HP_DIR"]
+DOCS = os.environ.get("HP_DOCS_DIR", "")
+BASE = os.environ.get("HOMELAB_BRANDFETCH_BASE", "https://cdn.brandfetch.io").rstrip("/")
+SETTINGS = os.path.join(HP, "settings.yaml")
+CSS = os.path.join(HP, "custom.css")
+MARKS = os.path.join(HP, "bookmarks.yaml")
+IMAGES = os.path.join(HP, "images")
+IDFILE = os.path.join(HP, ".brandfetch-client-id")
+B1, B2 = "/* >>> homelab theme >>>", "/* <<< homelab theme <<< */"
+COLORS = {
+    "slate": (14, 19, 31), "black": (0, 0, 0), "white": (255, 255, 255), "gray": (58, 58, 58), "grey": (58, 58, 58),
+    "blue": (30, 58, 138), "navy": (15, 23, 60), "green": (20, 83, 45), "teal": (19, 78, 74), "red": (127, 29, 29),
+    "purple": (59, 7, 100), "pink": (131, 24, 67), "orange": (124, 45, 18), "yellow": (113, 63, 18), "brown": (68, 40, 22),
+}
+ACCENT = {
+    "blue": (36, 140, 255), "green": (104, 186, 72), "red": (209, 18, 18), "purple": (147, 51, 234), "orange": (214, 90, 22),
+    "pink": (236, 72, 153), "teal": (20, 184, 166), "yellow": (234, 179, 8), "cyan": (0, 197, 253), "white": (255, 255, 255),
+    "gray": (148, 163, 184), "grey": (148, 163, 184), "black": (23, 21, 20),
+}
+SERVICES = ("adguard", "tailscale", "beszel", "portainer", "filebrowser", "speedtest", "immich", "nextcloud", "netdata")
+BLURS = ("sm", "md", "lg", "xl", "2xl", "3xl")
+
+
+class Fail(Exception):
+    pass
+
+
+def read(p):
+    try:
+        with open(p, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
+
+
+def write(p, text):
+    if os.path.exists(p) and not os.path.exists(p + ".before-theme") and p != IDFILE:
+        shutil.copy2(p, p + ".before-theme")
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.replace(tmp, p)
+
+
+def need_dir():
+    if not os.path.isdir(HP):
+        raise Fail("The Homepage folder %s does not exist. Set HOMELAB_HOMEPAGE_DIR to the folder that holds settings.yaml." % HP)
+
+
+def parse_color(s, table, what):
+    s = s.strip().lower()
+    if s in table:
+        return table[s]
+    m = re.fullmatch(r"#?([0-9a-f]{6})", s)
+    if m:
+        h = m.group(1)
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+    raise Fail("I don't know the %s colour '%s'. Use a name (%s) or a hex code such as #1e3a8a." % (what, s, ", ".join(sorted(table))))
+
+
+# ---------------------------------------------------------------- settings.yaml: the background block
+def bg_block(text):
+    lines = text.split("\n")
+    for i, l in enumerate(lines):
+        if re.match(r"^background:\s*(#.*)?$", l):
+            j = i + 1
+            while j < len(lines) and (lines[j].startswith(" ") or lines[j].startswith("\t") or lines[j].strip() == "" and j + 1 < len(lines) and lines[j + 1].startswith(" ")):
+                j += 1
+            return lines, i, j
+    return lines, None, None
+
+
+def bg_get(text):
+    lines, i, j = bg_block(text)
+    d = {}
+    if i is None:
+        return d
+    for l in lines[i + 1:j]:
+        m = re.match(r"^\s+([A-Za-z0-9_]+):\s*(.*?)\s*$", l)
+        if m:
+            d[m.group(1)] = m.group(2)
+    return d
+
+
+def bg_set(text, key, value):
+    """Set (or, with value None, remove) one key in the background: block."""
+    lines, i, j = bg_block(text)
+    if i is None:
+        if value is None:
+            return text
+        if not text.endswith("\n") and text:
+            text += "\n"
+        return text + "background:\n  %s: %s\n" % (key, value)
+    for k in range(i + 1, j):
+        if re.match(r"^\s+%s:" % re.escape(key), lines[k]):
+            if value is None:
+                del lines[k]
+            else:
+                lines[k] = "  %s: %s" % (key, value)
+            return "\n".join(lines)
+    if value is not None:
+        lines.insert(j, "  %s: %s" % (key, value))
+    return "\n".join(lines)
+
+
+def quote(s):
+    return "'" + s.replace("'", "''") + "'"
+
+
+def number(s, what, lo=0, hi=100):
+    try:
+        n = int(s)
+    except ValueError:
+        raise Fail("%s must be a whole number from %d to %d." % (what, lo, hi))
+    if not lo <= n <= hi:
+        raise Fail("%s must be from %d to %d." % (what, lo, hi))
+    return n
+
+
+# ---------------------------------------------------------------- custom.css: one marked block at the end
+def css_split(text):
+    a = text.find(B1)
+    if a < 0:
+        return text, ""
+    b = text.find(B2, a)
+    if b < 0:
+        return text, ""
+    return text[:a].rstrip("\n") + "\n", text[a:b + len(B2)]
+
+
+def css_state(block):
+    st = {"cards": None, "accent": {}}
+    m = re.search(r"\.service-card\s*\{\s*background:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)", block)
+    if m:
+        st["cards"] = (int(m.group(1)), int(m.group(2)), int(m.group(3)), float(m.group(4)))
+    for m in re.finditer(r"#(\w+)-card\s*\{\s*--accent:\s*(\d+),\s*(\d+),\s*(\d+);", block):
+        st["accent"][m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    return st
+
+
+def css_build(st):
+    if not st["cards"] and not st["accent"]:
+        return ""
+    out = [B1 + " written by: homelab theme. Remove it with: homelab theme reset */"]
+    if st["cards"]:
+        out.append(".service-card { background: rgba(%d, %d, %d, %s) !important; }" % (st["cards"][0], st["cards"][1], st["cards"][2], ("%.2f" % st["cards"][3]).rstrip("0").rstrip(".") if st["cards"][3] not in (0, 1) else int(st["cards"][3])))
+    for s in SERVICES:
+        if s in st["accent"]:
+            out.append("#%s-card { --accent: %d, %d, %d; }" % ((s,) + st["accent"][s]))
+    out.append(B2)
+    return "\n".join(out) + "\n"
+
+
+def css_save(st):
+    text = read(CSS)
+    head, _ = css_split(text)
+    block = css_build(st)
+    write(CSS, head + ("\n" + block if block else ""))
+
+
+def cur_css():
+    return css_state(css_split(read(CSS))[1])
+
+
+# ---------------------------------------------------------------- theme commands
+REFRESH = "Done. Refresh the Homepage page in the browser (Ctrl+Shift+R) to see it."
+
+
+def theme_show():
+    need_dir()
+    bg = bg_get(read(SETTINGS))
+    st = cur_css()
+    print("  Background    %s" % bg.get("image", "(none)").strip("'"))
+    print("  Dimming       brightness %s, saturation %s, opacity %s, blur %s" % (bg.get("brightness", "default"), bg.get("saturate", "default"), bg.get("opacity", "default"), bg.get("blur", "none")))
+    if st["cards"]:
+        r, g, b, a = st["cards"]
+        print("  Cards         rgb(%d, %d, %d), %d%% solid" % (r, g, b, round(a * 100)))
+    else:
+        print("  Cards         the shipped look (dark slate, 58%% solid)")
+    if st["accent"]:
+        print("  Accents       " + ", ".join("%s rgb(%d, %d, %d)" % ((k,) + v) for k, v in sorted(st["accent"].items())))
+    else:
+        print("  Accents       the shipped colours")
+    print()
+    print("  Change it with:")
+    print("    homelab theme background URL-or-FILE     a picture from the web, or one on this machine")
+    print("    homelab theme brightness 0-100           how dark the picture is (shipped: 42)")
+    print("    homelab theme blur none|sm|md|lg|xl      blur the picture (shipped: md)")
+    print("    homelab theme saturate 0-100 | opacity 0-100")
+    print("    homelab theme cards COLOR [0-100]        card colour and how solid it is (name or #hex)")
+    print("    homelab theme accent SERVICE COLOR       one service's glow and edge colour (or: all)")
+    print("    homelab theme reset                      the shipped look again")
+    print("  Colour names: " + ", ".join(sorted(COLORS)))
+    print("  Services: " + ", ".join(SERVICES))
+
+
+def theme_background(src):
+    need_dir()
+    if re.match(r"^https?://", src):
+        value = quote(src)
+    else:
+        p = os.path.expanduser(src)
+        if not os.path.isfile(p):
+            raise Fail("'%s' is neither a web address (https://...) nor a file on this machine." % src)
+        ext = os.path.splitext(p)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".svg"):
+            raise Fail("Use a picture file (.jpg, .png, .webp, .gif, .avif or .svg).")
+        os.makedirs(IMAGES, exist_ok=True)
+        name = "background" + ext
+        shutil.copyfile(p, os.path.join(IMAGES, name))
+        value = "/images/" + name
+    write(SETTINGS, bg_set(read(SETTINGS), "image", value))
+    print("Background set to %s. %s" % (value.strip("'") if value.startswith("/") else src, REFRESH))
+
+
+def theme_key(key, arg):
+    need_dir()
+    if key == "blur":
+        a = arg.lower()
+        if a in ("none", "off"):
+            write(SETTINGS, bg_set(read(SETTINGS), "blur", None))
+        elif a in BLURS:
+            write(SETTINGS, bg_set(read(SETTINGS), "blur", a))
+        else:
+            raise Fail("blur must be none, " + ", ".join(BLURS) + ".")
+    else:
+        write(SETTINGS, bg_set(read(SETTINGS), key, str(number(arg, key))))
+    print("%s changed. %s" % (key.capitalize(), REFRESH))
+
+
+def theme_cards(color, opacity):
+    need_dir()
+    r, g, b = parse_color(color, COLORS, "card")
+    st = cur_css()
+    a = st["cards"][3] if st["cards"] else 0.58
+    if opacity is not None:
+        a = number(opacity, "How solid the cards are", 0, 100) / 100.0
+    st["cards"] = (r, g, b, a)
+    css_save(st)
+    print("Cards set to rgb(%d, %d, %d), %d%% solid. %s" % (r, g, b, round(a * 100), REFRESH))
+
+
+def theme_accent(service, color):
+    need_dir()
+    service = service.lower()
+    if service != "all" and service not in SERVICES:
+        raise Fail("Unknown service '%s'. Use one of: %s, or all." % (service, ", ".join(SERVICES)))
+    rgb = parse_color(color, ACCENT, "accent")
+    st = cur_css()
+    for s in (SERVICES if service == "all" else (service,)):
+        st["accent"][s] = rgb
+    css_save(st)
+    print("Accent of %s set to rgb(%d, %d, %d). %s" % (service, rgb[0], rgb[1], rgb[2], REFRESH))
+
+
+def theme_reset():
+    need_dir()
+    css_save({"cards": None, "accent": {}})
+    shipped = read(os.path.join(DOCS, "homepage-config", "settings.yaml")) if DOCS else ""
+    if not shipped:
+        shipped = read(SETTINGS + ".before-theme")
+    sb = bg_get(shipped)
+    text = read(SETTINGS)
+    for k in ("image", "blur", "saturate", "brightness", "opacity"):
+        text = bg_set(text, k, sb.get(k))
+    write(SETTINGS, text)
+    print("The shipped look is back. %s" % REFRESH)
+
+
+# ---------------------------------------------------------------- bookmarks
+def marks_groups(text):
+    """[(group, [(name, start, end)])], where start/end are line numbers in text.split('\\n') (end excluded)."""
+    lines = text.split("\n")
+    groups, cur, ent = [], None, None
+    for i, l in enumerate(lines):
+        m = re.match(r"^- (.+?):\s*$", l)
+        if m:
+            if ent:
+                cur[1].append((ent[0], ent[1], i))
+                ent = None
+            if cur:
+                cur[2] = i
+            cur = [m.group(1), [], len(lines)]
+            groups.append(cur)
+            continue
+        m = re.match(r"^    - (.+?):\s*$", l)
+        if m and cur is not None:
+            if ent:
+                cur[1].append((ent[0], ent[1], i))
+            ent = (m.group(1), i)
+    if ent and cur:
+        cur[1].append((ent[0], ent[1], len(lines)))
+    return groups, lines
+
+
+def entry_field(lines, start, end, field):
+    for l in lines[start:end]:
+        m = re.match(r"^\s+(?:- )?%s:\s*(.*?)\s*$" % field, l)
+        if m:
+            return m.group(1)
+    return ""
+
+
+def slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "site"
+
+
+def get_id():
+    return os.environ.get("HOMELAB_BRANDFETCH_ID", "").strip() or read(IDFILE).strip()
+
+
+def fetch_svg(domain, name):
+    cid = get_id()
+    if not cid:
+        return None, "No Brandfetch client ID is saved yet, so no logo was downloaded. Save yours once with:  homelab bookmark brandfetch YOUR-CLIENT-ID"
+    last = ""
+    for kind in ("symbol", "logo", "icon"):
+        url = "%s/%s/theme/dark/%s.svg?c=%s" % (BASE, domain, kind, cid)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "homelab-bookmark/1"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = r.read(2000000)
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            last = str(e)
+            continue
+        head = data[:300].lstrip().lower()
+        if len(data) > 100 and (head.startswith(b"<svg") or head.startswith(b"<?xml")) and b"<svg" in data[:2000].lower():
+            os.makedirs(IMAGES, exist_ok=True)
+            p = os.path.join(IMAGES, slug(name) + ".svg")
+            with open(p, "wb") as f:
+                f.write(data)
+            return "/images/" + slug(name) + ".svg", "Logo saved as images/%s.svg (%s)." % (slug(name), kind)
+    return None, "Brandfetch gave no SVG for %s (%s). The bookmark was added without a logo." % (domain, last or "not found")
+
+
+def make_abbr(name):
+    words = re.findall(r"[A-Za-z0-9]+", name)
+    if len(words) > 1:
+        return "".join(w[0] for w in words)[:4].upper()
+    return (words[0] if words else "?")[:4].upper()
+
+
+def marks_add(name, url, group):
+    need_dir()
+    if not re.match(r"^https?://", url):
+        url = "https://" + url
+    host = urlparse(url).netloc.lower()
+    if not host or " " in url:
+        raise Fail("'%s' is not a web address." % url)
+    domain = re.sub(r"^www\.", "", host.split(":")[0])
+    text = read(MARKS)
+    groups, lines = marks_groups(text)
+    for g in groups:
+        for n, s, e in g[1]:
+            if n.lower() == name.lower():
+                raise Fail("A bookmark named '%s' is already in '%s'. Remove it first:  homelab bookmark remove \"%s\"" % (n, g[0], n))
+    icon, msg = fetch_svg(domain, name)
+    entry = ["    - %s:" % name, "        - abbr: %s" % make_abbr(name), "          href: %s" % url]
+    if icon:
+        entry.append("          icon: %s" % icon)
+    target = next((g for g in groups if g[0].lower() == group.lower()), None)
+    if target:
+        at = target[2]
+        while at > 0 and lines[at - 1].strip() == "":
+            at -= 1
+        new = lines[:at] + [""] + entry + lines[at:]
+        out = "\n".join(new).rstrip("\n") + "\n"
+    else:
+        body = text.rstrip("\n").split("\n") if text.strip() else []
+        out = "\n".join(body + ([""] if body else []) + ["- %s:" % group] + entry).rstrip("\n") + "\n"
+    write(MARKS, out)
+    print("Added '%s' to '%s' (%s). %s" % (name, group if target else group + " (a new group)", url, msg))
+    print("Refresh the Homepage page in the browser to see it.")
+
+
+def marks_list():
+    need_dir()
+    groups, lines = marks_groups(read(MARKS))
+    if not groups:
+        print("There are no bookmarks yet. Add one with:  homelab bookmark add NAME URL [GROUP]")
+        return
+    for g in groups:
+        print("  %s" % g[0])
+        for n, s, e in g[1]:
+            print("    %-22s %s" % (n, entry_field(lines, s, e, "href")))
+
+
+def marks_remove(name):
+    need_dir()
+    text = read(MARKS)
+    groups, lines = marks_groups(text)
+    hit = None
+    for g in groups:
+        for n, s, e in g[1]:
+            if n.lower() == name.lower():
+                hit = (g, n, s, e)
+    if not hit:
+        raise Fail("No bookmark named '%s'. See them with:  homelab bookmark list" % name)
+    g, n, s, e = hit
+    icon = entry_field(lines, s, e, "icon")
+    new = lines[:s] + lines[e:]
+    out = "\n".join(new)
+    out = re.sub(r"([^\n])\n(- )", r"\1\n\n\2", out)
+    out = re.sub(r"\n{3,}", "\n\n", out).rstrip("\n") + "\n"
+    # drop a group that has no bookmarks left
+    g2, l2 = marks_groups(out)
+    for gg in g2:
+        if not gg[1]:
+            del l2[l2.index("- %s:" % gg[0])]
+            out = re.sub(r"\n{3,}", "\n\n", "\n".join(l2)).strip("\n") + "\n"
+            break
+    write(MARKS, out if out.strip() else "")
+    if icon.startswith("/images/") and icon not in out:
+        p = os.path.join(IMAGES, os.path.basename(icon))
+        if os.path.isfile(p):
+            os.remove(p)
+    print("Removed '%s'. Refresh the Homepage page in the browser." % n)
+
+
+def marks_id(cid):
+    need_dir()
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", cid):
+        raise Fail("A Brandfetch client ID is letters, numbers, - and _ (8 to 64 characters). Copy it from your Brandfetch developer page.")
+    with open(IDFILE, "w") as f:
+        f.write(cid + "\n")
+    os.chmod(IDFILE, 0o600)
+    print("Brandfetch client ID saved in %s. New bookmarks now get their logo from Brandfetch." % IDFILE)
+
+
+USAGE_M = """Bookmarks on the Homepage dashboard:
+  homelab bookmark add NAME URL [GROUP]   add one (GROUP is created if it is new; default: Others)
+  homelab bookmark list                   what is there
+  homelab bookmark remove NAME            take one away (and its saved logo)
+  homelab bookmark brandfetch CLIENT-ID   save your Brandfetch client ID once, so logos are downloaded as SVG files"""
+
+
+def main(a):
+    try:
+        if not a:
+            raise Fail("nothing to do")
+        if a[0] == "theme":
+            a = a[1:]
+            c = a[0] if a else ""
+            if c == "":
+                theme_show()
+            elif c in ("background", "bg") and len(a) == 2:
+                theme_background(a[1])
+            elif c in ("brightness", "blur", "saturate", "opacity") and len(a) == 2:
+                theme_key(c, a[1])
+            elif c == "cards" and len(a) in (2, 3):
+                theme_cards(a[1], a[2] if len(a) == 3 else None)
+            elif c == "accent" and len(a) == 3:
+                theme_accent(a[1], a[2])
+            elif c == "reset" and len(a) == 1:
+                theme_reset()
+            else:
+                theme_show()
+                return 2
+        else:
+            a = a[1:]
+            c = a[0] if a else ""
+            if c == "add" and len(a) in (3, 4):
+                marks_add(a[1], a[2], a[3] if len(a) == 4 else "Others")
+            elif c == "list" and len(a) == 1:
+                marks_list()
+            elif c in ("remove", "rm", "delete") and len(a) == 2:
+                marks_remove(a[1])
+            elif c == "brandfetch" and len(a) == 2:
+                marks_id(a[1])
+            else:
+                print(USAGE_M)
+                return 2 if c else 0
+    except Fail as e:
+        print("homelab: %s" % e, file=sys.stderr)
+        return 1
+    return 0
+
+
+signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+sys.exit(main(sys.argv[1:]))
+PY
 }
 
 human_bytes() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1 B"; }
@@ -216,6 +771,7 @@ temps_line() {
   fi
   if [ ! -s "$f" ]; then
     warn "Drive temps" "no readings (is smartmontools installed? try: sudo homelab-sample)"
+    suggest 6 "sudo homelab-sample" "take a drive temperature reading now"
     return 0
   fi
   while IFS="|" read -r label _d t ep; do
@@ -254,7 +810,11 @@ updates_line() {
     else text="${text:+$text; }container images up to date"; fi
     [[ "$line" =~ ^[0-9]+$ ]] && text="$text (checked $(( ( $(date +%s) - line ) / 86400 )) d ago)"
   fi
-  if [ "${n:-0}" -gt 0 ] || [ "$img_n" -gt 0 ]; then warn "Updates" "$text"; else ok "Updates" "$text"; fi
+  if [ "${n:-0}" -gt 0 ] || [ "$img_n" -gt 0 ]; then
+    warn "Updates" "$text"
+    [ "$img_n" -gt 0 ] && suggest 4 "sudo homelab-update" "newer container images are waiting"
+    [ "${n:-0}" -gt 0 ] && suggest 5 "sudo apt update && sudo apt upgrade" "install the waiting system updates"
+  else ok "Updates" "$text"; fi
 }
 
 status() {
@@ -266,8 +826,10 @@ status() {
   elif [ -e "$STATE_DIR/no-data-drive" ]; then
     # written by homelab-setup while no data drive has been set up (or when you skipped that step): not a failure
     warn "Main pool" "no data drive set up yet (when you have one: sudo drives)"
+    suggest 5 "sudo drives" "connect a data drive (a menu; it asks before erasing anything)"
   else
     bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo hdd-recover (drive dead? sudo drives replace)"
+    suggest 1 "sudo hdd-recover" "the data drive is not mounted: remount it and restart the containers"
   fi
 
   # backup pool
@@ -290,15 +852,19 @@ status() {
     [ -n "$age_h" ] && line="$line  (${age_h} h ago)"
     if [ "$result" != "OK" ]; then
       bad "Last backup" "$line -> read: sudo tail -20 /var/log/homelab-backup.log"
+      suggest 1 "sudo tail -20 /var/log/homelab-backup.log" "the last backup failed: read why"
     elif [ -n "$age_h" ] && [ "$age_h" -ge "$STALE_HOURS" ]; then
       warn "Last backup" "$line -> older than ${STALE_HOURS} h"
+      suggest 3 "sudo homelab-backup" "the last backup is old: run one now"
     else
       ok "Last backup" "$line"
     fi
   elif [ -e "$(dirname "$LAST_RUN_FILE")" ]; then
     warn "Last backup" "no result found (check: sudo drives status)"
+    suggest 3 "sudo drives status" "no backup result was found: check the backup"
   else
     warn "Last backup" "no backup has run yet"
+    suggest 4 "sudo homelab-backup" "no backup has run yet: run the first one now"
   fi
 
   backup_size_line
@@ -325,8 +891,10 @@ status() {
     unhealthy=$(timeout 5 docker ps --filter health=unhealthy --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')
     if [ -n "$down" ]; then
       bad "Containers" "${n_run} of ${n_all} running; not running: ${down% }"
+      suggest 1 "docker ps -a" "a container is not running: see which one"
     elif [ -n "$unhealthy" ]; then
       warn "Containers" "${n_run} of ${n_all} running; unhealthy: ${unhealthy% }"
+      suggest 2 "docker logs --tail 50 NAME" "a container is unhealthy: read what it printed"
     else
       ok "Containers" "${n_run} of ${n_all} running"
     fi
@@ -483,6 +1051,8 @@ LIST
 }
 
 case "${1:-}" in
+  theme)  homepage_edit theme "${@:2}" ;;
+  bookmark|bookmarks) homepage_edit bookmark "${@:2}" ;;
   docs)   show_docs ;;
   secrets) secrets ;;
   -h|--help|help)
@@ -495,7 +1065,8 @@ case "${1:-}" in
   "")     BUFFERING=1; status; BUFFERING=0
           header; summary_line; setup_line
           rule "Status"; printf '%s\n' "$STATUS_BUF"
+          suggestions
           hint_line ;;
-  *)      echo "Unknown option '$1'. Try: homelab, homelab commands, homelab status, homelab docs, homelab secrets" >&2; exit 1 ;;
+  *)      echo "Unknown option '$1'. Try: homelab, homelab commands, homelab status, homelab docs, homelab secrets, homelab theme, homelab bookmark" >&2; exit 1 ;;
 esac
 
