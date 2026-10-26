@@ -98,7 +98,7 @@ A background check runs every 10 minutes, so the self-checking steps tick withou
 
 ## Round 3: verification
 
-FileBrowser shows the folders `boot-drive` and `main-storage` (and `backup` once a backup drive is connected). Check each of the following: Homepage; Portainer (all 9 stacks listed and editable); AdGuard Home; Beszel (the agent is listed); Netdata; Speedtest Tracker (log in with the email address and the shared password; the Homepage card shows an error until the first test has run, which is expected); FileBrowser; Immich (log in, create a test upload); Nextcloud (log in, no "trusted domain" error).
+FileBrowser shows one folder named after the system drive and, once drives are connected, `main-storage` and `backup-storage` with one folder per drive inside (the folder names come from the drive's model and size, or from `/etc/homelab-drive-names`). Check each of the following: Homepage; Portainer (all 9 stacks listed and editable); AdGuard Home; Beszel (the agent is listed); Netdata; Speedtest Tracker (log in with the email address and the shared password; the Homepage card shows an error until the first test has run, which is expected); FileBrowser; Immich (log in, create a test upload); Nextcloud (log in, no "trusted domain" error).
 
 On the VM:
 
@@ -118,6 +118,16 @@ With no data drive, the login screen shows a grey "no data drive set up yet" lin
 - **On the VM itself** use the LAN address: `http://<vm-address>:3001`. A machine cannot open its own Tailscale Serve addresses (`https://<vm-name>.<tailnet>.ts.net:1000` and so on); that is normal and not a bug. The installer also keeps Tailscale away from DNS on purpose (`--accept-dns=false`), so the VM does not look up `.ts.net` names at all.
 - **Testing the Tailscale links requires a second device on the same tailnet.** With a separate test account, share the VM with the production account: in the Tailscale admin page open the `...` menu next to the machine, choose Share, generate an invite link, open it in a browser signed in to the production account, accept it, and keep Tailscale running on that PC. Then open `https://<vm-name>.<tailnet>.ts.net:1000` there. The first page can take about 30 seconds while the HTTPS certificate is issued.
 - When testing is finished, remove the shared machine from the production account.
+
+## Round 3b: the changes of the October update
+
+These checks need the real machine; the simulation cannot prove them. Do them after Round 3, with the two extra virtual disks added in the VM settings (any size, for example 20 GB and 10 GB).
+
+1. **Nextcloud, both addresses.** Run `sudo homelab-setup refresh` first (it removes the forced address that an earlier install saved). Then open `http://192.168.X.X:8082` (plain http) and log in; and open the Tailscale address (`https://<machine>.<tailnet>.ts.net:1005`) from a second device and log in. Both must open the login page without a "trusted domain" error, and the local address must **stay** on `192.168.X.X:8082` instead of jumping to the Tailscale name. If the Tailscale address now shows a wrong link or a redirect loop, note the exact address in the browser and the output of `docker exec -u www-data nextcloud php occ config:system:get overwritehost`.
+2. **FileBrowser, one folder per drive.** Log in to FileBrowser (`:8081`). Expect a folder named after the system drive. Connect the first extra disk with `sudo drives` (it becomes `MAIN1`), then open FileBrowser again: `main-storage` must contain one folder, named after the disk (model and size, for example `QEMU HARDDISK 20 GB`), and the contents must be the disk's. Connect the second disk as a backup drive: `backup-storage` appears with its own folder. FileBrowser restarts for a few seconds after each change; that is expected. Then write `MAIN1=1TB HDD` into `/etc/homelab-drive-names` (as root), run `sudo homelab-setup filebrowser`, and check that the folder is now called `1TB HDD`.
+3. **Suggested Commands.** Open a new terminal: a "Suggested Commands" block appears above "Type homelab commands to see every command." Run `homelab commands` and check that `sudo homelab-setup refresh` is in the list.
+4. **Dashboard look.** As the normal user (no `sudo`): `homelab theme cards blue 40`, refresh Homepage with `Ctrl+Shift+R`, and the cards change colour. `homelab theme reset` puts it back. `homelab theme background <a picture address>` changes the picture.
+5. **Bookmarks.** Make a free Brandfetch client ID, run `homelab bookmark brandfetch YOUR-ID`, then `homelab bookmark add Proton https://proton.me`. After a hard refresh, the bookmark shows with its logo. `homelab bookmark remove Proton` removes it.
 
 ## Round 4: a real backup drive and the daily backup
 

@@ -7,7 +7,7 @@ The big files live on hard drives that are grouped into **pools**. The Immich ph
 | `sudo drives` | A menu to see drive health, connect a new drive, disconnect a drive, move a drive between the main and backup pools, recover after an unplug, and replace a dead drive. |
 | `sudo hdd-recover` | Run it after an unplug or a power cut. It finds the containers that use the storage, stops them, remounts every drive and pool, re-applies the power settings and starts the containers again. |
 | `sudo homelab-backup` | Copies the main pool and the boot drive's config files to the backup. It runs by itself from `cron` at 6:00 every day. |
-| `homelab` | Only reads information. Prints a cheat sheet of these commands and a live status (pools, last backup, containers, free space). It runs when a terminal opens ([step 14](#14-the-cheat-sheet-at-login)). |
+| `homelab` | Prints a cheat sheet of these commands, a few **Suggested Commands** based on what needs attention now, and a live status (pools, last backup, containers, free space). It runs when a terminal opens ([step 14](#14-the-cheat-sheet-at-login)). Apart from `homelab theme` and `homelab bookmark`, which change only the Homepage files in your home folder, it only reads. |
 
 **How the storage is organised**
 
@@ -421,7 +421,9 @@ Choose **2** (Connect a new drive), pick the drive and choose **Backup storage**
 
 Then delete the `DEST_FALLBACK` line from `/etc/homelab-backup.conf` and run `sudo homelab-backup`. `sudo drives status` should now show the destination `/mnt/backup`. After one good run on the new drive, free the space on the boot drive by deleting the interim folder (`sudo rm -rf /home/your-username/750GB_HDD/backup-interim`). Check the path before you press Enter.
 
-To browse the backup from FileBrowser, add `- /mnt/backup:/srv/backup` to the volumes in its stack. The container name stays the same, so `hdd-recover` finds it by itself.
+To browse the backup from FileBrowser on a machine set up with the installer, nothing needs adding: run `sudo homelab-setup filebrowser` (it also runs by itself after `sudo drives` connects or disconnects a drive) and the backup drive appears as a folder inside `backup-storage`. On the original server, add `- /mnt/backup:/srv/backup` to the volumes in the stack by hand. The container name stays the same, so `hdd-recover` finds it by itself.
+
+**FileBrowser folders and drive names.** On an installer-built machine FileBrowser shows one folder per drive: the system drive, then `main-storage/<drive>` and `backup-storage/<drive>`. A folder shows the whole drive. The name comes from the drive's model and size (for example `TOSHIBA DT01ACA100 1 TB`). To choose your own, create `/etc/homelab-drive-names` with one `LABEL=Name` per line (for example `MAIN1=1TB HDD`, and `boot=My Mint` for the system drive), then run `sudo homelab-setup filebrowser`. A file saved straight into a drive's folder skips the pool's copy rules and sits on that one drive only, so put new files in the pool paths the apps use unless you mean it.
 
 ## 13. When a drive goes missing
 
@@ -431,7 +433,7 @@ To browse the backup from FileBrowser, add `- /mnt/backup:/srv/backup` to the vo
 
 ## 14. The cheat sheet at login
 
-`homelab` is a small read-only script. It prints the commands from this section, grouped by job, and a live status block. I run it from `~/.bashrc`, so every new terminal shows it, both in a plain SSH session and in the terminal of VS Code Remote-SSH. It never changes anything and needs no `sudo`.
+`homelab` is a small script. It prints the commands from this section (and, when the installer is present, its setup commands such as `sudo homelab-setup refresh`), grouped by job, a short **Suggested Commands** list (what is worth running now: a setup step that is waiting, an old backup, updates, and so on) and a live status block. I run it from `~/.bashrc`, so every new terminal shows it, both in a plain SSH session and in the terminal of VS Code Remote-SSH. Showing the cheat sheet never changes anything and needs no `sudo`. The only commands in it that change files are `homelab theme` and `homelab bookmark`, which edit the Homepage dashboard's own files ([build guide, section 14.5](build-guide.md#145-change-the-look-and-add-bookmarks)). `HOMELAB_SUGGEST_MAX` sets how many suggestions are shown (default 4).
 
 **1. Install it.** Run this on the server. The checksum check is the same one as in [step 2](#2-install-the-scripts), and the commands must run inside the `scripts` folder:
 

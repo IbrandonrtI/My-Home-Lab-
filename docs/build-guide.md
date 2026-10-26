@@ -478,6 +478,8 @@ The container should be `healthy`. `/srv/hdd` should show the data drive (`/dev/
 
 ![FileBrowser's start page listing two drive folders, 750GB_HDD and hdd](images/Filebrowser.png)
 
+The two folders above are how the original server was set up. On a machine built with the installer, FileBrowser instead shows one folder named after the system drive and, for data and backup drives, `main-storage` and `backup-storage` with one folder per drive inside. See [storage](storage.md) for how the names are chosen.
+
 ---
 
 ## 10. Immich
@@ -567,8 +569,8 @@ NC_DB_PASSWORD=your-own-key
 What the settings do:
 
 - `NEXTCLOUD_DATA_DIR: /data` puts the user files on the data drive. It can't be changed after the first install.
-- `OVERWRITEHOST`, `OVERWRITEPROTOCOL` and `OVERWRITECLIURL` tell Nextcloud that it sits behind Tailscale's HTTPS address, so every link it builds is correct. Because of them, log in through the Tailscale address. The local address redirects to it.
-- `TRUSTED_PROXIES` lets Nextcloud trust the forwarded requests from Docker's networks and the server itself.
+- `TRUSTED_PROXIES` lets Nextcloud trust the forwarded requests from Docker's networks and the server itself. Tailscale Serve adds the original address and `https` to each request it forwards, and Nextcloud believes those headers only when they come from a trusted proxy. So the Tailscale link (`https://pc.your-tailnet.ts.net:1005`) builds correct `https` links, and the local link (`http://192.168.X.X:8082`) works as plain `http` on your own network. The local link is for devices at home. It is not encrypted, so don't use it on a Wi-Fi you don't trust.
+- `OVERWRITECLIURL` is the address Nextcloud puts in links that it builds without a browser (the background job). Don't add `OVERWRITEHOST` or `OVERWRITEPROTOCOL`: they force every request, the local ones too, to the Tailscale address.
 
 ### 11.3 Verify
 
@@ -818,3 +820,27 @@ docker exec homepage df -h /mnt/storage
 ```
 
 The cards should show green status dots and live widgets. The second command should show the data drive (about 916G). The Netdata card may leave a `Parse Error` line in the log even though the card is green. That is harmless, and the explanation is in [troubleshooting guide](troubleshooting.md).
+
+### 14.5 Change the look and add bookmarks
+
+Homepage has no page for this in the browser, so two terminal commands do it. Run them as your normal user, **without `sudo`** (they refuse to run as root, so the files do not become root's). They change the files in `~/homepage-config`; the previous `settings.yaml` and `custom.css` are saved as `*.before-theme` the first time.
+
+```bash
+homelab theme                         # shows the current look and the options
+homelab theme background https://example.com/picture.jpg   # or a file on this machine
+homelab theme brightness 50           # how dark the picture is (0 to 100)
+homelab theme cards blue 40           # card colour (name or #hex) and how solid it is (0 to 100)
+homelab theme accent adguard blue     # one service's glow and edge colour (or: all)
+homelab theme reset                   # the shipped look again
+```
+
+A picture from the web is downloaded once and kept in `~/homepage-config/images`, so the dashboard works without the internet. The colour settings are written into a marked block at the end of `custom.css`; `homelab theme reset` removes exactly that block and nothing else.
+
+```bash
+homelab bookmark brandfetch YOUR-CLIENT-ID   # once: your own free key from brandfetch.com
+homelab bookmark add Proton https://proton.me   # a group name can follow: ... Proton https://proton.me News
+homelab bookmark list
+homelab bookmark remove Proton
+```
+
+A bookmark's logo is downloaded as an SVG file from [Brandfetch](https://brandfetch.com)'s logo service, which needs a free client ID (get one from Brandfetch's developer pages, under the Logo API). The ID is saved in `~/homepage-config/.brandfetch-client-id`, readable only by you, and is never sent anywhere except to Brandfetch. Without an ID, or when Brandfetch has no logo for a site, the bookmark is still added, without a logo. After either command, refresh the dashboard page in the browser (a hard refresh, `Ctrl+Shift+R`) to see the change. Both commands show up as suggestions when a terminal opens.

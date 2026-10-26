@@ -606,7 +606,15 @@ docker exec -u www-data nextcloud php occ config:system:get trusted_domains
 docker exec -u www-data nextcloud php occ config:system:set trusted_domains 3 --value=pc.your-tailnet.ts.net
 ```
 
-Because the stack sets `OVERWRITEHOST` and `OVERWRITEPROTOCOL`, log in with the Tailscale address. The local `192.168.X.X:8082` address redirects to it.
+Both `https://pc.your-tailnet.ts.net:1005` and `http://192.168.X.X:8082` work. If the local address still redirects to the Tailscale one, an older install saved a forced address in Nextcloud's own settings. Check and remove it:
+
+```bash
+docker exec -u www-data nextcloud php occ config:system:get overwritehost
+docker exec -u www-data nextcloud php occ config:system:delete overwritehost
+docker exec -u www-data nextcloud php occ config:system:delete overwriteprotocol
+```
+
+Also remove `OVERWRITEHOST` and `OVERWRITEPROTOCOL` from the stack's environment in Portainer, and redeploy.
 
 **Verify:** the first command lists the new domain, and the Tailscale address loads the login page.
 
@@ -702,6 +710,8 @@ Press `Ctrl+C` when the install finishes and Apache is ready.
 **Symptom:** clicking the Nextcloud link on its Tailscale port sends you to `https://pc.your-tailnet.ts.net:8441/login`, a port that no longer exists.
 
 **Cause:** `OVERWRITEHOST` and `OVERWRITECLIURL` in the stack still had the old port (8441). They tell Nextcloud to build every link with that port. I had renumbered the Tailscale ports, so Nextcloud was now at 1005.
+
+**Note:** the stack file in this repository no longer has `OVERWRITEHOST` or `OVERWRITEPROTOCOL` (see [D1](#d1-access-through-untrusted-domain)), so a new install doesn't have this problem. Keep reading only if your stack still has them.
 
 **Fix:** in Portainer, open the `nextcloud` stack, click **Editor** and change the two lines in the `app` service:
 
