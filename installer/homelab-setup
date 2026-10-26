@@ -42,6 +42,7 @@ HOST_OVERRIDE = os.environ.get("HLS_HOST", "")              # tests: where the s
 
 
 def P(path):
+    """Path of `path` inside the machine's root folder (the real root, or the fake one under test)."""
     return ROOT + path
 
 
@@ -137,6 +138,7 @@ def window_rows():
 
 
 def term_cols():
+    """Width of the terminal in columns, at least 40."""
     return max(window_cols(), 40)
 
 
@@ -146,12 +148,14 @@ def live_cols():
 
 
 def out(msg=""):
+    """Print one line, keeping the pinned progress bar on the bottom row."""
     with Live.lock:
         Live.sync()
         print(msg, flush=True)
 
 
 def rule(title):
+    """Print a section heading."""
     w = min(term_cols(), 76)
     n = max(w - len(title) - 8, 3)
     out("")
@@ -169,6 +173,7 @@ def _protect(text):
 
 
 def wrap(text, indent, width=None):
+    """Wrap `text` to the terminal width with `indent` spaces in front of every line."""
     width = (width or min(term_cols(), 100)) - indent
     lines = []
     for para in _protect(text).split("\n"):
@@ -210,25 +215,30 @@ def styled(text, indent, base=""):
 
 
 def say(msg, indent=2):
+    """Print a plain message, wrapped and indented."""
     for l in styled(msg, indent):
         out(l)
 
 
 def good(msg):
+    """Print a message marked as done (green tick)."""
     out("  %s%s%s %s" % (G, S_OK, N, msg))
 
 
 def warn(msg):
+    """Print a message marked as a warning."""
     for i, l in enumerate(styled(msg, 4)):
         out(("  %s!%s " % (Y, N) + l[4:]) if i == 0 else l)
 
 
 def bad(msg):
+    """Print a message marked as a failure (red cross)."""
     for i, l in enumerate(styled(msg, 4)):
         out(("  %s%s%s " % (R, S_BAD, N) + l[4:]) if i == 0 else l)
 
 
 def log(msg):
+    """Append a line to the installer's log file, with the administrator password masked."""
     try:
         for word in [Runtime.password] + list(Runtime.hide):
             if word and len(word) >= 6:
@@ -242,6 +252,7 @@ def log(msg):
 
 # ---------------------------------------------------------------- live progress line
 def fmt_time(sec):
+    """Seconds as a short text such as '45s' or '3m 10s'."""
     sec = int(sec)
     if sec < 60:
         return "%ds" % sec
@@ -486,6 +497,7 @@ class Abort(Exception):
 
 # ---------------------------------------------------------------- global switches
 class Opt:
+    """Command-line options."""
     dry = False
     yes = False
     backup = None
@@ -524,20 +536,24 @@ def act(args, **kw):
 
 
 def have(cmd):
+    """True when the command exists on this machine."""
     return shutil.which(cmd) is not None
 
 
 def docker(*args, **kw):
+    """Run a docker command and return (exit code, output)."""
     return run(["docker"] + list(args), **kw)
 
 
 def apt_install(pkgs):
+    """Install packages with apt without asking questions (does nothing in a dry run)."""
     env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
     act(["apt-get", "install", "-y", "-q"] + list(pkgs), env=env, check=True, timeout=1800)
 
 
 # ---------------------------------------------------------------- files
 def read_file(path, default=""):
+    """Contents of a text file, or `default` when it cannot be read."""
     try:
         with open(path) as f:
             return f.read()
@@ -546,6 +562,7 @@ def read_file(path, default=""):
 
 
 def write_file(path, text, mode=None, owner=None):
+    """Write a text file (atomically, with the given mode and owner); a dry run only says what would be written."""
     if Opt.dry:
         out("      would write: %s" % path)
         return
@@ -561,11 +578,12 @@ def write_file(path, text, mode=None, owner=None):
 
 
 def chown(path, uid, gid, recursive=False):
+    """Change the owner of a path, and of everything under it when `recursive` is set."""
     if FAKE or Opt.dry:
         return
     try:
         if recursive and os.path.isdir(path):
-            for dp, dn, fn in os.walk(path):
+            for dp, _dirs, fn in os.walk(path):
                 os.chown(dp, uid, gid)
                 for n in fn:
                     try:
@@ -578,6 +596,7 @@ def chown(path, uid, gid, recursive=False):
 
 
 def mkdirs(path, uid=None, gid=None, mode=0o755):
+    """Create a folder and its parents with the given owner and mode."""
     if Opt.dry:
         if not os.path.isdir(path):
             out("      would create folder: %s" % path)
@@ -592,6 +611,7 @@ def mkdirs(path, uid=None, gid=None, mode=0o755):
 
 
 def sha(path):
+    """SHA-256 of a file as hex text, or '' when it cannot be read."""
     try:
         return hashlib.sha256(open(path, "rb").read()).hexdigest()
     except OSError:
@@ -603,14 +623,17 @@ ALNUM = string.ascii_letters + string.digits
 
 
 def rand_alnum(n=24):
+    """A random password of letters and digits."""
     return "".join(pysecrets.choice(ALNUM) for _ in range(n))
 
 
 def rand_hex(n=24):
+    """A random hex string of 2*n characters."""
     return pysecrets.token_hex(n)
 
 
 def rand_app_key():
+    """A random 32-byte application key in the 'base64:...' form Laravel apps expect."""
     return "base64:" + base64.b64encode(pysecrets.token_bytes(32)).decode()
 
 
@@ -676,6 +699,7 @@ def wait_for(fn, what, timeout=300, every=3, quiet=False):
 
 # ---------------------------------------------------------------- questions
 def interactive():
+    """True when a person is typing at a terminal."""
     return sys.stdin.isatty()
 
 
@@ -693,6 +717,7 @@ def stdin_line():
 
 
 def ask(prompt, default=""):
+    """Ask a question; with --yes the default is used without asking."""
     if Opt.yes and default != "":
         return default
     with Live.pause():
@@ -700,6 +725,7 @@ def ask(prompt, default=""):
 
 
 def _ask(prompt, default=""):
+    """Read one answer from the terminal (or from standard input when it is not a terminal)."""
     try:
         if interactive():
             v = input("  %s%s: " % (prompt, (" [%s]" % default) if default else ""))
@@ -717,11 +743,13 @@ def _ask(prompt, default=""):
 
 
 def ask_secret(prompt):
+    """Ask for a secret without echoing it."""
     with Live.pause():
         return _ask_secret(prompt)
 
 
 def _ask_secret(prompt):
+    """Read one secret from the terminal without echo."""
     try:
         if interactive():
             return getpass.getpass("  %s: " % prompt)
@@ -737,6 +765,7 @@ def _ask_secret(prompt):
 
 
 def yesno(prompt, default=False):
+    """Ask a yes/no question; --yes answers yes."""
     if Opt.yes:
         return True
     v = ask(prompt + (" [Y/n]" if default else " [y/N]"), "").lower()
@@ -746,6 +775,7 @@ def yesno(prompt, default=False):
 
 
 def typed(word, prompt):
+    """True when the person typed exactly `word` (used for the confirmations that cannot be undone)."""
     if Opt.yes:
         return True
     return ask(prompt).strip() == word
@@ -867,6 +897,7 @@ def need_password(why):
 
 
 def password_problem(pw):
+    """Why `pw` is not acceptable as the administrator password, or an empty text when it is fine."""
     if len(pw) < 12:
         return "The password must be at least 12 characters (Portainer requires it)."
     if not re.fullmatch(r"[A-Za-z0-9]+", pw):
@@ -934,6 +965,7 @@ class Ctx:
 
 
 def detect_user():
+    """The normal user who ran sudo (the owner of the lab folders)."""
     if os.environ.get("HLS_USER"):
         return os.environ["HLS_USER"]
     u = os.environ.get("SUDO_USER")
@@ -947,6 +979,7 @@ def detect_user():
 
 
 def detect_lan():
+    """This machine's address on the home network."""
     if os.environ.get("HLS_LAN"):
         return os.environ["HLS_LAN"]
     rc, txt = run(["ip", "-4", "route", "get", "1.1.1.1"])
@@ -961,6 +994,7 @@ def detect_lan():
 
 
 def detect_gateway():
+    """The router's address."""
     if os.environ.get("HLS_GATEWAY"):
         return os.environ["HLS_GATEWAY"]
     rc, txt = run(["ip", "-4", "route", "show", "default"])
@@ -969,6 +1003,7 @@ def detect_gateway():
 
 
 def detect_tz():
+    """The machine's time zone name."""
     rc, txt = run(["timedatectl", "show", "-p", "Timezone", "--value"])
     if rc == 0 and txt.strip():
         return txt.strip()
@@ -1009,6 +1044,7 @@ def weather_apply(text, w):
 
 
 def ts_status():
+    """Tailscale's status as a dict, or None when Tailscale is not installed or does not answer."""
     if not have("tailscale"):
         return None
     rc, txt = run(["tailscale", "status", "--json"], timeout=15)
@@ -1022,16 +1058,19 @@ def ts_status():
 
 # ================================================================ docker facts
 def containers_running():
+    """Names of the containers that are running."""
     rc, txt = docker("ps", "--format", "{{.Names}}", timeout=30)
     return set(txt.split()) if rc == 0 else set()
 
 
 def containers_all():
+    """Names of all containers, running or not."""
     rc, txt = docker("ps", "-a", "--format", "{{.Names}}", timeout=30)
     return set(txt.split()) if rc == 0 else set()
 
 
 def stack_up(name):
+    """True when every container of the stack is running."""
     need = STACKS[name][1]
     run_now = containers_running()
     return all(c in run_now for c in need)
@@ -1047,10 +1086,12 @@ def is_existing():
 
 
 def svc_host():
+    """Address used to reach the services from this machine."""
     return HOST_OVERRIDE or Ctx.lan or "127.0.0.1"
 
 
 def url(service, path=""):
+    """Local web address of a service, with an optional path."""
     return "http://%s:%d%s" % (svc_host(), PORTS[service], path)
 
 
@@ -1074,6 +1115,7 @@ def subst(text):
 
 
 def repo_file(*parts):
+    """Path of a file inside the repository the installer was started from."""
     return os.path.join(Ctx.repo, *parts)
 
 
@@ -1104,6 +1146,7 @@ def clean_folder_name(text):
 
 
 def drive_name_overrides():
+    """Drive names chosen in /etc/homelab-drive-names ('LABEL=Name' per line)."""
     names = {}
     for line in read_file(P(DRIVE_NAMES_FILE)).splitlines():
         line = line.strip()
@@ -1208,6 +1251,7 @@ def filebrowser_volumes(text):
 
 
 def stack_text(name):
+    """The stack file for `name` with this machine's values filled in."""
     fn = STACKS[name][0]
     text = read_file(repo_file("stacks", fn))
     if not text:
@@ -1225,6 +1269,7 @@ def stack_text(name):
 
 
 def stack_env(name):
+    """The variables Portainer needs for the stack, as (name, value) pairs."""
     if name == "immich":
         return [("UPLOAD_LOCATION", "/mnt/storage/immich"), ("DB_DATA_LOCATION", Ctx.home + "/immich/postgres"),
                 ("TZ", Ctx.tz), ("IMMICH_VERSION", "release"), ("DB_PASSWORD", Secrets.get("DB_PASSWORD")),
@@ -1236,6 +1281,7 @@ def stack_env(name):
 
 
 def images_in(text):
+    """The image names used in a stack file."""
     imgs = []
     for m in re.finditer(r"^\s*image:\s*(\S+)", text, re.M):
         img = m.group(1).replace("${IMMICH_VERSION:-release}", "release")
@@ -1258,14 +1304,17 @@ HP_CARDS = {   # card id -> (widget type, the fields that hold secrets)
 
 
 def hp_dir():
+    """The Homepage configuration folder."""
     return Ctx.home + "/homepage-config"
 
 
 def hp_path(name="services.yaml"):
+    """Path of one Homepage configuration file."""
     return P(hp_dir() + "/" + name)
 
 
 def _indent(line):
+    """Number of leading spaces of a line."""
     return len(line) - len(line.lstrip(" "))
 
 
@@ -1313,6 +1362,7 @@ def hp_template_widget(card_id):
 
 
 def hp_get(card_id, field, path=None):
+    """Value of a field of one Homepage card, or None when it is not there."""
     lines = read_file(path or hp_path()).split("\n")
     r = hp_ranges(lines, card_id)
     if not r or r[2] is None:
@@ -1325,12 +1375,14 @@ def hp_get(card_id, field, path=None):
 
 
 def hp_has_widget(card_id):
+    """True when the card has a widget block."""
     lines = read_file(hp_path()).split("\n")
     r = hp_ranges(lines, card_id)
     return bool(r and r[2] is not None)
 
 
 def is_placeholder(v):
+    """True when a Homepage value is still a placeholder (empty, your-own-key, X.X ...)."""
     return v is None or v == "" or PH_KEY in v or PH_MAIL in v or "X.X" in v or v in ("yours",)
 
 
@@ -1372,12 +1424,14 @@ def hp_strip_widgets(text):
 
 # ================================================================ steps and the checklist
 class Result:
+    """The state of one step: done, todo, blocked, skip or na, with a detail text."""
     def __init__(self, state, detail=""):
         self.state = state       # done | todo | blocked | failed | na | skip
         self.detail = detail
 
 
 class Step:
+    """One checklist step: `probe()` says whether it is done, `run()` does it."""
     id = ""
     group = ""
     title = ""
@@ -1412,6 +1466,7 @@ BY_ID = {}
 
 
 def step(cls):
+    """Class decorator: register a checklist step."""
     inst = cls()
     STEPS.append(inst)
     BY_ID[inst.id] = inst
@@ -1439,6 +1494,7 @@ def topo():
 
 
 def evaluate():
+    """Check every step and return {step id: Result}, in dependency order."""
     res = {}
     for s in topo():
         if not s.applies():
@@ -1472,12 +1528,14 @@ def evaluate():
 
 
 def counts(res):
+    """(steps done, steps that apply) from a set of results."""
     total = sum(1 for r in res.values() if r.state != "na")
     done = sum(1 for r in res.values() if r.state in ("done", "skip"))
     return done, total
 
 
 def write_progress(res):
+    """Save the progress counts for the login screen (does nothing in a dry run)."""
     if Opt.dry:
         return
     done, total = counts(res)
@@ -1563,6 +1621,7 @@ def pick_next(res):
 
 
 def unblock(res, dry=False):
+    """Turn steps that were blocked into 'todo' once the steps they need are done."""
     for t in STEPS:
         if res[t.id].state == "blocked" and all(res[n].state in ("done", "na", "skip") for n in t.needs):
             if dry:
@@ -1628,10 +1687,12 @@ def run_pass(res, selected=None):
 
 
 class Mode:
+    """How the machine was classified: new, or an existing lab."""
     existing = False          # this machine already runs the lab (built by hand)
 
 
 def fetch_bytes(u, timeout=60):
+    """Download a file and return its bytes."""
     if FAKE:
         if os.environ.get("HLS_FETCH_FAIL"):
             raise OSError("simulated download failure")
@@ -1642,6 +1703,7 @@ def fetch_bytes(u, timeout=60):
 
 
 def pkg_installed(name):
+    """True when the apt package is installed."""
     rc, txt = run(["dpkg-query", "-W", "-f=${Status}", name])
     return rc == 0 and "install ok installed" in txt
 
@@ -1950,6 +2012,7 @@ class ServeMappings(Step):
 
 # ---------------------------------------------------------------- Network: port 53
 def port53_listeners():
+    """Names of the processes that listen on port 53."""
     rc, txt = run(["ss", "-H", "-tulpn", "sport = :53"])
     procs = []
     for line in txt.splitlines():
@@ -2034,6 +2097,7 @@ class DnsStable(Step):
 
 # ---------------------------------------------------------------- Platform
 def folder_plan():
+    """The folders the lab needs, as (path, owner id, group id) tuples."""
     h = Ctx.home
     u, g = Ctx.uid, Ctx.gid
     return [
@@ -2103,6 +2167,7 @@ class SecretsFile(Step):
 
 # ================================================================ Portainer
 class Portainer:
+    """Portainer's web API (login, token, stacks)."""
     jwt = None
     _env_id = None
 
@@ -2363,6 +2428,7 @@ class StackStep(Step):
 
 
 def _register_stacks():
+    """Create one checklist step per Portainer stack."""
     base = ("portainer-env", "folders")
     spec = [
         ("adguard", base + ("port53", "restore-configs"), "AdGuard Home stack (DNS ad blocking)"),
@@ -2422,10 +2488,12 @@ class FileBrowserDrives(Step):
 
 # ================================================================ restore from a backup (only when one is found and you said yes)
 def restore_choice():
+    """What the person chose to restore from a backup (saved in the state file)."""
     return State.data.get("restore", {})
 
 
 def find_backups():
+    """Folders that look like a backup of an earlier lab (they hold main/ and boot-configs/)."""
     import glob
     cands = []
     if Opt.backup:
@@ -2442,6 +2510,7 @@ def find_backups():
 
 
 def dir_size_gb(path):
+    """Size of a folder in gigabytes."""
     rc, txt = run(["du", "-sb", path], timeout=300)
     try:
         return int(txt.split()[0]) / 1073741824.0
@@ -2544,6 +2613,7 @@ class RestoreData(Step):
 
 
 def immich_restored():
+    """True when data was restored from a backup and Immich's own database dumps are present."""
     import glob
     return bool(restore_choice().get("data")) and bool(glob.glob(P("/mnt/storage/immich/backups/*")))
 
@@ -2598,10 +2668,12 @@ class HomepageFiles(Step):
 
 # ================================================================ AdGuard Home
 def adguard_yaml():
+    """Contents of AdGuard Home's settings file."""
     return read_file(P("/opt/adguard-docker/conf/AdGuardHome.yaml"))
 
 
 def adguard_auth():
+    """Basic-authentication header for AdGuard Home's API."""
     pw = Runtime.password or ""
     tok = base64.b64encode(("%s:%s" % (Ctx.admin, pw)).encode()).decode()
     return {"Authorization": "Basic " + tok}
@@ -2661,6 +2733,7 @@ class AdGuardDns(Step):
 
 # ================================================================ Immich
 def immich_initialized():
+    """True when Immich has finished its first-run setup."""
     st, js, _ = http("GET", url("immich", "/api/server/config"), timeout=10)
     return st == 200 and isinstance(js, dict) and bool(js.get("isInitialized"))
 
@@ -2691,6 +2764,7 @@ class ImmichAdmin(Step):
 
 # ================================================================ Nextcloud
 def nc_installed():
+    """True when Nextcloud has finished installing itself."""
     st, js, _ = http("GET", url("nextcloud", "/status.php"), timeout=10)
     return st == 200 and isinstance(js, dict) and js.get("installed") is True
 
@@ -2699,6 +2773,7 @@ FORCED_NC_KEYS = ("overwritehost", "overwriteprotocol")
 
 
 def occ(*args, stdin=None):
+    """Run Nextcloud's `occ` command inside its container."""
     return docker("exec", "-u", "www-data", "nextcloud", "php", "occ", *args, timeout=300)
 
 
@@ -2781,6 +2856,7 @@ class NextcloudRestoreDb(Step):
 
 # ================================================================ Beszel
 def beszel_first_run():
+    """True while Beszel has no user yet."""
     st, js, _ = http("GET", url("beszel", "/api/beszel/first-run"), timeout=10)
     if st == 200 and isinstance(js, dict):
         return bool(js.get("firstRun"))
@@ -2788,6 +2864,7 @@ def beszel_first_run():
 
 
 def beszel_login(email, pw):
+    """Log in to Beszel and return its answer."""
     st, js, _ = http("POST", url("beszel", "/api/collections/users/auth-with-password"),
                      body={"identity": email, "password": pw}, timeout=20)
     return js.get("token") if st == 200 and isinstance(js, dict) else None
@@ -2860,21 +2937,25 @@ class BeszelAgentKey(Step):
 
 # ================================================================ Homepage widgets: create the key, TEST it, then write it
 def basic(user, pw):
+    """Basic-authentication header for a user name and password."""
     return {"Authorization": "Basic " + base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()}
 
 
 def v_adguard(v):
+    """Test the AdGuard Home login with a live request."""
     st, _, _ = http("GET", url("adguard", "/control/status"), headers=basic(v["username"], v["password"]), timeout=10)
     return st == 200
 
 
 def v_tailscale(v):
+    """Test the Tailscale API key with a live request."""
     base = os.environ.get("HLS_TS_API", "https://api.tailscale.com")
     st, _, _ = http("GET", "%s/api/v2/device/%s" % (base, v["deviceid"]), headers=basic(v["key"], ""), timeout=20)
     return st == 200
 
 
 def v_beszel(v):
+    """Test the Beszel login with a live request."""
     for path in ("/api/collections/_superusers/auth-with-password", "/api/admins/auth-with-password"):
         st, js, _ = http("POST", url("beszel", path), body={"identity": v["username"], "password": v["password"]}, timeout=15)
         if st == 200 and isinstance(js, dict) and js.get("token"):
@@ -2883,16 +2964,19 @@ def v_beszel(v):
 
 
 def v_netdata(v):
+    """Test that Netdata answers."""
     return http("GET", url("netdata", "/api/v1/info"), timeout=10)[0] == 200
 
 
 def v_speedtest(v):
+    """Test the Speedtest Tracker token with a live request."""
     st, _, _ = http("GET", url("speedtest", "/api/v1/results/latest"),
                     headers={"Authorization": "Bearer " + v["key"], "Accept": "application/json"}, timeout=15)
     return st not in (0, 401, 403)
 
 
 def v_portainer(v):
+    """Test the Portainer key with a live request."""
     st, _, _ = http("GET", url("portainer", "/api/users/me"), headers={"X-API-Key": v["key"]}, timeout=10)
     if st != 200:
         return False
@@ -2901,16 +2985,19 @@ def v_portainer(v):
 
 
 def v_filebrowser(v):
+    """Test the FileBrowser login with a live request."""
     st, _, _ = http("POST", url("filebrowser", "/api/login"), body={"username": v["username"], "password": v["password"]}, timeout=10)
     return st == 200
 
 
 def v_immich(v):
+    """Test the Immich key with a live request."""
     st, _, _ = http("GET", url("immich", "/api/server/statistics"), headers={"x-api-key": v["key"]}, timeout=15)
     return st == 200
 
 
 def v_nextcloud(v):
+    """Test the Nextcloud token with a live request."""
     st, js, _ = http("GET", url("nextcloud", "/ocs/v2.php/apps/serverinfo/api/v1/info?format=json"),
                      headers={"NC-Token": v["key"], "OCS-APIRequest": "true", "Accept": "application/json"}, timeout=30)
     return st == 200 and isinstance(js, dict) and (js.get("ocs") or {}).get("meta", {}).get("statuscode") == 200
@@ -2995,10 +3082,12 @@ class WidgetStep(Step):
 
 
 def auto_adguard():
+    """Values for the AdGuard Home widget."""
     return {"username": Ctx.admin, "password": need_password("for the AdGuard Home widget")}
 
 
 def auto_beszel():
+    """Create the Beszel superuser and return the values for its widget."""
     pw = need_password("to create the Beszel superuser (the Homepage widget needs one)")
     rc, txt = docker("exec", "beszel", "/beszel", "superuser", "upsert", Ctx.email, pw, timeout=60)
     if rc != 0:
@@ -3007,6 +3096,7 @@ def auto_beszel():
 
 
 def auto_speedtest():
+    """Create the Speedtest Tracker login and token and return the values for its widget."""
     pw = need_password("to set the Speedtest Tracker login")
     esc = lambda s: s.replace("\\", "\\\\").replace("'", "\\'")
     # The container has no "tinker" command, so start the Laravel app from a small PHP script read from stdin.
@@ -3029,6 +3119,7 @@ def auto_speedtest():
 
 
 def auto_portainer():
+    """Create a Portainer token and return the values for its widget."""
     pw = need_password("to create the Portainer token for Homepage")
     if not Portainer.login(pw):
         raise Abort("Portainer rejected the login for %s." % Ctx.admin)
@@ -3042,6 +3133,7 @@ def auto_portainer():
 
 
 def auto_filebrowser():
+    """Set the FileBrowser login and return the values for its widget."""
     pw = need_password("to set the FileBrowser login")
     api = lambda p: url("filebrowser", p)
     st, tok, _ = http("POST", api("/api/login"), body={"username": Ctx.admin, "password": pw}, timeout=10)
@@ -3067,6 +3159,7 @@ def auto_filebrowser():
 
 
 def auto_immich():
+    """Create an Immich API key and return the values for its widget."""
     if immich_restored():
         raise Abort("Immich was restored from a backup, so the key must be created manually: Immich > Account Settings > API Keys (permission server.statistics). Then run `sudo homelab-setup fill`.")
     pw = need_password("to log in to Immich and create the Homepage key")
@@ -3082,6 +3175,7 @@ def auto_immich():
 
 
 def auto_nextcloud():
+    """Create a Nextcloud token and return the values for its widget."""
     tok = rand_hex(24)
     rc, txt = occ("config:app:set", "serverinfo", "token", "--value=" + tok)
     if rc != 0:
@@ -3091,12 +3185,14 @@ def auto_nextcloud():
 
 
 class TailscaleWidget(WidgetStep):
+    """The Homepage Tailscale widget, which needs a key made by hand."""
     def prefill(self):
         Ctx.refresh_tailscale()
         return {"deviceid": Ctx.ts_id}
 
 
 def _register_widgets():
+    """Create one checklist step per Homepage widget."""
     mk = WidgetStep
     items = [
         mk("w-adguard", "adguard-card", "AdGuard Home widget login", ("adguard-setup",), ["username", "password"],
@@ -3135,12 +3231,14 @@ SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"),
 
 
 def render_script(name):
+    """A script from scripts/ ready to install (the user name filled in)."""
     text = read_file(repo_file("scripts", name))
     # the scripts look the lab's user up by themselves (the first normal user); the installed copy names this machine's user
     return text.replace("$(getent passwd 1000 | cut -d: -f1)", Ctx.user)
 
 
 def installed_copy(name, where):
+    """Path of the installed copy of a script, or None when it is not installed."""
     p = P(where + "/" + name)
     if os.path.exists(p):
         return p
@@ -3201,15 +3299,18 @@ CRON_BACKUP = ("homelab-backup", "0 6 * * * /usr/local/sbin/homelab-backup")
 
 
 def crontab_text():
+    """Root's crontab as text ('' when there is none)."""
     rc, txt = run(["crontab", "-l"])
     return txt if rc == 0 else ""
 
 
 def crontab_active(txt):
+    """The crontab without comments and blank lines."""
     return "\n".join(l for l in txt.splitlines() if l.strip() and not l.strip().startswith("#"))
 
 
 def crontab_add(lines):
+    """Add lines to root's crontab unless the same line is already active; the old crontab is saved first."""
     cur = crontab_text()
     if Opt.dry:
         for _, l in lines:
@@ -3306,10 +3407,12 @@ WEATHER_DEFAULT = (40.7128, -74.0060)
 
 
 def boot_id():
+    """An id that changes at every boot."""
     return os.environ.get("HLS_BOOT_ID") or read_file("/proc/sys/kernel/random/boot_id").strip()
 
 
 def chk_weather():
+    """True when the weather widget has coordinates."""
     if State.data.get("weather_set"):
         return True          # a city was chosen at install and written into widgets.yaml
     txt = read_file(P(Ctx.home + "/homepage-config/widgets.yaml"))
@@ -3369,6 +3472,7 @@ def chk_devices_dns():
 
 
 def chk_speedtest():
+    """True when Speedtest Tracker's widget has a real key."""
     key = hp_get("speedtest-card", "key")
     if is_placeholder(key):
         return False
@@ -3428,6 +3532,7 @@ class AckStep(Step):
 
 
 def _register_acks():
+    """Create the checklist steps that only a person can confirm."""
     items = [
         AckStep("secrets-saved", "Generated passwords copied into your password manager",
                 "Show the generated passwords and keys, copy them into your password manager, and store the admin password you chose there as well. They are kept in /root/.homelab-setup/secrets.env (root only). The step is marked done once this command has been run; the installer cannot check that the passwords were saved.\n$ sudo homelab-setup secrets",
@@ -3504,6 +3609,7 @@ _register_acks()
 
 # ================================================================ commands
 def ensure_root():
+    """Start the installer again under sudo when it was not started as root."""
     if FAKE or os.geteuid() == 0:
         return
     if not have("sudo"):
@@ -3512,6 +3618,7 @@ def ensure_root():
 
 
 def load_all():
+    """Load the state file, the saved secrets and this machine's facts."""
     State.load()
     Secrets.load()
     Ctx.detect()
@@ -3520,6 +3627,7 @@ def load_all():
 
 
 def password_warning():
+    """Explain that one password is used for every login."""
     out("")
     warn("One password is used for every admin login (Portainer, AdGuard Home, Beszel, Immich, Nextcloud, FileBrowser, "
          "Speedtest Tracker). If one service leaks it, all of them are exposed. Homepage's configuration file also stores "
@@ -3557,6 +3665,7 @@ def ask_weather(a):
 
 
 def ask_answers():
+    """Ask the first questions of an install: admin name, email, time zone, city, LAN address and the password."""
     a = State.data["answers"]
     out("")
     say("A few answers are needed first. They stay on this machine and only fill in its configuration files.")
@@ -3591,6 +3700,7 @@ def ask_answers():
 
 
 def preflight():
+    """Check that the machine can run the install."""
     out("")
     if OsSupported().probe() != "done":
         raise Abort(OsSupported().help())
@@ -3624,7 +3734,7 @@ def final_report(res):
     if 0 < http("GET", url("homepage"), timeout=10)[0] < 500:
         good("Your lab is running. Open Homepage: %s" % mark(url("homepage")))
     Secrets.load()
-    keys = [k for k in Secrets.vals]
+    keys = list(Secrets.vals)
     if keys and not State.data.get("secrets_announced"):
         State.data["secrets_announced"] = time.strftime("%F %T")
         State.save()
@@ -3730,6 +3840,7 @@ def next_step_section(res):
 
 
 def cmd_verify():
+    """`verify`: run the system check."""
     load_all()
     if Mode.existing and not Opt.force_existing:
         say("This machine already runs the lab. The system check is for machines set up by the installer.")
@@ -3738,6 +3849,7 @@ def cmd_verify():
 
 
 def cmd_checklist():
+    """Show the checklist."""
     load_all()
     res = evaluate()
     if Mode.existing:
@@ -3763,6 +3875,7 @@ GROUP_BLURB = {
 
 
 def welcome():
+    """Print the welcome screen."""
     say("This turns this machine into a home lab: Docker, Tailscale and nine apps (Homepage, Portainer, AdGuard Home, "
         "Beszel, Netdata, Speedtest Tracker, FileBrowser, Immich and Nextcloud), with their logins and dashboard widgets.")
     out("")
@@ -3780,6 +3893,7 @@ def welcome():
 
 
 def cmd_install():
+    """`install`: plan, ask, then build the lab."""
     load_all()
     if Mode.existing and not Opt.force_existing:
         out("")
@@ -3873,6 +3987,7 @@ def cmd_install():
 
 
 def run_install(res):
+    """Run the install: the early system steps, then the two steps a person must do, then up to four more passes."""
     early = {"os", "apt-upgrade", "packages", "docker", "docker-group", "tailscale-install"}
     rule("Installing")
     run_pass(res, early)
@@ -3897,6 +4012,7 @@ def run_install(res):
 
 
 def cmd_refresh():
+    """`refresh`: check every step again and do what is now possible."""
     load_all()
     if Mode.existing:
         say("This machine already runs the lab. Its checklist is shown read-only.")
@@ -3940,6 +4056,7 @@ def cmd_filebrowser():
 
 
 def cmd_fill():
+    """`fill`: enter the keys that cannot be created automatically."""
     load_all()
     res = evaluate()
     did = False
@@ -3971,6 +4088,7 @@ def cmd_fill():
 
 
 def cmd_mark(kind, sid):
+    """`done` or `skip`: mark a step by hand."""
     load_all()
     if sid not in BY_ID:
         raise Abort("There is no step called '%s'. Names: %s" % (sid, ", ".join(s.id for s in STEPS if s.kind == "ack" or s.optional)))
@@ -3981,6 +4099,7 @@ def cmd_mark(kind, sid):
 
 
 def cmd_secrets():
+    """`secrets`: show the generated passwords and keys."""
     load_all()
     if not Secrets.vals:
         say("No generated passwords or keys are stored on this machine.")
@@ -3998,6 +4117,7 @@ def cmd_secrets():
 
 
 def cmd_progress():
+    """`progress`: write the progress counts for the login screen."""
     load_all()
     res = evaluate()
     write_progress(res)
@@ -4035,6 +4155,7 @@ The installer never formats or modifies a drive and never saves the admin passwo
 
 
 def main(argv):
+    """Read the command line and run the command."""
     import signal
     try:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
