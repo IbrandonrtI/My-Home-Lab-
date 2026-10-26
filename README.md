@@ -1,17 +1,7 @@
 # My Home Lab
 
-[![checks](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml/badge.svg)](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml)
-
-This home lab runs on a small HP mini PC and does ad blocking for the whole network, runs my containers, monitors the machine, stores files and phone photos, and has one dashboard that links to everything. I reach all of it from anywhere through Tailscale, and nothing is open to the public internet.
-
-I also wrote an installer that rebuilds the whole thing on a new Linux Mint or Ubuntu machine. The guides cover every step, including the things that broke along the way.
-
-![The Homepage dashboard on a desktop monitor: cards for each service with live status dots and widgets](docs/images/Homepage-desktop.jpg)
-
-![The Homepage dashboard on a phone, with the same cards in one column](docs/images/Homepage-mobile.jpg)
-
-## Install
-
+# TLDR 
+Run this command to install this repo and homelab setup.
 On a new Linux Mint 22 or Ubuntu 24.04 machine with internet (about 30 to 60 minutes and 10 GB of downloads):
 
 ```bash
@@ -21,6 +11,16 @@ cd My-Home-Lab-
 sudo bash setup.sh install --dry-run     # shows what it would do, changes nothing
 sudo bash setup.sh install               # asks a few questions, then builds the lab
 ```
+
+[![checks](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml/badge.svg)](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml)
+
+This home lab runs on a small HP mini PC and does ad blocking for the whole network, runs my containers, monitors the machine, stores files and phone photos, and has one dashboard that links to everything. I reach all of it from anywhere through Tailscale, and nothing is open to the public internet.
+
+I also wrote an installer that rebuilds the whole thing on a new Linux Mint or Ubuntu machine. The guides cover every step, including the things that broke along the way.
+
+![The Homepage dashboard on a desktop monitor: cards for each service with live status dots and widgets](docs/images/Homepage-desktop.jpg)
+
+![The Homepage dashboard on a phone, with the same cards in one column](docs/images/Homepage-mobile.jpg)
 
 [INSTALL.md](INSTALL.md) shows what you'll see and what's left for you to do afterwards. If you'd rather build it step by step, follow the [build guide](docs/build-guide.md).
 
