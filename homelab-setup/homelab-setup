@@ -120,6 +120,20 @@ def window_cols():
         return 80
 
 
+def window_rows():
+    """The real height of the window (0 when it cannot be found). HLS_ROWS forces a height (tests)."""
+    forced = os.environ.get("HLS_ROWS", "")
+    if forced.isdigit():
+        return int(forced)
+    for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
+        try:
+            if stream is not None and stream.isatty():
+                return os.get_terminal_size(stream.fileno()).lines
+        except (OSError, ValueError):
+            pass
+    return 0
+
+
 def term_cols():
     return max(window_cols(), 40)
 
@@ -131,9 +145,8 @@ def live_cols():
 
 def out(msg=""):
     with Live.lock:
-        Live.clear()
+        Live.sync()
         print(msg, flush=True)
-        Live.draw()
 
 
 def rule(title):
@@ -236,19 +249,25 @@ def fmt_time(sec):
 
 
 class Live:
-    """One status line at the bottom of the screen while a step runs: a spinner, the step, a detail
-    (for example which image is downloading), a bar for the whole install and the elapsed time.
-    It is only drawn on a real terminal (HLS_LIVE=1 forces it for tests). Every normal line printed
-    through out() first wipes the status line and draws it again below, so nothing overlaps.
-    When there is no terminal (a pipe, a log file) nothing is animated: each step prints a plain line instead."""
+    """The progress bar. On a real terminal the bottom row of the window is reserved for it (the way apt does it):
+    a spinner, the step, a detail (for example which image is downloading), a bar for the whole install and the
+    elapsed time. Everything else the installer prints scrolls above it, so the bar is always in the same place and
+    never overlaps a message. The row is painted at an absolute position (cursor saved, row written, cursor put back,
+    all in one write), so nothing depends on where the cursor is or on how the terminal re-wrapped earlier output.
+    When the window changes size the reserved row is set up again for the new size.
+    It is only used on a real terminal (HLS_LIVE=1 forces it for tests). When there is no terminal (a pipe, a log
+    file) nothing is animated: each step prints a plain line instead."""
     lock = threading.RLock()
-    enabled = ((sys.stdout.isatty() and os.environ.get("TERM", "dumb") != "dumb") or os.environ.get("HLS_LIVE") == "1")
+    MIN_ROWS = 8
+    enabled = (((sys.stdout.isatty() and os.environ.get("TERM", "dumb") != "dumb") or os.environ.get("HLS_LIVE") == "1")
+               and (os.environ.get("HLS_LIVE") == "1" or window_rows() >= MIN_ROWS))
     FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if _utf else "|/-\\"
     FULL, EMPTY = ("█", "░") if _utf else ("#", "-")
-    active = False          # a step is running and the line is shown
-    paused = 0              # >0 while a question or an external program owns the screen
-    shown = False           # the status line is currently on screen
-    echo_saved = None       # terminal settings to put back (typing is not echoed while the line is shown)
+    active = False          # a step is running
+    region = False          # the bottom row is reserved and the bar is painted there
+    size = (0, 0)           # (rows, columns) the reserved row was set up for
+    paused = 0              # >0 while a question or an external program owns the keyboard
+    echo_saved = None       # terminal settings to put back (typing is not echoed while a step runs)
     title = ""
     note = ""
     t_step = 0.0
@@ -278,46 +297,51 @@ class Live:
             if not cls.enabled:
                 return
             cls.active = True
-            cls._echo(False)
             cls.stop = False
+            cls._echo(False)
             if cls.thread is None or not cls.thread.is_alive():
                 cls.thread = threading.Thread(target=cls._loop, daemon=True)
                 cls.thread.start()
-            cls.draw()
+            cls.sync()
+            cls.paint()
 
     @classmethod
     def end(cls):
-        """Stop the line and return how many seconds the step took."""
+        """A step is over: return how many seconds it took. The bar stays where it is until the next step."""
         with cls.lock:
-            cls.clear()
             cls.active = False
-            cls._echo(True)
-            return time.time() - cls.t_step
+            cls.own_clock = False
+            cls.note = ""
+            secs = time.time() - cls.t_step
+            cls.paint()
+            return secs
 
     @classmethod
     def set_note(cls, text):
         with cls.lock:
             cls.note = text
-            cls.draw()
+            cls.paint()
 
     @classmethod
     def advance(cls):
         with cls.lock:
             cls.done += 1
+            cls.paint()
 
     @classmethod
     def _loop(cls):
         while not cls.stop:
             time.sleep(0.12)
             with cls.lock:
-                if cls.active and not cls.paused:
+                if cls.active:
                     cls.frame += 1
-                    cls.draw()
+                    cls.sync()
+                    cls.paint()
 
     @classmethod
     def _echo(cls, on):
-        """While the line is shown, keys the person types must not be printed over it, so the echo is switched off
-        and put back when the line goes away (or when a question needs it)."""
+        """While a step runs, keys the person types are not printed (they would only add blank lines); the echo is put
+        back for a question and when the run ends."""
         try:
             import termios
             if not sys.stdin.isatty():
@@ -336,29 +360,65 @@ class Live:
             pass
 
     @classmethod
-    def clear(cls):
-        """Take the status line off the screen. The cursor always rests at the start of that line, so wiping from there
-        to the end of the screen removes it however the window was resized (a re-wrapped line included)."""
-        if cls.shown:
-            sys.stdout.write("\r\033[J\033[?25h")
-            sys.stdout.flush()
-            cls.shown = False
+    def _size(cls):
+        rows, cols = window_rows(), window_cols()
+        if os.environ.get("HLS_LIVE") == "1" and not rows:
+            rows = 24
+        return rows, cols
 
     @classmethod
-    def restore(cls):
-        """On the way out, in every case: the cursor and the typing echo come back."""
-        try:
-            if cls.shown:
-                sys.stdout.write("\r\033[J\033[?25h")
-                sys.stdout.flush()
-                cls.shown = False
-        except Exception:
-            pass
-        cls._echo(True)
+    def sync(cls):
+        """Set the reserved row up (first time) or again (the window changed size)."""
+        if not cls.enabled or not cls.active and not cls.region:
+            return
+        rows, cols = cls._size()
+        if cls.region and (rows, cols) == cls.size:
+            return
+        if rows < cls.MIN_ROWS:                 # too small to keep a bar
+            cls.close()
+            return
+        if cls.region and not cls.paused:
+            # the window was resized: the terminal has moved the old bar row somewhere below the text; wipe whatever
+            # is under the cursor (nothing but that old row can be there)
+            sys.stdout.write("\r\033[J")
+        # one blank line makes room (the screen scrolls if the cursor is on the last row), the cursor goes back up to
+        # where it was (now never on the last row), and the scrolling area is set to every row but the last
+        sys.stdout.write("\n\033[1A\0337\033[1;%dr\0338" % (rows - 1))
+        sys.stdout.flush()
+        cls.region = True
+        cls.size = (rows, cols)
+
+    @classmethod
+    def paint(cls):
+        if not cls.region:
+            return
+        rows, cols = cls.size
+        if cols < 46:                              # too narrow for a readable bar: leave the row empty
+            sys.stdout.write("\0337\033[%d;1H\033[2K\0338" % rows)
+            sys.stdout.flush()
+            return
+        text = cls.line(cols)
+        sys.stdout.write("\0337\033[%d;1H\033[?7l%s\033[K\033[?7h\0338" % (rows, text))
+        sys.stdout.flush()
+
+    @classmethod
+    def close(cls):
+        """Give the last row back and put the typing echo back. Safe to call any number of times."""
+        with cls.lock:
+            try:
+                if cls.region:
+                    rows = cls.size[0]
+                    sys.stdout.write("\0337\033[r\033[%d;1H\033[2K\0338" % rows)
+                    sys.stdout.flush()
+            except Exception:
+                pass
+            cls.region = False
+            cls.active = False
+            cls._echo(True)
 
     @classmethod
     def line(cls, cols):
-        """The status line, never longer than cols - 1 characters (so it can never wrap)."""
+        """The bar, never longer than cols - 1 characters."""
         spin = cls.FRAMES[cls.frame % len(cls.FRAMES)]
         clock = fmt_time(time.time() - (cls.t_step if cls.own_clock or not cls.t_all else cls.t_all))
         n = min(cls.total, max(cls.done, 0)) if cls.total else 0
@@ -384,31 +444,19 @@ class Live:
             if len(title) > room:
                 title = title[:max(room - 3, 1)] + "..."
             pad = " " * max(room - len(title) - len(note_plain), 0)
-            return "  %s%s%s %s%s%s%s" % (C, spin, N, title, note, pad, tail)
+            return "  %s%s%s %s%s%s%s" % (C, spin if cls.active else S_OK, N, title, note, pad, tail)
         # a very narrow window: spinner, counter and time only (or just the spinner)
         short = "  %s %s %s" % (spin, count.replace(" of ", "/"), clock) if count else "  %s %s" % (spin, clock)
         if len(short) > cols - 1:
             short = "  " + spin
         return short[:max(cols - 1, 1)]
 
-    @classmethod
-    def draw(cls):
-        """Draw the line from the start of its row, switch off wrapping so it can never spill onto a second row, wipe
-        whatever an older (wider) copy left to the right or below, and put the cursor back at the start of the row."""
-        if not (cls.enabled and cls.active) or cls.paused:
-            return
-        text = cls.line(live_cols())
-        sys.stdout.write("\r\033[?25l\033[?7l" + text + "\033[J\033[?7h\r")
-        sys.stdout.flush()
-        cls.shown = True
-
     class _Paused:
         def __enter__(self):
             with Live.lock:
-                Live.clear()
                 Live.paused += 1
-                if Live.active and Live.echo_saved is not None:
-                    try:                               # keys typed while the line was running are not answers
+                if Live.echo_saved is not None:
+                    try:                               # keys typed while a step ran are not answers
                         import termios
                         termios.tcflush(0, termios.TCIFLUSH)
                     except Exception:
@@ -418,17 +466,16 @@ class Live:
         def __exit__(self, *a):
             with Live.lock:
                 Live.paused -= 1
-                if Live.active and not Live.paused:
+                if Live.region and not Live.paused:
                     Live._echo(False)
-                Live.draw()
 
     @classmethod
     def pause(cls):
-        """Hand the screen to a question or to another program for a while."""
+        """A question or another program has the keyboard for a while (the bar keeps running)."""
         return cls._Paused()
 
 
-atexit.register(Live.restore)              # never leave the terminal with the cursor hidden or its echo switched off
+atexit.register(Live.close)                 # never leave the terminal with the last row reserved or its echo switched off
 
 
 class Abort(Exception):
@@ -1468,6 +1515,7 @@ def run_pass(res, selected=None):
             bad("%s: the step ran, but its check still reports it as not done." % s.title)
         # steps that were waiting may be ready now
         unblock(res)
+    Live.close()
     return gained
 
 
@@ -3451,6 +3499,7 @@ def preflight():
 
 def final_report(res):
     """End of install: how it went, the generated passwords (then wait for Enter), the checklist, the next step."""
+    Live.close()
     done, total = counts(res)
     failed = [s for s in STEPS if res[s.id].state == "failed"]
     rule("Install finished")
@@ -3920,12 +3969,12 @@ def main(argv):
         elif cmd == "verify":
             cmd_verify()
     except Abort as e:
-        Live.end()
+        Live.close()
         out("")
         bad(str(e))
         return 1
     except KeyboardInterrupt:
-        Live.end()
+        Live.close()
         out("")
         say("Stopped. Finished steps stay finished; run the same command again to continue.")
         return 130
