@@ -6,9 +6,9 @@ This is my home lab. It runs on a small HP mini PC and does ad blocking for the 
 
 I also wrote an installer that rebuilds the whole thing on a fresh Linux Mint or Ubuntu machine, and I wrote down every step in the guides, including the things that broke along the way.
 
-![The Homepage dashboard on a desktop monitor: cards for each service with live status dots and widgets](docs/images/Homepage-desktop.png)
+![The Homepage dashboard on a desktop monitor: cards for each service with live status dots and widgets](docs/images/Homepage-desktop.jpg)
 
-![The Homepage dashboard on a phone, with the same cards in one column](docs/images/Homepage-mobile.png)
+![The Homepage dashboard on a phone, with the same cards in one column](docs/images/Homepage-mobile.jpg)
 
 ## Try it
 

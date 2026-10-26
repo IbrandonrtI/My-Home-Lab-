@@ -14,3 +14,4 @@ tools/* text eol=lf
 
 # Pictures are binary files.
 *.png binary
+*.jpg binary
