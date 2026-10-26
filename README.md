@@ -34,8 +34,8 @@ sudo bash setup.sh install               # asks a few questions, then builds the
 - **A daily backup with a 30-day undo.** `rsync` copies the data and the boot drive's config files every morning at 6:00. Files I delete or replace are kept in dated folders for 30 days, and the Nextcloud database is dumped every day.
 - **Photo backup and a personal cloud.** Immich backs up phone photos, Nextcloud stores files, and Nextcloud can show the Immich library.
 - **Live monitoring.** Beszel, Netdata and Speedtest Tracker feed widgets on the Homepage dashboard.
-- **A cheat sheet at every login.** Every new terminal, over SSH or in VS Code, prints the commands I use and a live status: pools, last backup, containers and free space.
-- **A custom-built dashboard** with frosted-glass cards, status dots, live widgets and a layout that adapts from phones to large monitors.
+- **A cheat sheet at every login.** Every new terminal, over SSH or in VS Code, prints the commands I use, a few suggested commands for what needs attention now, and a live status: pools, last backup, containers and free space.
+- **A custom-built dashboard** with frosted-glass cards, status dots, live widgets and a layout that adapts from phones to large monitors. The background, the card colours and the bookmarks (with logos from Brandfetch) can be changed with two short commands ([build guide, section 14.5](docs/build-guide.md#145-change-the-look-and-add-bookmarks)).
 
 ## Architecture
 

@@ -19,7 +19,12 @@ These change what the scripts or stacks do on a live machine:
 - **`homelab` terminal width.** The login screen asks the terminal for its width first (`stty size`, then `tput cols`, then `$COLUMNS`), so it fits after a window resize.
 - **Help texts.** `homelab-update --help` prints its whole header block (it is longer than before). `setup.sh --help` prints its header and then the installer's help.
 - **`setup.sh`** stops when it is run through a pipe, and installs Python 3 without prompting.
-- **Script versions:** `homelab` 1.8, `drives` 1.2, `homelab-update` 1.2, `homelab-sample` 1.1, `homelab-check` 2.0.
+- **Nextcloud no longer forces the Tailscale address.** `stacks/nextcloud.yaml` drops `OVERWRITEHOST` and `OVERWRITEPROTOCOL`, which sent every request, even from `http://192.168.X.X:8082`, to the Tailscale address. Nextcloud now follows the address it is opened with and trusts the headers of the Docker network and the LAN (`TRUSTED_PROXIES`). The local link is plain `http`, not `https`. The installer's Nextcloud step also removes the two settings from an existing `config.php` (`occ config:system:delete`) the next time it runs. **Not yet proven on a real machine:** that the Tailscale address keeps working (it depends on the headers Tailscale Serve adds); see Round 3b of the VM test guide.
+- **`homelab` can now change files.** `homelab theme` and `homelab bookmark` edit the Homepage files in the user's own `~/homepage-config` (never as root). Showing the cheat sheet still changes nothing. The login screen has a new **Suggested Commands** block, and `homelab commands` lists the setup commands (`sudo homelab-setup refresh`, `--details`, `verify`, `fill`, `done`, `skip`, `install`, `secrets`).
+- **FileBrowser folders.** The installer replaces the two drive lines of the stack with one line per drive: a folder named after the system drive (showing the `~/750GB_HDD` share), `main-storage/<drive name>` and `backup-storage/<drive name>`, each showing the **whole** drive. Writing straight into a drive's folder bypasses the pool's copy rules, and the folders of Immich and Nextcloud on the drive become visible. A drive's name is its model and size, or the name set in `/etc/homelab-drive-names`. The backup is no longer at `/srv/backup` but at `/srv/backup-storage/<name>`. FileBrowser restarts for a few seconds when a drive is connected or removed. The production server's `stacks/filebrowser.yaml` lines are unchanged.
+- **`drives` runs `homelab-setup filebrowser`** after it connects, disconnects, moves, adopts, recovers, replaces or restores a drive, when the installer is installed (it does nothing otherwise, and in test mode).
+- **New command:** `sudo homelab-setup filebrowser` redeploys FileBrowser with the folders that match the drives now connected.
+- **Script versions:** `homelab` 2.0, `drives` 1.3, `homelab-update` 1.2, `homelab-sample` 1.1, `homelab-check` 2.0.
 
 ### Changed
 
@@ -51,6 +56,8 @@ These change what the scripts or stacks do on a live machine:
 - `CHANGELOG.md`, `CONTRIBUTING.md`, `docs/security.md`, `tests/README.md`, `tools/build.sh`, `ruff.toml`.
 - Automatic checks on every push and pull request (`.github/workflows/checks.yml`) and issue forms for bugs and questions.
 - Simulation tests: scenario S24 (a server that already runs the lab is only read), S25 (placeholder substitution), and `tests/run_all.sh`.
+- `homelab theme` (background picture, brightness, blur, card colour and solidity, per-service accent colour, reset) and `homelab bookmark` (add, list, remove; logos are downloaded as SVG files from Brandfetch with the user's own free client ID).
+- Simulation tests: S26 (Nextcloud answers on its local address) and S27 (FileBrowser folders named after the drives); `tests/t_homepage.sh` and `tests/t_names.py`.
 - `tests/t_check.py` (tests of the secret scan in `scripts/homelab-check`) and two new rounds in the [VM test guide](docs/vm-test-guide.md): a real backup drive with the daily backup, and a restore onto a new machine, plus an exact procedure for the "devices use AdGuard Home" step.
 - Notes in the guides about the `docker` group being root-equivalent, and about the Docker socket and the `/` mount in Homepage.
 
