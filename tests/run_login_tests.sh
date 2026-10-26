@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034  # many variables are only used inside the quoted test commands that ok() and check() evaluate
 # Tests for the login screen (scripts/homelab) against fake state files; nothing on this machine is touched.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 H="${H:-$HERE/../scripts/homelab}"; T="${TMPDIR:-/tmp}/homelab-login-test"; PASS=0; FAIL=0

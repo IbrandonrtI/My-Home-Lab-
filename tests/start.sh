@@ -49,7 +49,7 @@ if ! kill -0 "$(cat "$SIM_DIR/server.pid" 2>/dev/null)" 2>/dev/null; then
 rm -f "$SIM_DIR/server.ready"
 /usr/bin/python3 "$SIMSRC/server.py" >"$SIM_DIR/server.log" 2>&1 &
 echo $! > "$SIM_DIR/server.pid"
-for i in $(seq 1 50); do [ -f "$SIM_DIR/server.ready" ] && break; sleep 0.1; done
+for _ in $(seq 1 50); do [ -f "$SIM_DIR/server.ready" ] && break; sleep 0.1; done
 fi
 setw() { SIMSRC="$SIMSRC" python3 - "$@" <<'PY'
 import sys,json,os; sys.path.insert(0,os.environ["SIMSRC"])

@@ -65,6 +65,7 @@ out=$(hl theme reset); check "reset removes the block and brings the shipped bac
 check "after reset custom.css equals the shipped file" 'diff -q <(sed -e :a -e "/^\$/{\$d;N;ba" -e "}" $T/hp/custom.css) <(sed -e :a -e "/^\$/{\$d;N;ba" -e "}" $REPO/homepage-config/custom.css) >/dev/null'
 check "no temporary files are left behind" '[ -z "$(ls $T/hp | grep "\.tmp$")" ]'
 out=$(HOMELAB_HOMEPAGE_DIR=$T/nowhere hl theme); check "a missing Homepage folder gives a plain message" 'echo "$out" | grep -q "does not exist" && ! echo "$out" | grep -qi traceback'
+# shellcheck disable=SC2034  # out is used inside the quoted test command
 out=$(env -u HOMELAB_ALLOW_ROOT bash "$H" theme 2>&1 </dev/null); [ "$(id -u)" -eq 0 ] && check "as root it refuses and explains" 'echo "$out" | grep -q "without sudo"'
 
 echo "PASS=$PASS FAIL=$FAIL"

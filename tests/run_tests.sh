@@ -1,4 +1,5 @@
 #!/bin/bash
+# shellcheck disable=SC2034  # many variables are only used inside the quoted test commands that ok() and check() evaluate
 # Simulation tests for homelab-setup. Everything runs against a FAKE machine (fake apt, docker, Tailscale and web services).
 SIMDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export HLS_BOOT_ID=boot-A; ORIG_PATH="$PATH"; PASS=0; FAIL=0; ONLY="${1:-}"
@@ -121,7 +122,7 @@ fi
 if scen S23; then
 echo "### S23 install on a pseudo-terminal: live status line, Enter after the passwords ticks the step"
 fresh
-SIMDIR=$SIMDIR REPO=$REPO SIM_DIR=$SIM_DIR bash $SIMDIR/t_pty.sh >/dev/null 2>&1
+env SIMDIR="$SIMDIR" REPO="$REPO" SIM_DIR="$SIM_DIR" bash "$SIMDIR/t_pty.sh" >/dev/null 2>&1
 P=$SIM_DIR/pty.out
 ok "S23 the install finishes on a terminal" 'grep -q "Install finished" $P'
 ok "S23 the last row was reserved and the bar with the n of m count was painted" 'grep -aqE "[0-9]+ of [0-9]+ " $P && grep -aq $'"'"'\033\[1;39r'"'"' $P'

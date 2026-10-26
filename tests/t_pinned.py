@@ -47,7 +47,7 @@ for (R, C) in ((30, 100), (18, 100), (18, 60), (24, 120)):
 Live.end(); Live.close(); out("after close")
 r = rows()
 check("closed: last row blank or text only", "of 46" not in " ".join(r))
-allrows = history() + [x for x in rows()]
+allrows = history() + list(rows())
 text = [x for x in allrows if x.strip()]
 seen = [x for x in text if x.startswith("old line") or x.startswith("message") or x.startswith("done 1") or x.startswith("immich") or x.startswith("after")]
 want = ["old line %d" % k for k in range(1, 41)] + ["message %d" % k for k in range(1, 21)] + ["done 1", "immich line"] + ["after resize to %s" % s for s in ("30x100", "18x100", "18x60", "24x120")] + ["after close"]

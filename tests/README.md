@@ -6,7 +6,7 @@ pointed at a fake machine (fake `apt`, `docker`, Tailscale and web services); th
 ```bash
 bash tests/run_all.sh          # everything, about 10 minutes
 bash tests/run_all.sh quick    # a few scenarios, about 1 minute
-bash tests/run_tests.sh S1     # one installer scenario (S1 ... S25)
+bash tests/run_tests.sh S1     # one installer scenario (S1 ... S27)
 bash tests/run_login_tests.sh  # the login screen (scripts/homelab)
 ```
 
