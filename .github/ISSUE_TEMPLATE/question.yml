@@ -1,0 +1,18 @@
+name: Question
+description: You are not sure how something works or which guide to follow.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Look in [docs/troubleshooting.md](https://github.com/IbrandonrtI/My-Home-Lab-/blob/main/docs/troubleshooting.md) first: it lists 67 problems with their fixes. **Never paste passwords, API keys or tokens.**
+  - type: textarea
+    id: question
+    attributes:
+      label: What would you like to know?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: What have you tried, and what is your setup?

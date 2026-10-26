@@ -1,0 +1,51 @@
+name: Bug report
+description: Something in the installer, a script or a guide does not work as described.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting this. **Never paste passwords, API keys, tokens or the contents of `secrets.env`.** Check the log lines for anything private before you share them.
+  - type: dropdown
+    id: part
+    attributes:
+      label: Which part is affected?
+      options:
+        - Installer (setup.sh / homelab-setup)
+        - A script in scripts/ (drives, homelab-backup, homelab, ...)
+        - A stack file in stacks/
+        - Homepage configuration
+        - A guide in docs/
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: happened
+    attributes:
+      label: What happened?
+      description: The text of the failing step (from `sudo homelab-setup`) or the error message, exactly as shown.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How can it be repeated?
+      description: The commands you ran, in order.
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      placeholder: Linux Mint 22.3, Ubuntu Server 24.04, ...
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log (last 60 lines of /var/log/homelab-setup.log, if the installer is involved)
+      render: text
