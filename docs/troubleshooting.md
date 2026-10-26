@@ -1,13 +1,13 @@
 # Troubleshooting
 
-Problems I ran into while building and running this lab, and how I fixed each one. Every entry has the same four parts: **Symptom**, **Cause**, **Fix** and **Verify**. Find your symptom in the list below, or search this page for the error message.
+Problems I ran into while building and running this lab, and how I fixed them. Every entry has the same four parts: **Symptom**, **Cause**, **Fix** and **Check it**. Find your symptom in the list below, or search the page for the error message.
 
-**Conventions**
+**Notes before you start**
 
 - The server is a small PC with the host name `pc`, running Linux Mint 22.3. Addresses and names are placeholders: `your-username` (the Linux user), `192.168.X.X` (the server's address) and `your-tailnet.ts.net` (your Tailscale network). `192.168.X.Y` stands for the address of the old server in the migration notes. Passwords, keys and tokens are written as `your-own-key`.
 - Drive letters change (`sda` and `sdb` can swap after a reboot). Use the label or the UUID for anything permanent, and replace `sda`, `sdb` or `sdX` in a command with your drive's current letter. See [Setup at a glance](#setup-at-a-glance).
 - The tools: `sudo drives` (menu and status), `sudo hdd-recover`, `sudo homelab-backup` and `homelab` (a cheat sheet and live status when a terminal opens). They are explained in the [storage guide](storage.md).
-- Entries marked **Old setup** describe the first server, which used an NTFS-formatted drive. They are kept because the symptoms can come back if you reuse a Windows-formatted drive.
+- Entries marked **Old setup** are from my first server, which used an NTFS drive. I kept them because the same problems can come back if you reuse a Windows-formatted drive.
 
 **Contents**
 
@@ -48,11 +48,11 @@ The nine Portainer stacks are named `adguard`, `beszel`, `beszel-agent`, `filebr
 | Data drive: Toshiba MQ01ABD100 (`sda` today, label `MAIN1`) | 916G usable | Photos, Nextcloud files, FileBrowser share. ext4, mounted at `/mnt/disks/MAIN1` and joined into the main pool at `/mnt/storage` |
 | Backup | no drive yet | The daily 6:00 backup goes to `/home/your-username/750GB_HDD/backup-interim` on the boot drive. A backup drive (label `BACKUP1`, pool `/mnt/backup`) comes later. |
 
-**Drive letters change.** The letters `sda` and `sdb` are not fixed. On my machine they were `sda` for the Hitachi and `sdb` for the Toshiba at first, and they swapped later (the Toshiba is now `sda`, so the data drive's partition is `/dev/sda1`). The expected outputs in this guide show those current letters. If yours differ, read them as "the data drive's partition". Identify drives by model with `lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS`, by the label `MAIN1`, or by the partition mounted at `/boot/efi`. `sudo drives status` lists every pool drive with its current device name.
+**Drive letters change.** The letters `sda` and `sdb` aren't fixed. On my machine they were `sda` for the Hitachi and `sdb` for the Toshiba at first, and they swapped later (the Toshiba is now `sda`, so the data drive's partition is `/dev/sda1`). The expected outputs in this guide show those current letters. If yours differ, read them as "the data drive's partition". Identify drives by model with `lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS`, by the label `MAIN1`, or by the partition mounted at `/boot/efi`. `sudo drives status` lists every pool drive with its current device name.
 
 ## Problems and fixes
 
-Each entry has the same four parts: Symptom, Cause, Fix and Verify. Entries written before the data drive became a pool show it as `/dev/sda1` in the `df` checks. Since the drive became a pool, the same checks show `mergerfs-main` instead, and everything else in them still applies.
+Each entry has the same four parts: Symptom, Cause, Fix and Check it. Entries written before the data drive became a pool show it as `/dev/sda1` in the `df` checks. Now that it's a pool, the same checks show `mergerfs-main` instead, and everything else still applies.
 
 ### A. Drives and storage
 
@@ -77,11 +77,11 @@ sudo mount -t ntfs-3g -o uid=1000,gid=1000 /dev/sdb2 "/media/your-username/USB S
 docker restart filebrowser-filebrowser-1 homepage
 ```
 
-**Verify:** `findmnt /mnt/storage` shows the drive, and the `df` checks from [Step 8](history/storage-setup-notes.md#step-8-verify-it) show the pool in each container.
+**Check it:** `findmnt /mnt/storage` shows the drive, and the `df` checks from [Step 8](history/storage-setup-notes.md#step-8-verify-it) show the pool in each container.
 
 #### A2. A Windows-formatted drive: sdb1 vs sdb2 and the wrong filesystem type error
 
-> **Old setup.** This entry is from the first server, whose data drive was formatted as NTFS (Windows). The lab now uses ext4 drives, where this cannot happen. It is kept for anyone who reuses a Windows-formatted drive.
+> **Old setup.** This entry is from the first server, whose data drive was formatted as NTFS (Windows). The lab now uses ext4 drives, where this can't happen. It is kept for anyone who reuses a Windows-formatted drive.
 
 **Symptom:** mounting fails with `wrong fs type, bad option, bad superblock on /dev/sdb1`.
 
@@ -96,11 +96,11 @@ sudo mount -t ntfs-3g -o uid=1000,gid=1000 /dev/sdb2 "/media/your-username/USB S
 
 If `ntfsfix` says `Refusing to operate on read-write mounted device`, ignore it. `ntfsfix` only works on an unmounted drive, and it's only needed if the mount itself fails with a "dirty" message.
 
-**Verify:** `ls "/media/your-username/USB STICK"` lists your files.
+**Check it:** `ls "/media/your-username/USB STICK"` lists your files.
 
 #### A3. The mount is refused because the NTFS volume is already exclusively opened
 
-> **Old setup.** This entry is from the first server, whose data drive was formatted as NTFS (Windows). The lab now uses ext4 drives, where this cannot happen. It is kept for anyone who reuses a Windows-formatted drive.
+> **Old setup.** This entry is from the first server, whose data drive was formatted as NTFS (Windows). The lab now uses ext4 drives, where this can't happen. It is kept for anyone who reuses a Windows-formatted drive.
 
 **Symptom:** `Mount is denied because the NTFS volume is already exclusively opened.`
 
@@ -118,11 +118,11 @@ findmnt "/media/your-username/USB STICK"
 
 The first command should print nothing. The last should show `/dev/sdb2`. The ext4 setup in [Storage setup notes (build log)](history/storage-setup-notes.md#storage-setup-notes-build-log) avoids this by mounting at `/mnt/storage`.
 
-**Verify:** `findmnt` shows the drive at the fixed path.
+**Check it:** `findmnt` shows the drive at the fixed path.
 
 #### A4. Immich's database keeps restarting on an NTFS drive
 
-> **Old setup.** This entry is from the first server, whose data drive was formatted as NTFS (Windows). The lab now uses ext4 drives, where this cannot happen. It is kept for anyone who reuses a Windows-formatted drive.
+> **Old setup.** This entry is from the first server, whose data drive was formatted as NTFS (Windows). The lab now uses ext4 drives, where this can't happen. It is kept for anyone who reuses a Windows-formatted drive.
 
 **Symptom:** in Portainer, `immich_postgres` and `immich_server` keep restarting. The same stack worked when the folder was on the internal drive.
 
@@ -145,7 +145,7 @@ If a half-built database was left on the data drive, delete only the folder you 
 sudo hdparm -S 0 /dev/sda
 ```
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker ps
@@ -172,7 +172,7 @@ du -sh /home/your-username/immich-ssd-copy "/media/your-username/USB STICK/1TB H
 
 The two sizes should match. Once Immich shows your photos from the data drive, free the space with `sudo rm -rf /home/your-username/immich-ssd-copy`. The lasting fix is the locked mount point and the Docker wait rule from [Step 2](history/storage-setup-notes.md#step-2-add-the-main-drive), which make a missing drive stop the service with an error.
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker exec immich_server df -h /data
@@ -195,7 +195,7 @@ sudo hdd-recover
 
 Before you unplug a drive on purpose, open `sudo drives` and choose **3** (Disconnect a drive). It stops the containers that use the pool and unmounts the drive for you. (Before the pool existed, the manual way was: stop the stacks, run `sudo umount /mnt/storage`, plug the drive back in, run `sudo mount /mnt/storage` and start the stacks.)
 
-**Verify:** the `df` commands in [Step 8](history/storage-setup-notes.md#step-8-verify-it) show the pool in each container.
+**Check it:** the `df` commands in [Step 8](history/storage-setup-notes.md#step-8-verify-it) show the pool in each container.
 
 #### A7. Containers start before the drive is mounted after a reboot
 
@@ -211,9 +211,9 @@ printf '[Unit]\nWants=mnt-storage.mount\nAfter=mnt-storage.mount\n' | sudo tee /
 sudo systemctl daemon-reload
 ```
 
-If a drive of the pool is missing at boot, the pool does not mount, and the locked mount point makes the services fail with an error, so they don't write to the boot drive. Plug the drive in and run `sudo hdd-recover`. I tested the missing-drive case with fake drives, not on my real hardware.
+If a drive of the pool is missing at boot, the pool doesn't mount, and the locked mount point makes the services fail with an error, so they don't write to the boot drive. Plug the drive in and run `sudo hdd-recover`. I tested the missing-drive case with fake drives, not on my real hardware.
 
-**Verify:** after `sudo reboot`, run `findmnt /mnt/storage` and `docker ps`.
+**Check it:** after `sudo reboot`, run `findmnt /mnt/storage` and `docker ps`.
 
 #### A8. The head-parking count is high
 
@@ -234,7 +234,7 @@ sudo hdparm -B /dev/$DATA
 
 The last command should print `APM_level = 254`. Do the same for the boot drive with `/dev/$BOOT`. The `SG_IO: bad/missing sense data` messages are common with USB adapters and can be ignored. Keep the setting after reboots with the cron lines from [Step 5](history/storage-setup-notes.md#step-5-drive-power-settings-and-cron-lines). The `drives power` line there applies it to every pool drive. If the count still climbs by hundreds a day, try `sudo hdparm -B 255 /dev/$DATA`.
 
-**Verify:** the boot drive's count stayed at 48,421 after the change, and the data drive's rose only from 105,799 to 105,835 over a few hours. With the logging line from Step 5, `cat /var/log/loadcycles.log` shows one number a day. Under about 50 a day is healthy.
+**Check it:** the boot drive's count stayed at 48,421 after the change, and the data drive's rose only from 105,799 to 105,835 over a few hours. With the logging line from Step 5, `cat /var/log/loadcycles.log` shows one number a day. Under about 50 a day is healthy.
 
 #### A9. The cron job logs a date with no number
 
@@ -252,13 +252,13 @@ sudo crontab -e
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ```
 
-**Verify:** `sudo crontab -l` shows the line, and the log has a number after the next morning's date.
+**Check it:** `sudo crontab -l` shows the line, and the log has a number after the next morning's date.
 
 #### A10. Immich and Nextcloud overload the machine when they start together
 
 **Symptom:** `immich_server` shows `(unhealthy)` for a long time, its log is full of `could not renew lock for job` and `Missing lock for job` errors, `uptime` shows a load average of about 7.8 on a 4-core machine, and the Nextcloud install looks stuck: the log stops at `Starting nextcloud installation` and the data folder holds only `nextcloud.log`.
 
-**Cause:** the two stacks started at the same time on a single hard-drive boot disk. Immich's background-job queue stalls under the load, and the Nextcloud install is slow. It is not a real error.
+**Cause:** the two stacks started at the same time on a single hard-drive boot disk. Immich's background-job queue stalls under the load, and the Nextcloud install is slow. It isn't a real error.
 
 **Fix:** wait, and don't deploy anything else. Check progress without following the log:
 
@@ -272,7 +272,7 @@ sudo ls -a /mnt/storage/nextcloud
 
 A healthy Immich answers the ping with `{"res":"pong"}`. The Nextcloud install is finished when the folder lists `.ncdata`, an `appdata_...` folder and your login folder. On my machine the load fell to about 0.05 after 10 to 15 minutes, and Immich turned healthy by itself.
 
-**Verify:** `docker ps --format "table {{.Names}}\t{{.Status}}"` shows every Immich container `healthy`. To prevent it, deploy Immich, wait for it to turn healthy, and only then deploy Nextcloud.
+**Check it:** `docker ps --format "table {{.Names}}\t{{.Status}}"` shows every Immich container `healthy`. To prevent it, deploy Immich, wait for it to turn healthy, and only then deploy Nextcloud.
 
 #### A11. The practice pool is still mounted after test mode
 
@@ -288,7 +288,7 @@ sudo DRIVES_TEST=1 drives test-cleanup
 
 It unmounts the practice pools and drives, detaches the fake drives and deletes the image files and the test fstab.
 
-**Verify:** this prints nothing:
+**Check it:** this prints nothing:
 
 ```bash
 findmnt -rn | grep -E 'test-main|test-disks'
@@ -309,7 +309,7 @@ findmnt /mnt/storage
 findmnt /mnt/disks/MAIN1
 ```
 
-**Verify:** the first shows `mergerfs-main` with the type `fuse.mergerfs`, and the second shows `/dev/sda1` with the type `ext4`.
+**Check it:** the first shows `mergerfs-main` with the type `fuse.mergerfs`, and the second shows `/dev/sda1` with the type `ext4`.
 
 #### A13. hdparm -B -S says bad or missing standby interval
 
@@ -324,7 +324,7 @@ sudo hdparm -B /dev/sda
 sudo hdparm -C /dev/sda
 ```
 
-**Verify:** the first prints `APM_level      = 254`, and the second prints `drive state is:  active/idle` for a main drive. A backup drive that has been idle for more than 10 minutes should print `standby` (I haven't been able to test that yet).
+**Check it:** the first prints `APM_level      = 254`, and the second prints `drive state is:  active/idle` for a main drive. A backup drive that has been idle for more than 10 minutes should print `standby` (I haven't been able to test that yet).
 
 #### A14. The crontab went back to the old lines
 
@@ -338,7 +338,7 @@ sudo hdparm -C /dev/sda
 sudo crontab -l | sed -e 's|^@reboot sleep 60 && /usr/sbin/hdparm -S 0 -B 254 .*by-label/STORAGE.*$|@reboot sleep 60 \&\& /usr/local/sbin/drives power >/dev/null 2>\&1|' -e 's|by-label/STORAGE|by-label/MAIN1|' | sudo crontab -
 ```
 
-**Verify:** `sudo crontab -l | grep -v '^#'` shows the `drives power` line and `by-label/MAIN1` in the load-cycle line. Keep an "undo" command in its own block, away from the commands that change something, so it can't be run by accident. To undo for real, use `sudo crontab ~/crontab-before-step7.txt`.
+**Check it:** `sudo crontab -l | grep -v '^#'` shows the `drives power` line and `by-label/MAIN1` in the load-cycle line. Keep an "undo" command in its own block, away from the commands that change something, so it can't be run by accident. To undo for real, use `sudo crontab ~/crontab-before-step7.txt`.
 
 #### A15. pgrep shows nothing while the backup is running
 
@@ -353,7 +353,7 @@ pgrep -af homelab-backup
 sudo tail -f /var/log/homelab-backup.log
 ```
 
-**Verify:** while the backup runs, `pgrep -af homelab-backup` should list the process. After the log says `finished: OK`, it prints nothing, which is what I saw, and `sudo drives status` shows the result.
+**Check it:** while the backup runs, `pgrep -af homelab-backup` should list the process. After the log says `finished: OK`, it prints nothing, which is what I saw, and `sudo drives status` shows the result.
 
 #### A16. install says cannot stat when installing a script
 
@@ -371,7 +371,7 @@ sudo install -m 755 homelab /usr/local/bin/homelab
 
 If you copied the files by hand instead of cloning the repository, go to the folder you copied them to.
 
-**Verify:** `ls` lists `homelab`, `install` prints nothing, and `homelab version` prints `homelab 1.0`.
+**Check it:** `ls` lists `homelab`, `install` prints nothing, and `homelab version` prints `homelab 1.0`.
 
 ### B. Docker and Portainer
 
@@ -393,7 +393,7 @@ sudo apt-get update
 sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-ce-rootless-extras docker-buildx-plugin
 ```
 
-**Verify:** `docker --version` prints a version.
+**Check it:** `docker --version` prints a version.
 
 #### B2. Permission denied on the Docker socket
 
@@ -410,7 +410,7 @@ sudo reboot
 
 To test without rebooting, run `newgrp docker`.
 
-**Verify:** `groups` lists `docker`, and `docker run hello-world` prints `Hello from Docker!`.
+**Check it:** `groups` lists `docker`, and `docker run hello-world` prints `Hello from Docker!`.
 
 #### B3. Container names differ from the stack name
 
@@ -426,7 +426,7 @@ docker logs filebrowser-filebrowser-1
 docker exec netdata-netdata-1 cat /var/lib/netdata/netdata_random_session_id
 ```
 
-**Verify:** the command prints the container's output instead of an error. This is also why the stack names in this guide matter: the recovery script expects `filebrowser-filebrowser-1`.
+**Check it:** the command prints the container's output instead of an error. This is also why the stack names in this guide matter: the recovery script expects `filebrowser-filebrowser-1`.
 
 #### B4. Portainer asks for a setup token, or the setup page timed out
 
@@ -443,7 +443,7 @@ docker restart portainer
 
 Read the token from the logs if it asks for one. If the setup timed out, restart the container and reload `http://192.168.X.X:9000` to create your admin account.
 
-**Verify:** you can log in and see the local environment.
+**Check it:** you can log in and see the local environment.
 
 #### B5. toomanyrequests from GitHub's container registry
 
@@ -464,13 +464,13 @@ docker pull ghcr.io/gethomepage/homepage:latest
 
 Then, in Portainer, open the stack and click **Update the stack** (or add the stack again with the same YAML and variables).
 
-**Verify:** `docker images | grep -E "immich|valkey|speedtest|homepage"` lists the images, and the stack deploys with nothing to download.
+**Check it:** `docker images | grep -E "immich|valkey|speedtest|homepage"` lists the images, and the stack deploys with nothing to download.
 
 #### B6. A container starts empty after Update the stack
 
 **Symptom:** I updated Speedtest Tracker in Portainer with **Update the stack**. The container started and was healthy, and `docker logs speedtest-tracker` ended with `generating self-signed keys`, but the app behaved like a new install: the old results and settings were gone.
 
-**Cause:** the stack had no `volumes:` line for `/config`, so Docker created an **anonymous volume** (a volume with a 64-character name and no label). When Portainer recreated the container, the new one got a new empty anonymous volume, and the old one was left behind unused. Bind mounts (a folder on the host) and named volumes are kept. Anonymous volumes are not reliably kept.
+**Cause:** the stack had no `volumes:` line for `/config`, so Docker created an **anonymous volume** (a volume with a 64-character name and no label). When Portainer recreated the container, the new one got a new empty anonymous volume, and the old one was left behind unused. Bind mounts (a folder on the host) and named volumes are kept. Anonymous volumes aren't reliably kept.
 
 **Fix (what I did, as steps).** I had copied `/config` out of the old container with `docker cp` before updating ([Speedtest Tracker](updating.md#speedtest-tracker)), so nothing was lost.
 
@@ -519,7 +519,7 @@ docker inspect $(docker ps -q) --format '{{.Name}}: {{range .Mounts}}{{if eq .Ty
 
 A container on the second list needs a bind mount or a named volume before you update it. Make a copy first with `docker cp <container>:<path> ~/some-folder`.
 
-**Verify:** the second command prints nothing for the container you are about to update, or you have a `docker cp` copy of its data.
+**Check it:** the second command prints nothing for the container you are about to update, or you have a `docker cp` copy of its data.
 
 ### C. FileBrowser
 
@@ -538,7 +538,7 @@ docker logs filebrowser-filebrowser-1 | grep -i password
 
 The log line looks like `User 'admin' initialized with randomly generated password: ...`. Log in with it, then change it right away in your profile. If the log has no password, the database already existed from an earlier start. In that case delete the stack in Portainer, remove its `filebrowser_filebrowser_data` volume, and deploy it again for a fresh database.
 
-**Verify:** you can log in at `http://192.168.X.X:8081`.
+**Check it:** you can log in at `http://192.168.X.X:8081`.
 
 #### C2. The FileBrowser data folder is empty because of a folder name mismatch
 
@@ -558,7 +558,7 @@ The current stack avoids spaces entirely:
       - "/mnt/storage/filebrowser:/srv/hdd"
 ```
 
-**Verify:**
+**Check it:**
 
 ```bash
 ls "/mnt/storage/filebrowser"
@@ -571,7 +571,7 @@ docker exec filebrowser-filebrowser-1 df -h /srv/hdd
 
 **Cause:** the card reports the drive of the login's folder, and the admin login's folder is `/srv`, which is on the boot drive.
 
-**Fix (optional):** this is not part of my current setup, where the card is labeled "750GB HDD" on purpose and the drive pill shows the data drive. To get a card for the data drive, make a second FileBrowser login limited to its folder. In FileBrowser, open Settings, then User Management, and add a user named `homepage` with a password of at least 12 characters. Set **Scope** to `/hdd` and turn off all its permissions. Then add a card to `services.yaml`:
+**Fix (optional):** this isn't part of my current setup, where the card is labeled "750GB HDD" on purpose and the drive pill shows the data drive. To get a card for the data drive, make a second FileBrowser login limited to its folder. In FileBrowser, open Settings, then User Management, and add a user named `homepage` with a password of at least 12 characters. Set **Scope** to `/hdd` and turn off all its permissions. Then add a card to `services.yaml`:
 
 ```yaml
     - FileBrowser (HDD):
@@ -589,7 +589,7 @@ docker exec filebrowser-filebrowser-1 df -h /srv/hdd
 
 The new card has no colored accent until `#filebrowser-hdd-card` is added to the accent selectors in `custom.css`.
 
-**Verify:** after `docker restart homepage`, the new card shows the data drive's available and total space.
+**Check it:** after `docker restart homepage`, the new card shows the data drive's available and total space.
 
 ### D. Nextcloud
 
@@ -616,7 +616,7 @@ docker exec -u www-data nextcloud php occ config:system:delete overwriteprotocol
 
 Also remove `OVERWRITEHOST` and `OVERWRITEPROTOCOL` from the stack's environment in Portainer, and redeploy.
 
-**Verify:** the first command lists the new domain, and the Tailscale address loads the login page.
+**Check it:** the first command lists the new domain, and the Tailscale address loads the login page.
 
 #### D2. Cannot write to the data directory
 
@@ -632,7 +632,7 @@ sudo chown -R 33:33 /mnt/storage/nextcloud
 
 Then restart the stack.
 
-**Verify:**
+**Check it:**
 
 ```bash
 sudo ls -la /mnt/storage/nextcloud
@@ -666,7 +666,7 @@ The first line should be `HTTP/1.1 200 OK`. If it says `400`, add the address as
 docker exec -u www-data nextcloud php occ config:system:set trusted_domains 4 --value=192.168.X.X:8082
 ```
 
-**Verify:** the dot turns green. If it doesn't, check what Homepage saw:
+**Check it:** the dot turns green. If it doesn't, check what Homepage saw:
 
 ```bash
 docker logs homepage --tail 40 | grep -i -E "nextcloud|8082|monitor|error"
@@ -687,7 +687,7 @@ docker exec -u www-data nextcloud php occ config:system:get allow_local_remote_s
 
 In the integration settings, use the base address `http://192.168.X.X:2283`, with no `/photos` and no `/api`. Create the API key in Immich under Account Settings, then API Keys.
 
-**Verify:** the second command prints `true`, and **Test connection** succeeds. Also confirm that Nextcloud can reach Immich: `docker exec -u www-data nextcloud php -r 'echo file_get_contents("http://192.168.X.X:2283/api/server/ping");'` should print `{"res":"pong"}`.
+**Check it:** the second command prints `true`, and **Test connection** succeeds. Also confirm that Nextcloud can reach Immich: `docker exec -u www-data nextcloud php -r 'echo file_get_contents("http://192.168.X.X:2283/api/server/ping");'` should print `{"res":"pong"}`.
 
 #### D5. A 502 right after deploying Nextcloud
 
@@ -703,7 +703,7 @@ docker logs -f nextcloud
 
 Press `Ctrl+C` when the install finishes and Apache is ready.
 
-**Verify:** the login page loads.
+**Check it:** the login page loads.
 
 #### D6. Nextcloud redirects to the wrong port
 
@@ -722,7 +722,7 @@ Press `Ctrl+C` when the install finishes and Apache is ready.
 
 Click **Update the stack** with the re-pull option off. Your passwords stay saved, and the install isn't touched.
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker exec -u www-data nextcloud php occ config:system:get overwritehost
@@ -767,7 +767,7 @@ curl -s -H "NC-Token: $TOKEN" "http://192.168.X.X:8082/ocs/v2.php/apps/serverinf
 
 A good answer starts with `{"ocs":{"meta":{"status":"ok"`. Put the token into `services.yaml` as the Nextcloud `key`, then `docker start homepage`. The `$TOKEN` variable only exists in the same terminal window.
 
-**Verify:** the Nextcloud card shows its numbers, and Nextcloud's log stops filling with `Reached maximum delay`. To prevent it, always stop Homepage before you edit its keys.
+**Check it:** the Nextcloud card shows its numbers, and Nextcloud's log stops filling with `Reached maximum delay`. To prevent it, always stop Homepage before you edit its keys.
 
 #### D8. Permission denied when listing the Nextcloud data folder
 
@@ -781,7 +781,7 @@ A good answer starts with `{"ocs":{"meta":{"status":"ok"`. Put the token into `s
 sudo ls -a /mnt/storage/nextcloud
 ```
 
-**Verify:** the listing shows `.ncdata`, an `appdata_...` folder and your login folder.
+**Check it:** the listing shows `.ncdata`, an `appdata_...` folder and your login folder.
 
 #### D9. The Immich integration test fails with an authentication error
 
@@ -797,7 +797,7 @@ docker exec -u www-data nextcloud php -r 'echo file_get_contents("http://192.168
 
 It should print `{"res":"pong"}`. If it does, the problem is the key and not the network.
 
-**Verify:** **Test connection** reports success, and **Save** keeps the settings.
+**Check it:** **Test connection** reports success, and **Save** keeps the settings.
 
 ---
 
@@ -819,7 +819,7 @@ sudo tailscale serve --https=1001 off
 sudo tailscale serve --bg --https=1001 http://192.168.X.X:9000
 ```
 
-**Verify:** `https://pc.your-tailnet.ts.net:1001` loads.
+**Check it:** `https://pc.your-tailnet.ts.net:1001` loads.
 
 #### E2. tailscale serve says the CLI has changed
 
@@ -835,7 +835,7 @@ sudo tailscale serve --bg --https=1002 http://192.168.X.X:2283
 
 To remove one: `sudo tailscale serve --https=1002 off`.
 
-**Verify:** `tailscale serve status` lists the address.
+**Check it:** `tailscale serve status` lists the address.
 
 #### E3. Path-based addresses break apps
 
@@ -860,7 +860,7 @@ sudo tailscale serve --bg --https=1008 http://192.168.X.X:19999
 
 After renumbering, update every place that still has an old port: Nextcloud's `OVERWRITEHOST` and `OVERWRITECLIURL` ([D6](#d6-nextcloud-redirects-to-the-wrong-port)), Homepage's `href` links and its `HOMEPAGE_ALLOWED_HOSTS` line, and your phone app's server address.
 
-**Verify:** `tailscale serve status` lists nine entries, and each address loads.
+**Check it:** `tailscale serve status` lists nine entries, and each address loads.
 
 #### E4. The tailnet name changed
 
@@ -879,7 +879,7 @@ docker exec -u www-data nextcloud php occ config:system:set trusted_domains 3 --
 
 - The server address in your phone and desktop apps.
 
-**Verify:** `tailscale serve status` shows the new name, and every address loads.
+**Check it:** `tailscale serve status` shows the new name, and every address loads.
 
 #### E5. The name will not resolve from another computer
 
@@ -893,7 +893,7 @@ docker exec -u www-data nextcloud php occ config:system:set trusted_domains 3 --
 nslookup pc.your-tailnet.ts.net
 ```
 
-**Verify:** the lookup returns an address starting with `100.`.
+**Check it:** the lookup returns an address starting with `100.`.
 
 #### E6. 502 when forwarding to the wrong address
 
@@ -909,7 +909,7 @@ sudo tailscale serve --https=1004 off
 sudo tailscale serve --bg --https=1004 http://192.168.X.X:3000
 ```
 
-**Verify:** `tailscale serve status` shows the right target, and the address loads.
+**Check it:** `tailscale serve status` shows the right target, and the address loads.
 
 #### E7. An SSH session over Tailscale drops when Tailscale restarts
 
@@ -923,7 +923,7 @@ sudo tailscale serve --bg --https=1004 http://192.168.X.X:3000
 ssh your-username@192.168.X.X
 ```
 
-**Verify:** the session survives `sudo systemctl restart tailscaled`.
+**Check it:** the session survives `sudo systemctl restart tailscaled`.
 
 ### F. AdGuard Home and DNS
 
@@ -975,7 +975,7 @@ sudo ln -s ../run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 sudo systemctl restart systemd-resolved tailscaled
 ```
 
-**Verify:**
+**Check it:**
 
 ```bash
 sudo ss -tulpn | grep :53
@@ -998,7 +998,7 @@ curl -v https://dns10.quad9.net:443
 nslookup dns.google 127.0.0.1
 ```
 
-**Verify:** `nslookup dns.google 127.0.0.1` returns a real address, not `0.0.0.0`, and the errors stop.
+**Check it:** `nslookup dns.google 127.0.0.1` returns a real address, not `0.0.0.0`, and the errors stop.
 
 #### F3. Devices are not using AdGuard Home
 
@@ -1017,7 +1017,7 @@ sudo ss -tulpn | grep :53
 
 `ipconfig /all` (Windows) shows which DNS servers the PC got. `ip addr` (on the server) shows the server's address on each network card, so use the wired one (`eno1`). The alternate server `8.8.8.8` keeps the internet working when the server is off. Leave it blank if you want strict filtering and don't mind losing internet while the server is down.
 
-**Verify:** the AdGuard Query Log shows queries from the devices' addresses.
+**Check it:** the AdGuard Query Log shows queries from the devices' addresses.
 
 #### F4. The NextDNS app and Tailscale on the iPhone
 
@@ -1027,7 +1027,7 @@ sudo ss -tulpn | grep :53
 
 **Fix:** use one of them at a time. At home, AdGuard Home already blocks ads for configured devices. To use NextDNS with Tailscale, add it in Tailscale's DNS settings (Add nameserver, then NextDNS, with your endpoint ID) and delete the NextDNS app's profile. That setting applies to every device on the tailnet, and NextDNS's free plan has a monthly query limit. I removed this setting, and Tailscale's DNS is at its default.
 
-**Verify:** the iPhone opens `https://pc.your-tailnet.ts.net:1000` with Tailscale connected.
+**Check it:** the iPhone opens `https://pc.your-tailnet.ts.net:1000` with Tailscale connected.
 
 #### F5. The AdGuard web page shows a 502 on its Tailscale address
 
@@ -1054,7 +1054,7 @@ docker start adguardhome
 
 The best fix is to set 3000 in the setup wizard in the first place, which is what I did the second time.
 
-**Verify:**
+**Check it:**
 
 ```bash
 sudo ss -tulpn | grep AdGuardHome
@@ -1073,7 +1073,7 @@ nslookup google.com 192.168.X.X
 - `git clone https://github.com/...` on the server fails with `fatal: unable to access ...: Could not resolve host: github.com`.
 - `nslookup github.com` answers `** server can't find github.com: SERVFAIL` from `100.100.100.100`.
 - The Tailscale card on Homepage turns red, and its log shows `getaddrinfo EAI_AGAIN api.tailscale.com`. The Speedtest Tracker card was red at the same time (it had a second problem of its own, see [B6](#b6-a-container-starts-empty-after-update-the-stack)).
-- Everything that does not need a name still works: the web pages open by address and Docker keeps running.
+- Everything that doesn't need a name still works: the web pages open by address and Docker keeps running.
 
 **Cause:** on this server Tailscale owns `/etc/resolv.conf` ([F1](#f1-port-53-conflict-with-systemd-resolved)). The file said `nameserver 100.100.100.100`, which is Tailscale's own resolver, and that resolver had nothing to forward to. The message I found was `dns: resolver: forward: no upstream resolvers set, returning SERVFAIL`. The Machines page showed `pc` on 1.104.2, one version newer than the 1.104.1 I had installed, so Tailscale had updated itself (see [Tailscale](updating.md#tailscale)) and I believe that change is what broke it. That is my best explanation, not something I proved. Docker containers copy the host's DNS setting when they start, so Homepage had the broken setting too.
 
@@ -1088,7 +1088,7 @@ docker logs adguardhome --tail 30
 
 On my server `resolv.conf` started with `# resolv.conf(5) file generated by tailscale` and showed `nameserver 100.100.100.100`. A copy of the file from before Tailscale took it over was still there: `cat /etc/resolv.pre-tailscale-backup.conf` showed `nameserver 192.168.X.1`, the router.
 
-**What did not help.** `sudo systemctl restart tailscaled` changed nothing. `sudo tailscale set --accept-dns=false` stopped Tailscale from using its DNS, but it did not put the old file back, so `resolv.conf` still pointed at `100.100.100.100`.
+**What didn't help.** `sudo systemctl restart tailscaled` changed nothing. `sudo tailscale set --accept-dns=false` stopped Tailscale from using its DNS, but it didn't put the old file back, so `resolv.conf` still pointed at `100.100.100.100`.
 
 **Fix.** Do this on the local address or at the machine, not over a session through Tailscale ([E7](#e7-an-ssh-session-over-tailscale-drops-when-tailscale-restarts)).
 
@@ -1123,7 +1123,7 @@ On my server `resolv.conf` started with `# resolv.conf(5) file generated by tail
 
 5. Reload the dashboard. The Tailscale card should be green again. Mine was. (The Speedtest card also needed its data restored: [B6](#b6-a-container-starts-empty-after-update-the-stack).)
 
-**What this changes.** The server now sends its own lookups to the router (`192.168.X.1`), not through Tailscale. The server's own lookups do not pass through AdGuard Home, and names ending in `.ts.net` may not resolve on the server itself. Your other devices are not affected, and the Tailscale addresses on ports 1000 to 1008 still work for them.
+**What this changes.** The server now sends its own lookups to the router (`192.168.X.1`), not through Tailscale. The server's own lookups don't pass through AdGuard Home, and names ending in `.ts.net` may not resolve on the server itself. Your other devices aren't affected, and the Tailscale addresses on ports 1000 to 1008 still work for them.
 
 **Undo,** to let Tailscale manage DNS again:
 
@@ -1133,7 +1133,7 @@ sudo tailscale set --accept-dns=true
 
 Tailscale then rewrites `/etc/resolv.conf` by itself.
 
-**Verify:**
+**Check it:**
 
 ```bash
 cat /etc/resolv.conf
@@ -1163,7 +1163,7 @@ After you edit a Homepage file, run `docker restart homepage` and hard-refresh t
       HOMEPAGE_ALLOWED_HOSTS: 192.168.X.X:3001,pc.your-tailnet.ts.net:1000,localhost:3001
 ```
 
-**Verify:** `http://192.168.X.X:3001` loads.
+**Check it:** `http://192.168.X.X:3001` loads.
 
 #### G2. Port 3000 already in use
 
@@ -1180,7 +1180,7 @@ After you edit a Homepage file, run `docker restart homepage` and hard-refresh t
 
 Check what AdGuard is using with `sudo ss -tulpn | grep AdGuardHome`.
 
-**Verify:** `http://192.168.X.X:3001` loads.
+**Check it:** `http://192.168.X.X:3001` loads.
 
 #### G3. The Beszel widget says No items returned
 
@@ -1196,7 +1196,7 @@ curl -X POST http://192.168.X.X:8090/api/collections/_superusers/auth-with-passw
 docker restart homepage
 ```
 
-**Verify:** the `curl` returns a token, and the widget shows your system.
+**Check it:** the `curl` returns a token, and the widget shows your system.
 
 #### G4. The Portainer widget shows an error
 
@@ -1223,7 +1223,7 @@ curl -s -H "X-API-Key: $PT" http://192.168.X.X:9000/api/endpoints | python3 -c "
 
 If Python prints `TypeError: string indices must be integers`, Portainer answered with an error message, which usually means `PT` isn't set in that terminal.
 
-**Verify:** the widget shows your container counts.
+**Check it:** the widget shows your container counts.
 
 #### G5. The Tailscale widget says the API token is invalid
 
@@ -1239,7 +1239,7 @@ curl -H "Authorization: Bearer your-own-key" https://api.tailscale.com/api/v2/ta
 
 Use the machine's ID that ends in `CNTRL` for `deviceid:`.
 
-**Verify:** the `curl` lists your devices, and the card shows its fields.
+**Check it:** the `curl` lists your devices, and the card shows its fields.
 
 #### G6. The Speedtest Tracker card shows an error
 
@@ -1263,7 +1263,7 @@ docker exec speedtest-tracker sh -c 'printf "%s" "$APP_KEY" | cut -c1-7'
 
 They should print `51` and `base64:`. If not, generate a new key with `echo "base64:$(openssl rand -base64 32 2>/dev/null)"`, update the stack and run `docker restart speedtest-tracker`.
 
-**Verify:** the card shows download, upload and ping.
+**Check it:** the card shows download, upload and ping.
 
 #### G7. Widgets show errors until their keys are filled in
 
@@ -1281,7 +1281,7 @@ docker start homepage
 
 The table in [Phase 10](history/lenovo-migration.md#phase-10-homepage) lists where each value comes from. Don't put the real values anywhere that goes into Git.
 
-**Verify:** `docker logs homepage --tail 30` shows no widget errors.
+**Check it:** `docker logs homepage --tail 30` shows no widget errors.
 
 #### G8. YAML indentation mistakes
 
@@ -1317,7 +1317,7 @@ In `settings.yaml`, keys like `maxGroupColumns` and `disableCollapse` go at the 
 python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1])); print('OK')" bookmarks.yaml
 ```
 
-**Verify:** the parser prints `OK`, and after a restart the widget or bookmark group appears.
+**Check it:** the parser prints `OK`, and after a restart the widget or bookmark group appears.
 
 #### G9. Stat icons turn white
 
@@ -1333,7 +1333,7 @@ python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1])); print('OK')" boo
 
 Keep the order in `widgets.yaml` as the server stats first, then Drives.
 
-**Verify:** the icons are colored after a hard refresh.
+**Check it:** the icons are colored after a hard refresh.
 
 #### G10. The header wraps or overlaps on a smaller screen
 
@@ -1353,7 +1353,7 @@ Keep the order in `widgets.yaml` as the server stats first, then Drives.
 
 If a rule has no effect, your browser's real width isn't inside its range. Windows display scaling changes it (a 1080p screen at 125% is about 1536 wide). Check yours: press `F12`, click Console, type `innerWidth` and press Enter, then move the `min-width` and `max-width` numbers so your width is inside one range. If the header wraps, lower the zoom number by 0.03 at a time. The rule needs a recent browser (it works in Firefox from version 126).
 
-**Verify:** the pills stay on one row and the search bar sits under them.
+**Check it:** the pills stay on one row and the search bar sits under them.
 
 #### G11. Mobile layout spacing
 
@@ -1376,7 +1376,7 @@ If a rule has no effect, your browser's real width isn't inside its range. Windo
 
 The `--m-` numbers are for phones and small windows (1000px wide and under), and the `--d-` numbers are for the desktop layout.
 
-**Verify:** after a hard refresh, the spacing between the pills is equal.
+**Check it:** after a hard refresh, the spacing between the pills is equal.
 
 #### G12. Homepage cannot see the data drive
 
@@ -1390,7 +1390,7 @@ The `--m-` numbers are for phones and small windows (1000px wide and under), and
 docker restart homepage
 ```
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker exec homepage df -h /mnt/storage
@@ -1413,7 +1413,7 @@ curl -s -o /dev/null -w "%{http_code}\n" http://192.168.X.X:19999/api/v1/info
 
 The first prints `HTTP/1.1 400 Bad Request`. The second should print `200`.
 
-**Verify:** the second command prints `200`, and the card still shows live numbers.
+**Check it:** the second command prints `200`, and the card still shows live numbers.
 
 ### H. Remote access
 
@@ -1444,7 +1444,7 @@ Over Tailscale, use the name:
 ssh your-username@pc
 ```
 
-**Verify:** `sudo systemctl status ssh` shows `active (running)`.
+**Check it:** `sudo systemctl status ssh` shows `active (running)`.
 
 #### H2. VS Code Remote-SSH cannot save files
 
@@ -1462,7 +1462,7 @@ code -a ~/homepage-config/
 
 The Homepage stack's volume line is then `/home/your-username/homepage-config:/app/config`.
 
-**Verify:** you can save the files in VS Code.
+**Check it:** you can save the files in VS Code.
 
 #### H3. AnyDesk
 
@@ -1488,7 +1488,7 @@ autologin-user=your-username
 autologin-user-timeout=0
 ```
 
-**Verify:** you can connect from another computer with the AnyDesk ID and password, with no one accepting on the server.
+**Check it:** you can connect from another computer with the AnyDesk ID and password, with no one accepting on the server.
 
 #### H4. The remote desktop is choppy on a machine with no monitor
 
@@ -1498,7 +1498,7 @@ autologin-user-timeout=0
 
 **Fix:** plug a DisplayPort dummy plug (an EDID emulator) into the mini PC. It makes the machine believe a monitor is attached, which keeps the resolution stable, lets the integrated graphics work and makes the remote desktop smooth.
 
-**Verify:** you connect with AnyDesk and the picture is smooth at a normal resolution.
+**Check it:** you connect with AnyDesk and the picture is smooth at a normal resolution.
 
 #### H5. The cheat sheet does not appear in the VS Code terminal
 
@@ -1506,7 +1506,7 @@ autologin-user-timeout=0
 
 **Cause:** my first version of the `~/.bashrc` block used a guard variable, `export HOMELAB_SHOWN=1`, so the sheet showed once per terminal. VS Code Remote-SSH reads your environment by starting a shell on the server and copying its variables into every terminal it opens. That shell ran my block, which exported `HOMELAB_SHOWN=1`, so every VS Code terminal began with the variable already set and printed nothing. In a VS Code terminal, `echo "[$HOMELAB_SHOWN]"` printed `[1]`; in a fresh SSH session it printed `[]`.
 
-**Fix:** remove the guard variable. The block does not need one, because it only runs in a shell that is interactive and attached to a terminal. The background shell VS Code uses has its output captured, so the `[ -t 1 ]` test skips it.
+**Fix:** remove the guard variable. The block doesn't need one, because it only runs in a shell that is interactive and attached to a terminal. The background shell VS Code uses has its output captured, so the `[ -t 1 ]` test skips it.
 
 1. Look at what is in the file now:
 
@@ -1522,9 +1522,9 @@ autologin-user-timeout=0
 
    Then add the block from [Step 9, part 4](history/storage-setup-notes.md#step-9-the-cheat-sheet-at-login). If `grep` still shows a line with `HOMELAB_SHOWN`, open the file with `nano ~/.bashrc` and delete that line by hand.
 
-3. Close the VS Code terminals and open a new one. If the old variable is still set, clear it in that terminal with `unset HOMELAB_SHOWN`. If a new terminal still shows `[1]`, run **Remote-SSH: Kill VS Code Server on Host** from the Command Palette and reconnect. I did not need that step.
+3. Close the VS Code terminals and open a new one. If the old variable is still set, clear it in that terminal with `unset HOMELAB_SHOWN`. If a new terminal still shows `[1]`, run **Remote-SSH: Kill VS Code Server on Host** from the Command Palette and reconnect. I didn't need that step.
 
-**Verify:** a new VS Code terminal and a new SSH session both show the cheat sheet, `echo "[$HOMELAB_SHOWN]"` prints `[]`, and `ssh your-username@192.168.X.X "echo ok"` from PowerShell prints only `ok`. All of that was true on my server.
+**Check it:** a new VS Code terminal and a new SSH session both show the cheat sheet, `echo "[$HOMELAB_SHOWN]"` prints `[]`, and `ssh your-username@192.168.X.X "echo ok"` from PowerShell prints only `ok`. All of that was true on my server.
 
 ### I. Hardware and boot
 
@@ -1536,7 +1536,7 @@ autologin-user-timeout=0
 
 **Fix:** use a genuine HP 65W adapter with the matching 7.4mm plug. That is what fixed it. Before you blame the board, rule out the adapter: reset the power (unplug, hold the power button for 20 seconds, plug in again) and test with a genuine adapter. If a genuine adapter gives the same flicker, the board has a fault.
 
-**Verify:** the mini PC starts and the light stays on.
+**Check it:** the mini PC starts and the light stays on.
 
 #### I2. The USB stick won't boot
 
@@ -1546,7 +1546,7 @@ autologin-user-timeout=0
 
 **Fix:** press **F10** at the HP logo to open the BIOS setup, turn **Secure Boot** off in the BIOS security settings, then open **Boot Options** and choose the USB stick. In the Ventoy menu, select the Linux Mint XFCE ISO and boot it in normal mode. This is the only BIOS change I made.
 
-**Verify:** the Linux Mint live desktop appears.
+**Check it:** the Linux Mint live desktop appears.
 
 ---
 
@@ -1656,7 +1656,7 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 - [ ] The daily backup dumps Nextcloud's database (30 days kept) and keeps deleted files for 30 days. Until a backup drive is connected, it sits on the boot drive, which doesn't protect against a failed boot drive.
 - [ ] Run one command at a time when checking things, and keep any "undo" command in its own block.
 - [ ] If the boot drive dies, follow [Step 11](history/storage-setup-notes.md#step-11-rebuild-the-server-from-github-and-the-backup). Until `BACKUP1` exists, copy the `db-dumps` and `boot-configs` folders of the interim backup to another computer once a month.
-- [ ] If a pool drive dies for good, use `sudo drives replace` ([Step 10](history/storage-setup-notes.md#step-10-replace-a-dead-drive)). I rehearsed it once with the USB stick on 2026-10-23. Do not improvise on the live pool.
+- [ ] If a pool drive dies for good, use `sudo drives replace` ([Step 10](history/storage-setup-notes.md#step-10-replace-a-dead-drive)). I rehearsed it once with the USB stick on 2026-10-23. Don't improvise on the live pool.
 - [ ] Run `sudo install` and `sha256sum -c` from inside the folder that holds the files ([A16](#a16-install-says-cannot-stat-when-installing-a-script)). Keep `SHA256SUMS` in step with the files: five lines today.
 - [ ] Keep the `homelab` login block in `~/.bashrc` free of exported variables, or VS Code copies them into every terminal ([H5](#h5-the-cheat-sheet-does-not-appear-in-the-vs-code-terminal)).
 
@@ -1689,6 +1689,6 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 
 - [ ] Stop Homepage before editing its keys, then start it again.
 - [ ] Copy API tokens and keys with the copy button when they're first shown, and never commit real ones. Use `your-own-key` in files you publish.
-- [ ] Check a YAML file with a parser before you copy it to the server and before you upload it to GitHub: `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1])); print('OK')" stacks/immich.yaml`. On 2026-10-23 I checked all nine stack files in the repository and found three that would not parse: a missing closing quote in the Speedtest Tracker file, and plain-text notes after the YAML in the Immich and Nextcloud files. They are comments now.
+- [ ] Check a YAML file with a parser before you copy it to the server and before you upload it to GitHub: `python3 -c "import yaml,sys; yaml.safe_load(open(sys.argv[1])); print('OK')" stacks/immich.yaml`. On 2026-10-23 I checked all nine stack files in the repository and found three that wouldn't parse: a missing closing quote in the Speedtest Tracker file, and plain-text notes after the YAML in the Immich and Nextcloud files. They are comments now.
 - [ ] Keep the `.gitattributes` file in the repository. The nine stack files had Windows line endings (CRLF) from the upload and are plain LF now; the file keeps them that way.
 - [ ] After editing a Homepage file, restart it and hard-refresh the browser.

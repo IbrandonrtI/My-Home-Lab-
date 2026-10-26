@@ -1,6 +1,6 @@
 # Storage: drive pools and backups
 
-The big files live on hard drives that are grouped into **pools**. The Immich photos, the Nextcloud files and the FileBrowser share live in the **main pool**, which appears as the folder `/mnt/storage`. A second pool, `/mnt/backup`, holds the daily backup. Three small tools manage all of it, so connecting, removing, moving or recovering a drive is a menu choice instead of a pile of `fstab` edits. A fourth, `homelab`, prints the commands and the current status whenever a terminal opens, so none of them has to be memorised.
+The big files live on hard drives grouped into **pools**. Immich photos, Nextcloud files and the FileBrowser share all sit in the **main pool**, which shows up as `/mnt/storage`. A second pool, `/mnt/backup`, holds the daily backup. Three small tools handle all of it, so adding, removing, moving or recovering a drive is a menu choice instead of a pile of `fstab` edits. A fourth one, `homelab`, prints the commands and current status whenever I open a terminal, so I don't have to remember any of them.
 
 | Command | What it does |
 | :--- | :--- |
@@ -14,8 +14,8 @@ The big files live on hard drives that are grouped into **pools**. The Immich ph
 - Every real drive is an ordinary ext4 drive, mounted by its UUID under `/mnt/disks/` with a label: `MAIN1`, `MAIN2`, `BACKUP1` and so on. Any Linux computer can read one of them on its own.
 - A pool joins all the drives of one role into a single folder using **mergerfs**. `/mnt/storage` is the main pool and `/mnt/backup` is the backup pool. The paths in the Docker stacks (`/mnt/storage/...`) never change, so adding a drive needs no edits in Immich, Nextcloud, FileBrowser or Homepage.
 - New files go to the drive with the most free space, so two drives fill evenly. Files already on a drive stay where they are.
-- **A pool is not RAID and it is not a backup.** If a drive dies, only the files stored on that drive disappear from the pool. That is why the backup is a separate pool on separate drives.
-- **It fails closed.** If a drive is missing, the pool does not mount at all, instead of mounting half-empty. The empty mount point is locked, so the services stop with an error and can't quietly write to the boot drive. After you reconnect the drive, `sudo hdd-recover` fixes it.
+- **A pool isn't RAID and it isn't a backup.** If a drive dies, only the files stored on that drive disappear from the pool. That is why the backup is a separate pool on separate drives.
+- **It fails closed.** If a drive is missing, the pool doesn't mount at all, instead of mounting half-empty. The empty mount point is locked, so the services stop with an error and can't quietly write to the boot drive. After you reconnect the drive, `sudo hdd-recover` fixes it.
 
 **Why ext4:** it's a Linux filesystem, so Docker and databases get proper file permissions, and it isn't locked as "dirty" when the drive is unplugged the way NTFS can be.
 
@@ -73,7 +73,7 @@ no backup has run yet
 
 ## 3. Practice with fake drives
 
-Test mode uses disk-image files and its own folders (`/mnt/test-main`, `/mnt/test-backup`, `/mnt/test-disks`) and its own test `fstab`. Your real drives, `/etc/fstab` and containers are not touched, so you can learn the menu safely.
+Test mode uses disk-image files and its own folders (`/mnt/test-main`, `/mnt/test-backup`, `/mnt/test-disks`) and its own test `fstab`. Your real drives, `/etc/fstab` and containers aren't touched, so you can learn the menu safely.
 
 ```bash
 sudo DRIVES_TEST=1 drives test-setup 3 1G
@@ -93,7 +93,7 @@ sudo DRIVES_TEST=1 drives test-cleanup
 sudo drives status
 ```
 
-**Do not skip `test-cleanup`.** If you do, the practice pool stays mounted. The last command should look exactly like it did in 3.2.
+**Don't skip `test-cleanup`.** If you do, the practice pool stays mounted. The last command should look exactly like it did in 3.2.
 
 Here is what a good result looks like. I put two 200 MB files of random data in a practice pool of two fake drives (one file landed on each). I disconnected `TMAIN1`, which held one of them, and chose to copy its files first. The script printed `Verified: every file from TMAIN1 is also on TMAIN2.`, and `sha256sum` gave identical checksums for both files before and after.
 
@@ -405,7 +405,7 @@ What the script refuses or double-checks:
 
 - The boot drive and anything with a filesystem mounted outside the desktop's `/media` folder are never offered and never erased.
 - Erasing needs the exact device name and then the word `ERASE`.
-- It will not remove the last main drive. Removing the last backup drive needs the word `REMOVE`.
+- It won't remove the last main drive. Removing the last backup drive needs the word `REMOVE`.
 - Before removing a drive that holds files, it offers to copy them to another drive of the same pool first, and it checks that every file arrived.
 - Every change snapshots `/etc/fstab` first and puts it back if a mount fails. If something goes wrong half way, the containers it stopped stay stopped, and it tells you to run `sudo hdd-recover`.
 
@@ -427,8 +427,8 @@ To browse the backup from FileBrowser on a machine set up with the installer, no
 
 ## 13. When a drive goes missing
 
-- **A main drive is unplugged or dead:** the main pool does not mount, the empty locked `/mnt/storage` makes Immich, Nextcloud and FileBrowser fail with errors, and `sudo drives status` shows the drive as `MISSING`. Reconnect it and run `sudo hdd-recover`. I tested this with fake drives, not on my real hardware.
-- **A backup drive is missing:** the main pool and the services are not affected, and the backup run fails and says why. `drives status` shows `FAILED` in the last-backup line.
+- **A main drive is unplugged or dead:** the main pool doesn't mount, the empty locked `/mnt/storage` makes Immich, Nextcloud and FileBrowser fail with errors, and `sudo drives status` shows the drive as `MISSING`. Reconnect it and run `sudo hdd-recover`. I tested this with fake drives, not on my real hardware.
+- **A backup drive is missing:** the main pool and the services aren't affected, and the backup run fails and says why. `drives status` shows `FAILED` in the last-backup line.
 - **A drive is gone for good:** the files that were stored on it are in the backup, up to a day old. `sudo drives replace` swaps in a new drive and copies back only the files that are missing ([step 15](#15-replace-a-dead-drive)). I have tested it with fake drives and rehearsed it once on my server with a USB stick, but not yet on a real failed drive. Rehearse it first.
 
 ## 14. The cheat sheet at login
@@ -480,7 +480,7 @@ On a terminal that supports colour, a good line is green, a warning is yellow an
 | Main pool | Green when `/mnt/storage` is mounted. Red with `NOT MOUNTED` when it isn't: plug the drive in and run `sudo hdd-recover`. |
 | Backup pool | Yellow with `not connected` until a backup drive exists. That is normal for now. |
 | Last backup | Green when the last run was `OK` and less than 36 hours old. Yellow when it is older. Red when the last run failed, with the command that shows why. |
-| Containers | The number running out of the number that should run. A container that was stopped on purpose (restart policy `no`) is not counted. Red lists the ones that are down. |
+| Containers | The number running out of the number that should run. A container that was stopped on purpose (restart policy `no`) isn't counted. Red lists the ones that are down. |
 | Boot drive | Space used and free on `/`. |
 
 **2. Show it at login.** Make a copy of `~/.bashrc` first, then add a short block at the end. The `'EOF'` in quotes matters: it stops the shell from changing the text while it is written.
@@ -504,13 +504,13 @@ The `if` has three conditions. `$- == *i*` means an interactive shell, `-t 1` me
 
 1. In VS Code, open **Terminal**, then **New Terminal**.
 2. From the Windows PC, open a new PowerShell window and connect with `ssh your-username@192.168.X.X`.
-3. To confirm that scripts are not disturbed, run this from the Windows PC. It should print only the word `ok`:
+3. To confirm that scripts aren't disturbed, run this from the Windows PC. It should print only the word `ok`:
 
 ```powershell
 ssh your-username@192.168.X.X "echo ok"
 ```
 
-**Do not** keep a variable such as `export HOMELAB_SHOWN=1` to show the sheet only once. VS Code reads your environment by starting a shell, so the exported variable ends up in every VS Code terminal and the sheet never appears there. The `if` above needs no variable. See [H5 in the troubleshooting guide](troubleshooting.md#h5-the-cheat-sheet-does-not-appear-in-the-vs-code-terminal).
+**Don't** keep a variable such as `export HOMELAB_SHOWN=1` to show the sheet only once. VS Code reads your environment by starting a shell, so the exported variable ends up in every VS Code terminal and the sheet never appears there. The `if` above needs no variable. See [H5 in the troubleshooting guide](troubleshooting.md#h5-the-cheat-sheet-does-not-appear-in-the-vs-code-terminal).
 
 **4. Open the documents from the terminal.** `homelab docs` lists the `##` headings of the README and of every guide in `docs/`, with their line numbers, read from the clone you made in [step 2](#2-install-the-scripts):
 
@@ -540,7 +540,7 @@ Settings, for the rare case you need them, are environment variables: `HOMELAB_M
 
 Use this when a pool drive is gone for good: it won't spin up, it isn't found any more, and `sudo hdd-recover` can't bring it back. The command is `sudo drives replace` (or choose **8** in the `sudo drives` menu). It needs two things: a **new drive** (it will be erased) and a **backup copy** (the daily backup, 3.9).
 
-> **Tested with fake drives and one USB-stick rehearsal.** I ran 58 automatic checks on practice drives (one drive dying, one of two dying, refusing to continue, a dead backup drive, two dead drives). I also rehearsed it on my server: one of two practice drives "died", a real 8 GB USB stick took its place, the 2 missing files (100 MB) came back, and their SHA-256 checksums matched the ones I saved before. I have not yet used it on a real failed drive. Do the rehearsal at the end of this section once before you depend on it. Version 1.1 of `drives` is the first one that has this command: `sudo drives version` should print `drives 1.1`.
+> **Tested with fake drives and one USB-stick rehearsal.** I ran 58 automatic checks on practice drives (one drive dying, one of two dying, refusing to continue, a dead backup drive, two dead drives). I also rehearsed it on my server: one of two practice drives "died", a real 8 GB USB stick took its place, the 2 missing files (100 MB) came back, and their SHA-256 checksums matched the ones I saved before. I haven't yet used it on a real failed drive. Do the rehearsal at the end of this section once before you depend on it. Version 1.1 of `drives` is the first one that has this command: `sudo drives version` should print `drives 1.1`.
 
 **What it does, in order**
 
@@ -569,7 +569,7 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
    sudo drives status
    ```
 
-   The files that were created after that backup are not in it and can't come back.
+   The files that were created after that backup aren't in it and can't come back.
 
 3. Plug in the new drive. Check that the system sees it, and note the device name:
 
@@ -637,11 +637,11 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
 - If the old drive ever turns up again, don't plug it in next to the new one, because both are called `MAIN1`.
 - Until a backup drive exists, the backup is a folder on the boot drive ([step 9](#9-the-daily-backup)). `replace` finds it by itself from the record of the last run.
 
-**Rehearse it with a USB stick (it will be erased).** Do this once, while nothing is broken, so you know what the screens look like before you need them. It takes about 15 minutes. It uses test mode, so your real pools, `/etc/fstab` and containers are not touched: test mode has its own folders (`/mnt/test-main`, `/mnt/test-disks`) and its own test `fstab`. You need one spare USB stick of 2 GB or more. Everything on it is erased.
+**Rehearse it with a USB stick (it will be erased).** Do this once, while nothing is broken, so you know what the screens look like before you need them. It takes about 15 minutes. It uses test mode, so your real pools, `/etc/fstab` and containers aren't touched: test mode has its own folders (`/mnt/test-main`, `/mnt/test-disks`) and its own test `fstab`. You need one spare USB stick of 2 GB or more. Everything on it is erased.
 
 The idea: make two fake drives, put three files on them, pretend one fake drive died, and let a real USB stick take its place. Then check that the files came back unchanged. Run one command at a time in the terminal on the server, and check each result before going on.
 
-**Step 1: Make two fake drives. Do not plug in the USB stick yet.** If the stick is already in, the connect menu in Step 2 would list it too, and you could pick it by mistake.
+**Step 1: Make two fake drives. Don't plug in the USB stick yet.** If the stick is already in, the connect menu in Step 2 would list it too, and you could pick it by mistake.
 
 ```bash
 sudo DRIVES_TEST=1 drives test-setup 2 1G
@@ -665,7 +665,7 @@ Each run ends with `Done. TMAIN1 is connected to the main storage` (then `TMAIN2
 sudo DRIVES_TEST=1 drives status
 ```
 
-You should see two main drives, `TMAIN1` and `TMAIN2`, both `connected`, and the practice pool `/mnt/test-main` mounted with about 1.9 GB. In test mode, the "Other drives" part may list your real data drive as "not connected to a pool". That is only because test mode knows nothing about your real pool. Your real pool is not affected.
+You should see two main drives, `TMAIN1` and `TMAIN2`, both `connected`, and the practice pool `/mnt/test-main` mounted with about 1.9 GB. In test mode, the "Other drives" part may list your real data drive as "not connected to a pool". That is only because test mode knows nothing about your real pool. Your real pool isn't affected.
 
 **Step 3: Put practice files in the practice pool, and make a practice backup.** This writes 150 MB of random data into the fake pool only.
 
@@ -698,7 +698,7 @@ lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS,TRAN
 sudo dmesg | tail -15
 ```
 
-The stick is the new line with `usb` in the last column and a size that matches the stick (an 8 GB stick shows about 7.2G), usually `sdc`. `dmesg` should mention a new USB device. Your real data drive (also `usb`, hundreds of GB) and your boot drive are much bigger, so they are easy to tell apart. If the stick has an old label, or the desktop mounted it under `/media/...`, that is fine: the tool unmounts it before it erases it. If the stick does not show up, wait 10 seconds, try another USB port and run the two commands again.
+The stick is the new line with `usb` in the last column and a size that matches the stick (an 8 GB stick shows about 7.2G), usually `sdc`. `dmesg` should mention a new USB device. Your real data drive (also `usb`, hundreds of GB) and your boot drive are much bigger, so they are easy to tell apart. If the stick has an old label, or the desktop mounted it under `/media/...`, that is fine: the tool unmounts it before it erases it. If the stick doesn't show up, wait 10 seconds, try another USB port and run the two commands again.
 
 **Step 6: Run the replace with the stick as the new drive.** `DRIVES_RESTORE_SRC` tells the tool where the practice backup is, because there is no real backup record in test mode.
 
@@ -737,6 +737,6 @@ lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINTS,TRAN
 docker ps --format "table {{.Names}}\t{{.Status}}"
 ```
 
-You should see `Test setup removed.`, then your real `drives status` looking exactly as before the practice (your data drive connected, the same amount used). In `lsblk` there is no `loop0` and nothing is mounted under `/mnt/test-*`. The stick may still show the label `TMAIN2` with no mount point; cleanup does not wipe it. All your containers are still running. Now you can unplug the stick. It still holds the practice files, so wipe it before you use it for anything else.
+You should see `Test setup removed.`, then your real `drives status` looking exactly as before the practice (your data drive connected, the same amount used). In `lsblk` there is no `loop0` and nothing is mounted under `/mnt/test-*`. The stick may still show the label `TMAIN2` with no mount point; cleanup doesn't wipe it. All your containers are still running. Now you can unplug the stick. It still holds the practice files, so wipe it before you use it for anything else.
 
-**Do not skip Step 8.** If you do, the practice pool stays mounted. If a step goes wrong and you want to stop, run the first two commands of Step 8. They remove the practice setup whatever state it is in.
+**Don't skip Step 8.** If you do, the practice pool stays mounted. If a step goes wrong and you want to stop, run the first two commands of Step 8. They remove the practice setup whatever state it is in.

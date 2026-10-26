@@ -1,10 +1,10 @@
 # Updating services
 
-How to keep each service, and the system under it, up to date. The version numbers in the examples are the ones from the day I wrote each section; always look up the current ones on the release pages listed in [Sources](#sources).
+How I keep each service, and the system under it, up to date. The version numbers in the examples are the ones from the day I wrote each section, so look up the current ones on the release pages listed in [Sources](#sources).
 
-**How much of this has been tested.** I updated Portainer on 2026-10-22 ([Portainer](#portainer)) and Speedtest Tracker on 2026-10-23 ([Speedtest Tracker](#speedtest-tracker)), and those two sections show what I ran and what happened, including what went wrong. Everything else was written from each project's own documentation and release page, and **I have not run those steps on this server yet**. Each service says so.
+**What I've actually tested.** I updated Portainer on 2026-10-22 ([Portainer](#portainer)) and Speedtest Tracker on 2026-10-23 ([Speedtest Tracker](#speedtest-tracker)). Those two sections show what I ran and what happened, including what went wrong. Everything else comes from each project's own docs and release page, and **I haven't run those steps on this server yet**. Each service says so.
 
-**How updates work here.** The stack files in [`stacks/`](../stacks/) pin each image to a version (or, for Immich and Netdata, to a release channel), so a container never updates by itself. An update is always three moves: choose the new version and change the tag on the `image:` line, download the image, then recreate the container from it. In Portainer, the last move is **Update the stack**. Settings and data that live in bind-mounted folders and in named Docker volumes survive the recreate. Data in an **anonymous** volume may not: it is how Speedtest Tracker lost its data ([B6](troubleshooting.md#b6-a-container-starts-empty-after-update-the-stack)). Check for them first ([check 5](#before-you-update-anything)). After an update, change the same tag in your copy of the stack file in this repository, so that the next rebuild gets the version you run. `sudo homelab-update` finds newer builds of the tag a container runs (the `release`, `stable` and `35-apache` channels move; a tag such as `v2.6.0` hardly ever does), so for pinned versions also look at the release pages.
+**How updates work here.** The stack files in [`stacks/`](../stacks/) pin each image to a version (or, for Immich and Netdata, to a release channel), so nothing updates on its own. An update is always three moves: change the tag on the `image:` line, pull the new image, then recreate the container. In Portainer the last move is **Update the stack**. Data in bind-mounted folders and named Docker volumes survives the recreate. Data in an **anonymous** volume may not, which is how Speedtest Tracker lost its data ([B6](troubleshooting.md#b6-a-container-starts-empty-after-update-the-stack)), so check for those first ([check 5](#before-you-update-anything)). After an update, change the same tag in this repo's stack file too, so the next rebuild gets the version I actually run. `sudo homelab-update` finds newer builds of the tag a container runs (the `release`, `stable` and `35-apache` channels move; a tag such as `v2.6.0` hardly ever does), so for pinned versions also look at the release pages.
 
 ## What can be updated
 
@@ -30,7 +30,7 @@ Two things I found when I last checked (2026-10-23), which are still worth knowi
 
 ## Before you update anything
 
-Do these five things every time. They take a few minutes and make every later step safer.
+I do these five things every time. They take a few minutes and make everything after them safer.
 
 **1. Pick a quiet time.** Avoid 6:00 to 6:30, when the daily backup runs. Update one service at a time and wait until it is healthy before the next one. Never start Immich and Nextcloud together (see [A10](troubleshooting.md#a10-immich-and-nextcloud-overload-the-machine-when-they-start-together)).
 
@@ -55,7 +55,7 @@ The "Last backup" line should show `result: OK` and today's time. Know what this
 | A fresh dump of the Nextcloud database | The Nextcloud database folder `/home/your-username/nextcloud/db` (the dump covers it) |
 | Homepage config, AdGuard Home config, Nextcloud app files, and the Portainer, Beszel and FileBrowser volumes | The Netdata volumes. Speedtest Tracker's folder is covered only after you add it to `CONFIG_PATHS` ([Step 7](history/storage-setup-notes.md#step-7-the-daily-backup), "Extra folders") |
 
-Also remember that the backup lives on the boot drive until a backup drive is connected, so it does not protect against that drive failing.
+Also remember that the backup lives on the boot drive until a backup drive is connected, so it doesn't protect against that drive failing.
 
 **3. Find out which version you are on and which is newest.** The version you run is the tag on the `image:` line of the stack (Portainer, **Stacks**, the stack, **Editor**) or in `stacks/` in this repository. The newest one is on the project's release page ([Sources](#sources)). Pulling only downloads an image and never touches a running container, so you can safely download the new image first. Run the pulls one at a time, because the GitHub registry throttles parallel downloads ([B5](troubleshooting.md#b5-toomanyrequests-from-githubs-container-registry)). Each service section below shows its own pull command with the tag to use. The Netdata image is large (about 1.3 GB), so give it time.
 
@@ -83,7 +83,7 @@ docker ps --format "table {{.Names}}\t{{.Status}}"
 
 ## Portainer
 
-**Status: done and tested on 2026-10-22** (2.45.2 to 2.45.3). Portainer is the one container here that is not a stack. It was started with `docker run`, so it is recreated from the terminal, not with **Update the stack**. Its settings, users, stack files and the token Homepage uses are in the `portainer_data` volume, so they survive.
+**Status: done and tested on 2026-10-22** (2.45.2 to 2.45.3). Portainer is the one container here that isn't a stack. It was started with `docker run`, so it is recreated from the terminal, not with **Update the stack**. Its settings, users, stack files and the token Homepage uses are in the `portainer_data` volume, so they survive.
 
 **1. Record how it runs now.** This only reads information:
 
@@ -93,7 +93,7 @@ docker inspect portainer --format 'Image: {{.Config.Image}}{{"\n"}}Restart: {{.H
 
 Mine printed `portainer/portainer-ce:latest` (Portainer is the one container that runs from the `latest` tag, so that its security fixes reach it), `Restart: always`, ports 9000 and 9443, the `portainer_data` volume at `/data` and the Docker socket. Every option in step 4 comes from this output.
 
-**2. Stop Portainer and back up its data.** Stopping first means the database file is not being written to. Your other containers are not affected. The Portainer page and the Homepage Portainer card are down until step 4. The backup holds Portainer's private keys, so lock it down and never put it on GitHub:
+**2. Stop Portainer and back up its data.** Stopping first means the database file isn't being written to. Your other containers aren't affected. The Portainer page and the Homepage Portainer card are down until step 4. The backup holds Portainer's private keys, so lock it down and never put it on GitHub:
 
 ```bash
 docker stop portainer
@@ -143,7 +143,7 @@ docker image prune
 
 `docker image prune` removes the old, unused image (about 200 MB). It asks for confirmation.
 
-**Rollback (not tested).** The database was upgraded, so starting `portainer-old` against it is not safe. Go back by restoring the backup into the volume and running the old version:
+**Rollback (not tested).** The database was upgraded, so starting `portainer-old` against it isn't safe. Go back by restoring the backup into the volume and running the old version:
 
 ```bash
 docker stop portainer
@@ -168,7 +168,7 @@ Use the date of your own backup file in the `tar` line.
    ```
 
 4. In Portainer, open the `homepage` stack, change the version at the end of the `image:` line to `vX.Y.Z` and use **Update the stack** (the steps are in [Before you update anything](#before-you-update-anything)). The settings folder is a bind mount, and `HOMEPAGE_ALLOWED_HOSTS` is part of the stack, so both stay as they are.
-5. Check it. The container should become `healthy`, the log should not show a "Host validation failed" line, and the page should load after a hard refresh (`Ctrl+Shift+R`):
+5. Check it. The container should become `healthy`, the log shouldn't show a "Host validation failed" line, and the page should load after a hard refresh (`Ctrl+Shift+R`):
 
    ```bash
    docker ps --filter name=homepage --format "table {{.Names}}\t{{.Status}}"
@@ -177,7 +177,7 @@ Use the date of your own backup file in the `tar` line.
 
    The Netdata line `Parse Error: Data after Connection: close` is known and harmless ([G13](troubleshooting.md#g13-the-netdata-card-is-green-but-homepages-log-shows-a-parse-error)).
 
-**Rollback:** in the stack's **Editor**, change the tag back to the previous version (for example `homepage:v2.6.0`) and click **Update the stack**. Your files in `/home/your-username/homepage-config` are not changed by an update.
+**Rollback:** in the stack's **Editor**, change the tag back to the previous version (for example `homepage:v2.6.0`) and click **Update the stack**. Your files in `/home/your-username/homepage-config` aren't changed by an update.
 
 ## Speedtest Tracker
 
@@ -322,13 +322,13 @@ You can confirm that nothing changed with:
 docker pull filebrowser/filebrowser:v2.63.23
 ```
 
-It should end with `Status: Image is up to date`. A newer version will not come. If one ever does, update it like the others (change the tag on the `image:` line): open the `filebrowser` stack in Portainer and use **Update the stack**, then check `docker ps` for `filebrowser-filebrowser-1`.
+It should end with `Status: Image is up to date`. A newer version won't come. If one ever does, update it like the others (change the tag on the `image:` line): open the `filebrowser` stack in Portainer and use **Update the stack**, then check `docker ps` for `filebrowser-filebrowser-1`.
 
 What I do about it, following the project's own advice for unmaintained software:
 
-- FileBrowser is reachable only through Tailscale. There is no port forwarding on the router, so it is not exposed to the internet.
+- FileBrowser is reachable only through Tailscale. There is no port forwarding on the router, so it isn't exposed to the internet.
 - Keep its command runner turned off (the FileBrowser settings page has the switch).
-- Replacing it with a maintained file manager is a decision for later. I have not chosen one.
+- Replacing it with a maintained file manager is a decision for later. I haven't chosen one.
 
 ## Immich
 
@@ -338,7 +338,7 @@ Immich's own rules, from its upgrade page:
 
 - Read the release notes first. Breaking changes are supposed to appear only in major releases.
 - The server only works with its own major version. The mobile apps support the current and the previous major version, so update the iPhone app first when a major version changes.
-- Downgrades are not supported, not even inside a minor version. Rolling back means restoring a backup.
+- Downgrades aren't supported, not even inside a minor version. Rolling back means restoring a backup.
 
 Steps:
 
@@ -378,7 +378,7 @@ Steps:
    docker image prune
    ```
 
-**Rollback:** only for a small problem inside the same major version. In the stack's variables set `IMMICH_VERSION` to the previous version (for example `v3.3.3`) and click **Update the stack**. Immich does not support downgrades, so if the database was changed by the new version, restore the database from the dump made in step 2 following Immich's backup and restore page.
+**Rollback:** only for a small problem inside the same major version. In the stack's variables set `IMMICH_VERSION` to the previous version (for example `v3.3.3`) and click **Update the stack**. Immich doesn't support downgrades, so if the database was changed by the new version, restore the database from the dump made in step 2 following Immich's backup and restore page.
 
 ## Nextcloud
 
@@ -388,7 +388,7 @@ Steps:
 
 **A normal update inside the same major version (for example 35.0.2 to 35.0.3):**
 
-1. Do the four checks in [Before you update anything](#before-you-update-anything). The backup includes a fresh dump of the Nextcloud database, and that is your safety net, because Nextcloud cannot go back to an older version.
+1. Do the four checks in [Before you update anything](#before-you-update-anything). The backup includes a fresh dump of the Nextcloud database, and that is your safety net, because Nextcloud can't go back to an older version.
 2. Write down the current state:
 
    ```bash
@@ -418,7 +418,7 @@ Steps:
    ```
 
    It should show the new version, `needsDbUpgrade: false` and `maintenance: false`.
-7. Update the apps (such as `integration_immich`) from Nextcloud: sign in as admin, open the profile menu, click **Apps**, then **Updates**, and update what is listed. The command-line version, which I have not run, is:
+7. Update the apps (such as `integration_immich`) from Nextcloud: sign in as admin, open the profile menu, click **Apps**, then **Updates**, and update what is listed. The command-line version, which I haven't run, is:
 
    ```bash
    docker exec -u www-data nextcloud php occ app:update --all
@@ -459,13 +459,13 @@ Steps:
    docker ps --format "table {{.Names}}\t{{.Status}}"
    ```
 
-   The version should be the new one, and all 16 containers should come back up on their own. The wait-for-mount file in `/etc/systemd/system/docker.service.d/` is not touched by an update. If a container that needs the drive shows the wrong disk, run `sudo hdd-recover`.
+   The version should be the new one, and all 16 containers should come back up on their own. The wait-for-mount file in `/etc/systemd/system/docker.service.d/` isn't touched by an update. If a container that needs the drive shows the wrong disk, run `sudo hdd-recover`.
 
 **Rollback:** list the older versions with `apt list --all-versions docker-ce` and install one by naming its version, as Docker's install page describes. I wouldn't downgrade unless Docker itself stops working.
 
 ## Tailscale
 
-**Status: an automatic Tailscale update broke DNS on my server once.** The Machines page in the Tailscale admin console showed `pc` on a newer version, so the machine had updated itself. Right after that, the server could not look up names (`SERVFAIL` from `100.100.100.100`) and the Tailscale card on Homepage turned red. The cause and the fix are in [F6](troubleshooting.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update). The steps below are written from Tailscale's documentation, which says an update through a package manager is done by that manager and also names `tailscale update`. I have not run them.
+**Status: an automatic Tailscale update broke DNS on my server once.** The Machines page in the Tailscale admin console showed `pc` on a newer version, so the machine had updated itself. Right after that, the server couldn't look up names (`SERVFAIL` from `100.100.100.100`) and the Tailscale card on Homepage turned red. The cause and the fix are in [F6](troubleshooting.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update). The steps below are written from Tailscale's documentation, which says an update through a package manager is done by that manager and also names `tailscale update`. I haven't run them.
 
 **Important:** use the local address for this, not the Tailscale one. A restart of Tailscale drops a session that is running over Tailscale ([E7](troubleshooting.md#e7-an-ssh-session-over-tailscale-drops-when-tailscale-restarts)). From the Windows PC:
 
@@ -537,7 +537,7 @@ If the Serve list is empty after an update, re-create the nine entries from the 
    ls /var/run/reboot-required 2>/dev/null && echo "restart needed"
    ```
 
-6. If a restart is needed (a new kernel always needs one), stop and make sure the backup is not running. Then:
+6. If a restart is needed (a new kernel always needs one), stop and make sure the backup isn't running. Then:
 
    ```bash
    sudo reboot
@@ -561,7 +561,7 @@ If the Serve list is empty after an update, re-create the nine entries from the 
 
 1. Run the inventory script from [Diagnostic commands](troubleshooting.md#diagnostic-commands) so the report shows the new versions, and keep the new report.
 2. Check `sudo drives status` again the next morning: the 6:00 backup should say `OK`.
-3. Update the version numbers anywhere you keep them: the tag in the matching file in `stacks/`, the README's "Tested with" line, and the [changelog](../CHANGELOG.md).
+3. Update the version numbers anywhere you keep them: the tag in the matching file in `stacks/`, the README's "Tested with" line.
 4. Remove the spare Portainer container and the unused images once everything has worked for a day (see [Portainer](#portainer), step 6).
 5. Run `homelab` ([Step 9](history/storage-setup-notes.md#step-9-the-cheat-sheet-at-login)). Every status line should be green, and `nslookup github.com` should still work ([F6](troubleshooting.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update)).
 

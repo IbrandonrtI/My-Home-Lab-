@@ -1,8 +1,8 @@
 # Build guide
 
-This is the hand-built version of the home lab, one service at a time, in the order that works. The installer (`setup.sh`, see [INSTALL.md](../INSTALL.md)) does the same steps for you. Use this guide when you want to understand what the installer does, build only part of the lab, or repair something by hand.
+This is how I built the lab by hand, one service at a time, in the order that worked for me. The installer (`setup.sh`, see [INSTALL.md](../INSTALL.md)) does the same steps for you. Use this guide if you want to see what the installer does, build only part of the lab, or fix something by hand.
 
-> **About the placeholders.** Every address and name in this guide is a placeholder: `your-username` (the Linux user), `192.168.X.X` (the server's address on your home network) and `your-tailnet.ts.net` (your Tailscale network name). Passwords, keys and tokens are written as `your-own-key`. Replace them with your own values, and keep the real ones out of Git.
+> **About the placeholders.** Every address and name here is a placeholder: `your-username` (the Linux user), `192.168.X.X` (the server's address on your home network) and `your-tailnet.ts.net` (your Tailscale network name). Passwords, keys and tokens are written as `your-own-key`. Swap in your own values, and keep the real ones out of Git.
 
 <!-- toc -->
 
@@ -16,14 +16,14 @@ Every service except Portainer is a **stack**: a Compose file in the [`stacks/`]
 1. If the section lists environment variables, open **Environment variables**, switch to advanced mode and paste them in, with your own values.
 1. Click **Deploy the stack**.
 
-The files pin the version of each image, so a stack does not change by itself. [Updating services](updating.md) explains how to move to a newer version.
+The files pin the version of each image, so a stack doesn't change by itself. [Updating services](updating.md) explains how to move to a newer version.
 
 ## 1. Hardware, BIOS and operating system
 
 ### 1.1 Put the hardware together
 
 1. Install the 750GB drive in the mini PC's internal 2.5-inch bay and connect it by SATA. This will be the boot drive.
-1. Plug the genuine HP 65W power adapter into the mini PC. A third-party adapter with a converter tip did not work on this model (see [I1](troubleshooting.md#i1-the-mini-pc-wont-start-and-the-light-by-the-power-jack-flickers)).
+1. Plug the genuine HP 65W power adapter into the mini PC. A third-party adapter with a converter tip didn't work on this model (see [I1](troubleshooting.md#i1-the-mini-pc-wont-start-and-the-light-by-the-power-jack-flickers)).
 1. Connect the network cable to the router.
 1. Keep the 1TB data drive disconnected until the operating system is installed, so the installer can't pick the wrong disk.
 1. For the install, connect a monitor, keyboard and mouse. Afterwards the machine runs headless.
@@ -66,7 +66,7 @@ cat /etc/os-release | head -3
 
 You should see `Linux Mint 22.3`. Then plug in the DisplayPort dummy plug if you want the machine to run without a monitor. It makes the graphics card believe a display is connected, which keeps the remote desktop smooth and lets the integrated graphics work.
 
-**Verify:** `lsblk -f` shows the 750GB drive with an LVM partition and a `/` root, and `ip -br addr` shows your wired connection with an address.
+**Check it:** `lsblk -f` shows the 750GB drive with an LVM partition and a `/` root, and `ip -br addr` shows your wired connection with an address.
 
 ---
 
@@ -103,7 +103,7 @@ Connect from another machine:
 ssh your-username@192.168.X.X
 ```
 
-**Verify:** `sudo systemctl status ssh` shows `active (running)`, and the `ssh` command from your PC asks for your password.
+**Check it:** `sudo systemctl status ssh` shows `active (running)`, and the `ssh` command from your PC asks for your password.
 
 ### 2.3 Auto-login
 
@@ -155,7 +155,7 @@ sudo apt install anydesk -y
 
 The key is stored in its own file and only used for this one repository. (The older `apt-key add` command is deprecated, because it trusted the key for every repository.)
 
-Get the ID you will connect to:
+Get the ID you'll connect to:
 
 ```bash
 anydesk --get-id
@@ -183,7 +183,7 @@ cp /usr/share/applications/anydesk.desktop ~/.config/autostart/
 
 From another device, install AnyDesk and connect with the ID and password. The DisplayPort dummy plug from [section 1.5](#15-first-boot) keeps the screen resolution stable and the picture smooth.
 
-**Verify:** `sudo systemctl is-active anydesk` prints `active`, and you can connect from your PC.
+**Check it:** `sudo systemctl is-active anydesk` prints `active`, and you can connect from your PC.
 
 ## 3. Docker
 
@@ -207,9 +207,9 @@ sudo usermod -aG docker "$USER"
 sudo reboot
 ```
 
-> **Security note.** Being in the `docker` group is the same as being root on this machine: anyone who can run `docker` can start a container that mounts the whole disk. Only add accounts you trust, and keep SSH protected (a strong password or, better, keys).
+> **Heads up.** Being in the `docker` group is the same as being root on this machine: anyone who can run `docker` can start a container that mounts the whole disk. Only add accounts you trust, and keep SSH protected (a strong password or, better, keys).
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker --version
@@ -237,7 +237,7 @@ docker run -d \
   portainer/portainer-ce:latest
 ```
 
-Portainer is the one thing here that is not a stack and is not pinned: it runs from the `latest` tag so that security fixes reach it. [Updating services](updating.md#portainer) shows how to update it, and how to go back to an older version.
+Portainer is the one thing here that isn't a stack and isn't pinned: it runs from the `latest` tag so that security fixes reach it. [Updating services](updating.md#portainer) shows how to update it, and how to go back to an older version.
 
 Open `http://192.168.X.X:9000` and create an admin account. Portainer closes its first-time setup after about five minutes. If the page says setup timed out, restart it and reload:
 
@@ -257,7 +257,7 @@ If it asks for a setup token, read it from the logs with `docker logs portainer`
 
 Port 9000 is plain HTTP and is the one Tailscale will forward to. Portainer's own HTTPS port (9443) uses a self-signed certificate that Tailscale won't proxy.
 
-**Verify:** `docker ps` lists `portainer`, and you can log in.
+**Check it:** `docker ps` lists `portainer`, and you can log in.
 
 ![Portainer's home page showing the local environment running, with 16 of 16 containers up](images/Portainer.png)
 
@@ -312,7 +312,7 @@ If the first command asks you to enable HTTPS certificates for your tailnet, fol
 
 To remove one entry: `sudo tailscale serve --https=1008 off`.
 
-**Verify:** `tailscale serve status` lists nine entries, and `https://pc.your-tailnet.ts.net:1001` shows Portainer from a device that has Tailscale turned on.
+**Check it:** `tailscale serve status` lists nine entries, and `https://pc.your-tailnet.ts.net:1001` shows Portainer from a device that has Tailscale turned on.
 
 ![The Tailscale admin console's Machines page listing the devices on the tailnet](images/Tailscale.png)
 
@@ -338,7 +338,7 @@ sudo systemctl restart tailscaled
 
 Replace `192.168.X.1` with your router's address. It keeps the server resolving names until AdGuard is running.
 
-**Verify:**
+**Check it:**
 
 ```bash
 sudo ss -tulpn | grep :53
@@ -346,9 +346,9 @@ cat /etc/resolv.conf
 nslookup google.com
 ```
 
-The first command should not list `systemd-resolve` on port 53. `resolv.conf` should either show your one line or a Tailscale header with `nameserver 100.100.100.100`, and the lookup should return an address.
+The first command shouldn't list `systemd-resolve` on port 53. `resolv.conf` should either show your one line or a Tailscale header with `nameserver 100.100.100.100`, and the lookup should return an address.
 
-> **Watch out later.** When Tailscale updates itself, the server can lose name resolution while Tailscale owns `/etc/resolv.conf`: lookups fail with `SERVFAIL` and `git clone` says `Could not resolve host`. The fix is two commands, in [F6 in the troubleshooting guide](troubleshooting.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update). It happened to me on 2026-10-23.
+> **Heads up for later.** When Tailscale updates itself, the server can lose name resolution while Tailscale owns `/etc/resolv.conf`: lookups fail with `SERVFAIL` and `git clone` says `Could not resolve host`. The fix is two commands, in [F6 in the troubleshooting guide](troubleshooting.md#f6-the-server-cannot-look-up-names-after-a-tailscale-update). It happened to me on 2026-10-23.
 
 ### 6.2 Deploy the stack
 
@@ -365,7 +365,7 @@ Open `http://192.168.X.X:3000` and go through the wizard:
 
 My upstream servers are DNS-over-HTTPS from Quad9, Cloudflare and Google, with DNSSEC on. I enabled twelve blocklists: AdGuard DNS filter, AdAway Default Blocklist, AdGuard DNS Popup Hosts, HaGeZi's Pro, OISD Big, Peter Lowe's, Steven Black's, Dandelion Sprout's Game Console Adblock, HaGeZi's Allowlist Referral, HaGeZi's Apple Tracker, ShadowWhisperer's Dating List and Dandelion Sprout's Anti-Malware list. If a list ever blocks your upstream DNS providers, the fix is in [troubleshooting guide](troubleshooting.md).
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker ps | grep adguard
@@ -394,7 +394,7 @@ My router wouldn't let me change its DNS setting, so I set the DNS server on eac
 
 > The alternate DNS server `8.8.8.8` keeps the internet working if the server is off, but a device can use it at any time and skip AdGuard's filtering. Leave the alternate blank if you prefer strict filtering and don't mind losing internet when the server is down.
 
-**Verify:** in AdGuard's dashboard, the **Top clients** list shows your devices' addresses, and the query count rises as you browse.
+**Check it:** in AdGuard's dashboard, the **Top clients** list shows your devices' addresses, and the query count rises as you browse.
 
 ![The AdGuard Home dashboard: DNS queries, blocked counts, top clients and top domains](images/Adguard-home.png)
 
@@ -421,7 +421,7 @@ Open `http://192.168.X.X:8090` and create an admin account.
 <!-- markdownlint-disable-next-line MD029 -->
 6. Deploy the stack, then go back to the hub window and click **Add system** at the bottom to finish.
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker logs beszel-agent | tail -n 10
@@ -429,7 +429,7 @@ docker logs beszel-agent | tail -n 10
 
 Look for a line like `WebSocket connected host=192.168.X.X:8090`. In the hub, the system turns green and starts showing graphs.
 
-For the Homepage widget, Beszel needs a **superuser** login that is separate from your hub login. You will set it in [section 14](#14-homepage-dashboard).
+For the Homepage widget, Beszel needs a **superuser** login that is separate from your hub login. You'll set it in [section 14](#14-homepage-dashboard).
 
 ![Beszel's All Systems table with one server showing CPU, memory, disk, load, network and temperature](images/Beszel.png)
 
@@ -447,7 +447,7 @@ docker exec netdata-netdata-1 cat /var/lib/netdata/netdata_random_session_id
 
 If the page offers a way to continue without signing in, you can use the local dashboard as it is.
 
-**Verify:** `docker ps` shows `netdata-netdata-1` as `healthy`, and the dashboard shows live charts.
+**Check it:** `docker ps` shows `netdata-netdata-1` as `healthy`, and the dashboard shows live charts.
 
 ![Netdata's Metrics page with live gauges and a CPU chart for the server](images/Netdata.png)
 
@@ -467,7 +467,7 @@ docker logs filebrowser-filebrowser-1 | grep -i password
 
 Open `http://192.168.X.X:8081`, log in as `admin` with that password, and change it right away in your profile settings.
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker ps
@@ -548,7 +548,7 @@ A personal cloud: file sync, sharing, calendar and contacts. It runs as four con
 
 You need three values. Use letters and numbers only, because symbols can break Portainer's parsing:
 
-- `NC_ADMIN_USER`: the login name you will use in Nextcloud.
+- `NC_ADMIN_USER`: the login name you'll use in Nextcloud.
 - `NC_ADMIN_PASSWORD`: the admin password. Make it strong.
 - `NC_DB_PASSWORD`: a password that only Nextcloud and its database use to talk to each other. You never type it anywhere.
 
@@ -569,7 +569,7 @@ NC_DB_PASSWORD=your-own-key
 What the settings do:
 
 - `NEXTCLOUD_DATA_DIR: /data` puts the user files on the data drive. It can't be changed after the first install.
-- `TRUSTED_PROXIES` lets Nextcloud trust the forwarded requests from Docker's networks and the server itself. Tailscale Serve adds the original address and `https` to each request it forwards, and Nextcloud believes those headers only when they come from a trusted proxy. So the Tailscale link (`https://pc.your-tailnet.ts.net:1005`) builds correct `https` links, and the local link (`http://192.168.X.X:8082`) works as plain `http` on your own network. The local link is for devices at home. It is not encrypted, so don't use it on a Wi-Fi you don't trust.
+- `TRUSTED_PROXIES` lets Nextcloud trust the forwarded requests from Docker's networks and the server itself. Tailscale Serve adds the original address and `https` to each request it forwards, and Nextcloud believes those headers only when they come from a trusted proxy. So the Tailscale link (`https://pc.your-tailnet.ts.net:1005`) builds correct `https` links, and the local link (`http://192.168.X.X:8082`) works as plain `http` on your own network. The local link is for devices at home. It isn't encrypted, so don't use it on a Wi-Fi you don't trust.
 - `OVERWRITECLIURL` is the address Nextcloud puts in links that it builds without a browser (the background job). Don't add `OVERWRITEHOST` or `OVERWRITEPROTOCOL`: they force every request, the local ones too, to the Tailscale address.
 
 ### 11.3 Verify
@@ -641,10 +641,10 @@ You should see `integration_immich` and its version. The app store only lists ap
 
 1. Click your avatar, then **Personal settings**, and open **Immich Integration** in the left menu.
 1. For **Immich server URL**, enter `http://192.168.X.X:2283`. Use the local address, with no `/photos` and no `/api` on the end. Don't use the Tailscale name or `http://immich_server:2283`: Nextcloud and Immich are on different Docker networks, and a container can't reliably reach the server's own Tailscale address.
-1. For **API key**, paste the key from step 13.1.
+1. For **API key**, paste the key from step 12.1.
 1. Click **Test connection**, then **Save**.
 
-**Verify:** the test reports a successful connection, and your Immich photos show up through Nextcloud.
+**Check it:** the test reports a successful connection, and your Immich photos show up through Nextcloud.
 
 **If the test fails:**
 
@@ -687,7 +687,7 @@ The owner should be your user, because `PUID: "1000"` below runs the container a
 
 **6. Create an API token for the Homepage widget.** Open `http://192.168.X.X:8088/admin/api-tokens`, create a token and give it the **Read Results** ability. Copy it, because it's shown once. Then run one speed test from the dashboard so there is a result for the widget to read.
 
-**Verify:**
+**Check it:**
 
 ```bash
 curl -s -H "Accept: application/json" -H "Authorization: Bearer your-own-key" http://192.168.X.X:8088/api/v1/results/latest | head -c 300
@@ -695,7 +695,7 @@ curl -s -H "Accept: application/json" -H "Authorization: Bearer your-own-key" ht
 
 Put your real token in place of `your-own-key`. You should see JSON with your download and upload speeds. `Unauthenticated` means the token is wrong or lacks the Read Results ability.
 
-The folder is not in the daily backup by default. Add it as shown in [storage guide, step 9](storage.md#9-the-daily-backup).
+The folder isn't in the daily backup by default. Add it as shown in [storage guide, step 9](storage.md#9-the-daily-backup).
 
 ![Speedtest Tracker's Dashboard with test totals and the latest download, upload and ping results](images/Speedtest-Tracker.png)
 
@@ -812,7 +812,7 @@ The `id` (`adguard-card`) is what `custom.css` uses to give each card its own ac
 
 `/` is the boot drive and `/mnt/storage` is the data drive, which is why Homepage needed the extra volume line above.
 
-**Verify:**
+**Check it:**
 
 ```bash
 docker logs homepage --tail 30
@@ -823,7 +823,7 @@ The cards should show green status dots and live widgets. The second command sho
 
 ### 14.5 Change the look and add bookmarks
 
-Homepage has no page for this in the browser, so two terminal commands do it. Run them as your normal user, **without `sudo`** (they refuse to run as root, so the files do not become root's). They change the files in `~/homepage-config`; the previous `settings.yaml` and `custom.css` are saved as `*.before-theme` the first time.
+Homepage has no page for this in the browser, so two terminal commands do it. Run them as your normal user, **without `sudo`** (they refuse to run as root, so the files don't become root's). They change the files in `~/homepage-config`; the previous `settings.yaml` and `custom.css` are saved as `*.before-theme` the first time.
 
 ```bash
 homelab theme                         # shows the current look and the options
