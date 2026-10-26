@@ -1589,7 +1589,7 @@ This script reads the whole setup and saves it to one file, with every secret ma
 ```bash
 cat > ~/prodesk-full-report.sh <<'EOF'
 #!/bin/bash
-U=${SUDO_USER:-brandon}
+U=${SUDO_USER:-your-username}
 OUT=/home/$U/prodesk-full-report.txt
 HP=/home/$U/homepage-config
 sec() { echo; echo "=================== $1 ==================="; }
