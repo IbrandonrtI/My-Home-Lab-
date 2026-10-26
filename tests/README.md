@@ -1,12 +1,12 @@
 # Tests
 
-These tests check the installer **without touching the machine they run on**. The installer is pointed at a fake
-machine (fake `apt`, `docker`, Tailscale and web services).
+These tests run the installer against a fake machine (fake `apt`, `docker`, Tailscale and web services), so nothing on the
+machine you run them on is touched.
 
 ```bash
 bash tests/run_all.sh          # everything, about 10 minutes
 bash tests/run_all.sh quick    # a few scenarios, about 1 minute
-bash tests/run_tests.sh S1     # one installer scenario (S1 to S27, there is no S23)
+bash tests/run_tests.sh S1     # one installer scenario (S1 to S27, there's no S23)
 ```
 
 Needs `python3` and `bash`.
@@ -20,10 +20,9 @@ Needs `python3` and `bash`.
 | `t_homepage.sh` | `homelab theme` and `homelab bookmark` in a temporary copy of the Homepage files, with a local web server playing Brandfetch. |
 | `start.sh` | Builds the fake machine and defines the `hls`, `fresh`, `wj` and `setw` helpers. |
 | `simlib.py`, `server.py`, `fakecmd.py` | The fake machine, its web services and its commands. |
-| `mkbackup.sh`, `mkexisting.py` | Build a fake backup and a fake hand-built server. |
+| `mkbackup.sh`, `mkexisting.py` | Make a fake backup and a fake server someone already set up by hand. |
 
-The tests copy `installer/`, `scripts/`, `stacks/` and `homepage-config/` from this repository into a temporary
-folder (`$TMPDIR/homelab-sim`), so run `tools/build.sh` first if you changed anything under `src/`.
+The tests copy `installer/`, `scripts/`, `stacks/` and `homepage-config/` into a temporary folder
+(`$TMPDIR/homelab-sim`), so run `tools/build.sh` first if you changed anything under `src/`.
 
-**Not covered:** real hardware, real Docker images, real Tailscale, Ubuntu Server. Test those on a throwaway VM
-(see `docs/vm-test-guide.md`).
+**Not covered:** real hardware, real Docker images, real Tailscale, Ubuntu Server. Test those on a throwaway VM.
