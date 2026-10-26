@@ -1,0 +1,9 @@
+# Lint settings for the installer sources in src/ and the test helpers.
+line-length = 140
+target-version = "py38"
+
+[lint]
+select = ["F", "E", "W", "B904"]
+# E741: short names such as `l` are used in small loops; E501 is not enforced (long messages and tables);
+# E70x: one-line `if x: y` statements are used on purpose in the installer.
+ignore = ["E741", "E501", "E701", "E702", "E703", "E401", "E731"]

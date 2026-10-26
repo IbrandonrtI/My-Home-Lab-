@@ -1,0 +1,16 @@
+# Line endings: scripts and text files keep Unix (LF) endings so they run on Linux even if edited on Windows.
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.example text eol=lf
+installer/homelab-setup text eol=lf
+scripts/* text eol=lf
+tools/* text eol=lf
+
+# Pictures are binary files.
+*.png binary
