@@ -275,6 +275,9 @@ def nc_installed():
     return st == 200 and isinstance(js, dict) and js.get("installed") is True
 
 
+FORCED_NC_KEYS = ("overwritehost", "overwriteprotocol")
+
+
 def occ(*args, stdin=None):
     return docker("exec", "-u", "www-data", "nextcloud", "php", "occ", *args, timeout=300)
 
@@ -302,12 +305,16 @@ class NextcloudConfig(Step):
     def probe(self):
         rc, txt = occ("config:system:get", "allow_local_remote_servers")
         rc2, doms = occ("config:system:get", "trusted_domains")
-        return "done" if rc == 0 and "true" in txt.lower() and Ctx.fqdn in doms and Ctx.lan in doms else "todo"
+        forced = [k for k in FORCED_NC_KEYS if occ("config:system:get", k)[0] == 0]
+        return "done" if rc == 0 and "true" in txt.lower() and Ctx.fqdn in doms and Ctx.lan in doms and not forced else "todo"
 
     def run(self):
         if Opt.dry:
-            out("      would set trusted domains and allow_local_remote_servers in Nextcloud")
+            out("      would set trusted domains and allow_local_remote_servers in Nextcloud, and remove a forced address if one is saved")
             return
+        for k in FORCED_NC_KEYS:   # a forced address would send every local request to the Tailscale address
+            if occ("config:system:get", k)[0] == 0:
+                occ("config:system:delete", k)
         for args in (["config:system:set", "allow_local_remote_servers", "--value=true", "--type=boolean"],
                      ["config:system:set", "trusted_domains", "1", "--value=" + Ctx.lan],
                      ["config:system:set", "trusted_domains", "2", "--value=" + Ctx.fqdn]):

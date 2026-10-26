@@ -417,6 +417,26 @@ def cmd_refresh():
     next_step_section(res)
 
 
+def cmd_filebrowser():
+    """Update FileBrowser's drive folders after a drive was connected or removed (sudo drives calls this by itself)."""
+    load_all()
+    if Mode.existing:
+        say("This machine already runs the lab. The installer does not change it.")
+        return
+    if not State.exists():
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    s = BY_ID["filebrowser-drives"]
+    if BY_ID["stack-filebrowser"].probe() != "done":
+        raise Abort("FileBrowser is not running yet. Run `sudo homelab-setup install` first.")
+    if s.probe() == "done":
+        say("FileBrowser already shows the drives that are connected: %s." % s.detail())
+        return
+    rule("FileBrowser")
+    out("  Updating FileBrowser's drive folders: %s" % s.detail())
+    s.run()
+    good("FileBrowser now shows: %s" % s.detail())
+
+
 def cmd_fill():
     load_all()
     res = evaluate()
@@ -502,6 +522,7 @@ Commands:
   refresh                  re-check and continue every step that is now possible
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
+  filebrowser              update FileBrowser's drive folders after a drive was connected or removed
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -556,7 +577,7 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify"):
+    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify", "filebrowser"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
@@ -580,6 +601,8 @@ def main(argv):
             cmd_progress()
         elif cmd == "verify":
             cmd_verify()
+        elif cmd == "filebrowser":
+            cmd_filebrowser()
     except Abort as e:
         Live.close()
         out("")

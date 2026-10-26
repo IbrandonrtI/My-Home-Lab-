@@ -284,13 +284,13 @@ _register_stacks()
 
 def filebrowser_destinations():
     """The folders FileBrowser has mounted right now (read from the running container)."""
-    rc, txt = docker("inspect", "-f", "{{range .Mounts}}{{.Destination}} {{end}}", "filebrowser-filebrowser-1", timeout=30)
-    return set(txt.split()) if rc == 0 else set()
+    rc, txt = docker("inspect", "-f", "{{range .Mounts}}{{.Destination}}|{{end}}", "filebrowser-filebrowser-1", timeout=30)
+    return {d.strip() for d in txt.split("|") if d.strip()} if rc == 0 else set()
 
 
 @step
 class FileBrowserDrives(Step):
-    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows this machine's drives (boot-drive, main-storage, backup when connected)"
+    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows this machine's drives, each in a folder named after the drive"
     needs = ("stack-filebrowser",)
 
     def applies(self):

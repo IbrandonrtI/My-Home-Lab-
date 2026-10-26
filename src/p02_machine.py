@@ -331,12 +331,118 @@ def backup_mounted():
     return os.path.ismount(P("/mnt/backup")) or os.environ.get("HLS_MOUNTED_BACKUP") == "1"
 
 
+DRIVE_NAMES_FILE = "/etc/homelab-drive-names"
+
+
+def is_mount(path):
+    """A real mount point (tests can mark folders as mounted with HLS_MOUNTED_DISKS="MAIN1 BACKUP1")."""
+    return os.path.ismount(P(path)) or os.path.basename(path) in os.environ.get("HLS_MOUNTED_DISKS", "").split()
+
+
+def pretty_size(nbytes):
+    """Size as a drive is sold: 1 TB, 750 GB, 256 GB."""
+    if nbytes >= 0.95e12:
+        return "%g TB" % round(nbytes / 1e12, 1)
+    return "%d GB" % round(nbytes / 1e9)
+
+
+def clean_folder_name(text):
+    """A name that is safe as a FileBrowser folder and inside a Docker volume line."""
+    text = re.sub(r"[^\w .()+,-]", " ", text.replace("_", " "))
+    return re.sub(r"\s+", " ", text).strip(" .-")
+
+
+def drive_name_overrides():
+    names = {}
+    for line in read_file(P(DRIVE_NAMES_FILE)).splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            if clean_folder_name(v):
+                names[k.strip()] = clean_folder_name(v)
+    return names
+
+
+def disk_facts(mountpoint):
+    """(model, size in bytes, file system label) of the physical drive behind a mount point; empty when unknown."""
+    rc, src = run(["findmnt", "-n", "-o", "SOURCE", "--target", mountpoint], timeout=15)
+    src = src.strip().splitlines()[0].strip() if rc == 0 and src.strip() else ""
+    if not src.startswith("/dev/"):
+        return "", 0, ""
+    label = run(["lsblk", "-no", "LABEL", src], timeout=15)[1].strip().splitlines()
+    label = label[0].strip() if label else ""
+    disk = ""
+    rc, txt = run(["lsblk", "-nslo", "NAME,TYPE", src], timeout=15)
+    for line in txt.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == "disk":
+            disk = "/dev/" + parts[0]
+            break
+    model, size = "", 0
+    if disk:
+        rc, txt = run(["lsblk", "-dnbo", "MODEL,SIZE", disk], timeout=15)
+        line = txt.strip().splitlines()[0].strip() if rc == 0 and txt.strip() else ""
+        m = re.match(r"^(.*?)\s*(\d+)$", line)
+        if m:
+            model, size = m.group(1).strip(), int(m.group(2))
+    return model, size, label
+
+
+def drive_name(mountpoint, fallback, prefer_label=False):
+    """The folder name for a drive: a name you chose (/etc/homelab-drive-names), else the drive's own name
+    (its file system label for the boot drive, else the model and size), else the fallback."""
+    base = os.path.basename(mountpoint.rstrip("/")) or "boot"
+    over = drive_name_overrides()
+    if base in over:
+        return over[base]
+    model, size, label = disk_facts(mountpoint)
+    generic = re.fullmatch(r"(MAIN|BACKUP)\d*", label or "")
+    if prefer_label and label and not generic and clean_folder_name(label):
+        return clean_folder_name(label)
+    if model:
+        name = clean_folder_name("%s %s" % (model, pretty_size(size)) if size else model)
+        if name:
+            return name
+    if label and not generic and clean_folder_name(label):
+        return clean_folder_name(label)
+    return fallback
+
+
+def pool_drives(role):
+    """Mount points of the drives that are connected for a role (main or backup), as /mnt/disks/MAIN1 ..."""
+    import glob
+    prefix = "MAIN" if role == "main" else "BACKUP"
+    found = sorted(d[len(ROOT):] if ROOT and d.startswith(ROOT) else d for d in glob.glob(P("/mnt/disks/" + prefix + "[0-9]*")))
+    found = [d for d in found if is_mount(d)]
+    if found:
+        return found
+    # one plain drive mounted at the pool path (before it is converted into a pool), or the old single backup mount
+    if role == "main":
+        return ["/mnt/storage"] if os.path.ismount(P("/mnt/storage")) or os.environ.get("HLS_MOUNTED") == "1" else []
+    return ["/mnt/backup"] if backup_mounted() else []
+
+
+def unique_names(items):
+    """items: [(mount point, name)] -> the same list, a duplicate name made different by adding the mount point's own name."""
+    seen = {}
+    for _, n in items:
+        seen[n] = seen.get(n, 0) + 1
+    return [(mp, n if seen[n] == 1 else "%s (%s)" % (n, os.path.basename(mp))) for mp, n in items]
+
+
 def filebrowser_mounts():
-    """(host folder, folder name inside FileBrowser) for this machine's drives. The names describe the role of the drive,
-    not the hardware of the original server (which used 750GB_HDD and hdd)."""
-    m = [(Ctx.home + "/750GB_HDD", "/srv/boot-drive"), ("/mnt/storage/filebrowser", "/srv/main-storage")]
-    if backup_mounted():
-        m.append(("/mnt/backup", "/srv/backup"))
+    """(host folder, folder name inside FileBrowser) for this machine's drives, named after the drives themselves:
+    the drive that holds the system, then main-storage/<drive> and backup-storage/<drive> for every connected drive."""
+    boot = drive_name("/", "boot-drive", prefer_label=True)
+    if boot in ("main-storage", "backup-storage"):
+        boot += " (system)"
+    m = [(Ctx.home + "/750GB_HDD", "/srv/" + boot)]
+    for role, folder in (("main", "main-storage"), ("backup", "backup-storage")):
+        drives = unique_names([(mp, drive_name(mp, os.path.basename(mp))) for mp in pool_drives(role)])
+        if not drives and role == "main":
+            m.append(("/mnt/storage/filebrowser", "/srv/main-storage"))   # no data drive yet: a share on the boot drive
+        for mp, name in drives:
+            m.append((mp, "/srv/%s/%s" % (folder, name)))
     return m
 
 
