@@ -1,13 +1,13 @@
 # Storage setup notes (build log)
 
-> **Historical record.** These are my notes from setting up the storage on the current server, with the real command output I saw (host names and addresses replaced). The up-to-date, step-by-step version is the [storage guide](../storage.md); use that to build, and this file to see what the commands printed and what went wrong along the way.
+> **Old notes.** My notes from setting up the storage on the current server, with the real command output I saw (host names and addresses replaced). The up-to-date version is the [storage guide](../storage.md). Use that to build, and this file to see what the commands printed and what went wrong.
 
 Goal: the data drives are joined into a pool at `/mnt/storage` and keep the same labels, formats and paths after a reboot or a disconnect. Each service has its own folder in the pool, Homepage, FileBrowser, Immich and Nextcloud all see the pool correctly, and a daily backup copies it to a separate place.
 
 **How it is laid out today**
 
 - The Toshiba is the first drive of the main pool: ext4, label `MAIN1`, mounted by UUID at `/mnt/disks/MAIN1`. The mergerfs pool on top of it is mounted at `/mnt/storage`, the same path the stacks always used.
-- The backup pool `/mnt/backup` (drive label `BACKUP1`) does not exist yet, because there is no backup drive. Until there is one, the daily backup goes to `/home/your-username/750GB_HDD/backup-interim` on the boot drive.
+- The backup pool `/mnt/backup` (drive label `BACKUP1`) doesn't exist yet, because there is no backup drive. Until there is one, the daily backup goes to `/home/your-username/750GB_HDD/backup-interim` on the boot drive.
 - Three tools manage it: `sudo drives` (menu and status), `sudo hdd-recover` (remount and restart) and `sudo homelab-backup` (daily copy). A fourth, `homelab`, only reads information and shows a cheat sheet and the status at every login ([Step 9](#step-9-the-cheat-sheet-at-login)). Their source is in the repository's [`scripts/`](../../scripts/) folder, and the [storage guide](../storage.md) explains each option.
 
 **Why ext4:** it's a Linux filesystem, so Docker and databases get proper file permissions, and it isn't locked as "dirty" when the drive is unplugged the way NTFS can be.
@@ -209,7 +209,7 @@ Power settings applied (main drives never sleep, backup drives sleep after 10 mi
 Some USB adapters ignore these commands. That is harmless.
 ```
 
-`hdparm -B` printed `APM_level      = 254`, and `hdparm -C` printed `drive state is:  active/idle`. The `-S` value can't be read back, so `-C` after a long idle period is the only way to see whether a drive sleeps. The drive was awake, which is what a main drive should be. I have not been able to test the backup drives' sleep setting, because there is no backup drive yet. Some USB adapters ignore it.
+`hdparm -B` printed `APM_level      = 254`, and `hdparm -C` printed `drive state is:  active/idle`. The `-S` value can't be read back, so `-C` after a long idle period is the only way to see whether a drive sleeps. The drive was awake, which is what a main drive should be. I haven't been able to test the backup drives' sleep setting, because there is no backup drive yet. Some USB adapters ignore it.
 
 My root crontab now has these lines. The first re-applies the settings to every pool drive 60 seconds after every boot. The second logs the main drive's head-parking count each morning (optional). The third sets the boot drive, which it finds by the partition mounted at `/boot/efi`. The fourth is the daily backup from Step 7. Don't type a drive letter into these lines: on my machine the Toshiba became `sda` and the Hitachi `sdb` after a reboot, which broke an earlier version of the boot-drive line that said `/dev/sda`.
 
@@ -283,7 +283,7 @@ sudo cp -a /home/your-username/750GB_HDD/backup-interim/main/nextcloud/some-fold
 docker exec -u www-data nextcloud php occ files:scan --all
 ```
 
-**Extra folders.** The list of boot-drive folders that the backup copies is `CONFIG_PATHS` at the top of `homelab-backup`. Speedtest Tracker's data folder is not in it, because the container used an anonymous volume when the list was written ([B6](../troubleshooting.md#b6-a-container-starts-empty-after-update-the-stack)). I don't edit the script. I add the folder from the settings file, which is read after the defaults:
+**Extra folders.** The list of boot-drive folders that the backup copies is `CONFIG_PATHS` at the top of `homelab-backup`. Speedtest Tracker's data folder isn't in it, because the container used an anonymous volume when the list was written ([B6](../troubleshooting.md#b6-a-container-starts-empty-after-update-the-stack)). I don't edit the script. I add the folder from the settings file, which is read after the defaults:
 
 ```bash
 echo 'CONFIG_PATHS+=(/home/your-username/speedtest-tracker)' | sudo tee -a /etc/homelab-backup.conf
@@ -297,7 +297,7 @@ sudo drives status
 sudo ls /home/your-username/750GB_HDD/backup-interim/boot-configs/home/your-username/
 ```
 
-The status should say `OK`, and the listing should include `speedtest-tracker`. I gave myself this command on 2026-10-23 and have not yet checked the result of a backup after it.
+The status should say `OK`, and the listing should include `speedtest-tracker`. I gave myself this command on 2026-10-23 and haven't yet checked the result of a backup after it.
 
 ## Step 8: Verify it
 
@@ -321,7 +321,7 @@ mergerfs-main   916G   61G  855G   7% /data
 FileBrowser and Homepage, whose `df` prints a slightly different layout, showed `mergerfs-main 915.8G 60.9G 854.9G 7%`. If one shows the boot drive instead, that container was started before the pool was mounted, so restart it. Then run these tests:
 
 - **Reboot:** run `sudo reboot`. After about three minutes, run `findmnt /mnt/storage`, `findmnt /mnt/disks/MAIN1` and `docker ps --format "table {{.Names}}\t{{.Status}}"`. The pool and the drive should be mounted and the containers up with no help from you. My result is in Phase 15.
-- **Unplug:** unplug the drive, wait a few seconds, plug it back in and run `sudo hdd-recover`. You should see `Recovered.` I tested this with fake drives, but I have not repeated it on the real drive since it became a pool.
+- **Unplug:** unplug the drive, wait a few seconds, plug it back in and run `sudo hdd-recover`. You should see `Recovered.` I tested this with fake drives, but I haven't repeated it on the real drive since it became a pool.
 - **Lock test (optional):** with the stacks stopped, run `sudo umount /mnt/storage`, then `touch /mnt/storage/test`. It should say `Operation not permitted`, which shows nothing can write to the empty folder. Then run `sudo mount /mnt/storage` and start the stacks again. I ran this test on the single drive. The pool uses the same locked folders, but I haven't repeated it since. `lsattr` can't show the lock while the drive is mounted, because the flag sits on the hidden folder underneath.
 
 ## Step 9: The cheat sheet at login
@@ -453,7 +453,7 @@ TMAIN2    main     /dev/loop1p1 972MB     24KB      skipped (test mode) connecte
 /dev/sda  931.5G  TOSHIBA MQ01ABD100  [usb]   not connected to a pool
 ```
 
-The last line is only how test mode sees my real Toshiba: it knows nothing about my real pool. The real pool was not touched.
+The last line is only how test mode sees my real Toshiba: it knows nothing about my real pool. The real pool wasn't touched.
 
 **2.2 Practice files and a practice backup.** Three 50 MB random files in `/mnt/test-main/photos`, copied with `rsync -a` to `/var/tmp/practice-backup/main`, checksums saved in `~/practice-sums.txt`. The pool put `file1.bin` on `TMAIN1` and `file2.bin` and `file3.bin` on `TMAIN2` (51 MB and 101 MB used), so losing `TMAIN2` would lose two of the three files.
 
@@ -465,7 +465,7 @@ TMAIN1    main     /dev/loop0p1 972MB     51MB      skipped (test mode) connecte
 TMAIN2    main     -            -         -         -         MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)
 ```
 
-**2.4 Plug in the stick and find it.** `lsblk` listed a new `sdc`, 7.2G, `usb`, with one partition labelled `TMAIN1` (left over from an earlier practice). `dmesg` showed `USB DISK 2.0 ... Attached SCSI removable disk`. My Toshiba (`sda`, 931.5G) and the boot drive (`sdb`, 698.6G) were unmistakably different. I did not unplug the Toshiba.
+**2.4 Plug in the stick and find it.** `lsblk` listed a new `sdc`, 7.2G, `usb`, with one partition labelled `TMAIN1` (left over from an earlier practice). `dmesg` showed `USB DISK 2.0 ... Attached SCSI removable disk`. My Toshiba (`sda`, 931.5G) and the boot drive (`sdb`, 698.6G) were unmistakably different. I didn't unplug the Toshiba.
 
 **2.5 The replace.** `sudo DRIVES_TEST=1 DRIVES_RESTORE_SRC=/var/tmp/practice-backup drives replace`. I chose `TMAIN2`, answered `y` to the no-backup-record warning, chose the stick (the only real drive in the list), typed its name and `ERASE`, saw the preview and typed `RESTORE`. The desktop had auto-mounted the stick at `/media/your-username/TMAIN1`; the tool handled that. What it printed (the stick's serial number left out):
 
@@ -501,7 +501,7 @@ Done. If the old drive ever turns up again, do not plug it in next to the new on
 
 **2.7 Cleanup.** `sudo DRIVES_TEST=1 drives test-cleanup` printed `Test setup removed.` The real `sudo drives status` was exactly as before (`MAIN1` connected, 61GB used of 916GB, last backup 06:00 OK). `findmnt /mnt/storage` showed the pool still mounted. All 16 containers were running, with the longest at 11 hours, so nothing restarted at any point. The stick stayed formatted as `TMAIN2` with no mount point; I unplugged it afterwards.
 
-**What it showed.** The whole flow works on a real USB drive: it detects the dead drive, refuses to guess a backup without asking, only lists drives that are safe to erase, previews exactly what it will copy, verifies the copy, and the files match their checksums. Two small things, neither a bug: the stick's old label and the desktop auto-mount did not matter, and test mode's status lists my real Toshiba as "not connected to a pool". What is still untested is a real failed drive and the real backup folder on the boot drive as the source.
+**What it showed.** The whole flow works on a real USB drive: it detects the dead drive, refuses to guess a backup without asking, only lists drives that are safe to erase, previews exactly what it will copy, verifies the copy, and the files match their checksums. Two small things, neither a bug: the stick's old label and the desktop auto-mount didn't matter, and test mode's status lists my real Toshiba as "not connected to a pool". What is still untested is a real failed drive and the real backup folder on the boot drive as the source.
 
 **3. What a real failure looks like, and what I will do.**
 
@@ -516,15 +516,15 @@ Done. If the old drive ever turns up again, do not plug it in next to the new on
 | Scenario | What I checked |
 | --- | --- |
 | The only main drive dies | The new drive gets the label `MAIN1` and a new UUID in `/etc/fstab` (the old line is kept as a comment). Every file is identical afterwards (`sha256sum`), including symlinks, names with spaces and accents, and nested folders. The containers are stopped first and started only after the check. |
-| One of two main drives dies | Only the missing files come back. A file I had changed on the surviving drive after the backup was not overwritten, a file created after the backup was untouched, and a file I had deleted after the backup came back (documented behaviour). |
+| One of two main drives dies | Only the missing files come back. A file I had changed on the surviving drive after the backup wasn't overwritten, a file created after the backup was untouched, and a file I had deleted after the backup came back (documented behaviour). |
 | I type something other than `RESTORE` | Nothing is copied, the containers stay stopped, and `sudo drives restore` finishes the job later. Running it again says `Nothing is missing`. |
 | A backup drive dies | The new drive gets the label `BACKUP1`, the pool mounts, the main data is untouched, and the backup run is offered. |
 | Refusals | No missing drive, no backup found, a failed last backup, a wrong device name, `ERASE` not typed, a drive that is too small, and not enough free space all stop with the fstab unchanged and (where it applies) the drive not formatted. |
 | Two main drives die | The first replacement leaves the pool down and the containers stopped, the second brings it up and restores everything. |
 
-**One limit I found while testing.** In my fake-drive test, two hard-linked files showed different inode numbers through the mergerfs pool, so `rsync -H` copied them into the backup as two separate files. A restored hard link would then be a normal copy. I have not checked whether any of my real files are hard-linked.
+**One limit I found while testing.** In my fake-drive test, two hard-linked files showed different inode numbers through the mergerfs pool, so `rsync -H` copied them into the backup as two separate files. A restored hard link would then be a normal copy. I haven't checked whether any of my real files are hard-linked.
 
-**Undo for the install,** if you want the old version back: install the old `drives` from the repository history, or from `/home/your-username/homelab-drives` if you still have it. The old version does not have the `replace` command and works as before.
+**Undo for the install,** if you want the old version back: install the old `drives` from the repository history, or from `/home/your-username/homelab-drives` if you still have it. The old version doesn't have the `replace` command and works as before.
 
 ## Step 11: Rebuild the server from GitHub and the backup
 
@@ -533,7 +533,7 @@ Done. If the old drive ever turns up again, do not plug it in next to the new on
 **What I found when I checked it on paper**
 
 1. **Until `BACKUP1` exists, the backup dies with the boot drive.** The backup sits in `/home/your-username/750GB_HDD/backup-interim`, on the same drive as the databases and the app folders. If that drive dies, I lose the Nextcloud database dump, the Nextcloud app folder (`config.php`), AdGuard Home's settings and the Beszel and FileBrowser data. Not lost: all photos and files (they are on `MAIN1`) and the Immich database, because Immich writes its own dumps to `/mnt/storage/immich/backups`. Until the backup drive is connected, I copy the `db-dumps` and `boot-configs` folders of the interim backup to another computer once a month.
-2. **A full copy of the saved configs would break the new server.** The backup holds the old `/etc/fstab`. Copying it back makes the new install unbootable, which is why Step 6 of the maintenance guide leaves it out (with the scripts and the Docker data). I tested the exclusions on a fake tree: the new `fstab` and the new `drives` stayed, the Homepage, Nextcloud and AdGuard files came back, the Homepage files kept their owner (1000), and `root-crontab.txt` did not land in `/`.
+2. **A full copy of the saved configs would break the new server.** The backup holds the old `/etc/fstab`. Copying it back makes the new install unbootable, which is why Step 6 of the maintenance guide leaves it out (with the scripts and the Docker data). I tested the exclusions on a fake tree: the new `fstab` and the new `drives` stayed, the Homepage, Nextcloud and AdGuard files came back, the Homepage files kept their owner (1000), and `root-crontab.txt` didn't land in `/`.
 3. **The stack names matter.** The Beszel and FileBrowser data come back by their volume names, `beszel_beszel_data` and `filebrowser_filebrowser_data`. Before I need this, I run this once and keep the output:
 
 ```bash
