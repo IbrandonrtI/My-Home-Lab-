@@ -60,6 +60,8 @@ These change what the scripts or stacks do on a live machine:
 - Simulation tests: S26 (Nextcloud answers on its local address) and S27 (FileBrowser folders named after the drives); `tests/t_homepage.sh` and `tests/t_names.py`.
 - `tests/t_check.py` (tests of the secret scan in `scripts/homelab-check`) and two new rounds in the [VM test guide](docs/vm-test-guide.md): a real backup drive with the daily backup, and a restore onto a new machine, plus an exact procedure for the "devices use AdGuard Home" step.
 - Notes in the guides about the `docker` group being root-equivalent, and about the Docker socket and the `/` mount in Homepage.
+- `.gitignore`, `SECURITY.md`, `.github/dependabot.yml` (monthly check of the GitHub Actions versions) and a status badge for the checks at the top of the README.
+- One-line explanations (docstrings) for 121 more functions of the installer; no change in what it does.
 
 ### Fixed
 
@@ -68,6 +70,9 @@ These change what the scripts or stacks do on a live machine:
 - The weekly/daily contradiction about the backup in the Nextcloud guide.
 - Unused imports and implicit exception chaining in the installer (no change in behaviour).
 - Wrong step numbers in several cross-references.
+- A leftover personal user name in the report script of the troubleshooting guide (now the placeholder `your-username`).
+- Device names and LAN addresses in the AdGuard Home screenshot are blacked out.
+- Test scripts: shellcheck warnings removed, and `tests/*.sh` now go through the same shellcheck step in the checks. ruff also checks for likely bugs (`B`) and simplifiable code (`C4`); four small findings fixed.
 
 ### Not done on purpose
 

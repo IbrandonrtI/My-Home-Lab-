@@ -1,5 +1,7 @@
 # My Home Lab
 
+[![checks](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml/badge.svg)](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml)
+
 A self-hosted home lab on a small HP mini PC: network-wide ad blocking, container management, system monitoring, file storage, photo backup, a personal cloud and one dashboard that ties it all together. Everything is reachable from anywhere through a private Tailscale network, and nothing is exposed to the public internet.
 
 It is also reproducible: a one-file installer rebuilds the whole lab on a fresh Linux Mint or Ubuntu machine, and every step it takes is written down in the guides.
@@ -28,7 +30,7 @@ sudo bash setup.sh install               # asks a few questions, then builds the
 
 - **One-command rebuild.** `homelab-setup` installs Docker, Tailscale and Portainer, deploys the nine stacks through the Portainer API, fills in every machine-specific value and tests each Homepage widget against the live service before it writes the key. It never formats or changes a drive, and `--dry-run` shows the plan without changing anything. It has been tested against a simulated machine and on a real Linux Mint virtual machine ([installer design](docs/installer-design.md)).
 - **DNS-level ad and tracker blocking** for every device on the network, with AdGuard Home and 12 blocklists.
-- **Nine services in Docker.** Portainer runs on its own; everything else is a Portainer stack (nine, because Beszel's agent is a stack of its own) defined by a version-pinned Compose file in [`stacks/`](stacks/), so the setup can be rebuilt from text files.
+- **Nine services in Docker.** Portainer manages Docker, and every other service is a Portainer stack defined by a version-pinned Compose file in [`stacks/`](stacks/) (nine stacks, because Beszel's agent has a stack of its own), so the setup can be rebuilt from text files.
 - **Private remote access.** Tailscale gives every service its own trusted HTTPS address. There is no port forwarding and no public exposure.
 - **A storage layout built to survive mistakes.** The data drives are joined into a pool with mergerfs and mounted by UUID, the empty mount points are locked so a missing drive can't fill the boot drive, Docker waits for the pool at boot, and one recovery command restores everything after a disconnect. A menu script connects, disconnects and moves drives, and undoes its own changes if a mount fails ([storage guide](docs/storage.md)).
 - **A daily backup with a 30-day undo.** `rsync` copies the data and the boot drive's config files every morning at 6:00. Files I delete or replace are kept in dated folders for 30 days, and the Nextcloud database is dumped every day.
@@ -238,6 +240,7 @@ No port is forwarded to the internet, secrets live outside Git, and each integra
 README.md, INSTALL.md   front page and quick start
 CHANGELOG.md            what changed in each version
 CONTRIBUTING.md         how to change and test the project
+SECURITY.md             how to report a problem (the guide is docs/security.md)
 setup.sh                starts the installer
 installer/              homelab-setup, the installer (built from src/)
 src/                    the parts of the installer
@@ -247,7 +250,7 @@ scripts/                server commands: drives, homelab-backup, hdd-recover, ho
 tests/                  simulation tests (no real machine needed)
 tools/                  build script for the installer
 docs/                   the guides and the screenshots
-.github/                automatic checks and issue forms
+.github/                automatic checks, issue forms and Dependabot
 ```
 
 If something doesn't work, start with [Troubleshooting](docs/troubleshooting.md). It lists the problems I hit, with the symptom, cause, fix and a way to check each fix.

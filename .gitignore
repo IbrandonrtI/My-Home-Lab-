@@ -1,0 +1,21 @@
+# Files that must never be committed: real values and generated files.
+secrets.env
+*.env
+!stack.env.example
+state.json
+*.before-theme
+.brandfetch-client-id
+*.log
+
+# Python and tool caches
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+
+# Editor and system files
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
