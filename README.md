@@ -2,17 +2,17 @@
 
 [![checks](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml/badge.svg)](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml)
 
-This is my home lab. It runs on a small HP mini PC and does ad blocking for the whole network, runs my containers, monitors the machine, stores files and phone photos, and has one dashboard that links to everything. I reach all of it from anywhere through Tailscale, and nothing is open to the public internet.
+This home lab runs on a small HP mini PC and does ad blocking for the whole network, runs my containers, monitors the machine, stores files and phone photos, and has one dashboard that links to everything. I reach all of it from anywhere through Tailscale, and nothing is open to the public internet.
 
-I also wrote an installer that rebuilds the whole thing on a fresh Linux Mint or Ubuntu machine, and I wrote down every step in the guides, including the things that broke along the way.
+There is an installer that rebuilds the whole thing on a new Linux Mint or Ubuntu machine, and there are step on how to create it in the guides, including the things that broke along the way.
 
 ![The Homepage dashboard on a desktop monitor: cards for each service with live status dots and widgets](docs/images/Homepage-desktop.jpg)
 
 ![The Homepage dashboard on a phone, with the same cards in one column](docs/images/Homepage-mobile.jpg)
 
-## Try it
+## Install
 
-On a fresh Linux Mint 22 or Ubuntu 24.04 machine with internet (about 30 to 60 minutes and 10 GB of downloads):
+On a new Linux Mint 22 or Ubuntu 24.04 machine with internet (about 30 to 60 minutes and 10 GB of downloads):
 
 ```bash
 sudo apt update && sudo apt install -y git
@@ -24,19 +24,19 @@ sudo bash setup.sh install               # asks a few questions, then builds the
 
 [INSTALL.md](INSTALL.md) shows what you'll see and what is left to do by hand afterwards. If you'd rather build it step by step, follow the [build guide](docs/build-guide.md).
 
-> **About the placeholders.** Every name and address in this repo is a placeholder: `your-username` (the Linux user), `192.168.X.X` (the server's address at home) and `your-tailnet.ts.net` (your Tailscale network). Passwords and keys are written as `your-own-key`. The installer and the guides say where your own values go. Keep real values out of Git.
+> **Placeholders.** Every name and address in this repo is a placeholder: `your-username` (the Linux user), `192.168.X.X` (the server's address at home) and `your-tailnet.ts.net` (your Tailscale network). Passwords and keys are written as `your-own-key`. The installer and the guides say where your own values go.
 
 ## What's in it
 
-- **One-command rebuild.** `homelab-setup` installs Docker, Tailscale and Portainer, deploys the nine stacks through Portainer, fills in the values that are specific to the machine, and tests each Homepage widget against the live service before it saves the key. It never formats a drive, and `--dry-run` shows the plan first. I've tested it against a fake machine and on a real Linux Mint virtual machine.
+- **One-command rebuild.** `homelab-setup` installs Docker, Tailscale and Portainer, deploys the nine stacks through Portainer, fills in the values that are specific to the machine, and tests each Homepage widget against the live service before it saves the key. It never formats a drive, and `--dry-run` shows the plan first. I've tested it against a Linux Mint virtual machine.
 - **Ad and tracker blocking** for every device on the network, with AdGuard Home and 12 blocklists.
 - **Nine services in Docker.** Portainer manages Docker, and every other service is a Portainer stack from a Compose file in [`stacks/`](stacks/), with the image versions pinned. That makes nine stacks, because the Beszel agent has its own.
 - **Private remote access.** Tailscale gives every service its own HTTPS address. No port forwarding, nothing public.
-- **Storage that survives mistakes.** The data drives are pooled with mergerfs and mounted by UUID. The empty mount points are locked so a missing drive can't fill the boot drive, Docker waits for the pool at boot, and one command recovers after an unplug. A menu script connects, disconnects and moves drives, and undoes its own changes if a mount fails ([storage guide](docs/storage.md)).
+- **Storage setup.** The data drives are pooled with mergerfs and mounted by UUID. The empty mount points are locked so a missing drive can't fill the boot drive, Docker waits for the pool at boot, and one command recovers after an unplug. A menu script connects, disconnects and moves drives, and undoes its own changes if a mount fails ([storage guide](docs/storage.md)).
 - **A daily backup with a 30-day undo.** `rsync` copies the data and the boot drive's config files at 6:00 every morning. Files I delete or replace are kept in dated folders for 30 days, and the Nextcloud database is dumped every day.
 - **Photos and files.** Immich backs up the phone photos, Nextcloud stores files, and Nextcloud can show the Immich library.
 - **Monitoring.** Beszel, Netdata and Speedtest Tracker feed widgets on the dashboard.
-- **A cheat sheet at every login.** A new terminal prints my commands, a few suggested commands for whatever needs attention, and a live status: pools, last backup, containers and free space.
+- **A Command list at every login.** A new terminal prints commands, a few suggested commands for whatever needs attention, and a live status: pools, last backup, containers and free space.
 - **A custom dashboard.** Frosted-glass cards, status dots, live widgets, and a layout that works from a phone to a big monitor. `homelab theme` changes the background and card colours, and `homelab bookmark` adds bookmarks with their logos ([build guide, section 14.5](docs/build-guide.md#145-change-the-look-and-add-bookmarks)).
 
 ## Architecture
@@ -186,21 +186,19 @@ Tested with: Linux Mint 22.3, mergerfs 2.33.5, Docker 29.9, Tailscale 1.104, Hom
 
 ## Guides
 
-| Guide | What's in it |
+| Guide | What's Here |
 | :--- | :--- |
 | [INSTALL.md](INSTALL.md) | Install the whole lab with the installer, and how the installer works |
-| [Build guide](docs/build-guide.md) | The same lab built by hand, one service at a time |
+| [Build guide](docs/build-guide.md) | The same lab but one service at a time |
 | [Storage guide](docs/storage.md) | Drive pools, the daily backup, recovery, replacing a dead drive |
 | [Nextcloud clients](docs/nextcloud-clients.md) | Syncing Windows, Linux, macOS, iPhone and Android with Nextcloud |
 | [Maintenance](docs/maintenance.md) | Health checks, power cuts, rebuilding after the boot drive dies |
 | [Updating](docs/updating.md) | How I update each service and the system, and how to roll back |
-| [Troubleshooting](docs/troubleshooting.md) | 67 problems I ran into, each with the symptom, cause, fix and a check |
-| [Security](docs/security.md) | What protects the lab and where the weak spots are |
+| [Troubleshooting](docs/troubleshooting.md) | Multiple problems I ran into, each with the symptom, cause, fix and a check |
 | [Secrets checklist](docs/secrets-checklist.md) | Every password and key, where it lives and how to get it back |
-| [VM test guide](docs/vm-test-guide.md) | Testing the installer on a throw-away virtual machine |
 | [History](docs/history/lenovo-migration.md) | How I first built it and moved it off an old laptop |
 
-On the server, `homelab docs` lists the sections of these guides, and `homelab` prints the cheat sheet.
+On the server, `homelab docs` lists the sections of these guides, and `homelab` prints what you see on a new terminal.
 
 ## What I learned
 
