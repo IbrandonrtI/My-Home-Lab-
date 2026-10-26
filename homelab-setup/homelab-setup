@@ -3587,8 +3587,10 @@ def system_check():
     return len(problems)
 
 
-def next_step_section(res):
-    """The last thing on screen: the one command to run next, or the system check when everything is done."""
+def next_step_section(res, offer=True):
+    """The last thing on screen: the one command to run next, or the system check when everything is done.
+    At a terminal it then offers to run that command when Enter is pressed (a terminal cannot make text clickable
+    in a way that runs it)."""
     if Mode.existing:
         return
     done, total = counts(res)
@@ -3613,6 +3615,48 @@ def next_step_section(res):
         out("")
         say("%d of %d steps are done. After each step, check progress with:\n$ sudo homelab-setup refresh" % (done, total))
     out("")
+    if offer:
+        offer_next(res)
+
+
+def can_offer():
+    return interactive() and sys.stdout.isatty() and not Opt.yes and not Opt.dry and not Mode.existing
+
+
+def offer_next(res):
+    """Ask whether to run the next command now. Only the installer's own safe commands are ever offered: the
+    walk-through (fill), the re-check (refresh) and skipping an optional step. Never a drive tool, `done` or a reboot."""
+    if not can_offer():
+        return
+    for _ in range(30):
+        done, total = counts(res)
+        nxt = pick_next(res)
+        if done >= total or nxt is None:
+            return
+        walk = nxt.kind != "auto" and type(nxt).fill is not Step.fill
+        can_skip = nxt.optional and nxt.kind != "auto"
+        if walk:
+            what = "run `sudo homelab-setup fill` now"
+        else:
+            what = "re-check now (`sudo homelab-setup refresh`)"
+        q = "Press Enter to %s, %sor type n to stop" % (what.replace("`", ""), "type skip to skip this step, " if can_skip else "")
+        try:
+            a = ask(q).strip().lower()
+        except Abort:
+            return
+        out("")
+        if a in ("n", "no", "q", "quit", "stop", "x"):
+            return
+        if a == "skip" and can_skip:
+            cmd_mark("skip", nxt.id)
+        elif a == "":
+            if walk:
+                cmd_fill()
+        else:
+            say("Not understood. Press Enter, or type n.")
+            continue
+        cmd_refresh(offer=False)
+        res = evaluate()
 
 
 def cmd_verify():
@@ -3782,7 +3826,7 @@ def run_install(res):
             break
 
 
-def cmd_refresh():
+def cmd_refresh(offer=True):
     load_all()
     if Mode.existing:
         say("This machine already runs the lab. Its checklist is shown read-only.")
@@ -3802,7 +3846,7 @@ def cmd_refresh():
             break
     write_progress(res)
     show_checklist(res)
-    next_step_section(res)
+    next_step_section(res, offer)
 
 
 def cmd_fill():
