@@ -1,0 +1,49 @@
+# A short example list of bookmarks. Replace it with your own.
+# The icons are loaded from Brandfetch's public CDN; any icon name from Homepage's icon list works instead.
+- Entertainment:
+    - YouTube:
+        - abbr: YT
+          href: https://youtube.com/
+          icon: https://cdn.brandfetch.io/idVfYwcuQz/theme/dark/symbol.svg?c=1dxbfHSJFAPEGdCLU4o5B
+
+    - Twitch:
+        - abbr: TW
+          href: https://twitch.tv/
+          icon: https://cdn.brandfetch.io/idIwZCwD2f/theme/dark/symbol.svg?c=1dxbfHSJFAPEGdCLU4o5B
+
+    - Spotify:
+        - abbr: SPOT
+          href: https://spotify.com/
+          icon: https://cdn.brandfetch.io/id20mQyGeY/theme/dark/symbol.svg?c=1dxbfHSJFAPEGdCLU4o5B
+
+- Online Shopping:
+    - Amazon:
+        - abbr: AMZ
+          href: https://amazon.com/
+          icon: https://cdn.brandfetch.io/idawOgYOsG/theme/dark/logo.svg?c=1dxbfHSJFAPEGdCLU4o5B
+
+    - Newegg:
+        - abbr: NEWEGG
+          href: https://newegg.com/
+          icon: https://cdn.brandfetch.io/idk4VupXU2/theme/dark/logo.svg?c=1dxbfHSJFAPEGdCLU4o5B
+
+    - eBay:
+        - abbr: EBAY
+          href: https://ebay.com/
+          icon: https://cdn.brandfetch.io/idC0T6HUjp/theme/dark/logo.svg?c=1dxbfHSJFAPEGdCLU4o5B
+
+- Productivity:
+    - GitHub:
+        - abbr: GH
+          href: https://github.com/
+          icon: https://cdn.brandfetch.io/idZAyF9rlg/theme/dark/symbol.svg?c=1dxbfHSJFAPEGdCLU4o5B
+
+    - Gmail:
+        - abbr: GM
+          href: https://mail.google.com/
+          icon: https://cdn.brandfetch.io/id5o3EIREg/theme/dark/symbol.svg?c=1dxbfHSJFAPEGdCLU4o5B
+
+    - Outlook:
+        - abbr: OL
+          href: https://outlook.office.com/mail/
+          icon: https://cdn.brandfetch.io/idgdw68PEO/theme/dark/logo.svg?c=1dxbfHSJFAPEGdCLU4o5B
