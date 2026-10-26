@@ -24,10 +24,10 @@ jobs:
       - name: Install the check tools
         run: pip install ruff==0.16.9 pyyaml==6.0.3 pyte==0.8.2
 
-      - name: Shell syntax and shellcheck (scripts/ and setup.sh)
+      - name: Shell syntax and shellcheck (scripts/, setup.sh, tools/ and tests/)
         run: |
           set -eu
-          files="setup.sh tools/build.sh"
+          files="setup.sh tools/build.sh $(ls tests/*.sh)"
           for f in scripts/*; do
             case "$f" in
               scripts/SHA256SUMS|scripts/*.example) continue ;;
