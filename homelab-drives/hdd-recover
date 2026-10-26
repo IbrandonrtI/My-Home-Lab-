@@ -1,6 +1,0 @@
-#!/bin/bash
-# hdd-recover - run after an unplug, a power cut or a reconnected drive.
-# Stops the containers that use the storage, remounts every drive and pool,
-# re-applies the power settings and starts the containers again.
-# The work is done by "drives recover" so the container list is found automatically.
-exec /usr/local/sbin/drives recover
