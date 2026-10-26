@@ -1082,12 +1082,118 @@ def backup_mounted():
     return os.path.ismount(P("/mnt/backup")) or os.environ.get("HLS_MOUNTED_BACKUP") == "1"
 
 
+DRIVE_NAMES_FILE = "/etc/homelab-drive-names"
+
+
+def is_mount(path):
+    """A real mount point (tests can mark folders as mounted with HLS_MOUNTED_DISKS="MAIN1 BACKUP1")."""
+    return os.path.ismount(P(path)) or os.path.basename(path) in os.environ.get("HLS_MOUNTED_DISKS", "").split()
+
+
+def pretty_size(nbytes):
+    """Size as a drive is sold: 1 TB, 750 GB, 256 GB."""
+    if nbytes >= 0.95e12:
+        return "%g TB" % round(nbytes / 1e12, 1)
+    return "%d GB" % round(nbytes / 1e9)
+
+
+def clean_folder_name(text):
+    """A name that is safe as a FileBrowser folder and inside a Docker volume line."""
+    text = re.sub(r"[^\w .()+,-]", " ", text.replace("_", " "))
+    return re.sub(r"\s+", " ", text).strip(" .-")
+
+
+def drive_name_overrides():
+    names = {}
+    for line in read_file(P(DRIVE_NAMES_FILE)).splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            if clean_folder_name(v):
+                names[k.strip()] = clean_folder_name(v)
+    return names
+
+
+def disk_facts(mountpoint):
+    """(model, size in bytes, file system label) of the physical drive behind a mount point; empty when unknown."""
+    rc, src = run(["findmnt", "-n", "-o", "SOURCE", "--target", mountpoint], timeout=15)
+    src = src.strip().splitlines()[0].strip() if rc == 0 and src.strip() else ""
+    if not src.startswith("/dev/"):
+        return "", 0, ""
+    label = run(["lsblk", "-no", "LABEL", src], timeout=15)[1].strip().splitlines()
+    label = label[0].strip() if label else ""
+    disk = ""
+    rc, txt = run(["lsblk", "-nslo", "NAME,TYPE", src], timeout=15)
+    for line in txt.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] == "disk":
+            disk = "/dev/" + parts[0]
+            break
+    model, size = "", 0
+    if disk:
+        rc, txt = run(["lsblk", "-dnbo", "MODEL,SIZE", disk], timeout=15)
+        line = txt.strip().splitlines()[0].strip() if rc == 0 and txt.strip() else ""
+        m = re.match(r"^(.*?)\s*(\d+)$", line)
+        if m:
+            model, size = m.group(1).strip(), int(m.group(2))
+    return model, size, label
+
+
+def drive_name(mountpoint, fallback, prefer_label=False):
+    """The folder name for a drive: a name you chose (/etc/homelab-drive-names), else the drive's own name
+    (its file system label for the boot drive, else the model and size), else the fallback."""
+    base = os.path.basename(mountpoint.rstrip("/")) or "boot"
+    over = drive_name_overrides()
+    if base in over:
+        return over[base]
+    model, size, label = disk_facts(mountpoint)
+    generic = re.fullmatch(r"(MAIN|BACKUP)\d*", label or "")
+    if prefer_label and label and not generic and clean_folder_name(label):
+        return clean_folder_name(label)
+    if model:
+        name = clean_folder_name("%s %s" % (model, pretty_size(size)) if size else model)
+        if name:
+            return name
+    if label and not generic and clean_folder_name(label):
+        return clean_folder_name(label)
+    return fallback
+
+
+def pool_drives(role):
+    """Mount points of the drives that are connected for a role (main or backup), as /mnt/disks/MAIN1 ..."""
+    import glob
+    prefix = "MAIN" if role == "main" else "BACKUP"
+    found = sorted(d[len(ROOT):] if ROOT and d.startswith(ROOT) else d for d in glob.glob(P("/mnt/disks/" + prefix + "[0-9]*")))
+    found = [d for d in found if is_mount(d)]
+    if found:
+        return found
+    # one plain drive mounted at the pool path (before it is converted into a pool), or the old single backup mount
+    if role == "main":
+        return ["/mnt/storage"] if os.path.ismount(P("/mnt/storage")) or os.environ.get("HLS_MOUNTED") == "1" else []
+    return ["/mnt/backup"] if backup_mounted() else []
+
+
+def unique_names(items):
+    """items: [(mount point, name)] -> the same list, a duplicate name made different by adding the mount point's own name."""
+    seen = {}
+    for _, n in items:
+        seen[n] = seen.get(n, 0) + 1
+    return [(mp, n if seen[n] == 1 else "%s (%s)" % (n, os.path.basename(mp))) for mp, n in items]
+
+
 def filebrowser_mounts():
-    """(host folder, folder name inside FileBrowser) for this machine's drives. The names describe the role of the drive,
-    not the hardware of the original server (which used 750GB_HDD and hdd)."""
-    m = [(Ctx.home + "/750GB_HDD", "/srv/boot-drive"), ("/mnt/storage/filebrowser", "/srv/main-storage")]
-    if backup_mounted():
-        m.append(("/mnt/backup", "/srv/backup"))
+    """(host folder, folder name inside FileBrowser) for this machine's drives, named after the drives themselves:
+    the drive that holds the system, then main-storage/<drive> and backup-storage/<drive> for every connected drive."""
+    boot = drive_name("/", "boot-drive", prefer_label=True)
+    if boot in ("main-storage", "backup-storage"):
+        boot += " (system)"
+    m = [(Ctx.home + "/750GB_HDD", "/srv/" + boot)]
+    for role, folder in (("main", "main-storage"), ("backup", "backup-storage")):
+        drives = unique_names([(mp, drive_name(mp, os.path.basename(mp))) for mp in pool_drives(role)])
+        if not drives and role == "main":
+            m.append(("/mnt/storage/filebrowser", "/srv/main-storage"))   # no data drive yet: a share on the boot drive
+        for mp, name in drives:
+            m.append((mp, "/srv/%s/%s" % (folder, name)))
     return m
 
 
@@ -2279,13 +2385,13 @@ _register_stacks()
 
 def filebrowser_destinations():
     """The folders FileBrowser has mounted right now (read from the running container)."""
-    rc, txt = docker("inspect", "-f", "{{range .Mounts}}{{.Destination}} {{end}}", "filebrowser-filebrowser-1", timeout=30)
-    return set(txt.split()) if rc == 0 else set()
+    rc, txt = docker("inspect", "-f", "{{range .Mounts}}{{.Destination}}|{{end}}", "filebrowser-filebrowser-1", timeout=30)
+    return {d.strip() for d in txt.split("|") if d.strip()} if rc == 0 else set()
 
 
 @step
 class FileBrowserDrives(Step):
-    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows this machine's drives (boot-drive, main-storage, backup when connected)"
+    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows this machine's drives, each in a folder named after the drive"
     needs = ("stack-filebrowser",)
 
     def applies(self):
@@ -2589,6 +2695,9 @@ def nc_installed():
     return st == 200 and isinstance(js, dict) and js.get("installed") is True
 
 
+FORCED_NC_KEYS = ("overwritehost", "overwriteprotocol")
+
+
 def occ(*args, stdin=None):
     return docker("exec", "-u", "www-data", "nextcloud", "php", "occ", *args, timeout=300)
 
@@ -2616,12 +2725,16 @@ class NextcloudConfig(Step):
     def probe(self):
         rc, txt = occ("config:system:get", "allow_local_remote_servers")
         rc2, doms = occ("config:system:get", "trusted_domains")
-        return "done" if rc == 0 and "true" in txt.lower() and Ctx.fqdn in doms and Ctx.lan in doms else "todo"
+        forced = [k for k in FORCED_NC_KEYS if occ("config:system:get", k)[0] == 0]
+        return "done" if rc == 0 and "true" in txt.lower() and Ctx.fqdn in doms and Ctx.lan in doms and not forced else "todo"
 
     def run(self):
         if Opt.dry:
-            out("      would set trusted domains and allow_local_remote_servers in Nextcloud")
+            out("      would set trusted domains and allow_local_remote_servers in Nextcloud, and remove a forced address if one is saved")
             return
+        for k in FORCED_NC_KEYS:   # a forced address would send every local request to the Tailscale address
+            if occ("config:system:get", k)[0] == 0:
+                occ("config:system:delete", k)
         for args in (["config:system:set", "allow_local_remote_servers", "--value=true", "--type=boolean"],
                      ["config:system:set", "trusted_domains", "1", "--value=" + Ctx.lan],
                      ["config:system:set", "trusted_domains", "2", "--value=" + Ctx.fqdn]):
@@ -3806,6 +3919,26 @@ def cmd_refresh():
     next_step_section(res)
 
 
+def cmd_filebrowser():
+    """Update FileBrowser's drive folders after a drive was connected or removed (sudo drives calls this by itself)."""
+    load_all()
+    if Mode.existing:
+        say("This machine already runs the lab. The installer does not change it.")
+        return
+    if not State.exists():
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    s = BY_ID["filebrowser-drives"]
+    if BY_ID["stack-filebrowser"].probe() != "done":
+        raise Abort("FileBrowser is not running yet. Run `sudo homelab-setup install` first.")
+    if s.probe() == "done":
+        say("FileBrowser already shows the drives that are connected: %s." % s.detail())
+        return
+    rule("FileBrowser")
+    out("  Updating FileBrowser's drive folders: %s" % s.detail())
+    s.run()
+    good("FileBrowser now shows: %s" % s.detail())
+
+
 def cmd_fill():
     load_all()
     res = evaluate()
@@ -3891,6 +4024,7 @@ Commands:
   refresh                  re-check and continue every step that is now possible
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
+  filebrowser              update FileBrowser's drive folders after a drive was connected or removed
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -3945,7 +4079,7 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify"):
+    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify", "filebrowser"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
@@ -3969,6 +4103,8 @@ def main(argv):
             cmd_progress()
         elif cmd == "verify":
             cmd_verify()
+        elif cmd == "filebrowser":
+            cmd_filebrowser()
     except Abort as e:
         Live.close()
         out("")
