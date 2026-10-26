@@ -52,7 +52,7 @@ Use `sudo bash setup.sh`, not `./setup.sh`. Files downloaded from GitHub's web p
 7. **Port 53.** The installer explains that it will stop the built-in DNS resolver so AdGuard Home can use port 53, and asks first. Answer `y`.
 8. **Install finished.** The time taken, how many steps are done and the address of Homepage, your dashboard.
 9. **Generated passwords and keys.** Shown once. Copy them into your password manager, then press Enter. They stay in a root-only file on the machine; `sudo homelab-setup secrets` shows them again.
-10. **Checklist and Next step.** A short list of what is done and what is left, then the one step to do next with its command.
+10. **Checklist and Next step.** A short list of what is done and what is left, then the one step to do next with its command. Press **Enter** to run that command right away (type `n` to stop). Only the installer's own commands are offered; a reboot or a drive tool is never run for you.
 
 ## After the install
 
