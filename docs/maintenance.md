@@ -74,7 +74,7 @@ This is my plan for the day the boot drive (the one with Linux on it) fails, or 
 
 **Step 3: Install Docker, but don't start any stack yet.** Follow [build guide, section 3](build-guide.md#3-docker), then the "wait for the pool" file from [storage guide, step 6](storage.md#6-make-docker-wait-for-the-pool). Install Tailscale ([build guide, section 5](build-guide.md#5-tailscale)) and run `sudo tailscale up`, but leave the `tailscale serve` commands for later.
 
-**Step 4: Get the tools from GitHub.** Follow [storage guide, step 1](storage.md#1-install-the-tools) and [storage guide, step 2](storage.md#2-install-the-scripts): install the tools, clone the repo, check `SHA256SUMS` (every line `OK`), then install `drives`, `homelab-backup`, `hdd-recover` ([storage guide, step 8](storage.md#8-the-recovery-command)) and `homelab` ([storage guide, step 14](storage.md#14-the-cheat-sheet-at-login)).
+**Step 4: Get the tools from GitHub.** Follow [storage guide, step 1](storage.md#1-install-the-tools) and [storage guide, step 2](storage.md#2-install-the-scripts): install the tools, clone the repo, then install `drives`, `homelab-backup`, `hdd-recover` ([storage guide, step 8](storage.md#8-the-recovery-command)) and `homelab` ([storage guide, step 14](storage.md#14-the-cheat-sheet-at-login)).
 
 **Step 5: Reconnect the drives without erasing them.** Plug in the main drive and run `sudo drives`. Choose **2** (Connect a new drive), pick the main drive, choose **Main storage**, and when it says the drive already has an ext4 partition with data, choose **Keep the data and add the drive as it is**. **Never choose "Erase everything" here.** Repeat for the backup drive with **Backup storage**. Then check:
 

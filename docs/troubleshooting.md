@@ -359,7 +359,7 @@ sudo tail -f /var/log/homelab-backup.log
 
 **Symptom:** running `sudo install -m 755 homelab /usr/local/bin/homelab` prints `install: cannot stat 'homelab': No such file or directory`.
 
-**Cause:** the command names the file without a path, so it looks in the folder the terminal is in. A new terminal starts in the home folder (`/home/your-username`), and the script is in `~/My-Home-Lab-/scripts`. The same applies to `sha256sum -c SHA256SUMS`.
+**Cause:** the command names the file without a path, so it looks in the folder the terminal is in. A new terminal starts in the home folder (`/home/your-username`), and the script is in `~/My-Home-Lab-/scripts`.
 
 **Fix:** go into the folder that holds the files, and run the command again:
 
@@ -1657,7 +1657,7 @@ The `mask` function hides the value of any setting whose name contains `pass`, `
 - [ ] Run one command at a time when checking things, and keep any "undo" command in its own block.
 - [ ] If the boot drive dies, follow [Step 11](history/storage-setup-notes.md#step-11-rebuild-the-server-from-github-and-the-backup). Until `BACKUP1` exists, copy the `db-dumps` and `boot-configs` folders of the interim backup to another computer once a month.
 - [ ] If a pool drive dies for good, use `sudo drives replace` ([Step 10](history/storage-setup-notes.md#step-10-replace-a-dead-drive)). I rehearsed it once with the USB stick on 2026-10-23. Don't improvise on the live pool.
-- [ ] Run `sudo install` and `sha256sum -c` from inside the folder that holds the files ([A16](#a16-install-says-cannot-stat-when-installing-a-script)). Keep `SHA256SUMS` in step with the files: five lines today.
+- [ ] Run `sudo install` from inside the folder that holds the files ([A16](#a16-install-says-cannot-stat-when-installing-a-script)).
 - [ ] Keep the `homelab` login block in `~/.bashrc` free of exported variables, or VS Code copies them into every terminal ([H5](#h5-the-cheat-sheet-does-not-appear-in-the-vs-code-terminal)).
 
 **Deploying**

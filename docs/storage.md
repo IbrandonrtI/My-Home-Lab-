@@ -32,24 +32,23 @@ The time zone should be yours, because the 6:00 backup runs on the server's cloc
 
 ## 2. Install the scripts
 
-The scripts are in the [`scripts/`](../scripts/) folder of this repository. The folder holds the commands `drives`, `homelab-backup`, `hdd-recover` and `homelab`, a few helpers (`homelab-sample`, `homelab-update`, `homelab-restore-configs` and `homelab-check`), the example settings file `homelab-backup.conf.example`, and `SHA256SUMS`, which lists every file in the folder. (If you used the installer, it has already put these on the server; this part is for building by hand.) Clone the repository on the server, check the files, and install two of the commands now (`hdd-recover` comes in [step 8](#8-the-recovery-command) and `homelab` in [step 14](#14-the-cheat-sheet-at-login)):
+The scripts are in the [`scripts/`](../scripts/) folder of this repository. The folder holds the commands `drives`, `homelab-backup`, `hdd-recover` and `homelab`, a few helpers (`homelab-sample`, `homelab-update`, `homelab-restore-configs` and `homelab-check`), and the example settings file `homelab-backup.conf.example`. (If you used the installer, it has already put these on the server; this part is for building by hand.) Clone the repository on the server and install two of the commands now (`hdd-recover` comes in [step 8](#8-the-recovery-command) and `homelab` in [step 14](#14-the-cheat-sheet-at-login)):
 
 ```bash
 sudo apt install -y git
 git clone https://github.com/IbrandonrtI/My-Home-Lab-.git ~/My-Home-Lab-
 cd ~/My-Home-Lab-/scripts
-sha256sum -c SHA256SUMS
 sudo install -m 755 drives /usr/local/sbin/drives
 sudo install -m 755 homelab-backup /usr/local/sbin/homelab-backup
 sudo drives version
 sudo drives status
 ```
 
-Every line of the checksum check should end in `OK` (one line per file in the folder, for example `drives: OK`). `drives` is version 1.2 (1.1 added `drives replace`, see [step 15](#15-replace-a-dead-drive)).
+`drives` is version 1.2 (1.1 added `drives replace`, see [step 15](#15-replace-a-dead-drive)).
 
 If you copy the files from a Windows PC instead, run `grep -c $'\r' drives hdd-recover homelab-backup homelab` as well. All four numbers must be `0`, because Windows line endings stop a script from running.
 
-Every `sha256sum` and `install` command here has to run **inside** the `scripts` folder, because it names the files without a path. If `install` answers `cannot stat 'homelab'` (or another file name), you are in the wrong folder. Run `cd ~/My-Home-Lab-/scripts` and repeat the command.
+Every `install` command here has to run **inside** the `scripts` folder, because it names the files without a path. If `install` answers `cannot stat 'homelab'` (or another file name), you are in the wrong folder. Run `cd ~/My-Home-Lab-/scripts` and repeat the command.
 
 On a server with no pools yet, `status` looks like this:
 
@@ -435,11 +434,10 @@ To browse the backup from FileBrowser on a machine set up with the installer, no
 
 `homelab` is a small script. It prints the commands from this section (and, when the installer is present, its setup commands such as `sudo homelab-setup refresh`), grouped by job, a short **Suggested Commands** list (what is worth running now: a setup step that is waiting, an old backup, updates, and so on) and a live status block. I run it from `~/.bashrc`, so every new terminal shows it, both in a plain SSH session and in the terminal of VS Code Remote-SSH. Showing the cheat sheet never changes anything and needs no `sudo`. The only commands in it that change files are `homelab theme` and `homelab bookmark`, which edit the Homepage dashboard's own files ([build guide, section 14.5](build-guide.md#145-change-the-look-and-add-bookmarks)). `HOMELAB_SUGGEST_MAX` sets how many suggestions are shown (default 4).
 
-**1. Install it.** Run this on the server. The checksum check is the same one as in [step 2](#2-install-the-scripts), and the commands must run inside the `scripts` folder:
+**1. Install it.** Run this on the server. Like in [step 2](#2-install-the-scripts), the commands must run inside the `scripts` folder:
 
 ```bash
 cd ~/My-Home-Lab-/scripts
-sha256sum -c SHA256SUMS
 sudo install -m 755 homelab /usr/local/bin/homelab
 homelab version
 ```
@@ -522,7 +520,7 @@ git -C ~/My-Home-Lab- pull
 
 The second command opens a guide at a line from that list (replace `LINE` with the number and the file name with the one `homelab docs` shows, and press `q` to leave). The third refreshes the clone from GitHub. If the clone is missing, `homelab docs` prints the `git clone` command to run.
 
-**5. Update it later.** After a `git pull` that changes the script, repeat the checksum check and the `install` line from step 1.
+**5. Update it later.** After a `git pull` that changes the script, repeat the `install` line from step 1.
 
 **Undo.** Remove the block, or put the old file back (only if you changed nothing else in `~/.bashrc` since):
 
