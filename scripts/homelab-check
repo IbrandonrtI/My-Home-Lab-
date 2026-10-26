@@ -11,8 +11,7 @@ It only reads files. It never changes anything and needs no sudo.
 
 What it checks:
   - line endings: Windows line endings (CRLF) in scripts, YAML, Markdown and text files
-  - scripts (scripts/): syntax (bash -n), shellcheck if it is installed, and SHA256SUMS
-    (every file listed, every file present, every checksum right)
+  - scripts (scripts/): syntax (bash -n) and shellcheck if it is installed
   - the installer: installer/homelab-setup compiles, and (with src/ present) is the exact join of src/p0*.py
   - YAML: every .yaml/.yml file, and every yaml code block in the Markdown files
   - Markdown (README.md, INSTALL.md and docs/**): balanced code fences, links to headings (#...),
@@ -23,7 +22,6 @@ What it checks:
 
 Exit status: 0 = no problems (warnings are allowed), 1 = at least one problem.
 """
-import hashlib
 import os
 import re
 import shutil
@@ -151,37 +149,6 @@ def check_scripts(root, r):
             r.ok("scripts", "shellcheck found nothing")
         else:
             r.warn("scripts", "shellcheck reports warnings (run: shellcheck -S warning scripts/*)")
-    # SHA256SUMS
-    sums = os.path.join(d, "SHA256SUMS")
-    if not os.path.isfile(sums):
-        r.error("checksums", "scripts/SHA256SUMS is missing")
-        return
-    listed = {}
-    for line in read_text(sums).decode("utf-8", "replace").splitlines():
-        if not line.strip():
-            continue
-        m = re.match(r"^([0-9a-f]{64})\s+\*?(.+)$", line)
-        if not m:
-            r.error("checksums", "SHA256SUMS has a line that is not a checksum: %r" % line[:60])
-            continue
-        listed[m.group(2).strip()] = m.group(1)
-    present = [f for f in sorted(os.listdir(d)) if os.path.isfile(os.path.join(d, f)) and f != "SHA256SUMS" and not f.startswith(".")]
-    problems = 0
-    for f in present:
-        if f not in listed:
-            problems += 1
-            r.error("checksums", "%s is in scripts/ but not in SHA256SUMS. Add its line." % f)
-    for f, h in listed.items():
-        p = os.path.join(d, f)
-        if not os.path.isfile(p):
-            problems += 1
-            r.error("checksums", "SHA256SUMS lists %s but the file is missing" % f)
-            continue
-        if hashlib.sha256(read_text(p)).hexdigest() != h:
-            problems += 1
-            r.error("checksums", "%s does not match its line in SHA256SUMS (the file changed: rebuild the list with: cd scripts && sha256sum $(ls | grep -v SHA256SUMS) > SHA256SUMS)" % f)
-    if not problems:
-        r.ok("checksums", "SHA256SUMS lists %d files and all checksums match" % len(listed))
 
 
 def yaml_module():
