@@ -3,14 +3,14 @@
 #
 #   homelab           login screen: a summary and the current status
 #   homelab commands  every command I use, in groups
-#                     (the login screen also shows "Suggested Commands": up to four that fit the current state)
+#                     (the login screen also shows "Suggested Commands": up to six that fit the current state)
 #   homelab status    only the status block
 #   homelab docs    list the sections of the README and of the guides in docs/
 #   homelab secrets rebuild check: what must be in your password manager, and what the
 #                   server can confirm (values are never shown; sudo gives a fuller check)
 #
-#   homelab theme     change the Homepage dashboard's background and card colours (homelab theme shows how)
-#   homelab bookmark  add, list or remove bookmarks on the dashboard; logos come from Brandfetch as SVG files
+#   homelab theme     change the Homepage dashboard's background, and the colour of all cards or of one card (homelab theme shows how)
+#   homelab bookmark  add, list, move or remove bookmarks, by category; logos come from Brandfetch as SVG files
 #
 # Apart from theme and bookmark (which edit the Homepage files in your own home folder), it only reads
 # information. It never needs sudo.
@@ -184,17 +184,17 @@ commands() {
   cmd "sudo drives power"              "re-apply the drive power settings"
   cmd "sudo drives fillorder"          "make an older pool fill one drive at a time"
   cmd "sudo drives release"            "take all drives out of the pools (the files stay on the drives)"
-  cmd "findmnt /mnt/storage"           "is the main pool mounted (one path per command)"
-  cmd "df -h /"                        "free space on the boot drive"
+  cmd "findmnt /mnt/storage"           "is the main pool connected? (prints nothing if not; ask again with /mnt/backup)"
+  cmd "df -h /"                        "free space on the boot drive (the one the system runs from)"
   section "Backup"
-  cmd "sudo homelab-backup"            "run the backup now"
-  cmd "sudo tail -f /var/log/homelab-backup.log" "watch the backup (Ctrl+C to leave)"
-  cmd "sudo homelab-restore-configs check" "preview putting the saved configs back on a rebuilt server"
+  cmd "sudo homelab-backup"            "run the backup now (about a minute, longer after many new files)"
+  cmd "sudo tail -f /var/log/homelab-backup.log" "watch a backup while it runs (Ctrl+C to leave)"
+  cmd "sudo homelab-restore-configs check" "after a rebuild: preview putting the saved settings back (changes nothing)"
   section "Containers and updates"
-  cmd "sudo homelab-update"            "check, download, back up, then list what to update"
-  cmd "homelab-update list"            "what is waiting, and in which order to update"
+  cmd "sudo homelab-update"            "check, download the new images, back up, then list what to update (you update in Portainer)"
+  cmd "homelab-update list"            "what is waiting, and in which order to update (no sudo needed)"
   cmd "sudo homelab-update clean"      "delete old saved versions and leftover images (asks first)"
-  cmd "docker ps --format \"table {{.Names}}\\t{{.Status}}\"" "what is running, with how healthy it is"
+  cmd "docker ps --format \"table {{.Names}}\\t{{.Status}}\"" "the same list in a tidier table, with each container's health"
   cmd "docker logs --tail 50 NAME"     "the last 50 lines a container printed"
   cmd "docker restart NAME"            "restart one container"
   cmd "docker stats --no-stream"       "CPU and memory of each container"
@@ -203,13 +203,15 @@ commands() {
   cmd "sudo apt update && sudo apt upgrade" "install the waiting Linux Mint updates"
   cmd "sudo reboot"                    "restart the server (afterwards: sudo drives status)"
   section "Homepage dashboard"
-  cmd "homelab theme"                  "show the look, and how to change the background and card colours"
+  cmd "homelab theme"                  "show the look, and how to change it (no sudo)"
   cmd "homelab theme background URL"   "a new background picture (a web address or a file on this machine)"
-  cmd "homelab theme cards blue 40"    "card colour, and how solid the cards are (0 to 100)"
+  cmd "homelab theme cards blue 40"    "ALL cards: colour, and how solid they are (0 to 100)"
+  cmd "homelab theme cards AdGuard Home blue" "ONE card: any service from the dashboard, any colour"
   cmd "homelab theme reset"            "the shipped look again"
-  cmd "homelab bookmark add NAME URL"  "add a bookmark; its logo is downloaded as an SVG from Brandfetch"
-  cmd "homelab bookmark list"          "the bookmarks on the dashboard"
-  cmd "homelab bookmark remove NAME"   "take a bookmark away"
+  cmd "homelab bookmark list"          "the bookmarks, by category"
+  cmd "homelab bookmark add NAME URL"  "add a bookmark; you pick the category (or add it at the end:  ... Entertainment)"
+  cmd "homelab bookmark remove NAME"   "take one away (add the category if the name is in two)"
+  cmd "homelab bookmark move NAME CATEGORY" "put a bookmark in another category"
   if command -v homelab-setup >/dev/null 2>&1; then
     section "Setup checklist"
     cmd "sudo homelab-setup"             "the checklist: what is done and what is left"
@@ -217,19 +219,19 @@ commands() {
     cmd "sudo homelab-setup --details"   "the full instructions of every open step"
     cmd "sudo homelab-setup verify"      "check that every container and service is up"
     cmd "sudo homelab-setup fill"        "walk through the logins and keys that need you"
-    cmd "sudo homelab-setup done STEP"   "mark a step you did by hand as done (not for the automatic ones)"
-    cmd "sudo homelab-setup skip STEP"   "mark an optional step as not wanted"
+    cmd "sudo homelab-setup done STEP"   "mark a step you did by hand as done (STEP is the name in the checklist)"
+    cmd "sudo homelab-setup skip STEP"   "mark an optional step as not wanted (STEP is the name in the checklist)"
     cmd "sudo homelab-setup install"     "set everything up, or carry on after a failed step (safe to repeat)"
     cmd "sudo homelab-setup secrets"     "show the generated passwords and keys once more"
   fi
   section "Rebuild and safety"
   cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
-  cmd "homelab-check"                  "check the GitHub files before you upload them"
+  cmd "homelab-check ~/My-Home-Lab-"   "look for mistakes in the repository files before you upload them to GitHub"
   section "This screen and the guides"
   cmd "homelab commands"               "this list"
   cmd "homelab status"                 "only the status block"
   cmd "homelab docs"                   "sections of the README and the guides in docs/"
-  cmd "git -C ~/My-Home-Lab- pull"     "refresh the guides from GitHub"
+  cmd "git -C ~/My-Home-Lab- pull"     "download the newest guides and scripts from GitHub (then: cd ~/My-Home-Lab- && sudo bash setup.sh install)"
   flush_cmds
 }
 
@@ -242,6 +244,7 @@ homepage_edit() {
   fi
   command -v python3 >/dev/null 2>&1 || { echo "python3 is needed for this command (sudo apt install python3)." >&2; return 1; }
   HP_DIR="$HOMEPAGE_DIR" HP_DOCS_DIR="$DOCS_DIR" python3 - "$@" <<'PY'
+import difflib
 import os
 import re
 import shutil
@@ -257,6 +260,7 @@ BASE = os.environ.get("HOMELAB_BRANDFETCH_BASE", "https://cdn.brandfetch.io").rs
 SETTINGS = os.path.join(HP, "settings.yaml")
 CSS = os.path.join(HP, "custom.css")
 MARKS = os.path.join(HP, "bookmarks.yaml")
+SERVICES_FILE = os.path.join(HP, "services.yaml")
 IMAGES = os.path.join(HP, "images")
 IDFILE = os.path.join(HP, ".brandfetch-client-id")
 B1, B2 = "/* >>> homelab theme >>>", "/* <<< homelab theme <<< */"
@@ -270,7 +274,11 @@ ACCENT = {
     "pink": (236, 72, 153), "teal": (20, 184, 166), "yellow": (234, 179, 8), "cyan": (0, 197, 253), "white": (255, 255, 255),
     "gray": (148, 163, 184), "grey": (148, 163, 184), "black": (23, 21, 20),
 }
-SERVICES = ("adguard", "tailscale", "beszel", "portainer", "filebrowser", "speedtest", "immich", "nextcloud", "netdata")
+# the cards that ship with the lab; the real list is read from services.yaml, so a service you add yourself works too
+DEFAULT_SERVICES = [("AdGuard Home", "adguard-card"), ("Tailscale", "tailscale-card"), ("Beszel", "beszel-card"), ("Netdata", "netdata-card"),
+                    ("Speedtest Tracker", "speedtest-card"), ("Portainer", "portainer-card"), ("FileBrowser", "filebrowser-card"),
+                    ("Immich", "immich-card"), ("Nextcloud", "nextcloud-card")]
+DEFAULT_WORDS = ("default", "reset", "normal", "shipped")
 BLURS = ("sm", "md", "lg", "xl", "2xl", "3xl")
 
 
@@ -381,25 +389,33 @@ def css_split(text):
     return text[:a].rstrip("\n") + "\n", text[a:b + len(B2)]
 
 
+def fmt_alpha(a):
+    return str(int(a)) if a in (0, 1) else ("%.2f" % a).rstrip("0").rstrip(".")
+
+
 def css_state(block):
-    st = {"cards": None, "accent": {}}
-    m = re.search(r"\.service-card\s*\{\s*background:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)", block)
+    """cards = the colour of every card, card = {service: colour of that one card}, accent = {service: glow colour}"""
+    st = {"cards": None, "card": {}, "accent": {}}
+    m = re.search(r"(?m)^\.service-card\s*\{\s*background:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)", block)
     if m:
         st["cards"] = (int(m.group(1)), int(m.group(2)), int(m.group(3)), float(m.group(4)))
-    for m in re.finditer(r"#(\w+)-card\s*\{\s*--accent:\s*(\d+),\s*(\d+),\s*(\d+);", block):
+    for m in re.finditer(r"#([\w-]+)-card\s+\.service-card\s*\{\s*background:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)", block):
+        st["card"][m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)), float(m.group(5)))
+    for m in re.finditer(r"#([\w-]+)-card\s*\{\s*--accent:\s*(\d+),\s*(\d+),\s*(\d+);", block):
         st["accent"][m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
     return st
 
 
 def css_build(st):
-    if not st["cards"] and not st["accent"]:
+    if not st["cards"] and not st["card"] and not st["accent"]:
         return ""
     out = [B1 + " written by: homelab theme. Remove it with: homelab theme reset */"]
     if st["cards"]:
-        out.append(".service-card { background: rgba(%d, %d, %d, %s) !important; }" % (st["cards"][0], st["cards"][1], st["cards"][2], ("%.2f" % st["cards"][3]).rstrip("0").rstrip(".") if st["cards"][3] not in (0, 1) else int(st["cards"][3])))
-    for s in SERVICES:
-        if s in st["accent"]:
-            out.append("#%s-card { --accent: %d, %d, %d; }" % ((s,) + st["accent"][s]))
+        out.append(".service-card { background: rgba(%d, %d, %d, %s) !important; }" % (st["cards"][:3] + (fmt_alpha(st["cards"][3]),)))
+    for s in sorted(st["card"]):
+        out.append("#%s-card .service-card { background: rgba(%d, %d, %d, %s) !important; }" % ((s,) + st["card"][s][:3] + (fmt_alpha(st["card"][s][3]),)))
+    for s in sorted(st["accent"]):
+        out.append("#%s-card { --accent: %d, %d, %d; }" % ((s,) + st["accent"][s]))
     out.append(B2)
     return "\n".join(out) + "\n"
 
@@ -423,28 +439,34 @@ def theme_show():
     need_dir()
     bg = bg_get(read(SETTINGS))
     st = cur_css()
+    names = {i[:-5]: n for n, i in known_services() if i}
     print("  Background    %s" % bg.get("image", "(none)").strip("'"))
     print("  Dimming       brightness %s, saturation %s, opacity %s, blur %s" % (bg.get("brightness", "default"), bg.get("saturate", "default"), bg.get("opacity", "default"), bg.get("blur", "none")))
     if st["cards"]:
         r, g, b, a = st["cards"]
-        print("  Cards         rgb(%d, %d, %d), %d%% solid" % (r, g, b, round(a * 100)))
+        print("  All cards     rgb(%d, %d, %d), %d%% solid" % (r, g, b, round(a * 100)))
     else:
-        print("  Cards         the shipped look (dark slate, 58%% solid)")
+        print("  All cards     the shipped look (dark slate, 58%% solid)")
+    for k in sorted(st["card"]):
+        r, g, b, a = st["card"][k]
+        print("  Card          %s: rgb(%d, %d, %d), %d%% solid" % (names.get(k, k), r, g, b, round(a * 100)))
     if st["accent"]:
-        print("  Accents       " + ", ".join("%s rgb(%d, %d, %d)" % ((k,) + v) for k, v in sorted(st["accent"].items())))
+        print("  Glow colours  " + ", ".join("%s rgb(%d, %d, %d)" % ((names.get(k, k),) + v) for k, v in sorted(st["accent"].items())))
     else:
-        print("  Accents       the shipped colours")
+        print("  Glow colours  the shipped colours")
     print()
     print("  Change it with:")
     print("    homelab theme background URL-or-FILE     a picture from the web, or one on this machine")
     print("    homelab theme brightness 0-100           how dark the picture is (shipped: 42)")
     print("    homelab theme blur none|sm|md|lg|xl      blur the picture (shipped: md)")
     print("    homelab theme saturate 0-100 | opacity 0-100")
-    print("    homelab theme cards COLOR [0-100]        card colour and how solid it is (name or #hex)")
-    print("    homelab theme accent SERVICE COLOR       one service's glow and edge colour (or: all)")
-    print("    homelab theme reset                      the shipped look again")
-    print("  Colour names: " + ", ".join(sorted(COLORS)))
-    print("  Services: " + ", ".join(SERVICES))
+    print("    homelab theme cards COLOR [0-100]        ALL cards: colour, and how solid they are (0-100)")
+    print("    homelab theme cards SERVICE COLOR [0-100]   ONE card, for example:  homelab theme cards AdGuard Home blue")
+    print("    homelab theme cards SERVICE default      that card goes back to the shipped look")
+    print("    homelab theme accent SERVICE COLOR       only the glow and edge colour of one card (or: all)")
+    print("    homelab theme reset                      the shipped look again, everywhere")
+    print("  Colour names: " + ", ".join(sorted(COLORS)) + "  (or a hex code such as #1e3a8a)")
+    print("  Services: " + ", ".join(n for n, i in known_services() if i))
 
 
 def theme_background(src):
@@ -481,7 +503,60 @@ def theme_key(key, arg):
     print("%s changed. %s" % (key.capitalize(), REFRESH))
 
 
+def norm(s):
+    return re.sub(r"[^a-z0-9]+", "", s.lower())
+
+
+def known_services():
+    """[(name, card id or None)] from services.yaml (the nine shipped cards when the file is missing)."""
+    out, name = [], None
+    for line in read(SERVICES_FILE).split("\n"):
+        m = re.match(r"^    - (.+?):\s*$", line)
+        if m:
+            if name:
+                out.append((name, None))
+            name = m.group(1)
+            continue
+        m = re.match(r"^ {8}id:\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*$", line)
+        if m and name:
+            out.append((name, m.group(1) if m.group(1).endswith("-card") else None))
+            name = None
+    if name:
+        out.append((name, None))
+    return out or list(DEFAULT_SERVICES)
+
+
+def find_service(words, quiet=False):
+    """The (name, id) of the card the words point at: not case sensitive, spaces optional, a small typo is forgiven."""
+    sv = known_services()
+    usable = [(n, i) for n, i in sv if i]
+    t = norm(words)
+    if not t:
+        raise Fail("Which service? One of: %s." % ", ".join(n for n, _ in usable))
+    keys = {}
+    for n, i in usable:
+        keys.setdefault(norm(n), (n, i))
+        keys.setdefault(norm(i[:-5]), (n, i))
+    if t in keys:
+        return keys[t]
+    hits = sorted({keys[k] for k in keys if k.startswith(t)}) or sorted({keys[k] for k in keys if len(t) >= 3 and t in k})
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise Fail("'%s' could mean %s. Type a little more of the name." % (words, " or ".join(n for n, _ in hits)))
+    close = difflib.get_close_matches(t, list(keys), n=1, cutoff=0.75)
+    if close:
+        return keys[close[0]]
+    for n, i in sv:
+        if not i and norm(n) == t:
+            raise Fail("'%s' has no 'id:' line in services.yaml, so its card cannot be coloured. Add this line under it:  id: %s-card" % (n, slug(n)))
+    if quiet:
+        return None
+    raise Fail("I don't know a service called '%s'. The services are: %s." % (words, ", ".join(n for n, _ in usable)))
+
+
 def theme_cards(color, opacity):
+    """Every card gets the same colour (a colour given to one card before is dropped)."""
     need_dir()
     r, g, b = parse_color(color, COLORS, "card")
     st = cur_css()
@@ -489,26 +564,83 @@ def theme_cards(color, opacity):
     if opacity is not None:
         a = number(opacity, "How solid the cards are", 0, 100) / 100.0
     st["cards"] = (r, g, b, a)
+    st["card"] = {}
     css_save(st)
-    print("Cards set to rgb(%d, %d, %d), %d%% solid. %s" % (r, g, b, round(a * 100), REFRESH))
+    print("All cards set to rgb(%d, %d, %d), %d%% solid. %s" % (r, g, b, round(a * 100), REFRESH))
+
+
+def theme_card_one(words, color, opacity):
+    """One card: its background and its glow and edge get the colour. 'default' puts that card back."""
+    need_dir()
+    name, cid = find_service(words)
+    key = cid[:-5]
+    st = cur_css()
+    if color.lower() in DEFAULT_WORDS:
+        st["card"].pop(key, None)
+        st["accent"].pop(key, None)
+        css_save(st)
+        print("The %s card is back to the shipped look. %s" % (name, REFRESH))
+        return
+    r, g, b = parse_color(color, COLORS, "card")
+    a = st["card"][key][3] if key in st["card"] else (st["cards"][3] if st["cards"] else 0.58)
+    if opacity is not None:
+        a = number(opacity, "How solid the card is", 0, 100) / 100.0
+    st["card"][key] = (r, g, b, a)
+    glow = ACCENT.get(color.lower())
+    if glow is None and re.fullmatch(r"#?[0-9a-fA-F]{6}", color):
+        glow = (r, g, b)
+    if glow:
+        st["accent"][key] = glow
+    css_save(st)
+    print("The %s card is now %s (rgb(%d, %d, %d), %d%% solid)%s. %s" % (name, color, r, g, b, round(a * 100), ", with a matching glow" if glow else "", REFRESH))
+
+
+def theme_cards_cmd(words):
+    """homelab theme cards [SERVICE] COLOR [0-100]  (the service name may have spaces and needs no quotes)"""
+    words = list(words)
+    opacity = None
+    if len(words) >= 2 and re.fullmatch(r"\d{1,3}%?", words[-1]):
+        opacity = words.pop().rstrip("%")
+    color = words.pop()
+    if not words or norm(" ".join(words)) == "all":
+        if not words and color.lower() not in DEFAULT_WORDS:
+            try:
+                parse_color(color, COLORS, "card")
+            except Fail:
+                if find_service(color, quiet=True):
+                    raise Fail("Which colour? For example:  homelab theme cards %s blue" % color)
+                raise
+        if color.lower() in DEFAULT_WORDS:
+            raise Fail("To put every card back to the shipped look, use:  homelab theme reset")
+        theme_cards(color, opacity)
+    else:
+        theme_card_one(" ".join(words), color, opacity)
+
+
+def theme_accent_cmd(words):
+    """homelab theme accent SERVICE COLOR  (SERVICE may be several words, or: all)"""
+    theme_accent(" ".join(words[:-1]), words[-1])
 
 
 def theme_accent(service, color):
     need_dir()
-    service = service.lower()
-    if service != "all" and service not in SERVICES:
-        raise Fail("Unknown service '%s'. Use one of: %s, or all." % (service, ", ".join(SERVICES)))
     rgb = parse_color(color, ACCENT, "accent")
     st = cur_css()
-    for s in (SERVICES if service == "all" else (service,)):
-        st["accent"][s] = rgb
+    if norm(service) == "all":
+        targets = [i[:-5] for _, i in known_services() if i]
+        label = "every card"
+    else:
+        name, cid = find_service(service)
+        targets, label = [cid[:-5]], "the " + name + " card"
+    for t in targets:
+        st["accent"][t] = rgb
     css_save(st)
-    print("Accent of %s set to rgb(%d, %d, %d). %s" % (service, rgb[0], rgb[1], rgb[2], REFRESH))
+    print("The glow and edge of %s is now rgb(%d, %d, %d). %s" % (label, rgb[0], rgb[1], rgb[2], REFRESH))
 
 
 def theme_reset():
     need_dir()
-    css_save({"cards": None, "accent": {}})
+    css_save({"cards": None, "card": {}, "accent": {}})
     shipped = read(os.path.join(DOCS, "homepage-config", "settings.yaml")) if DOCS else ""
     if not shipped:
         shipped = read(SETTINGS + ".before-theme")
@@ -593,6 +725,62 @@ def make_abbr(name):
     return (words[0] if words else "?")[:4].upper()
 
 
+def tty_path():
+    """Where answers can be typed: the keyboard, not the pipe this program is fed through. '' when nobody is there to answer."""
+    return os.environ.get("HOMELAB_TTY", "") or ("/dev/tty" if sys.stdout.isatty() else "")
+
+
+_TTY = []
+
+
+def ask(question):
+    """Ask on the keyboard. None when nobody is there to answer."""
+    path = tty_path()
+    if not path:
+        return None
+    try:
+        if not _TTY:
+            _TTY.append(open(path, encoding="utf-8"))
+        sys.stdout.write(question)
+        sys.stdout.flush()
+        line = _TTY[0].readline()
+    except OSError:
+        return None
+    return line.strip() if line else None
+
+
+def find_group(groups, wanted):
+    """The category that 'wanted' means: not case sensitive, spaces and punctuation ignored, a small typo forgiven. None if there is none."""
+    t = norm(wanted)
+    for g in groups:
+        if norm(g[0]) == t:
+            return g
+    close = difflib.get_close_matches(t, [norm(g[0]) for g in groups], n=1, cutoff=0.8)
+    return next((g for g in groups if norm(g[0]) == close[0]), None) if close else None
+
+
+def pick_group(groups, what, allow_new):
+    """Show the categories as a numbered list and let the person choose one. Returns the group, or its new name as a string."""
+    if not tty_path():
+        return None
+    print(what)
+    for i, g in enumerate(groups, 1):
+        print("  %d) %s" % (i, g[0]))
+    if allow_new:
+        print("  %d) A new category (you type its name)" % (len(groups) + 1))
+    ans = ask("Number%s: " % (" (Enter = Others)" if allow_new else ""))
+    if ans is None:
+        return None
+    if ans == "" and allow_new:
+        return "Others"
+    if ans.isdigit() and 1 <= int(ans) <= len(groups):
+        return groups[int(ans) - 1]
+    if allow_new and ans.isdigit() and int(ans) == len(groups) + 1:
+        new = ask("Name of the new category: ")
+        return new if new else None
+    raise Fail("'%s' is not one of the numbers above. Nothing was changed." % ans)
+
+
 def marks_add(name, url, group):
     need_dir()
     if not re.match(r"^https?://", url):
@@ -603,15 +791,22 @@ def marks_add(name, url, group):
     domain = re.sub(r"^www\.", "", host.split(":")[0])
     text = read(MARKS)
     groups, lines = marks_groups(text)
+    if group is None:   # no category given: ask, or use Others when nobody can answer
+        choice = pick_group(groups, "Which category should '%s' go in?" % name, True) if groups else "Others"
+        group = choice if choice is not None else "Others"
+        if not isinstance(group, str):
+            group = group[0]
+    target = find_group(groups, group)
+    if target:
+        group = target[0]
     for g in groups:
         for n, s, e in g[1]:
-            if n.lower() == name.lower():
-                raise Fail("A bookmark named '%s' is already in '%s'. Remove it first:  homelab bookmark remove \"%s\"" % (n, g[0], n))
+            if n.lower() == name.lower() and g is target:
+                raise Fail("A bookmark named '%s' is already in '%s'. Remove it first:  homelab bookmark remove \"%s\" \"%s\"" % (n, g[0], n, g[0]))
     icon, msg = fetch_svg(domain, name)
     entry = ["    - %s:" % name, "        - abbr: %s" % make_abbr(name), "          href: %s" % url]
     if icon:
         entry.append("          icon: %s" % icon)
-    target = next((g for g in groups if g[0].lower() == group.lower()), None)
     if target:
         at = target[2]
         while at > 0 and lines[at - 1].strip() == "":
@@ -622,7 +817,9 @@ def marks_add(name, url, group):
         body = text.rstrip("\n").split("\n") if text.strip() else []
         out = "\n".join(body + ([""] if body else []) + ["- %s:" % group] + entry).rstrip("\n") + "\n"
     write(MARKS, out)
-    print("Added '%s' to '%s' (%s). %s" % (name, group if target else group + " (a new group)", url, msg))
+    print("Added '%s' to '%s' (%s). %s" % (name, group, url, msg))
+    if not target and groups:
+        print("'%s' is a new category (it did not exist yet). The ones before: %s." % (group, ", ".join(g[0] for g in groups)))
     print("Refresh the Homepage page in the browser to see it.")
 
 
@@ -630,7 +827,7 @@ def marks_list():
     need_dir()
     groups, lines = marks_groups(read(MARKS))
     if not groups:
-        print("There are no bookmarks yet. Add one with:  homelab bookmark add NAME URL [GROUP]")
+        print("There are no bookmarks yet. Add one with:  homelab bookmark add NAME URL [CATEGORY]")
         return
     for g in groups:
         print("  %s" % g[0])
@@ -638,36 +835,76 @@ def marks_list():
             print("    %-22s %s" % (n, entry_field(lines, s, e, "href")))
 
 
-def marks_remove(name):
-    need_dir()
+def marks_pick(name, group, verb):
+    """The one bookmark meant by NAME (and CATEGORY): (group, name, start, end), plus the text and its lines."""
     text = read(MARKS)
     groups, lines = marks_groups(text)
-    hit = None
-    for g in groups:
-        for n, s, e in g[1]:
-            if n.lower() == name.lower():
-                hit = (g, n, s, e)
-    if not hit:
-        raise Fail("No bookmark named '%s'. See them with:  homelab bookmark list" % name)
-    g, n, s, e = hit
-    icon = entry_field(lines, s, e, "icon")
-    new = lines[:s] + lines[e:]
-    out = "\n".join(new)
+    if group is not None:
+        want = find_group(groups, group)
+        if not want:
+            raise Fail("There is no category '%s'. The categories are: %s." % (group, ", ".join(g[0] for g in groups) or "(none)"))
+        groups = [want]
+    hits = [(g, n, s, e) for g in groups for n, s, e in g[1] if n.lower() == name.lower()]
+    if not hits:
+        where = " in '%s'" % groups[0][0] if group is not None else ""
+        raise Fail("No bookmark named '%s'%s. See them with:  homelab bookmark list" % (name, where))
+    if len(hits) > 1:
+        cats = [h[0] for h in hits]
+        choice = pick_group(cats, "'%s' is in %d categories. Which one should I %s?" % (name, len(cats), verb), False)
+        if choice is None:
+            raise Fail("'%s' is in %s. Say which one:  homelab bookmark %s \"%s\" \"CATEGORY\"" % (name, " and ".join("'%s'" % c[0] for c in cats), verb, name))
+        hits = [h for h in hits if h[0] is choice]
+    return hits[0], text, lines
+
+
+def clean_marks(lines):
+    """Join the lines again with one blank line between categories, and drop a category that has no bookmark left."""
+    out = "\n".join(lines)
     out = re.sub(r"([^\n])\n(- )", r"\1\n\n\2", out)
     out = re.sub(r"\n{3,}", "\n\n", out).rstrip("\n") + "\n"
-    # drop a group that has no bookmarks left
     g2, l2 = marks_groups(out)
     for gg in g2:
         if not gg[1]:
             del l2[l2.index("- %s:" % gg[0])]
             out = re.sub(r"\n{3,}", "\n\n", "\n".join(l2)).strip("\n") + "\n"
             break
-    write(MARKS, out if out.strip() else "")
+    return out if out.strip() else ""
+
+
+def marks_remove(name, group):
+    need_dir()
+    (g, n, s, e), text, lines = marks_pick(name, group, "remove")
+    icon = entry_field(lines, s, e, "icon")
+    out = clean_marks(lines[:s] + lines[e:])
+    write(MARKS, out)
     if icon.startswith("/images/") and icon not in out:
         p = os.path.join(IMAGES, os.path.basename(icon))
         if os.path.isfile(p):
             os.remove(p)
-    print("Removed '%s'. Refresh the Homepage page in the browser." % n)
+    print("Removed '%s' from '%s'. Refresh the Homepage page in the browser." % (n, g[0]))
+
+
+def marks_move(name, to, group):
+    """Take a bookmark out of its category and put it in another one (the saved logo stays with it)."""
+    need_dir()
+    (g, n, s, e), text, lines = marks_pick(name, group, "move")
+    if norm(to) == norm(g[0]):
+        raise Fail("'%s' is already in '%s'." % (n, g[0]))
+    entry = lines[s:e]
+    while entry and entry[-1].strip() == "":
+        entry.pop()
+    rest = lines[:s] + lines[e:]
+    groups2, lines2 = marks_groups("\n".join(rest))
+    dest = find_group(groups2, to)
+    if dest:
+        at = dest[2]
+        while at > 0 and lines2[at - 1].strip() == "":
+            at -= 1
+        new = lines2[:at] + [""] + entry + lines2[at:]
+    else:
+        new = lines2 + ([""] if "".join(lines2).strip() else []) + ["- %s:" % to] + entry
+    write(MARKS, clean_marks(new))
+    print("Moved '%s' from '%s' to '%s'%s. Refresh the Homepage page in the browser." % (n, g[0], dest[0] if dest else to, "" if dest else " (a new category)"))
 
 
 def marks_id(cid):
@@ -680,11 +917,16 @@ def marks_id(cid):
     print("Brandfetch client ID saved in %s. New bookmarks now get their logo from Brandfetch." % IDFILE)
 
 
-USAGE_M = """Bookmarks on the Homepage dashboard:
-  homelab bookmark add NAME URL [GROUP]   add one (GROUP is created if it is new; default: Others)
-  homelab bookmark list                   what is there
-  homelab bookmark remove NAME            take one away (and its saved logo)
-  homelab bookmark brandfetch CLIENT-ID   save your Brandfetch client ID once, so logos are downloaded as SVG files"""
+USAGE_M = """Bookmarks on the Homepage dashboard (a name with spaces goes in quotes):
+  homelab bookmark list                           every category and the bookmarks in it
+  homelab bookmark add NAME URL [CATEGORY]        add one. Without a CATEGORY you pick from a list.
+                                                  A category that does not exist yet is created.
+  homelab bookmark remove NAME [CATEGORY]         take one away (and its saved logo). If the name is in
+                                                  more than one category, give the CATEGORY or pick it.
+  homelab bookmark move NAME NEW-CATEGORY [FROM]  put a bookmark in another category
+  homelab bookmark brandfetch CLIENT-ID           save your Brandfetch client ID once, so logos are downloaded
+For example:  homelab bookmark add Netflix netflix.com Entertainment
+              homelab bookmark remove YouTube Entertainment"""
 
 
 def main(a):
@@ -700,10 +942,10 @@ def main(a):
                 theme_background(a[1])
             elif c in ("brightness", "blur", "saturate", "opacity") and len(a) == 2:
                 theme_key(c, a[1])
-            elif c == "cards" and len(a) in (2, 3):
-                theme_cards(a[1], a[2] if len(a) == 3 else None)
-            elif c == "accent" and len(a) == 3:
-                theme_accent(a[1], a[2])
+            elif c == "cards" and len(a) >= 2:
+                theme_cards_cmd(a[1:])
+            elif c == "accent" and len(a) >= 3:
+                theme_accent_cmd(a[1:])
             elif c == "reset" and len(a) == 1:
                 theme_reset()
             else:
@@ -713,11 +955,15 @@ def main(a):
             a = a[1:]
             c = a[0] if a else ""
             if c == "add" and len(a) in (3, 4):
-                marks_add(a[1], a[2], a[3] if len(a) == 4 else "Others")
+                marks_add(a[1], a[2], a[3] if len(a) == 4 else None)
+            elif c == "add" and len(a) > 4:
+                raise Fail("Too many words. If the name has spaces, put it in quotes:  homelab bookmark add \"My Bank\" mybank.com Productivity")
             elif c == "list" and len(a) == 1:
                 marks_list()
-            elif c in ("remove", "rm", "delete") and len(a) == 2:
-                marks_remove(a[1])
+            elif c in ("remove", "rm", "delete") and len(a) in (2, 3):
+                marks_remove(a[1], a[2] if len(a) == 3 else None)
+            elif c == "move" and len(a) in (3, 4):
+                marks_move(a[1], a[2], a[3] if len(a) == 4 else None)
             elif c == "brandfetch" and len(a) == 2:
                 marks_id(a[1])
             else:
@@ -779,6 +1025,22 @@ backup_size_line() {
   ok "Backup size" "$text"
 }
 
+# The name of a pool drive as "sudo drives status" shows it ("1 TB Samsung HDD"), not the label on the drive (MAIN2).
+# The name you chose in /etc/homelab-drive-names wins, then the name "drives" saved. A name two drives share keeps the label too.
+drive_shown_name() {   # drive_shown_name LABEL TEMPS-FILE
+  local lab=$1 file=$2 name="" n
+  case "$lab" in MAIN[0-9]*|BACKUP[0-9]*) ;; *) printf '%s' "$lab"; return 0 ;; esac
+  [ -r "${HOMELAB_NAMES_FILE:-/etc/homelab-drive-names}" ] && name=$(awk -F= -v k="$lab" '{ gsub(/^[ \t]+|[ \t]+$/, "", $1) } $1 == k && !/^[ \t]*#/ { sub(/^[^=]*=/, ""); print; exit }' "${HOMELAB_NAMES_FILE:-/etc/homelab-drive-names}")
+  [ -n "$name" ] || { [ -r "$STATE_DIR/drive-names" ] && name=$(awk -F'|' -v k="$lab" '$1 == k {print $2; exit}' "$STATE_DIR/drive-names"); }
+  [ -n "$name" ] || { printf '%s' "$lab"; return 0; }
+  n=0
+  while IFS='|' read -r other _; do
+    [ "$other" = "$lab" ] && continue
+    case "$other" in MAIN[0-9]*|BACKUP[0-9]*) [ "$(awk -F'|' -v k="$other" '$1 == k {print $2; exit}' "$STATE_DIR/drive-names" 2>/dev/null)" = "$name" ] && n=1 ;; esac
+  done <"$file"
+  if [ "$n" -eq 1 ]; then printf '%s (%s)' "$name" "$lab"; else printf '%s' "$name"; fi
+}
+
 temps_line() {
   local f="$STATE_DIR/temps" label _d t ep parts="" max=0 oldest="" age
   if [ ! -e "$f" ]; then
@@ -792,6 +1054,7 @@ temps_line() {
   fi
   while IFS="|" read -r label _d t ep; do
     [ -n "$label" ] || continue
+    label=$(drive_shown_name "$label" "$f")
     if [ "$t" = "standby" ]; then parts="$parts$label asleep, "
     elif [[ "$t" =~ ^[0-9]+$ ]]; then
       parts="$parts$label ${t}°C, "
@@ -927,7 +1190,11 @@ status() {
     fi
     [ -n "$restarted" ] && warn "Restarts" "Docker restarted in the last 24 h: ${restarted%, }"
   else
-    warn "Containers" "cannot read Docker (is Docker running, and are you in the docker group?)"
+    case "$(systemctl is-active docker 2>/dev/null)" in
+      activating) warn "Containers" "Docker is still starting after the restart. Wait a minute, then run  homelab  again" ;;
+      inactive|failed) warn "Containers" "Docker is not running. Start it with:  sudo systemctl start docker" ;;
+      *) warn "Containers" "cannot read Docker (is Docker running, and are you in the docker group?)" ;;
+    esac
   fi
 
   # boot drive space
