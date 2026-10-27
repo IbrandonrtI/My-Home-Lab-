@@ -187,7 +187,7 @@ sudo chown -R 33:33 /mnt/storage/nextcloud
 mkdir -p /home/your-username/nextcloud/html /home/your-username/nextcloud/db
 mkdir -p /home/your-username/immich/postgres
 mkdir -p /home/your-username/homepage-config
-mkdir -p /home/your-username/750GB_HDD
+mkdir -p /home/your-username/boot-drive-files
 sudo mkdir -p /opt/adguard-docker/conf /opt/adguard-docker/work
 ```
 
@@ -200,7 +200,7 @@ UID 33 is the user Nextcloud runs as inside its container (it shows as `www-data
 | `/mnt/storage/filebrowser` | FileBrowser share | Main pool |
 | `/home/your-username/immich/postgres` | Immich database | Boot |
 | `/home/your-username/nextcloud/db` and `html` | Nextcloud database and app files | Boot |
-| `/home/your-username/750GB_HDD` | FileBrowser share on the boot drive | Boot |
+| `/home/your-username/boot-drive-files` | FileBrowser share on the boot drive | Boot |
 | `/home/your-username/homepage-config` | Homepage config files | Boot |
 | `/opt/adguard-docker` | AdGuard Home settings | Boot |
 
@@ -288,7 +288,7 @@ Immich also writes its own database backups into `/mnt/storage/immich/backups`, 
 
 ```bash
 sudo tee /etc/homelab-backup.conf >/dev/null <<'EOF'
-DEST_FALLBACK="/home/your-username/750GB_HDD/backup-interim"
+DEST_FALLBACK="/home/your-username/boot-drive-files/backup-interim"
 EOF
 cat /etc/homelab-backup.conf
 ```
@@ -304,8 +304,8 @@ My first run copied 61 GB over the USB adapter in 1420 seconds (about 24 minutes
 
 ```text
 2026-10-22 19:04:46 start
-2026-10-22 19:04:46 backup pool not mounted, using the fallback folder /home/your-username/750GB_HDD/backup-interim
-2026-10-22 19:04:53 database dump saved: /home/your-username/750GB_HDD/backup-interim/db-dumps/nextcloud-2026-10-22.sql.gz
+2026-10-22 19:04:46 backup pool not mounted, using the fallback folder /home/your-username/boot-drive-files/backup-interim
+2026-10-22 19:04:53 database dump saved: /home/your-username/boot-drive-files/backup-interim/db-dumps/nextcloud-2026-10-22.sql.gz
 2026-10-22 19:27:04 main storage copied
 2026-10-22 19:28:26 configs copied
 2026-10-22 19:28:26 finished: OK in 1420s
@@ -315,7 +315,7 @@ To check whether it is still running, use `pgrep -af homelab-backup`. The `f` ma
 
 ```bash
 sudo drives status
-sudo du -sh /mnt/storage /home/your-username/750GB_HDD/backup-interim/main
+sudo du -sh /mnt/storage /home/your-username/boot-drive-files/backup-interim/main
 ```
 
 The status should show `result: OK` with the destination, and the two sizes should be close (mine were both 61G). Then schedule it for 6:00 every day:
@@ -349,7 +349,7 @@ cat /etc/homelab-backup.conf
 Use `+=`, which adds to the list. A plain `=` would replace the list, and the backup would stop copying everything else. A folder that doesn't exist is skipped, with a line in the log. After the next backup, the folder appears under `boot-configs/`, with its full path:
 
 ```bash
-sudo ls /home/your-username/750GB_HDD/backup-interim/boot-configs/home/your-username/
+sudo ls /home/your-username/boot-drive-files/backup-interim/boot-configs/home/your-username/
 ```
 
 **Restore a file or folder.** Copy it out of the backup, and don't edit it there, because the next backup overwrites a changed file. Replace the backup path with your fallback folder while you still use one:
@@ -418,11 +418,11 @@ sudo drives
 
 Choose **2** (Connect a new drive), pick the drive and choose **Backup storage**. It becomes `BACKUP1`, mounted at `/mnt/disks/BACKUP1`, and `/mnt/backup` becomes the backup pool. A second backup drive becomes `BACKUP2` and joins the same pool.
 
-Then delete the `DEST_FALLBACK` line from `/etc/homelab-backup.conf` and run `sudo homelab-backup`. `sudo drives status` should now show the destination `/mnt/backup`. After one good run on the new drive, free the space on the boot drive by deleting the interim folder (`sudo rm -rf /home/your-username/750GB_HDD/backup-interim`). Check the path before you press Enter.
+Then delete the `DEST_FALLBACK` line from `/etc/homelab-backup.conf` and run `sudo homelab-backup`. `sudo drives status` should now show the destination `/mnt/backup`. After one good run on the new drive, free the space on the boot drive by deleting the interim folder (`sudo rm -rf /home/your-username/boot-drive-files/backup-interim`). Check the path before you press Enter.
 
 To browse the backup from FileBrowser on a machine set up with the installer, nothing needs adding: run `sudo homelab-setup filebrowser` (it also runs by itself after `sudo drives` connects or disconnects a drive) and the backup drive appears as a folder inside `backup-storage`. On the original server, add `- /mnt/backup:/srv/backup` to the volumes in the stack by hand. The container name stays the same, so `hdd-recover` finds it by itself.
 
-**FileBrowser folders and drive names.** On an installer-built machine FileBrowser shows one folder per drive: the system drive, then `main-storage/<drive>` and `backup-storage/<drive>`. A folder shows the whole drive. The name comes from the drive's model and size (for example `TOSHIBA DT01ACA100 1 TB`). To choose your own, create `/etc/homelab-drive-names` with one `LABEL=Name` per line (for example `MAIN1=1TB HDD`, and `boot=My Mint` for the system drive), then run `sudo homelab-setup filebrowser`. A file saved straight into a drive's folder skips the pool's copy rules and sits on that one drive only, so put new files in the pool paths the apps use unless you mean it.
+**FileBrowser folders and drive names.** On an installer-built machine FileBrowser shows one folder per drive: the system drive, then `main-storage/<drive>` and `backup-storage/<drive>`. A folder shows the whole drive. The installer scans each drive and names the folder after its size, brand and type, for example `1 TB Toshiba HDD` or `250 GB Samsung SSD`. The size comes from the drive itself, the brand is picked out of its model name, and HDD or SSD comes from whether the drive spins. If it can't recognise the brand it uses the model text instead (`1 TB ST1000DM010`), and if two drives end up with the same name the mount name is added in brackets (`1 TB Toshiba HDD (MAIN2)`). Some USB adapters hide what kind of drive is inside, so the HDD or SSD part may be missing. The drive labels `MAIN1` and `BACKUP1` don't change, only the folder names in FileBrowser. To choose your own, create `/etc/homelab-drive-names` with one `LABEL=Name` per line (for example `MAIN1=Photos drive`, and `boot=My Mint` for the system drive), then run `sudo homelab-setup filebrowser`. A file saved straight into a drive's folder skips the pool's copy rules and sits on that one drive only, so put new files in the pool paths the apps use unless you mean it.
 
 ## 13. When a drive goes missing
 

@@ -36,7 +36,7 @@ Updating a service is covered in the [updating guide](updating.md). How the lab 
 | Beszel | `beszel`, `beszel-agent` | 8090 | `https://pc.your-tailnet.ts.net:1003` | Docker volume `beszel_beszel_data` |
 | AdGuard Home | `adguardhome` (host network) | 3000 (web), 53 (DNS) | `https://pc.your-tailnet.ts.net:1004` | `/opt/adguard-docker` (boot drive) |
 | Nextcloud | `nextcloud`, `nextcloud_db`, `nextcloud_redis`, `nextcloud_cron` | 8082 | `https://pc.your-tailnet.ts.net:1005` | Files on the data drive: `/mnt/storage/nextcloud`. Database and app files on the boot drive: `/home/your-username/nextcloud` |
-| FileBrowser | `filebrowser-filebrowser-1` | 8081 | `https://pc.your-tailnet.ts.net:1006` | Data drive: `/mnt/storage/filebrowser` (shown as `/srv/hdd`). Boot drive: `/home/your-username/750GB_HDD` (shown as `/srv/750GB_HDD`) |
+| FileBrowser | `filebrowser-filebrowser-1` | 8081 | `https://pc.your-tailnet.ts.net:1006` | Data drive: `/mnt/storage/filebrowser` (shown as `/srv/hdd`). Boot drive: `/home/your-username/boot-drive-files` (shown as `/srv/boot-drive-files`; the original server still has the older `750GB_HDD` name) |
 | Speedtest Tracker | `speedtest-tracker` | 8088 | `https://pc.your-tailnet.ts.net:1007` | `/home/your-username/speedtest-tracker` (boot drive), shown in the container as `/config`. It was an anonymous Docker volume until 2026-10-23: [B6](#b6-a-container-starts-empty-after-update-the-stack) |
 | Netdata | `netdata-netdata-1` | 19999 | `https://pc.your-tailnet.ts.net:1008` | Docker volumes |
 
@@ -46,7 +46,7 @@ The nine Portainer stacks are named `adguard`, `beszel`, `beszel-agent`, `filebr
 | :--- | :--- | :--- |
 | Boot drive: Hitachi Travelstar 5K750 (`sdb` today) | 698.6G | Linux Mint on LVM, Docker, databases, app files and config |
 | Data drive: Toshiba MQ01ABD100 (`sda` today, label `MAIN1`) | 916G usable | Photos, Nextcloud files, FileBrowser share. ext4, mounted at `/mnt/disks/MAIN1` and joined into the main pool at `/mnt/storage` |
-| Backup | no drive yet | The daily 6:00 backup goes to `/home/your-username/750GB_HDD/backup-interim` on the boot drive. A backup drive (label `BACKUP1`, pool `/mnt/backup`) comes later. |
+| Backup | no drive yet | The daily 6:00 backup goes to `/home/your-username/boot-drive-files/backup-interim` on the boot drive (the original server still uses the older folder name `750GB_HDD`). A backup drive (label `BACKUP1`, pool `/mnt/backup`) comes later. |
 
 **Drive letters change.** The letters `sda` and `sdb` aren't fixed. On my machine they were `sda` for the Hitachi and `sdb` for the Toshiba at first, and they swapped later (the Toshiba is now `sda`, so the data drive's partition is `/dev/sda1`). The expected outputs in this guide show those current letters. If yours differ, read them as "the data drive's partition". Identify drives by model with `lsblk -o NAME,SIZE,MODEL,TRAN,MOUNTPOINTS`, by the label `MAIN1`, or by the partition mounted at `/boot/efi`. `sudo drives status` lists every pool drive with its current device name.
 
@@ -1618,14 +1618,14 @@ sec "DOCKER: versions"; for c in $(docker ps -aq); do docker inspect -f '{{.Name
 sec "DOCKER: mounts and restart policy"
 for c in $(docker ps -aq); do docker inspect "$c" --format '== {{.Name}} | restart: {{.HostConfig.RestartPolicy.Name}} | network: {{.HostConfig.NetworkMode}}{{println}}{{range .Mounts}}   {{.Source}} -> {{.Destination}} ({{if .RW}}rw{{else}}ro{{end}}){{println}}{{end}}'; done
 sec "DOCKER: which drive each container sees"
-for c in immich_server filebrowser-filebrowser-1 nextcloud homepage; do echo "-- $c"; docker exec "$c" df -h /data /srv/hdd /srv/750GB_HDD /mnt/storage 2>/dev/null; done
+for c in immich_server filebrowser-filebrowser-1 nextcloud homepage; do echo "-- $c"; docker exec "$c" df -h /data /srv/hdd /srv/boot-drive-files /srv/750GB_HDD /mnt/storage 2>/dev/null; done
 sec "PORTAINER STACK FILES (secrets masked)"
 for f in $(find /var/lib/docker/volumes/portainer_data/_data/compose -maxdepth 2 -type f 2>/dev/null | sort); do echo "### $f"; mask < "$f"; echo; done
 sec "TAILSCALE"; tailscale version | head -1; tailscale ip -4; tailscale status --peers=false 2>&1 | head -3; tailscale dns status 2>&1 | head -15; tailscale serve status 2>&1
 sec "ADGUARD HOME CONFIG"; awk '/^http:/,/^users:/' /opt/adguard-docker/conf/AdGuardHome.yaml 2>&1; awk '/^dns:/,/^tls:/' /opt/adguard-docker/conf/AdGuardHome.yaml 2>&1 | head -60; awk '/^filters:/,/^whitelist_filters:/' /opt/adguard-docker/conf/AdGuardHome.yaml 2>&1 | head -80
 sec "NEXTCLOUD SETTINGS"; docker exec -u www-data nextcloud php occ status 2>&1
 for k in trusted_domains overwritehost overwriteprotocol overwrite.cli.url trusted_proxies datadirectory allow_local_remote_servers; do echo -n "$k: "; docker exec -u www-data nextcloud php occ config:system:get $k 2>&1 | tr '\n' ' '; echo; done
-sec "FOLDER SIZES"; du -sh /home/$U/immich /home/$U/nextcloud /home/$U/750GB_HDD /mnt/storage/* 2>&1
+sec "FOLDER SIZES"; du -sh /home/$U/immich /home/$U/nextcloud /home/$U/boot-drive-files /home/$U/750GB_HDD /mnt/storage/* 2>&1
 sec "HOMEPAGE CONFIG (secrets masked)"; ls -la $HP
 for f in services.yaml widgets.yaml settings.yaml bookmarks.yaml docker.yaml custom.js custom.css; do echo "### $f"; mask < "$HP/$f" 2>&1; echo; done
 sec "HOMEPAGE RECENT ERRORS"; docker logs homepage --tail 80 2>&1 | grep -i -E "error|warn" | tail -12 | cut -c1-220

@@ -478,7 +478,7 @@ The container should be `healthy`. `/srv/hdd` should show the data drive (`/dev/
 
 ![FileBrowser's start page listing two drive folders, 750GB_HDD and hdd](images/Filebrowser.png)
 
-The two folders above are how the original server was set up. On a machine built with the installer, FileBrowser instead shows one folder named after the system drive and, for data and backup drives, `main-storage` and `backup-storage` with one folder per drive inside. See [storage](storage.md) for how the names are chosen.
+The two folders above are how the original server was set up (its boot drive folder is still called `750GB_HDD`; new installs call it `boot-drive-files`). On a machine built with the installer, FileBrowser instead shows one folder named after the system drive and, for data and backup drives, `main-storage` and `backup-storage` with one folder per drive inside. See [storage](storage.md) for how the names are chosen.
 
 ---
 

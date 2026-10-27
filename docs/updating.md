@@ -275,7 +275,7 @@ docker start speedtest-tracker
 4. **Then the agent.** Open the `beszel-agent` stack, change its tag to `X.Y` as well and use **Update the stack**. The `KEY` and `TOKEN` variables stay saved, so don't retype them. The system `pc` should show as up again in the hub within a minute.
 5. Check that the Beszel card on Homepage shows the numbers.
 
-**Rollback:** change the tags back to the version you ran before in the two stacks' **Editor** and update them. If the hub's data looks wrong afterwards, restore the `beszel_beszel_data` folder from the backup (`/home/your-username/750GB_HDD/backup-interim/boot-configs/var/lib/docker/volumes/beszel_beszel_data`) with the hub stopped.
+**Rollback:** change the tags back to the version you ran before in the two stacks' **Editor** and update them. If the hub's data looks wrong afterwards, restore the `beszel_beszel_data` folder from the backup (`/home/your-username/boot-drive-files/backup-interim/boot-configs/var/lib/docker/volumes/beszel_beszel_data`) with the hub stopped.
 
 ## AdGuard Home
 
