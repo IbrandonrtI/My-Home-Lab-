@@ -119,8 +119,6 @@ The installer is one Python file with no dependencies, so it works on a machine 
 - Restoring never overwrites existing data, and the Nextcloud database restore needs you to type `RESTORE`.
 - It won't free port 53 over a Tailscale SSH session.
 
-**Tests.** `bash tests/run_all.sh` runs the installer against a fake machine (fake `apt`, Docker, Tailscale and fake web services for every app). The full run takes about 10 minutes, and `bash tests/run_all.sh quick` takes about one. The tests are listed in [tests/README.md](tests/README.md).
-
 **What I've tested on a real machine.** Two clean installs on a Linux Mint 22.3 virtual machine: system and Docker, Tailscale login and HTTPS, the nine stacks, the Beszel and Speedtest Tracker keys, the Nextcloud first install, every Homepage widget, DNS after a reboot and the login screen.
 
 **What I haven't tested yet.**

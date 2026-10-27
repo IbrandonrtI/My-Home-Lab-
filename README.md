@@ -281,7 +281,6 @@ src/                    the pieces of the installer
 stacks/                 one Compose file per Portainer stack
 homepage-config/        Homepage settings, widgets and styles
 scripts/                server commands: drives, homelab-backup, hdd-recover, homelab, ...
-tests/                  tests that run against a fake machine
 tools/                  build script for the installer
 docs/                   the guides and screenshots
 .github/                the automatic checks
