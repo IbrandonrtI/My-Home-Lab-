@@ -35,8 +35,9 @@ check("quotes, colons, slashes and $ are removed", m.clean_folder_name("My \"dri
 check("brackets and plus are kept", m.clean_folder_name("Disk (2) +"), "Disk (2) +")
 check("only odd characters leave nothing", m.clean_folder_name("///:::"), "")
 check("accents are kept", m.clean_folder_name("Música"), "Música")
-check("same names get the mount name added", m.unique_names([("/mnt/disks/MAIN1", "X"), ("/mnt/disks/MAIN2", "X"), ("/mnt/disks/MAIN3", "Y")]),
-      [("/mnt/disks/MAIN1", "X (MAIN1)"), ("/mnt/disks/MAIN2", "X (MAIN2)"), ("/mnt/disks/MAIN3", "Y")])
+check("same names get a number, in the order given", m.unique_names([("/mnt/disks/MAIN1", "X"), ("/mnt/disks/MAIN2", "X"), ("/mnt/disks/MAIN3", "Y")]),
+      [("/mnt/disks/MAIN1", "X 1"), ("/mnt/disks/MAIN2", "X 2"), ("/mnt/disks/MAIN3", "Y")])
+check("a name that is alone gets no number", m.unique_names([("/a", "X")]), [("/a", "X")])
 with tempfile.TemporaryDirectory() as d:
     m.ROOT = d
     os.makedirs(d + "/etc")
@@ -104,5 +105,17 @@ for model, out, want, why in [("Samsung SSD 860", "", "SSD", "SSD in the model t
                               ("Foo Bar", "", "", "no answer: not known")]:
     answer["rc"], answer["out"] = 0, out
     check("HDD or SSD: " + why, m2.drive_kind("/x", model), want)
+# FileBrowser shows only Backup-Pool, one folder per backup drive; main drives are numbered with them but not shown
+m.pool_drives = lambda role: {"main": ["/mnt/disks/MAIN1"], "backup": ["/mnt/disks/BACKUP1", "/mnt/disks/BACKUP2"]}[role]
+m.drive_name = lambda mp, fb, prefer_label=False: "1 TB Samsung HDD"
+check("FileBrowser: only backup drives, in Backup-Pool, numbered against all pool drives", m.filebrowser_mounts(),
+      [("/mnt/disks/BACKUP1", "/srv/Backup-Pool/1 TB Samsung HDD 2"), ("/mnt/disks/BACKUP2", "/srv/Backup-Pool/1 TB Samsung HDD 3")])
+m.pool_drives = lambda role: {"main": ["/mnt/disks/MAIN1"], "backup": []}[role]
+check("FileBrowser: no backup drive, no folder", m.filebrowser_mounts(), [])
+stack = 'x\n    volumes:\n      - "/mnt/backup:/srv/Backup-Pool"\n      - filebrowser_data:/database\nvolumes:\n'
+check("the stack keeps its database volume when there are no drives", m.filebrowser_volumes(stack), 'x\n    volumes:\n      - filebrowser_data:/database\nvolumes:\n')
+m.drive_kind = lambda mp, model="": ""
+check("nothing known but the size", m.nice_drive_name("/x", "", 2000398934016), "2 TB drive")
+check("a small test image is shown in MB", m.pretty_size(62914560), "63 MB")
 print("OK" if not bad else "FAIL")
 sys.exit(1 if bad else 0)

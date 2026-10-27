@@ -63,8 +63,8 @@ ok "S1 fill writes the tested Tailscale key" 'grep -q "tskey-api-VALID123" $HLS_
 H0=$(sha256sum $HLS_ROOT/home/testuser/homepage-config/services.yaml | cut -d' ' -f1)
 # (re-run fill on a done step does nothing; tested in S5)
 ok "S1 fill does not tell the user to start the walk-through while inside it" '! grep -q "start the walk-through" $SIM_DIR/s1c.out && grep -q "then paste it below" $SIM_DIR/s1c.out'
-ok "S1 FileBrowser shows the boot drive and the main storage, named by role" 'wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv/boot-drive" && wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv/main-storage" && ! wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -qE "/srv/(hdd|750GB_HDD|backup)"'
-ok "S1 the FileBrowser card on Homepage no longer names a 750GB drive" '! grep -q "750GB HDD" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "this machine.s drives" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
+ok "S1 with no backup drive FileBrowser shows no drive folder (no boot drive, no main storage)" '! wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv"'
+ok "S1 the FileBrowser card on Homepage no longer names a 750GB drive" '! grep -q "750GB HDD" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "View and edit the backups" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
 ok "S1 the first Homepage resources pill is named after this machine, not the original server" '! grep -q "label: Server" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml && grep -q "label: vm" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml'
 ok "S1 the Next step section is the last thing printed after the passwords" '[ "$(grep -n "── Next step" $SIM_DIR/s1.out | tail -1 | cut -d: -f1)" -gt "$(grep -n "Generated passwords and keys" $SIM_DIR/s1.out | head -1 | cut -d: -f1)" ] && tail -8 $SIM_DIR/s1.out | grep -q "sudo homelab-setup"'
 ok "S1 the Next step section names the HTTPS step (the first thing that waits for a person)" 'sed -n "/── Next step/,\$p" $SIM_DIR/s1.out | grep -q "MagicDNS and HTTPS" && sed -n "/── Next step/,\$p" $SIM_DIR/s1.out | grep -q "sudo homelab-setup refresh"'
@@ -436,12 +436,12 @@ fresh; approve_in 3
 install_in "" y | hls install > $SIM_DIR/s22.out 2>&1
 mkdir -p $HLS_ROOT/mnt/backup
 HLS_MOUNTED_BACKUP=1 hls > $SIM_DIR/s22a.out 2>&1
-ok "S22 a connected backup pool puts the FileBrowser step back on the list" 'grep -q "○ FileBrowser shows this machine" $SIM_DIR/s22a.out'
+ok "S22 a connected backup pool puts the FileBrowser step back on the list" 'grep -q "○ FileBrowser shows the backup" $SIM_DIR/s22a.out'
 HLS_MOUNTED_BACKUP=1 hls refresh > $SIM_DIR/s22b.out 2>&1
-ok "S22 refresh redeploys FileBrowser with the backup folder" 'wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv/backup" && ! HLS_MOUNTED_BACKUP=1 hls 2>&1 | grep -q "○ FileBrowser shows this machine"'
-ok "S22 the other folders are still there" 'wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv/main-storage" && wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv/boot-drive"'
+ok "S22 refresh redeploys FileBrowser with the backup folder" 'wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv/Backup-Pool" && ! HLS_MOUNTED_BACKUP=1 hls 2>&1 | grep -q "○ FileBrowser shows this machine"'
+ok "S22 nothing but Backup-Pool is shown" '! wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -qE "/srv/(main-storage|boot-drive|backup-storage|hdd)"'
 hls refresh > $SIM_DIR/s22c.out 2>&1
-ok "S22 when the backup pool is gone, refresh removes the backup folder again" '! wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv/backup"'
+ok "S22 when the backup pool is gone, refresh removes the backup folder again" '! wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv/Backup-Pool"'
 fi
 
 # ------------------------------------------------------------------ S24: a machine that already runs the lab (read-only)
@@ -480,40 +480,41 @@ ok "S26 the forced host and protocol saved earlier were removed" '[ "$(wj "\"ove
 ok "S26 the trusted domains still hold this machine's address and its Tailscale name" 'wj "list(w[\"nc\"][\"domains\"].values())" | grep -q 192.168.50.23'
 fi
 
-# ------------------------------------------------------------------ S27: FileBrowser shows one folder per drive, named after the drive
+# ------------------------------------------------------------------ S27: FileBrowser shows Backup-Pool with one folder per backup drive
 if scen S27; then
-echo "### S27 FileBrowser: the system drive and every main and backup drive get a folder named after the drive"
+echo "### S27 FileBrowser: only Backup-Pool, with a folder named after each backup drive"
 fresh; approve_in 3
-mkdir -p $HLS_ROOT/mnt/disks/MAIN1 $HLS_ROOT/mnt/disks/MAIN2 $HLS_ROOT/mnt/disks/BACKUP1 $HLS_ROOT/etc
+mkdir -p $HLS_ROOT/mnt/disks/MAIN1 $HLS_ROOT/mnt/disks/MAIN2 $HLS_ROOT/mnt/disks/BACKUP1 $HLS_ROOT/mnt/disks/BACKUP2 $HLS_ROOT/mnt/disks/BACKUP3 $HLS_ROOT/etc
 cat > $SIM_DIR/disks.txt <<DISKS
 /|/dev/sda2|sda|Samsung_SSD_860|250059350016||0|sata
 /mnt/disks/MAIN1|/dev/sdb1|sdb|TOSHIBA_DT01ACA100|1000204886016|MAIN1|1|sata
-/mnt/disks/MAIN2|/dev/sdc1|sdc|TOSHIBA_DT01ACA100|1000204886016|MAIN2|1|usb
-/mnt/disks/BACKUP1|/dev/sdd1|sdd|WDC_WD10EZEX|1000204886016|BACKUP1|1|sata
+/mnt/disks/MAIN2|/dev/sdc1|sdc|ST2000DM008-2FR102|2000398934016|MAIN2|1|usb
+/mnt/disks/BACKUP1|/dev/sdd1|sdd|TOSHIBA_DT01ACA100|1000204886016|BACKUP1|1|sata
+/mnt/disks/BACKUP2|/dev/sde1|sde|WDC_WD10EZEX|1000204886016|BACKUP2|1|sata
+/mnt/disks/BACKUP3|/dev/sdf1|sdf|WDC_WD10EZEX|1000204886016|BACKUP3|1|sata
 DISKS
-export HLS_MOUNTED_DISKS="MAIN1 MAIN2 BACKUP1"
+export HLS_MOUNTED_DISKS="MAIN1 MAIN2 BACKUP1 BACKUP2 BACKUP3"
 install_in "" y | hls install > $SIM_DIR/s27.out 2>&1
 M='wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]"'
 ok "S27 install finished with 16 containers" '[ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
-ok "S27 the folder of the system drive is named after the drive (size, maker and SSD)" 'eval "$M" | grep -q "/srv/250 GB Samsung SSD"'
-ok "S27 two identical drives are told apart by their mount name" 'eval "$M" | grep -q "/srv/main-storage/1 TB Toshiba HDD (MAIN1)" && eval "$M" | grep -q "/srv/main-storage/1 TB Toshiba HDD (MAIN2)"'
-ok "S27 a backup drive gets a folder under backup-storage" 'eval "$M" | grep -q "/srv/backup-storage/1 TB Western Digital HDD"'
-ok "S27 no old fixed folder names are left" '! eval "$M" | grep -q "/srv/boot-drive" && ! eval "$M" | grep -q "/srv/hdd" && ! eval "$M" | grep -q "/srv/750GB_HDD"'
-ok "S27 the checklist counts the FileBrowser step as done" '! hls 2>&1 | grep -q "○ FileBrowser shows this"'
+ok "S27 every backup drive has a folder inside Backup-Pool, named by size, maker and HDD" 'eval "$M" | grep -q "/srv/Backup-Pool/1 TB Western Digital HDD 1" && eval "$M" | grep -q "/srv/Backup-Pool/1 TB Western Digital HDD 2"'
+ok "S27 a backup drive that looks like a main drive is numbered after it (the main one is 1)" 'eval "$M" | grep -q "/srv/Backup-Pool/1 TB Toshiba HDD 2"'
+ok "S27 main drives and the system drive are not shown, and nothing sits outside Backup-Pool" '! eval "$M" | grep -q "Seagate" && [ "$(eval "$M" | tr "|" "\n" | grep -c "^/srv/")" = "$(eval "$M" | tr "|" "\n" | grep -c "^/srv/Backup-Pool/")" ] && ! eval "$M" | grep -qE "/srv/(main-storage|backup-storage|boot-drive|hdd|750GB_HDD)"'
+ok "S27 the checklist counts the FileBrowser step as done" '! hls 2>&1 | grep -q "○ FileBrowser shows the backup"'
 echo "mix: a name you chose wins, and a drive that goes away loses its folder"
-printf '# my names\nMAIN1=1TB HDD\nBACKUP1= Backup: drive/one \n' > $HLS_ROOT/etc/homelab-drive-names
-ok "S27 after naming a drive, the checklist says FileBrowser is out of date" 'hls 2>&1 | grep -q "○ FileBrowser shows this"'
-export HLS_MOUNTED_DISKS="MAIN1 BACKUP1"
+printf '# my names\nBACKUP1= Backup: drive/one \n' > $HLS_ROOT/etc/homelab-drive-names
+ok "S27 after naming a drive, the checklist says FileBrowser is out of date" 'hls 2>&1 | grep -q "○ FileBrowser shows the backup"'
+export HLS_MOUNTED_DISKS="MAIN1 BACKUP1 BACKUP2"
 hls filebrowser > $SIM_DIR/s27b.out 2>&1
-ok "S27 homelab-setup filebrowser applied the chosen names (unsafe characters removed)" 'eval "$M" | grep -q "/srv/main-storage/1TB HDD" && eval "$M" | grep -q "/srv/backup-storage/Backup drive one"'
-ok "S27 the drive that went away has no folder any more" '! eval "$M" | grep -q "MAIN2" && ! eval "$M" | grep -q "main-storage/1 TB Toshiba"'
+ok "S27 homelab-setup filebrowser applied the chosen name (unsafe characters removed)" 'eval "$M" | grep -q "/srv/Backup-Pool/Backup drive one"'
+ok "S27 the drive that went away has no folder, and the one left alone loses its number" '! eval "$M" | grep -q "Western Digital HDD [12]" && eval "$M" | grep -q "Western Digital HDD"'
 hls filebrowser > $SIM_DIR/s27c.out 2>&1
 ok "S27 a second run says nothing is to do" 'grep -q "already shows" $SIM_DIR/s27c.out'
-export HLS_MOUNTED_DISKS=""
-rm -rf $HLS_ROOT/mnt/disks; rm -f $SIM_DIR/disks.txt
+export HLS_MOUNTED_DISKS="MAIN1 MAIN2"
 hls filebrowser > $SIM_DIR/s27d.out 2>&1
-ok "S27 with no data drive the old main-storage share on the boot drive is back, and the system drive falls back to boot-drive" 'eval "$M" | grep -q "/srv/main-storage" && eval "$M" | grep -q "/srv/boot-drive" && ! eval "$M" | grep -q "backup-storage"'
+ok "S27 with no backup drive FileBrowser shows no drive folder at all" '! eval "$M" | tr "|" "\n" | grep -q "^/srv/"'
 unset HLS_MOUNTED_DISKS
+rm -rf $HLS_ROOT/mnt/disks; rm -f $SIM_DIR/disks.txt
 fi
 
 echo; echo "TOTAL pass=$PASS fail=$FAIL"

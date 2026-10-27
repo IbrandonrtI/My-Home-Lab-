@@ -16,6 +16,7 @@ Needs `python3` and `bash`.
 | `run_tests.sh` | The installer scenarios (S1 to S27, no S23): full install, dry run, failures, restore, existing server, and more. |
 | `t_subst.py` | Unit test for the placeholder substitution (`subst()`). |
 | `t_names.py` | Unit test for the drive names FileBrowser uses (sizes such as 1 TB, odd characters, duplicate names, the names file). |
+| `t_drivenames.sh` | Tests the drive names in `scripts/drives` (size, brand, HDD or SSD, numbering of identical drives, a chosen name) against the installer's own code, and the pool options (fill one drive at a time). |
 | `t_check.py` | Unit test for the secret scan in `scripts/homelab-check` (real-looking values are reported, placeholders are not). |
 | `t_homepage.sh` | `homelab theme` and `homelab bookmark` in a temporary copy of the Homepage files, with a local web server playing Brandfetch. |
 | `start.sh` | Builds the fake machine and defines the `hls`, `fresh`, `wj` and `setw` helpers. |
