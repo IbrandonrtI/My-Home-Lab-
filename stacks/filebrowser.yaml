@@ -1,11 +1,10 @@
-# FileBrowser: a web file manager for the boot drive's share and the data drives.
+# FileBrowser: a web file manager for the backups (view, download, edit).
 # Stack name in Portainer: filebrowser. Keep the stack AND the service named "filebrowser":
 # the container is then called filebrowser-filebrowser-1, which hdd-recover and the checks expect.
 # Port:    8081 (web interface).
-# Folders: /home/your-username/boot-drive-files (boot drive) and /mnt/storage/filebrowser (main pool), as on the original server.
-#          On a new machine the installer replaces these two lines with one line per drive (the system drive's share,
-#          main-storage/<drive> and backup-storage/<drive>), named after the drives. Names: /etc/homelab-drive-names.
-#          Refresh after a drive change: sudo homelab-setup filebrowser
+# Folders: one folder, Backup-Pool, with a folder for each backup drive inside it, named after the drive ("1 TB Samsung HDD").
+#          Nothing else is shown. The line below shows the whole backup pool; on a new machine the installer replaces it with
+#          one line per backup drive. Refresh after a drive change: sudo homelab-setup filebrowser
 # Variables: none. The first admin password is random: docker logs filebrowser-filebrowser-1 | grep -i password
 # Note: the FileBrowser project was archived in 2026 and gets no more updates; keep it off the internet.
 services:
@@ -15,8 +14,7 @@ services:
     ports:
       - "8081:80"
     volumes:
-      - "/home/your-username/boot-drive-files:/srv/boot-drive-files"
-      - "/mnt/storage/filebrowser:/srv/hdd"
+      - "/mnt/backup:/srv/Backup-Pool"
       - filebrowser_data:/database
 
 volumes:
