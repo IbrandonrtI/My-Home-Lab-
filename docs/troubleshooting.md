@@ -36,7 +36,7 @@ Updating a service is covered in the [updating guide](updating.md). How the lab 
 | Beszel | `beszel`, `beszel-agent` | 8090 | `https://pc.your-tailnet.ts.net:1003` | Docker volume `beszel_beszel_data` |
 | AdGuard Home | `adguardhome` (host network) | 3000 (web), 53 (DNS) | `https://pc.your-tailnet.ts.net:1004` | `/opt/adguard-docker` (boot drive) |
 | Nextcloud | `nextcloud`, `nextcloud_db`, `nextcloud_redis`, `nextcloud_cron` | 8082 | `https://pc.your-tailnet.ts.net:1005` | Files on the data drive: `/mnt/storage/nextcloud`. Database and app files on the boot drive: `/home/your-username/nextcloud` |
-| FileBrowser | `filebrowser-filebrowser-1` | 8081 | `https://pc.your-tailnet.ts.net:1006` | Data drive: `/mnt/storage/filebrowser` (shown as `/srv/hdd`). Boot drive: `/home/your-username/boot-drive-files` (shown as `/srv/boot-drive-files`; the original server still has the older `750GB_HDD` name) |
+| FileBrowser | `filebrowser-filebrowser-1` | 8081 | `https://pc.your-tailnet.ts.net:1006` | New installs: the backup drives, shown as `/srv/Backup-Pool/<drive>`. The original server's stack still has the older folders: `/mnt/storage/filebrowser` (shown as `/srv/hdd`) and `/home/your-username/750GB_HDD` (shown as `/srv/750GB_HDD`) |
 | Speedtest Tracker | `speedtest-tracker` | 8088 | `https://pc.your-tailnet.ts.net:1007` | `/home/your-username/speedtest-tracker` (boot drive), shown in the container as `/config`. It was an anonymous Docker volume until 2026-10-23: [B6](#b6-a-container-starts-empty-after-update-the-stack) |
 | Netdata | `netdata-netdata-1` | 19999 | `https://pc.your-tailnet.ts.net:1008` | Docker volumes |
 
@@ -1618,7 +1618,7 @@ sec "DOCKER: versions"; for c in $(docker ps -aq); do docker inspect -f '{{.Name
 sec "DOCKER: mounts and restart policy"
 for c in $(docker ps -aq); do docker inspect "$c" --format '== {{.Name}} | restart: {{.HostConfig.RestartPolicy.Name}} | network: {{.HostConfig.NetworkMode}}{{println}}{{range .Mounts}}   {{.Source}} -> {{.Destination}} ({{if .RW}}rw{{else}}ro{{end}}){{println}}{{end}}'; done
 sec "DOCKER: which drive each container sees"
-for c in immich_server filebrowser-filebrowser-1 nextcloud homepage; do echo "-- $c"; docker exec "$c" df -h /data /srv/hdd /srv/boot-drive-files /srv/750GB_HDD /mnt/storage 2>/dev/null; done
+for c in immich_server filebrowser-filebrowser-1 nextcloud homepage; do echo "-- $c"; docker exec "$c" df -h /data /srv/hdd /srv/750GB_HDD /srv/Backup-Pool /mnt/storage 2>/dev/null; done
 sec "PORTAINER STACK FILES (secrets masked)"
 for f in $(find /var/lib/docker/volumes/portainer_data/_data/compose -maxdepth 2 -type f 2>/dev/null | sort); do echo "### $f"; mask < "$f"; echo; done
 sec "TAILSCALE"; tailscale version | head -1; tailscale ip -4; tailscale status --peers=false 2>&1 | head -3; tailscale dns status 2>&1 | head -15; tailscale serve status 2>&1

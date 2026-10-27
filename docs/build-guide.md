@@ -455,9 +455,9 @@ If the page offers a way to continue without signing in, you can just use the lo
 
 ## 9. FileBrowser
 
-A web-based file manager for drag-and-drop access to the server's storage. It shares two folders: one on the boot drive and one on the data drive. The folders were created in [storage guide, step 5](storage.md#5-create-a-folder-for-each-service).
+A web-based file manager for looking at the backups. It shows one folder, **Backup-Pool**, and inside it one folder for each backup drive, named after the drive (for example `1 TB Seagate HDD`). Nothing else is shown: not the main pool and not the boot drive. Until a backup drive is connected there is nothing to see.
 
-Create a stack named `filebrowser` from [`stacks/filebrowser.yaml`](../stacks/filebrowser.yaml). The stack and the service must both be named `filebrowser`, because the recovery script expects the container name `filebrowser-filebrowser-1`. Change the two folders on the left of the `volumes:` lines if your drives are mounted elsewhere.
+Create a stack named `filebrowser` from [`stacks/filebrowser.yaml`](../stacks/filebrowser.yaml). The stack and the service must both be named `filebrowser`, because the recovery script expects the container name `filebrowser-filebrowser-1`. The file mounts the whole backup pool (`/mnt/backup`) as `Backup-Pool`. On a machine set up with the installer, it is replaced by one line per backup drive, so each drive has its own folder ([storage guide](storage.md#drive-names)).
 
 **First login.** This version creates the `admin` user with a random password the first time it starts, so `admin` / `admin` won't work. Read the password from the logs:
 
@@ -467,18 +467,15 @@ docker logs filebrowser-filebrowser-1 | grep -i password
 
 Open `http://192.168.X.X:8081`, log in as `admin` with that password, and change it right away in your profile settings.
 
-**Check it:**
+**Check it:** `docker ps` shows `filebrowser-filebrowser-1` as `healthy`. Once a backup drive is connected ([storage guide, step 12](storage.md#12-adding-the-backup-drive)), the start page lists `Backup-Pool`:
 
 ```bash
-docker ps
-docker exec filebrowser-filebrowser-1 df -h /srv/hdd /srv/750GB_HDD
+docker exec filebrowser-filebrowser-1 ls /srv/Backup-Pool
 ```
 
-The container should be `healthy`. `/srv/hdd` should show the data drive (`/dev/sda1`, about 916G), and `/srv/750GB_HDD` should show the boot drive's `vgmint-root`.
+![FileBrowser's start page on the original server, from before it was changed to show only the backups](images/Filebrowser.png)
 
-![FileBrowser's start page listing two drive folders, 750GB_HDD and hdd](images/Filebrowser.png)
-
-The two folders above are how the original server was set up (its boot drive folder is still called `750GB_HDD`; new installs call it `boot-drive-files`). On a machine built with the installer, FileBrowser instead shows one folder named after the system drive and, for data and backup drives, `main-storage` and `backup-storage` with one folder per drive inside. See [storage](storage.md) for how the names are chosen.
+The screenshot shows the original server, which still has the older layout: a folder for the boot drive (`750GB_HDD`) and one for the data drive (`hdd`). To change it, replace the two `volumes:` lines for `/srv/hdd` and `/srv/750GB_HDD` in the stack with the line from the repo's file, update the stack in Portainer, and the folders you don't want disappear.
 
 ---
 

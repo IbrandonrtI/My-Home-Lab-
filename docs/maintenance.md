@@ -61,7 +61,7 @@ This is my plan for the day the boot drive (the one with Linux on it) fails, or 
 | Where it lives | What's in it | After the boot drive dies |
 | :--- | :--- | :--- |
 | GitHub (this repo) | The scripts, the stack files, the Homepage config, these guides | Safe |
-| The main drive (`MAIN1`) | Immich photos, Nextcloud files, the FileBrowser share, Immich's own nightly database dumps in `/mnt/storage/immich/backups` | Safe, it's a separate drive |
+| The main drive (`MAIN1`) | Immich photos, Nextcloud files, Immich's own nightly database dumps in `/mnt/storage/immich/backups` | Safe, it's a separate drive |
 | A backup drive (`BACKUP1`) | The daily copy of the main pool, `boot-configs/` (Homepage, Nextcloud app files, AdGuard settings, Beszel and FileBrowser data) and `db-dumps/` (Nextcloud database) | Safe, if you have one |
 | The interim backup folder on the boot drive | The same as above | **Lost with the boot drive.** Without a backup drive you lose the Nextcloud database dump and the saved configs. The photos and files are still safe, and Immich can still be restored from its own dumps |
 | Your password manager | The passwords and keys the stacks need | Safe, if you really keep them there |

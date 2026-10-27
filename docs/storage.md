@@ -1,6 +1,6 @@
 # Storage: drive pools and backups
 
-The big files live on hard drives grouped into **pools**. Immich photos, Nextcloud files and the FileBrowser share all sit in the **main pool**, which shows up as `/mnt/storage`. A second pool, `/mnt/backup`, holds the daily backup. Three small tools handle all of it, so adding, removing, moving or recovering a drive is a menu choice instead of a pile of `fstab` edits. A fourth one, `homelab`, prints the commands and current status whenever I open a terminal, so I don't have to remember any of them.
+The big files live on hard drives grouped into **pools**. Immich photos and Nextcloud files sit in the **main pool**, which shows up as `/mnt/storage`. A second pool, `/mnt/backup`, holds the daily backup. Three small tools handle all of it, so adding, removing, moving or recovering a drive is a menu choice instead of a pile of `fstab` edits. A fourth one, `homelab`, prints the commands and current status whenever I open a terminal, so I don't have to remember any of them.
 
 | Command | What it does |
 | :--- | :--- |
@@ -11,9 +11,9 @@ The big files live on hard drives grouped into **pools**. Immich photos, Nextclo
 
 **How the storage is organised**
 
-- Every real drive is an ordinary ext4 drive, mounted by its UUID under `/mnt/disks/` with a label: `MAIN1`, `MAIN2`, `BACKUP1` and so on. Any Linux computer can read one of them on its own.
+- Every real drive is an ordinary ext4 drive, mounted by its UUID under `/mnt/disks/` with an internal label: `MAIN1`, `MAIN2`, `BACKUP1` and so on. Any Linux computer can read one of them on its own. You never have to deal with those labels: every screen shows a drive by what it is, which the tool scans from the drive itself ([drive names](#drive-names)).
 - A pool joins all the drives of one role into a single folder using **mergerfs**. `/mnt/storage` is the main pool and `/mnt/backup` is the backup pool. The paths in the Docker stacks (`/mnt/storage/...`) never change, so adding a drive needs no edits in Immich, Nextcloud, FileBrowser or Homepage.
-- New files go to the drive with the most free space, so two drives fill evenly. Files already on a drive stay where they are.
+- **Drives fill up one at a time.** A new file goes to the first drive in the pool that still has room (the one added first), and the next drive is used only when the first is nearly full (20 GB free is kept). Every file sits whole on one drive. If a drive dies, you lose only what was stored on that drive, and the backup has it. Files already on a drive stay where they are. A pool made by an older version of this repo spread files over the drives instead; `sudo drives fillorder` (menu option 9) switches it.
 - **A pool isn't RAID and it isn't a backup.** If a drive dies, only the files stored on that drive disappear from the pool. That is why the backup is a separate pool on separate drives.
 - **It fails closed.** If a drive is missing, the pool doesn't mount at all, instead of mounting half-empty. The empty mount point is locked, so the services stop with an error and can't quietly write to the boot drive. After you reconnect the drive, `sudo hdd-recover` fixes it.
 
@@ -94,7 +94,7 @@ sudo drives status
 
 **Don't skip `test-cleanup`.** If you do, the practice pool stays mounted. The last command should look exactly like it did in [step 2](#2-install-the-scripts).
 
-Here's what a good result looks like. I put two 200 MB files of random data in a practice pool of two fake drives (one file landed on each). I disconnected `TMAIN1`, which held one of them, and chose to copy its files first. The script printed `Verified: every file from TMAIN1 is also on TMAIN2.`, and `sha256sum` gave identical checksums for both files before and after.
+Here's what a good result looks like. I put two 200 MB files of random data in a practice pool of two fake drives (I placed one on each drive by hand, because a pool normally fills the first drive first). I disconnected `TMAIN1`, which held one of them, and chose to copy its files first. The script printed `Verified: every file from 1 GB HDD 1 is also on 1 GB HDD 2.` (practice drives are shown by size and type; `TMAIN1` and `TMAIN2` are their internal labels), and `sha256sum` gave identical checksums for both files before and after.
 
 You can repeat the practice with a real, spare USB stick (**it will be erased**). Test mode lists only unused drives, and the boot drive and your data drive never appear in the list.
 
@@ -130,14 +130,15 @@ The script shows what will change and asks `Continue? [y/N]`. Answer `y`. It sto
 
 ```text
 UUID=<uuid-of-the-drive>  /mnt/disks/MAIN1  ext4  defaults,noatime,nofail,x-systemd.device-timeout=10  0  2
-/mnt/disks/MAIN1 /mnt/storage fuse.mergerfs allow_other,cache.files=off,category.create=mfs,moveonenospc=true,dropcacheonclose=true,nofail,fsname=mergerfs-main,x-systemd.requires-mounts-for=/mnt/disks/MAIN1 0 0
+/mnt/disks/MAIN1 /mnt/storage fuse.mergerfs allow_other,cache.files=off,category.create=ff,moveonenospc=true,dropcacheonclose=true,minfreespace=20G,nofail,fsname=mergerfs-main,x-systemd.requires-mounts-for=/mnt/disks/MAIN1 0 0
 ```
 
 | Pool option | Meaning |
 | :--- | :--- |
 | `allow_other` | Docker and the other users on the server can use the pool, not only root. |
 | `cache.files=off` | No kernel file cache, so containers see changes straight away. (Kernels older than 6.6 use `auto-full` instead.) |
-| `category.create=mfs` | New files go to the drive with the most free space. |
+| `category.create=ff` | New files go to the first drive that has room, so the drives fill one after the other. |
+| `minfreespace=20G` | A drive with less than 20 GB free is skipped for new files, and the next drive is used. |
 | `moveonenospc=true` | If a drive fills up while a file is being written, the file moves to a drive with room. |
 | `dropcacheonclose=true` | Frees cached data when a file is closed. |
 | `nofail` | The server still boots if the pool can't mount. |
@@ -162,8 +163,8 @@ main     /mnt/storage   mounted (fuse.mergerfs)  61GB used of 916GB
 backup   /mnt/backup    NOT MOUNTED
 
 === Pool drives ===
-LABEL     ROLE     DEVICE       SIZE      USED      SMART     STATE
-MAIN1     main     /dev/sda1    916GB     61GB      PASSED    connected
+DRIVE                      ROLE     DEVICE       SIZE      USED      SMART     STATE
+1 TB Toshiba HDD           main     /dev/sda1    916GB     61GB      PASSED    connected
 ```
 
 Once the services exist (sections 10 to 12 and 15), each container should see the pool, not the boot drive:
@@ -171,16 +172,15 @@ Once the services exist (sections 10 to 12 and 15), each container should see th
 ```bash
 docker exec immich_server df -h /data
 docker exec nextcloud df -h /data
-docker exec filebrowser-filebrowser-1 df -h /srv/hdd
 docker exec homepage df -h /mnt/storage
 ```
 
-Every line should show the filesystem `mergerfs-main` at about 916G. On my machine the same four commands worked unchanged after the conversion, which shows the stacks didn't need any edit.
+Every line should show the filesystem `mergerfs-main` at about 916G. On my machine the same three commands worked unchanged after the conversion, which shows the stacks didn't need any edit.
 
 ## 5. Create a folder for each service
 
 ```bash
-sudo mkdir -p /mnt/storage/immich /mnt/storage/filebrowser
+sudo mkdir -p /mnt/storage/immich
 sudo chown -R your-username:your-username /mnt/storage
 sudo mkdir -p /mnt/storage/nextcloud
 sudo chown -R 33:33 /mnt/storage/nextcloud
@@ -197,10 +197,9 @@ UID 33 is the user Nextcloud runs as inside its container (it shows as `www-data
 | :--- | :--- | :--- |
 | `/mnt/storage/immich` | Immich photos and videos | Main pool |
 | `/mnt/storage/nextcloud` | Nextcloud files | Main pool |
-| `/mnt/storage/filebrowser` | FileBrowser share | Main pool |
 | `/home/your-username/immich/postgres` | Immich database | Boot |
 | `/home/your-username/nextcloud/db` and `html` | Nextcloud database and app files | Boot |
-| `/home/your-username/boot-drive-files` | FileBrowser share on the boot drive | Boot |
+| `/home/your-username/boot-drive-files` | The daily backup, until a backup drive exists | Boot |
 | `/home/your-username/homepage-config` | Homepage config files | Boot |
 | `/opt/adguard-docker` | AdGuard Home settings | Boot |
 
@@ -416,13 +415,24 @@ I haven't done this on my own server yet, because I don't have the drive. I test
 sudo drives
 ```
 
-Choose **2** (Connect a new drive), pick the drive and choose **Backup storage**. It becomes `BACKUP1`, mounted at `/mnt/disks/BACKUP1`, and `/mnt/backup` becomes the backup pool. A second backup drive becomes `BACKUP2` and joins the same pool.
+Choose **2** (Connect a new drive), pick the drive and choose **Backup storage**. The tool shows the drive by its size and brand (for example `1 TB Seagate HDD`), mounts it and makes `/mnt/backup` the backup pool. A second backup drive joins the same pool. Inside it is called `BACKUP1`, `BACKUP2`, and so on, but you never need those names.
 
 Then delete the `DEST_FALLBACK` line from `/etc/homelab-backup.conf` and run `sudo homelab-backup`. `sudo drives status` should now show the destination `/mnt/backup`. After one good run on the new drive, free the space on the boot drive by deleting the interim folder (`sudo rm -rf /home/your-username/boot-drive-files/backup-interim`). Check the path before you press Enter.
 
-To browse the backup from FileBrowser on a machine set up with the installer, nothing needs adding: run `sudo homelab-setup filebrowser` (it also runs by itself after `sudo drives` connects or disconnects a drive) and the backup drive appears as a folder inside `backup-storage`. On the original server, add `- /mnt/backup:/srv/backup` to the volumes in the stack by hand. The container name stays the same, so `hdd-recover` finds it by itself.
+To browse and edit the backup in FileBrowser, run `sudo homelab-setup filebrowser` (it also runs by itself after `sudo drives` connects or disconnects a drive). FileBrowser shows one folder, **Backup-Pool**, and inside it one folder for each backup drive, named after the drive (`1 TB Seagate HDD`). Each folder shows that whole drive, so you can see which drive holds which backup files. Nothing else is shown: the main pool and the boot drive are not in FileBrowser. Until a backup drive is connected, FileBrowser shows no drive folder at all. On the original server, the stack file has the line `- /mnt/backup:/srv/Backup-Pool` instead, which shows the whole backup pool as one folder. The container name stays the same, so `hdd-recover` finds it by itself.
 
-**FileBrowser folders and drive names.** On an installer-built machine FileBrowser shows one folder per drive: the system drive, then `main-storage/<drive>` and `backup-storage/<drive>`. A folder shows the whole drive. The installer scans each drive and names the folder after its size, brand and type, for example `1 TB Toshiba HDD` or `250 GB Samsung SSD`. The size comes from the drive itself, the brand is picked out of its model name, and HDD or SSD comes from whether the drive spins. If it can't recognise the brand it uses the model text instead (`1 TB ST1000DM010`), and if two drives end up with the same name the mount name is added in brackets (`1 TB Toshiba HDD (MAIN2)`). Some USB adapters hide what kind of drive is inside, so the HDD or SSD part may be missing. The drive labels `MAIN1` and `BACKUP1` don't change, only the folder names in FileBrowser. To choose your own, create `/etc/homelab-drive-names` with one `LABEL=Name` per line (for example `MAIN1=Photos drive`, and `boot=My Mint` for the system drive), then run `sudo homelab-setup filebrowser`. A file saved straight into a drive's folder skips the pool's copy rules and sits on that one drive only, so put new files in the pool paths the apps use unless you mean it.
+The backup is a mirror of the main pool, refreshed every night. A change you make inside a drive's `main` folder in FileBrowser is undone by the next run: the changed or added file is moved to `_deleted/<date>/` and kept for 30 days, and the file from the main pool is copied back. So use FileBrowser to look at the backup and to copy files out of it. A folder you create at the top of a drive, next to `main`, is left alone by the backup. A file saved straight into a drive's folder skips the pool's rules and sits on that one drive only.
+
+### Drive names
+
+Every drive is shown by what it is: its size, brand and type, for example `1 TB Toshiba HDD` or `250 GB Samsung SSD`. The tool scans these from the drive when you connect it, and the same name appears in `sudo drives`, in the confirmation before a drive is erased, and in FileBrowser.
+
+- The size comes from the drive itself, the brand is picked out of its model name, and HDD or SSD comes from whether the drive spins.
+- If the brand isn't recognised, the model text is used instead (`1 TB ST1000DM010`). If only the size is known you get `1 TB drive`.
+- If two drives have the same name, they get a number in the order they were added: `1 TB Seagate HDD 1` and `1 TB Seagate HDD 2`. The numbers count over the main and the backup drives together, so a name means the same drive everywhere.
+- Some USB adapters hide what kind of drive is inside, so the HDD or SSD part can be wrong or missing.
+- A drive that is unplugged or dead keeps the name it had, so you can still tell which one it was.
+- To choose a name yourself, create `/etc/homelab-drive-names` with one `LABEL=Name` per line (for example `BACKUP1=Photos backup`), then run `sudo homelab-setup filebrowser`. The labels `MAIN1` and `BACKUP1` are the internal ones from `/etc/fstab`.
 
 ## 13. When a drive goes missing
 
@@ -545,7 +555,7 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
 1. Finds the pool drives that can't be found, and asks which one is dead. If none is missing, it says so and stops. (A drive that was only unplugged needs `sudo hdd-recover`, not this.)
 2. For a main drive, finds the backup copy and shows its date and result. It stops if there is no backup. Nothing has been changed so far.
 3. Asks you to pick the new drive, and to type its name and `ERASE`. Nothing is erased before both match, and the boot drive and your working pool drives are never offered.
-4. Stops the containers that use the storage, formats the new drive with **the same label as the dead one** (for example `MAIN1`), swaps the line in `/etc/fstab` (the old line stays in the file as a comment) and mounts the pool again.
+4. Stops the containers that use the storage, formats the new drive with **the same internal label as the dead one** (for example `MAIN1`), swaps the line in `/etc/fstab` (the old line stays in the file as a comment) and mounts the pool again.
 5. For a main drive: compares the backup with the pool and shows a **preview** with the number of missing files, their total size and the first 20 names. Nothing is copied until you type `RESTORE`.
 6. Copies only the missing files. Files that are already in the pool are never overwritten.
 7. Checks that every file in the backup is now in the pool. **Only if that check passes, the containers start again.** If anything fails, they stay stopped and the tool tells you what to run next.
@@ -581,14 +591,14 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
    sudo drives replace
    ```
 
-   Here's the middle of a run from my practice drives (practice labels start with a `T`, so the dead drive is `TMAIN1`; on the real server it is `MAIN1`):
+   Here's the middle of a run from my practice drives (practice labels start with a `T`, so the dead drive is `TMAIN1`, which the tool shows as `1 GB HDD 1`; on the real server it shows its brand, like `1 TB Toshiba HDD`):
 
    ```text
    Pool drives that cannot be found:
-     1) TMAIN1  (main)  not found
+     1) 1 GB HDD 1  (main)  not found
    Which drive is dead? 1
 
-   TMAIN1 will be replaced by a new drive that gets the same name (TMAIN1).
+   1 GB HDD 1 will be replaced by a new drive. The new drive takes its place in the main storage and is named by what it is.
    Backup copy to restore from: /path/to/backup/main
    Last backup run: 2026-10-23 06:00  result: OK  destination: /path/to/backup
    ...
@@ -598,7 +608,7 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
    Type ERASE (capitals) to confirm: ERASE
    Stopping containers that use this storage: immich_server nextcloud
 
-   TMAIN1 is in place and the main pool is mounted.
+   1 GB HDD 1 is in place and the main pool is mounted.
 
    Missing from the pool but present in the backup: 23 files, 31MB
    First 20:
@@ -625,14 +635,14 @@ Use this when a pool drive is gone for good: it won't spin up, it isn't found an
 
 **If two main drives are dead,** replace them one at a time. After the first one, the pool can't start until the second is replaced too, so the tool tells you to run `sudo drives replace` again. The files are restored after the last one.
 
-**If the dead drive is a backup drive,** there is nothing to restore. The new drive gets the same label (`BACKUP1`) and starts empty, and the tool offers to run the backup now. The older versions of deleted files (`_deleted/`) that were on the dead drive are gone.
+**If the dead drive is a backup drive,** there is nothing to restore. The new drive takes its place and starts empty, and the tool offers to run the backup now. The older versions of deleted files (`_deleted/`) that were on the dead drive are gone.
 
 **What it can't do**
 
 - It can't bring back files that were created after the last backup and lived on the dead drive. A file that was changed after the last backup comes back in its older, backed-up version.
 - It also brings back files you deleted after the last backup, because they are still in the backup.
 - If the drive is still connected but failing (SMART says `FAILED`, but it still mounts), don't use this. Copy the files off it first with option **3** (Disconnect a drive).
-- If the old drive ever turns up again, don't plug it in next to the new one, because both are called `MAIN1`.
+- If the old drive ever turns up again, don't plug it in next to the new one, because the computer sees them as the same drive.
 - Until a backup drive exists, the backup is a folder on the boot drive ([step 9](#9-the-daily-backup)). `replace` finds it by itself from the record of the last run.
 
 **Rehearse it with a USB stick (it will be erased).** Do this once, while nothing is broken, so you know what the screens look like before you need them. It takes about 15 minutes. It uses test mode, so your real pools, `/etc/fstab` and containers aren't touched: test mode has its own folders (`/mnt/test-main`, `/mnt/test-disks`) and its own test `fstab`. You need one spare USB stick of 2 GB or more. Everything on it is erased.
@@ -657,26 +667,28 @@ sudo DRIVES_TEST=1 drives connect
 2. Choose **Main storage**.
 3. Type the drive name exactly as shown (for example `/dev/loop0`), then type `ERASE`. This only erases the fake image file.
 
-Each run ends with `Done. TMAIN1 is connected to the main storage` (then `TMAIN2` the second time). Check the result:
+Each run ends with `Done. ... is connected to the main storage`. The practice drives are shown by what they are (`1 GB HDD`, and `1 GB HDD 1` and `1 GB HDD 2` once there are two). Their internal labels are `TMAIN1` and `TMAIN2`, which is also what the folders under `/mnt/test-disks` are called. Check the result:
 
 ```bash
 sudo DRIVES_TEST=1 drives status
 ```
 
-You should see two main drives, `TMAIN1` and `TMAIN2`, both `connected`, and the practice pool `/mnt/test-main` mounted with about 1.9 GB. In test mode, the "Other drives" part may list your real data drive as "not connected to a pool". That is only because test mode knows nothing about your real pool. Your real pool isn't affected.
+You should see two main drives, `1 GB HDD 1` (`TMAIN1`) and `1 GB HDD 2` (`TMAIN2`), both `connected`, and the practice pool `/mnt/test-main` mounted with about 1.9 GB. In test mode, the "Other drives" part may list your real data drive as "not connected to a pool". That is only because test mode knows nothing about your real pool. Your real pool isn't affected.
 
-**Step 3: Put practice files in the practice pool, and make a practice backup.** This writes 150 MB of random data into the fake pool only.
+**Step 3: Put practice files in the practice pool, and make a practice backup.** This writes 150 MB of random data onto the fake drives only. A pool normally fills the first drive first, so I place the files by hand: one on the first drive and two on the second.
 
 ```bash
 sudo mkdir -p /mnt/test-main/photos
-for i in 1 2 3; do sudo sh -c "head -c 50M /dev/urandom > /mnt/test-main/photos/file$i.bin"; done
+sudo mkdir -p /mnt/test-disks/TMAIN1/photos /mnt/test-disks/TMAIN2/photos
+sudo sh -c "head -c 50M /dev/urandom > /mnt/test-disks/TMAIN1/photos/file1.bin"
+for i in 2 3; do sudo sh -c "head -c 50M /dev/urandom > /mnt/test-disks/TMAIN2/photos/file$i.bin"; done
 sudo mkdir -p /var/tmp/practice-backup/main
 sudo rsync -a /mnt/test-main/ /var/tmp/practice-backup/main/
 (cd /mnt/test-main && sha256sum photos/*.bin) | tee ~/practice-sums.txt
 ls -la /mnt/test-disks/TMAIN1/photos /mnt/test-disks/TMAIN2/photos
 ```
 
-You should see three `sha256sum` lines, which are the fingerprints of the files before the "crash". The `ls` shows which fake drive holds which file. The pool puts new files on the drive with the most free space, so in my run `TMAIN1` held `file1.bin` and `TMAIN2` held `file2.bin` and `file3.bin`. The next steps use `TMAIN2` as the drive that dies. If your split is different, use the drive that holds at least one file, and swap the names (and `disk2.img`) below.
+You should see three `sha256sum` lines, which are the fingerprints of the files before the "crash". The `ls` shows which fake drive holds which file: `TMAIN1` holds `file1.bin` and `TMAIN2` holds `file2.bin` and `file3.bin`. The next steps use `TMAIN2` as the drive that dies.
 
 **Step 4: Pretend `TMAIN2` died.** This unmounts the pool and takes the fake drive away.
 
@@ -687,7 +699,7 @@ sudo losetup -d "$(losetup -j /var/tmp/scripts-test/disk2.img | cut -d: -f1)"
 sudo DRIVES_TEST=1 drives status
 ```
 
-You should see `TMAIN2` as `MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)` and the practice main pool as `NOT MOUNTED`. The pool refuses to mount with a drive missing, which is on purpose: a half-empty pool would look healthy while it hid files.
+You should see the second drive (`1 GB HDD 2`, which is `TMAIN2`) as `MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)` and the practice main pool as `NOT MOUNTED`. The pool refuses to mount with a drive missing, which is on purpose: a half-empty pool would look healthy while it hid files.
 
 **Step 5: Plug in the USB stick and find it.** This only reads; nothing is erased yet.
 
@@ -706,14 +718,14 @@ sudo DRIVES_TEST=1 DRIVES_RESTORE_SRC=/var/tmp/practice-backup drives replace
 
 Answer the questions as they come:
 
-1. **Which drive is dead?** Choose `TMAIN2`.
+1. **Which drive is dead?** Choose `1 GB HDD 2` (it is `TMAIN2`).
 2. **WARNING: There is no record of a backup run. Use this copy anyway? [y/N]:** type `y`. This is your hand-made practice backup, so the warning is expected.
 3. **Which drive do you want to connect?** Choose the stick. It must be the only real drive in the list. If your data drive or boot drive is listed, press `0` and stop.
 4. **Type the drive name exactly:** type the stick's name (for example `/dev/sdc`), then type `ERASE`.
-5. The tool formats the stick, names it `TMAIN2`, mounts it and rebuilds the pool. Then it prints a preview: `Missing from the pool but present in the backup: 2 files, 100MB`, followed by the names (`photos/file2.bin` and `photos/file3.bin`). Check that these are the files that were on the dead drive.
+5. The tool formats the stick, gives it the dead drive's place (`TMAIN2`), mounts it and rebuilds the pool. Then it prints a preview: `Missing from the pool but present in the backup: 2 files, 100MB`, followed by the names (`photos/file2.bin` and `photos/file3.bin`). Check that these are the files that were on the dead drive.
 6. **Type RESTORE (capitals) to copy these 2 files:** type `RESTORE`.
 
-It copies the files and then checks them: `Verified: all 2 restored files, and every other file in the backup, are in the pool.` It ends with `Done.` and a reminder not to plug the old drive in next to the new one, because both are called `TMAIN2`.
+It copies the files and then checks them: `Verified: all 2 restored files, and every other file in the backup, are in the pool.` It ends with `Done.` and a reminder not to plug the old drive in next to the new one, because the computer sees them as the same drive.
 
 **Step 7: Check the files yourself.** The script's own check says the files are there; this check says they are unchanged.
 
