@@ -34,6 +34,7 @@ ok "S1 commands in the checklist are highlighted (bold cyan) when colour is on" 
 ok "S1 links in the checklist are underlined when colour is on" 'HLS_COLOR=1 hls 2>&1 | grep -q $'"'"'\033\[4;36mhttps://'"'"''
 ok "S1 plain output (no colour) shows commands as plain \$ lines" 'hls 2>&1 | grep -q "^ *\$ sudo homelab-setup"'
 ok "S1 login screen is told there is no data drive yet (marker written)" '[ -s $HLS_ROOT/var/lib/homelab/no-data-drive ]'
+ok "S1 the boot drive share is ~/boot-drive-files (no 750GB_HDD), and the stand-in backup points into it" '[ -d $HLS_ROOT/home/testuser/boot-drive-files ] && [ ! -e $HLS_ROOT/home/testuser/750GB_HDD ] && grep -q "boot-drive-files/backup-interim" $HLS_ROOT/etc/homelab-backup.conf'
 ok "S1 user was added to the docker group" 'wj "w[\"usermod\"]" | grep -q "docker testuser"'
 ok "S1 serve waits for HTTPS (not set yet)" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 0 ]'
 ok "S1 Tailscale widget is the only missing key" 'grep -q "Tailscale widget" $SIM_DIR/s1.out'
@@ -452,6 +453,7 @@ hls install </dev/null > $SIM_DIR/s24b.out 2>&1
 ok "S24 the checklist is read-only and counts every step done" 'grep -q "already runs the lab" $SIM_DIR/s24a.out && grep -q "43 of 43 steps done" $SIM_DIR/s24a.out'
 ok "S24 install refuses and points at --force-existing" 'grep -q "nothing is installed" $SIM_DIR/s24b.out && grep -q -- "--force-existing" $SIM_DIR/s24b.out'
 ok "S24 nothing was run on the machine (no package, container, service or file event)" '[ "$(wj "len(w[\"events\"])")" = 0 ]'
+ok "S24 the old ~/750GB_HDD is left alone and no boot-drive-files folder is created" '[ -d $HLS_ROOT/home/testuser/750GB_HDD ] && [ ! -e $HLS_ROOT/home/testuser/boot-drive-files ]'
 ok "S24 no installer state or secrets were created" '[ ! -e $HLS_ROOT/var/lib/homelab-setup ] && [ ! -e $HLS_ROOT/root/.homelab-setup ]'
 unset HLS_MOUNTED
 fi
@@ -484,18 +486,18 @@ echo "### S27 FileBrowser: the system drive and every main and backup drive get 
 fresh; approve_in 3
 mkdir -p $HLS_ROOT/mnt/disks/MAIN1 $HLS_ROOT/mnt/disks/MAIN2 $HLS_ROOT/mnt/disks/BACKUP1 $HLS_ROOT/etc
 cat > $SIM_DIR/disks.txt <<DISKS
-/|/dev/sda2|sda|Samsung_SSD_860|250059350016|
-/mnt/disks/MAIN1|/dev/sdb1|sdb|TOSHIBA_DT01ACA100|1000204886016|MAIN1
-/mnt/disks/MAIN2|/dev/sdc1|sdc|TOSHIBA_DT01ACA100|1000204886016|MAIN2
-/mnt/disks/BACKUP1|/dev/sdd1|sdd|WDC_WD10EZEX|1000204886016|BACKUP1
+/|/dev/sda2|sda|Samsung_SSD_860|250059350016||0|sata
+/mnt/disks/MAIN1|/dev/sdb1|sdb|TOSHIBA_DT01ACA100|1000204886016|MAIN1|1|sata
+/mnt/disks/MAIN2|/dev/sdc1|sdc|TOSHIBA_DT01ACA100|1000204886016|MAIN2|1|usb
+/mnt/disks/BACKUP1|/dev/sdd1|sdd|WDC_WD10EZEX|1000204886016|BACKUP1|1|sata
 DISKS
 export HLS_MOUNTED_DISKS="MAIN1 MAIN2 BACKUP1"
 install_in "" y | hls install > $SIM_DIR/s27.out 2>&1
 M='wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]"'
 ok "S27 install finished with 16 containers" '[ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
-ok "S27 the folder of the system drive is named after the drive (model and size)" 'eval "$M" | grep -q "/srv/Samsung SSD 860 250 GB"'
-ok "S27 two identical drives are told apart by their mount name" 'eval "$M" | grep -q "/srv/main-storage/TOSHIBA DT01ACA100 1 TB (MAIN1)" && eval "$M" | grep -q "/srv/main-storage/TOSHIBA DT01ACA100 1 TB (MAIN2)"'
-ok "S27 a backup drive gets a folder under backup-storage" 'eval "$M" | grep -q "/srv/backup-storage/WDC WD10EZEX 1 TB"'
+ok "S27 the folder of the system drive is named after the drive (size, maker and SSD)" 'eval "$M" | grep -q "/srv/250 GB Samsung SSD"'
+ok "S27 two identical drives are told apart by their mount name" 'eval "$M" | grep -q "/srv/main-storage/1 TB Toshiba HDD (MAIN1)" && eval "$M" | grep -q "/srv/main-storage/1 TB Toshiba HDD (MAIN2)"'
+ok "S27 a backup drive gets a folder under backup-storage" 'eval "$M" | grep -q "/srv/backup-storage/1 TB Western Digital HDD"'
 ok "S27 no old fixed folder names are left" '! eval "$M" | grep -q "/srv/boot-drive" && ! eval "$M" | grep -q "/srv/hdd" && ! eval "$M" | grep -q "/srv/750GB_HDD"'
 ok "S27 the checklist counts the FileBrowser step as done" '! hls 2>&1 | grep -q "○ FileBrowser shows this"'
 echo "mix: a name you chose wins, and a drive that goes away loses its folder"
@@ -504,7 +506,7 @@ ok "S27 after naming a drive, the checklist says FileBrowser is out of date" 'hl
 export HLS_MOUNTED_DISKS="MAIN1 BACKUP1"
 hls filebrowser > $SIM_DIR/s27b.out 2>&1
 ok "S27 homelab-setup filebrowser applied the chosen names (unsafe characters removed)" 'eval "$M" | grep -q "/srv/main-storage/1TB HDD" && eval "$M" | grep -q "/srv/backup-storage/Backup drive one"'
-ok "S27 the drive that went away has no folder any more" '! eval "$M" | grep -q "MAIN2" && ! eval "$M" | grep -q "main-storage/TOSHIBA"'
+ok "S27 the drive that went away has no folder any more" '! eval "$M" | grep -q "MAIN2" && ! eval "$M" | grep -q "main-storage/1 TB Toshiba"'
 hls filebrowser > $SIM_DIR/s27c.out 2>&1
 ok "S27 a second run says nothing is to do" 'grep -q "already shows" $SIM_DIR/s27c.out'
 export HLS_MOUNTED_DISKS=""

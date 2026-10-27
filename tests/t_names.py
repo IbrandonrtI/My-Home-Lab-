@@ -44,17 +44,65 @@ with tempfile.TemporaryDirectory() as d:
     m.P = lambda p: d + p
     check("names file: chosen names are read, empty and bad lines ignored", m.drive_name_overrides(), {"MAIN1": "1TB HDD", "boot": "My Mint"})
     m.disk_facts = lambda mp: ("MODEL X", 1000204886016, "")
+    m.drive_kind = lambda mp, model="": ""
     check("a chosen name wins over the drive's own", m.drive_name("/mnt/disks/MAIN1", "fallback"), "1TB HDD")
     check("the system drive can be named with boot", m.drive_name("/", "boot-drive", prefer_label=True), "My Mint")
-    check("without a chosen name: model and size", m.drive_name("/mnt/disks/MAIN2", "fallback"), "MODEL X 1 TB")
+    check("without a chosen name and with a maker nobody knows: size and model", m.drive_name("/mnt/disks/MAIN2", "fallback"), "1 TB MODEL X")
     m.disk_facts = lambda mp: ("", 0, "Data Disk")
     check("without a model: the file system label", m.drive_name("/mnt/disks/MAIN2", "fallback"), "Data Disk")
     m.disk_facts = lambda mp: ("MODEL X", 250059350016, "Linux Mint")
     check("the system drive prefers its label", m.drive_name("/home", "boot-drive", prefer_label=True), "Linux Mint")
-    check("a data drive prefers model and size over its label", m.drive_name("/mnt/disks/MAIN2", "fallback"), "MODEL X 250 GB")
+    check("a data drive prefers its own name over its label", m.drive_name("/mnt/disks/MAIN2", "fallback"), "250 GB MODEL X")
     m.disk_facts = lambda mp: ("MODEL X", 250059350016, "MAIN2")
-    check("a generic label (MAIN2) is never used as the name", m.drive_name("/home", "boot-drive", prefer_label=True), "MODEL X 250 GB")
+    check("a generic label (MAIN2) is never used as the name", m.drive_name("/home", "boot-drive", prefer_label=True), "250 GB MODEL X")
     m.disk_facts = lambda mp: ("", 0, "")
     check("nothing known: the fallback", m.drive_name("/mnt/disks/MAIN2", "MAIN2"), "MAIN2")
+# the boot drive's share folder: the new name, but a machine that already has the old ~/750GB_HDD keeps it
+with tempfile.TemporaryDirectory() as d:
+    m.ROOT = d
+    m.P = lambda p: d + p
+    m.Ctx.home = "/home/u"
+    os.makedirs(d + "/home/u")
+    check("share folder on a new machine", m.boot_share_dir(), "/home/u/boot-drive-files")
+    os.makedirs(d + "/home/u/750GB_HDD")
+    check("share folder on a machine that has the old one", m.boot_share_dir(), "/home/u/750GB_HDD")
+    os.makedirs(d + "/home/u/boot-drive-files")
+    check("share folder once the new one exists too", m.boot_share_dir(), "/home/u/boot-drive-files")
+# the maker, found in the model text
+for model, brand in [("Samsung SSD 860 EVO 250GB", "Samsung"), ("SAMSUNG_HM641JI", "Samsung"), ("TOSHIBA MQ01ABD100", "Toshiba"), ("TOSHIBA_DT01ACA100", "Toshiba"),
+                     ("MQ01ABD100", "Toshiba"), ("WDC WD10EZEX-00BN5A0", "Western Digital"), ("WD10SPZX-24Z10", "Western Digital"),
+                     ("ST1000LM035-1RK172", "Seagate"), ("Hitachi HTS547575A9E384", "Hitachi"), ("HTS547575A9E384", "Hitachi"),
+                     ("HGST HTS721010A9E630", "HGST"), ("CT500MX500SSD1", "Crucial"), ("KINGSTON SA400S37240G", "Kingston"),
+                     ("SanDisk SDSSDA240G", "SanDisk"), ("USB DISK 3.0", ""), ("External HDD", ""), ("", "")]:
+    check("maker of %r" % model, m.drive_brand(model), brand)
+# the whole name: size, maker, HDD or SSD
+kinds = {}
+m.disk_facts = lambda mp: kinds[mp][:3]
+m.drive_kind = lambda mp, model="": kinds[mp][3]
+kinds["/a"] = ("TOSHIBA MQ01ABD100", 1000204886016, "", "HDD")
+kinds["/b"] = ("Samsung SSD 860 EVO", 250059350016, "", "SSD")
+kinds["/c"] = ("USB DISK 3.0", 500107862016, "", "")
+kinds["/d"] = ("WDC WD10EZEX", 0, "", "HDD")
+check("size, maker and HDD", m.drive_name("/a", "x"), "1 TB Toshiba HDD")
+check("size, maker and SSD", m.drive_name("/b", "x"), "250 GB Samsung SSD")
+check("unknown maker and unknown type: size and the model text", m.drive_name("/c", "x"), "500 GB USB DISK 3.0")
+check("unknown size is left out", m.drive_name("/d", "x"), "Western Digital HDD")
+# HDD or SSD: the model text first, then NVMe, then the drive's own spinning flag (a fresh copy of the program, without the mocks above)
+loader2 = importlib.machinery.SourceFileLoader("hls2", PROG)
+m2 = importlib.util.module_from_spec(importlib.util.spec_from_loader("hls2", loader2))
+loader2.exec_module(m2)
+m2.disk_device = lambda mp: ("/dev/sda1", "/dev/sda")
+answer = {}
+m2.run = lambda cmd, timeout=0: (answer["rc"], answer["out"])
+for model, out, want, why in [("Samsung SSD 860", "", "SSD", "SSD in the model text wins"),
+                              ("Samsung_SSD_860", "", "SSD", "SSD in the model text, with underscores"),
+                              ("KINGSTON SA400", "0 sata", "SSD", "not spinning"),
+                              ("TOSHIBA MQ01", "1 sata", "HDD", "spinning"),
+                              ("TOSHIBA MQ01", "1 usb", "HDD", "spinning, over USB"),
+                              ("Foo Bar", "1 nvme", "SSD", "NVMe is always an SSD"),
+                              ("Foo Bar", "0", "SSD", "not spinning, no transport shown"),
+                              ("Foo Bar", "", "", "no answer: not known")]:
+    answer["rc"], answer["out"] = 0, out
+    check("HDD or SSD: " + why, m2.drive_kind("/x", model), want)
 print("OK" if not bad else "FAIL")
 sys.exit(1 if bad else 0)
