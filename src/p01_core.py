@@ -541,8 +541,21 @@ def have(cmd):
 
 
 def docker(*args, **kw):
-    """Run a docker command and return (exit code, output)."""
+    """Run a docker command and return (exit code, output). A docker command that hangs (a stuck Docker service)
+    is stopped after 3 minutes instead of freezing the installer for ever."""
+    kw.setdefault("timeout", 180)
     return run(["docker"] + list(args), **kw)
+
+
+def docker_answers():
+    """True when the Docker service answers a plain question within 30 seconds."""
+    return docker("info", "--format", "{{.ServerVersion}}", timeout=30)[0] == 0
+
+
+DOCKER_DOWN = ("Docker is not answering, so the apps cannot be reached or checked. Look at it with:\n"
+               "      $ sudo systemctl status docker\n"
+               "      $ sudo journalctl -u docker -n 40 --no-pager\n"
+               "      Then run `sudo homelab-setup refresh` again.")
 
 
 def apt_install(pkgs):

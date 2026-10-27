@@ -512,6 +512,16 @@ def pool_drives(role):
     return ["/mnt/backup"] if backup_mounted() else []
 
 
+def fstab_pool_drives():
+    """Mount points of drives that /etc/fstab already assigns to the pools (left by an earlier install): /mnt/disks/MAIN1 ..."""
+    found = []
+    for line in read_file(P("/etc/fstab")).splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and not parts[0].startswith("#") and re.fullmatch(r"/mnt/disks/(MAIN|BACKUP)\d+", parts[1]):
+            found.append(parts[1])
+    return found
+
+
 def unique_names(items):
     """items: [(mount point, name)] -> the same list, with a number added to a name that more than one drive has
     ('1 TB Samsung HDD' twice becomes '1 TB Samsung HDD 1' and '1 TB Samsung HDD 2', in the order given)."""

@@ -36,6 +36,12 @@ def ask_restore_plan():
     """Install-time question: restore from a backup? Returns nothing; saves the choice."""
     if "restore" in State.data:
         return
+    old = fstab_pool_drives()
+    if old:
+        out("")
+        warn("This machine already has drive(s) set up for the pools, left by an earlier install (%s). The installer never changes drives, "
+             "so they stay in the pool and mount at every boot. To start with no drive in a pool, run `sudo drives release` once the install is done "
+             "(the files on the drives are not touched), then choose the drives you want with `sudo drives`." % ", ".join(sorted(old)))
     State.data["restore"] = {"path": "", "configs": False, "data": False}
     if Opt.no_restore:
         State.save()
@@ -268,6 +274,8 @@ class ImmichAdmin(Step):
         if Opt.dry:
             out("      would create the Immich admin %s with the email address entered at install" % Ctx.admin)
             return
+        if not docker_answers():
+            raise Abort(DOCKER_DOWN)
         pw = need_password("to create the Immich admin account")
         wait_for(lambda: http("GET", url("immich", "/api/server/ping"), timeout=8)[0] == 200, "Immich to answer", 300)
         st, js, _ = http("POST", url("immich", "/api/auth/admin-sign-up"),

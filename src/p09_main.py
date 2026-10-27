@@ -415,6 +415,8 @@ def cmd_refresh():
         return
     if not State.exists():
         raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    if have("docker") and not Opt.dry and not docker_answers():
+        raise Abort(DOCKER_DOWN)
     res = evaluate()
     Live.begin_run(len([s for s in STEPS if s.kind == "auto" and res[s.id].state in ("todo", "failed", "blocked")]))
     rule("Checking and continuing")
