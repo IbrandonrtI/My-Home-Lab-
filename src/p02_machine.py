@@ -282,6 +282,14 @@ def containers_running():
     return set(txt.split()) if rc == 0 else set()
 
 
+def containers_starting():
+    """Names of the containers that are running but still starting up (Docker says 'health: starting' or 'Restarting')."""
+    rc, txt = docker("ps", "--format", "{{.Names}}|{{.Status}}", timeout=30)
+    if rc != 0:
+        return set()
+    return {line.split("|")[0] for line in txt.splitlines() if "|" in line and ("starting" in line.lower() or "restarting" in line.lower())}
+
+
 def containers_all():
     """Names of all containers, running or not."""
     rc, txt = docker("ps", "-a", "--format", "{{.Names}}", timeout=30)

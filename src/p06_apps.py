@@ -276,8 +276,12 @@ class ImmichAdmin(Step):
             return
         if not docker_answers():
             raise Abort(DOCKER_DOWN)
-        pw = need_password("to create the Immich admin account")
+        # Right after a reboot Immich needs a few minutes to start. Until it answers, the check above says "not set up"
+        # even when the account exists, so wait first and look again before asking for a password.
         wait_for(lambda: http("GET", url("immich", "/api/server/ping"), timeout=8)[0] == 200, "Immich to answer", 300)
+        if immich_initialized():
+            return
+        pw = need_password("to create the Immich admin account")
         st, js, _ = http("POST", url("immich", "/api/auth/admin-sign-up"),
                          body={"email": Ctx.email, "name": Ctx.admin, "password": pw}, timeout=60)
         if st not in (200, 201):
