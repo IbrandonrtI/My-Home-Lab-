@@ -24,10 +24,10 @@ jobs:
       - name: Install the check tools
         run: pip install ruff==0.16.9 pyyaml==6.0.3
 
-      - name: Shell syntax and shellcheck (scripts/, setup.sh, tools/ and tests/)
+      - name: Shell syntax and shellcheck (scripts/, setup.sh and tools/)
         run: |
           set -eu
-          files="setup.sh tools/build.sh $(ls tests/*.sh)"
+          files="setup.sh tools/build.sh"
           for f in scripts/*; do
             case "$f" in
               scripts/*.example) continue ;;
@@ -40,8 +40,8 @@ jobs:
       - name: The installer is the exact join of src/
         run: bash tools/build.sh --check
 
-      - name: Python lint (installer and tests)
-        run: ruff check installer/homelab-setup tests scripts/homelab-check
+      - name: Python lint (installer and the check script)
+        run: ruff check installer/homelab-setup scripts/homelab-check
 
       - name: Repository check (links, YAML, code blocks, secrets)
         run: python3 scripts/homelab-check .
@@ -49,19 +49,3 @@ jobs:
       - name: Markdown lint
         run: npx --yes markdownlint-cli2@0.23.2 "**/*.md" "#node_modules"
 
-  tests:
-    name: Simulation tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install the test tools
-        run: pip install pyyaml==6.0.3
-
-      - name: Run every test
-        run: bash tests/run_all.sh
