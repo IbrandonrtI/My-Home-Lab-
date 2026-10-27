@@ -1136,7 +1136,9 @@ def pretty_size(nbytes):
     """Size as a drive is sold: 1 TB, 750 GB, 256 GB."""
     if nbytes >= 0.95e12:
         return "%g TB" % round(nbytes / 1e12, 1)
-    return "%d GB" % round(nbytes / 1e9)
+    if nbytes >= 1e9:
+        return "%d GB" % round(nbytes / 1e9)
+    return "%d MB" % round(nbytes / 1e6)
 
 
 def clean_folder_name(text):
@@ -1251,6 +1253,8 @@ def nice_drive_name(mountpoint, model, size):
     """'1 TB Samsung HDD': the size as the drive is sold, its maker (or its model text if the maker is not known),
     and HDD or SSD when that can be told."""
     parts = [pretty_size(size) if size else "", drive_brand(model) or model, drive_kind(mountpoint, model)]
+    if size and not any(parts[1:]):
+        parts.append("drive")          # nothing but the size is known: "1 TB drive"
     return clean_folder_name(" ".join(p for p in parts if p))
 
 
@@ -1265,7 +1269,7 @@ def drive_name(mountpoint, fallback, prefer_label=False):
     generic = re.fullmatch(r"(MAIN|BACKUP)\d*", label or "")
     if prefer_label and label and not generic and clean_folder_name(label):
         return clean_folder_name(label)
-    if model:
+    if model or size:
         name = nice_drive_name(mountpoint, model, size)
         if name:
             return name
@@ -1278,7 +1282,8 @@ def pool_drives(role):
     """Mount points of the drives that are connected for a role (main or backup), as /mnt/disks/MAIN1 ..."""
     import glob
     prefix = "MAIN" if role == "main" else "BACKUP"
-    found = sorted(d[len(ROOT):] if ROOT and d.startswith(ROOT) else d for d in glob.glob(P("/mnt/disks/" + prefix + "[0-9]*")))
+    found = sorted((d[len(ROOT):] if ROOT and d.startswith(ROOT) else d for d in glob.glob(P("/mnt/disks/" + prefix + "[0-9]*"))),
+                   key=lambda d: int(re.sub(r"\D", "", os.path.basename(d)) or 0))
     found = [d for d in found if is_mount(d)]
     if found:
         return found
@@ -1289,11 +1294,15 @@ def pool_drives(role):
 
 
 def unique_names(items):
-    """items: [(mount point, name)] -> the same list, a duplicate name made different by adding the mount point's own name."""
-    seen = {}
+    """items: [(mount point, name)] -> the same list, with a number added to a name that more than one drive has
+    ('1 TB Samsung HDD' twice becomes '1 TB Samsung HDD 1' and '1 TB Samsung HDD 2', in the order given)."""
+    total, seen, out = {}, {}, []
     for _, n in items:
+        total[n] = total.get(n, 0) + 1
+    for mp, n in items:
         seen[n] = seen.get(n, 0) + 1
-    return [(mp, n if seen[n] == 1 else "%s (%s)" % (n, os.path.basename(mp))) for mp, n in items]
+        out.append((mp, n if total[n] == 1 else "%s %d" % (n, seen[n])))
+    return out
 
 
 def boot_share_dir():
@@ -1304,27 +1313,21 @@ def boot_share_dir():
 
 
 def filebrowser_mounts():
-    """(host folder, folder name inside FileBrowser) for this machine's drives, named after the drives themselves:
-    the drive that holds the system, then main-storage/<drive> and backup-storage/<drive> for every connected drive."""
-    boot = drive_name("/", "boot-drive", prefer_label=True)
-    if boot in ("main-storage", "backup-storage"):
-        boot += " (system)"
-    m = [(boot_share_dir(), "/srv/" + boot)]
-    for role, folder in (("main", "main-storage"), ("backup", "backup-storage")):
-        drives = unique_names([(mp, drive_name(mp, os.path.basename(mp))) for mp in pool_drives(role)])
-        if not drives and role == "main":
-            m.append(("/mnt/storage/filebrowser", "/srv/main-storage"))   # no data drive yet: a share on the boot drive
-        for mp, name in drives:
-            m.append((mp, "/srv/%s/%s" % (folder, name)))
-    return m
+    """(host folder, folder name inside FileBrowser) for this machine: one folder, Backup-Pool, with a folder for each
+    backup drive inside it, named after the drive ("1 TB Samsung HDD"). Nothing else is shown. With no backup drive
+    connected there is nothing to show. A name shared by two drives of the same make gets a number, counted over
+    the main and the backup drives, so it is the same name `sudo drives` shows."""
+    every = [(role, mp, drive_name(mp, os.path.basename(mp))) for role in ("main", "backup") for mp in pool_drives(role)]
+    named = unique_names([(mp, n) for _, mp, n in every])
+    return [(mp, "/srv/Backup-Pool/" + n) for (role, _, _), (mp, n) in zip(every, named) if role == "backup"]
 
 
 def filebrowser_volumes(text):
-    """Replace the two drive folders of the original server's FileBrowser stack with this machine's drives."""
+    """Replace the folder lines of FileBrowser's stack file (everything mounted under /srv) with this machine's backup drives."""
     m = re.search(r"(\n    volumes:\n)((?:      - .*(?:\n|$))+)", text)
-    if not m or "/srv/hdd" not in m.group(2):
+    if not m or "/srv/Backup-Pool" not in m.group(2):
         return text          # the stack file was changed: leave it as it is
-    keep = [l for l in m.group(2).splitlines() if "/srv/hdd" not in l and "/srv/boot-drive-files" not in l and "/srv/750GB_HDD" not in l]
+    keep = [l for l in m.group(2).splitlines() if ":/srv/" not in l]
     new = ['      - "%s:%s"' % d for d in filebrowser_mounts()] + keep
     return text[:m.start(2)] + "\n".join(new) + "\n" + text[m.end(2):]
 
@@ -2180,7 +2183,7 @@ def folder_plan():
     h = Ctx.home
     u, g = Ctx.uid, Ctx.gid
     return [
-        ("/mnt/storage", 0, 0), ("/mnt/storage/immich", u, g), ("/mnt/storage/filebrowser", u, g),
+        ("/mnt/storage", 0, 0), ("/mnt/storage/immich", u, g),
         ("/mnt/storage/nextcloud", 33, 33),
         (h + "/nextcloud", u, g), (h + "/nextcloud/html", 33, 33), (h + "/nextcloud/db", 0, 0),
         (h + "/immich", u, g), (h + "/immich/postgres", 0, 0),
@@ -2536,7 +2539,7 @@ def filebrowser_destinations():
 
 @step
 class FileBrowserDrives(Step):
-    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows this machine's drives, each in a folder named after the drive"
+    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows the backup drives in a Backup-Pool folder, each in a folder named after the drive"
     needs = ("stack-filebrowser",)
 
     def applies(self):
@@ -2551,7 +2554,7 @@ class FileBrowserDrives(Step):
         return ", ".join(d.replace("/srv/", "") for _, d in filebrowser_mounts())
 
     def help(self):
-        return ("FileBrowser lists the drives that are connected now. After connecting or removing a drive with `sudo drives`, "
+        return ("FileBrowser lists the backup drives that are connected now. After connecting or removing a drive with `sudo drives`, "
                 "run this to update it (FileBrowser restarts for a few seconds):\n$ sudo homelab-setup refresh")
 
     def run(self):
