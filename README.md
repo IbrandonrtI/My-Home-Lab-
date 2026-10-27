@@ -126,7 +126,7 @@ flowchart TB
             bootinfo["<b>Boot drive</b><br/>750GB HDD, LVM and ext4<br/>mounted at /"]
             os["Linux Mint, Docker<br/>and Portainer"]
             dbs["Databases<br/>Immich and Nextcloud"]
-            share["FileBrowser share<br/>750GB_HDD"]
+            share["FileBrowser share<br/>boot-drive-files"]
         bk["Daily backup copy<br/>(a folder here until<br/>a backup drive is added)"]
             cfg["App files and config<br/>Nextcloud app, Homepage<br/>config, AdGuard settings"]
         end
@@ -226,7 +226,33 @@ If a secret ever leaks, I change it in the service first. Deleting it from Git i
 
 ## Uninstall
 
-> **Warning.** This takes the lab off the machine **and deletes its data**: every container and Docker volume on it (not only this lab's), your Immich photos, Nextcloud files and FileBrowser share, and `~/750GB_HDD`, which holds the interim backup. It also clears root's whole crontab. Copy anything you want to keep first.
+There are two ways to do this: take the lab off but keep my data, or wipe everything. Pick one.
+
+### Keep my data
+
+This removes the containers, the scripts and the cron jobs, and leaves the things that are hard to replace: the photos and files in `/mnt/storage`, the Immich and Nextcloud databases (`~/immich` and `~/nextcloud`), and the backups in `~/boot-drive-files` (and `/mnt/backup` if you have a backup drive). Docker's own volumes stay too, because I don't delete `/var/lib/docker`.
+
+```bash
+sudo docker ps -aq | xargs -r sudo docker rm -f
+sudo docker image prune -a -f
+sudo crontab -e
+```
+
+In the crontab, delete only the lines for the lab (the ones that run `homelab-sample`, `homelab-update`, `drives power`, `hdparm -B 254`, `homelab-backup` and `homelab-setup progress`), then save. Then:
+
+```bash
+sed -i '/# >>> homelab login display >>>/,/# <<< homelab login display <<</d' ~/.bashrc
+sudo rm -rf /root/.homelab-setup /var/lib/homelab-setup /var/lib/homelab /var/log/homelab-setup.log
+sudo rm -f /usr/local/sbin/{drives,homelab-backup,homelab-update,homelab-restore-configs,homelab-sample,homelab-setup} /usr/local/bin/{hdd-recover,homelab,homelab-check}
+cd ~
+rm -rf ~/My-Home-Lab-
+```
+
+I leave `/etc/homelab-backup.conf`, `/etc/homelab-drive-names`, the drive mounts in `/etc/fstab` and the Docker and Tailscale packages alone, so nothing else on the machine changes. Running the installer again later picks the data back up.
+
+### Remove everything
+
+> **Warning.** This takes the lab off the machine **and deletes its data**: every container and Docker volume on it (not only this lab's), your Immich photos, Nextcloud files and FileBrowser share, and `~/boot-drive-files`, which holds the interim backup. It also clears root's whole crontab. Copy anything you want to keep first.
 
 To remove everything, run:
 
@@ -236,7 +262,7 @@ sudo docker system prune -a --volumes -f
 sudo tailscale logout
 sudo crontab -r
 sed -i '/# >>> homelab login display >>>/,/# <<< homelab login display <<</d' ~/.bashrc
-sudo rm -rf ~/nextcloud ~/immich ~/speedtest-tracker ~/homepage-config ~/750GB_HDD /opt/adguard-docker /mnt/storage/immich /mnt/storage/filebrowser /mnt/storage/nextcloud
+sudo rm -rf ~/nextcloud ~/immich ~/speedtest-tracker ~/homepage-config ~/boot-drive-files ~/750GB_HDD /opt/adguard-docker /mnt/storage/immich /mnt/storage/filebrowser /mnt/storage/nextcloud
 sudo rm -rf /root/.homelab-setup /var/lib/homelab-setup /var/lib/homelab /var/log/homelab-setup.log /etc/homelab-backup.conf
 sudo rm -f /usr/local/sbin/{drives,homelab-backup,homelab-update,homelab-restore-configs,homelab-sample,homelab-setup} /usr/local/bin/{hdd-recover,homelab,homelab-check}
 sudo apt-get purge -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale
