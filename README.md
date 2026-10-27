@@ -1,7 +1,10 @@
 # My Home Lab
 
-# Install 
-Run this command to install this repo and homelab setup on a new Linux Mint 22 or Ubuntu 24.04 machine with internet (about 30 to 60 minutes and 10 GB of downloads):
+[![checks](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml/badge.svg)](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml)
+
+## Install
+
+Run this on a new Linux Mint 22 or Ubuntu 24.04 machine with internet (about 30 to 60 minutes and 10 GB of downloads):
 
 ```bash
 sudo apt update && sudo apt upgrade && sudo apt install -y git
@@ -9,8 +12,7 @@ git clone https://github.com/IbrandonrtI/My-Home-Lab-.git
 cd My-Home-Lab-
 sudo bash setup.sh install --dry-run     # shows what it would do, changes nothing
 sudo bash setup.sh install               # asks a few questions, then builds the lab
-``` 
-[![checks](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml/badge.svg)](https://github.com/IbrandonrtI/My-Home-Lab-/actions/workflows/checks.yml)
+```
 
 This home lab runs on a small HP mini PC and does ad blocking for the whole network, runs my containers, monitors the machine, stores files and phone photos, and has one dashboard that links to everything. I reach all of it from anywhere through Tailscale, and nothing is open to the public internet.
 
@@ -223,7 +225,11 @@ It's not perfect, and these are the weak spots I know about:
 If a secret ever leaks, I change it in the service first. Deleting it from Git isn't enough, because the old commit still has it. The [secrets checklist](docs/secrets-checklist.md) lists every secret and how to get it back.
 
 ## Uninstall
-if you want to uninstall the whole project and files run these command: 
+
+> **Warning.** This takes the lab off the machine **and deletes its data**: every container and Docker volume on it (not only this lab's), your Immich photos, Nextcloud files and FileBrowser share, and `~/750GB_HDD`, which holds the interim backup. It also clears root's whole crontab. Copy anything you want to keep first.
+
+To remove everything, run:
+
 ```bash
 sudo docker ps -aq | xargs -r sudo docker rm -f
 sudo docker system prune -a --volumes -f
@@ -240,7 +246,7 @@ sudo ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 sudo apt-get autoremove -y
 cd ~
 rm -rf ~/My-Home-Lab-
-``` 
+```
 
 ## What's where
 
