@@ -200,6 +200,10 @@ part_state() {
     info "no backup has run yet"
   fi
   if [ -f /etc/homelab-backup.conf ]; then
+    info "backup folder used while no backup drive is connected: $(grep -m1 '^DEST_FALLBACK=' /etc/homelab-backup.conf | cut -d'"' -f2)"
+    if grep -q '750GB_HDD' /etc/homelab-backup.conf && [ ! -d "$REAL_HOME/750GB_HDD" ] && [ -d "$REAL_HOME/boot-drive-files" ]; then
+      warn "/etc/homelab-backup.conf still names ~/750GB_HDD (from the earlier install) but this machine uses ~/boot-drive-files; change DEST_FALLBACK there"
+    fi
     # shellcheck disable=SC1091
     ( . /etc/homelab-backup.conf 2>/dev/null; [ -z "${DEST_FALLBACK:-}" ] || [ -d "$(dirname "$DEST_FALLBACK")" ] ) || warn "the fallback backup folder in /etc/homelab-backup.conf does not exist"
   fi
@@ -223,9 +227,12 @@ part_state() {
 
   # ---- the web pages of the apps (answered on this machine)
   local svc port code
+  LAN_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") {print $(i+1); exit}}')
+  [ -n "$LAN_IP" ] || LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
   for svc in "Homepage:3001" "Portainer:9000" "AdGuard Home:3000" "Beszel:8090" "Netdata:19999" "Speedtest Tracker:8088" "FileBrowser:8081" "Immich:2283" "Nextcloud:8082"; do
     port=${svc##*:}; svc=${svc%:*}
-    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null)
+    # Homepage only answers the addresses it was told about (HOMEPAGE_ALLOWED_HOSTS), so ask by this machine's address
+    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://${LAN_IP:-127.0.0.1}:$port/" 2>/dev/null)
     case "$code" in
       200|301|302|303|307|308|401|403) ok "$svc answers on port $port (HTTP $code)" ;;
       000) fail "$svc does not answer on port $port" ;;
@@ -277,7 +284,13 @@ part_state() {
   check_scripts_vs_repo
 
   # ---- ports that listen on all interfaces
+  local known=" 22 53 2283 3000 3001 8081 8082 8088 8090 9000 9443 19999 " unknown=""
+  while read -r port proc; do
+    case "$known" in *" $port "*) continue ;; esac
+    unknown="$unknown $port${proc:+ ($proc)};"
+  done < <(ss -lntpH 2>/dev/null | awk '$4 ~ /^(0\.0\.0\.0|\*|\[::\]):/ {n = split($4, a, ":"); match($0, /\("[^"]+"/); print a[n], (RSTART ? substr($0, RSTART + 2, RLENGTH - 3) : "")}' | sort -un)
   info "ports open to the whole network: $(ss -lntH 2>/dev/null | awk '$4 ~ /^(0\.0\.0\.0|\*|\[::\]):/ {n=split($4,a,":"); print a[n]}' | sort -un | tr '\n' ' ')"
+  [ -z "$unknown" ] || info "ports that are not one of the lab's apps:$unknown"
 }
 
 # ---------------------------------------------------------------- run it
