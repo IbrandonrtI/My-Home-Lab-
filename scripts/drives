@@ -29,7 +29,7 @@ if [ "$TEST_MODE" = 1 ]; then
   LOGFILE="${LOGFILE:-$STATE_DIR/drives.log}"
   mkdir -p "$STATE_DIR"
   [ -f "$FSTAB" ] || : >"$FSTAB"
-  TEST_POOL_EXTRA=",minfreespace=${DRIVES_MINFREE:-10M}"   # the test disks are tiny
+  POOL_MINFREE="${POOL_MINFREE:-${DRIVES_MINFREE:-10M}}"   # the test disks are tiny
   BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-$STATE_DIR/last-run}"   # test mode never reads the real backup record
 else
   STATE_DIR="${DRIVES_STATE_DIR:-/var/lib/homelab-drives}"
@@ -42,7 +42,16 @@ else
   LOGFILE="${LOGFILE:-/var/log/homelab-drives.log}"
 fi
 
-POOL_OPTS_BASE="allow_other,cache.files=off,category.create=mfs,moveonenospc=true,dropcacheonclose=true,nofail${TEST_POOL_EXTRA:-}"
+# category.create=ff: a new file goes to the first drive (MAIN1, then MAIN2, ...) that still has room, so the drives fill up
+# one after the other. Every file sits whole on one drive. minfreespace is how much free space a drive keeps before the next one is used.
+POOL_MINFREE="${POOL_MINFREE:-20G}"
+POOL_OPTS_BASE="allow_other,cache.files=off,category.create=ff,moveonenospc=true,dropcacheonclose=true,minfreespace=$POOL_MINFREE,nofail"
+# A drive is shown by what it is, e.g. "1 TB Samsung HDD", never by its internal label (MAIN1, BACKUP1). The names you chose
+# yourself are in DRIVE_NAMES_FILE (LABEL=Name per line); the name scanned when a drive was connected is kept in NAME_STORE,
+# so a drive that is unplugged or dead still shows its name.
+DRIVE_NAMES_FILE="${DRIVE_NAMES_FILE:-/etc/homelab-drive-names}"
+[ "$TEST_MODE" = 1 ] && DRIVE_NAMES_FILE="${DRIVE_NAMES_FILE_TEST:-$STATE_DIR/drive-names-chosen}"
+NAME_STORE="${NAME_STORE:-$STATE_DIR/drive-names}"
 BRANCH_OPTS="defaults,noatime,nofail,x-systemd.device-timeout=10"
 BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/var/lib/homelab-backup/last-run}"
 DRAIN_SPARE_BYTES="${DRAIN_SPARE_BYTES:-2147483648}"   # free space to keep on the target drive when copying a drive off
@@ -242,9 +251,120 @@ candidate_disks() {
   done
 }
 
-disk_summary() {
+# ---------- drive names ----------
+BRAND_TABLE='SAMSUNG|^MZ[- ]?[A-Z0-9_]|^HM[0-9]{3}|^HN-M	Samsung
+TOSHIBA|^MQ0[0-9]|^DT0[0-9]|^HDW|^MK[0-9]{4}|^MG0[0-9]|^KBG|^KXG	Toshiba
+WESTERN DIGITAL|^WDC|^WD ?[0-9]|^WDS	Western Digital
+HGST|^HU[SH]	HGST
+HITACHI|^HT[ES][0-9]|^HDS	Hitachi
+SEAGATE|^ST[0-9]{3,}[A-Z]{2}	Seagate
+CRUCIAL|^CT[0-9]{2,}	Crucial
+KINGSTON|^SA400|^SKC|^SNV|^SUV|^SV300	Kingston
+SANDISK|^SDSSD|^SD[A-Z]{2}[0-9]	SanDisk
+INTEL|^SSDSC|^SSDPE	Intel
+MICRON|^MTFD	Micron
+ADATA|^SU[0-9]{3}	ADATA
+LEXAR	Lexar
+CORSAIR	Corsair
+SABRENT	Sabrent
+PATRIOT	Patriot
+PLEXTOR	Plextor
+KIOXIA	Kioxia
+TRANSCEND	Transcend
+LITE-?ON	Lite-On
+SK ?HYNIX	SK hynix
+MAXTOR	Maxtor
+FUJITSU	Fujitsu
+(^| )PNY( |$)	PNY
+TEAM ?GROUP|^TEAM 	TeamGroup'
+
+drive_brand() {   # drive_brand "TOSHIBA MQ01ABD100" -> Toshiba (nothing when the maker is not known)
+  local text pat name
+  text=$(printf '%s' "$1" | tr 'a-z_' 'A-Z ' | tr -s ' ' | sed 's/^ //; s/ $//')
+  while IFS=$'\t' read -r pat name; do
+    if printf '%s' "$text" | grep -Eq -- "$pat"; then printf '%s' "$name"; return 0; fi
+  done <<<"$BRAND_TABLE"
+  return 0
+}
+
+pretty_size() {   # bytes -> "1 TB", "750 GB" (as the drive is sold)
+  awk -v b="$1" 'BEGIN { if (b >= 0.95e12) { v = int(b / 1e11 + 0.5) / 10; printf "%g TB", v } else if (b >= 1e9) printf "%d GB", int(b / 1e9 + 0.5); else printf "%d MB", int(b / 1e6 + 0.5) }'
+}
+
+clean_name() {   # safe as a folder name and inside a Docker volume line
+  printf '%s' "$1" | tr '_' ' ' | sed 's/[^A-Za-z0-9 .()+,-]/ /g' | tr -s ' ' | sed 's/^[ .-]*//; s/[ .-]*$//'
+}
+
+drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, or nothing when it cannot be told
+  local model=$2 line rota tran
+  if printf '%s' "$model" | tr 'a-z_' 'A-Z ' | grep -Eq '(^|[^A-Z0-9])SSD([^A-Z0-9]|$)|NVME'; then printf SSD; return 0; fi
+  line=$(lsblk -dnbo ROTA,TRAN "$1" 2>/dev/null | head -1)
+  read -r rota tran <<<"$line"
+  [ "${tran,,}" = nvme ] && { printf SSD; return 0; }
+  case "$rota" in 1) printf HDD ;; 0) printf SSD ;; esac
+  return 0
+}
+
+disk_base_name() {   # disk_base_name /dev/sdX -> "1 TB Samsung HDD"
+  local d=$1 model size brand kind name
+  model=$(lsblk -dno MODEL "$d" 2>/dev/null | sed 's/ *$//')
+  size=$(lsblk -dnbo SIZE "$d" 2>/dev/null | head -1 | tr -d ' ')
+  brand=$(drive_brand "$model")
+  kind=$(drive_kind "$d" "$model")
+  name="$([ -n "$size" ] && pretty_size "$size") ${brand:-$model} $kind"
+  name=$(clean_name "$name")
+  if [ -z "$name" ] || [ "$name" = "$(clean_name "$([ -n "$size" ] && pretty_size "$size")")" ]; then name=$(clean_name "$(pretty_size "${size:-0}") drive"); fi
+  printf '%s' "$name"
+}
+
+chosen_name() {   # a name set in DRIVE_NAMES_FILE for this label
+  [ -r "$DRIVE_NAMES_FILE" ] || return 0
+  local n
+  n=$(awk -F= -v k="$1" '{ gsub(/^[ \t]+|[ \t]+$/, "", $1) } $1 == k && !/^[ \t]*#/ { sub(/^[^=]*=/, ""); print; exit }' "$DRIVE_NAMES_FILE")
+  clean_name "$n"
+}
+
+name_store_put() {   # name_store_put LABEL "name"
+  local tmp
+  mkdir -p "$(dirname "$NAME_STORE")" 2>/dev/null || return 0
+  tmp=$(mktemp) || return 0
+  { [ -r "$NAME_STORE" ] && awk -F'|' -v k="$1" '$1 != k' "$NAME_STORE"; printf '%s|%s\n' "$1" "$2"; } >"$tmp" 2>/dev/null
+  cat "$tmp" >"$NAME_STORE" 2>/dev/null || true
+  rm -f "$tmp"
+}
+
+name_store_get() { [ -r "$NAME_STORE" ] && awk -F'|' -v k="$1" '$1 == k {print $2; exit}' "$NAME_STORE"; return 0; }
+
+branch_base_name() {   # the name of one pool drive, before numbering: chosen, else scanned now, else the one kept, else the label
+  local mp=$1 label n part
+  label=$(basename "$mp")
+  n=$(chosen_name "$label")
+  [ -n "$n" ] && { printf '%s' "$n"; return 0; }
+  part=$(branch_part "$mp")
+  if [ -n "$part" ] && mountpoint -q "$mp"; then
+    n=$(disk_base_name "$(disk_of_part "$part")")
+    if [ -n "$n" ]; then
+      [ "$(name_store_get "$label")" = "$n" ] || name_store_put "$label" "$n"
+      printf '%s' "$n"; return 0
+    fi
+  fi
+  n=$(name_store_get "$label")
+  printf '%s' "${n:-$label}"
+}
+
+branch_name() {   # the name shown for a pool drive; a name shared with another pool drive gets a number (1, 2, ...)
+  local mp=$1 b n base total=0 mine=0
+  base=$(branch_base_name "$mp")
+  for b in $(all_branches); do
+    n=$(branch_base_name "$b")
+    if [ "$n" = "$base" ]; then total=$((total + 1)); [ "$b" = "$mp" ] && mine=$total; fi
+  done
+  if [ "$total" -gt 1 ] && [ "$mine" -gt 0 ]; then printf '%s %s' "$base" "$mine"; else printf '%s' "$base"; fi
+}
+
+disk_summary() {   # "1 TB Toshiba HDD  (/dev/sdb, 931.5G, TOSHIBA MQ01ABD100, sata)"
   local d=$1
-  printf '%s  %s  %s  [%s]' "$d" "$(lsblk -dno SIZE "$d")" "$(lsblk -dno MODEL "$d" | sed 's/ *$//')" "$(lsblk -dno TRAN "$d" | sed 's/ *$//')"
+  printf '%s  (%s, %s, %s, %s)' "$(disk_base_name "$d")" "$d" "$(lsblk -dno SIZE "$d" | tr -d ' ')" "$(lsblk -dno MODEL "$d" | sed 's/ *$//')" "$(lsblk -dno TRAN "$d" | sed 's/ *$//')"
 }
 
 smart_health() {
@@ -411,7 +531,18 @@ need_tools() {
 pick_new_disk() {
   local -a items=() devs=()
   local d
-  for d in $(candidate_disks); do devs+=("$d"); items+=("$(disk_summary "$d")"); done
+  local -a bases=()
+  local i j same seen
+  for d in $(candidate_disks); do devs+=("$d"); bases+=("$(disk_base_name "$d")"); done
+  for i in "${!devs[@]}"; do
+    same=0; seen=0
+    for j in "${!devs[@]}"; do
+      if [ "${bases[$j]}" = "${bases[$i]}" ]; then same=$((same + 1)); [ "$j" -le "$i" ] && seen=$((seen + 1)); fi
+    done
+    d=${devs[$i]}
+    if [ "$same" -gt 1 ]; then items+=("${bases[$i]} $seen  ($d, $(lsblk -dno SIZE "$d" | tr -d ' '), $(lsblk -dno MODEL "$d" | sed 's/ *$//'), $(lsblk -dno TRAN "$d" | sed 's/ *$//'))")
+    else items+=("$(disk_summary "$d")"); fi
+  done
   if [ ${#devs[@]} -eq 0 ]; then
     note "No new drive found. Plug it in, wait 10 seconds and try again."
     return 1
@@ -442,7 +573,12 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase]
     return 1
   fi
   label=$(next_label "$role")
-  say "This drive will be called $label ($role)."
+  local base same=0 b
+  base=$(disk_base_name "$dev")
+  for b in $(all_branches); do [ "$(branch_base_name "$b")" = "$base" ] && same=$((same + 1)); done
+  say "This drive: $base  ($dev)"
+  say "It will be added to the $([ "$role" = main ] && echo Main || echo Backup) storage."
+  [ "$same" -gt 0 ] && say "You already have a drive with this name, so the drives with this name get a number (1, 2, ...)."
 
   if [ "$force" != 1 ]; then
     local -a parts; mapfile -t parts < <(parts_of "$dev")
@@ -470,6 +606,7 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase]
   uuid=$(blkid -s UUID -o value "$part") || true
   [ -n "$uuid" ] || die "Could not read the UUID of $part"
   mp="$DISKS_DIR/$label"
+  name_store_put "$label" "$base"
 
   stop_containers "$(role_pool "$role")"
   fstab_snapshot
@@ -488,8 +625,8 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase]
   start_containers
   power_apply "$mp" "$role"
   say ""
-  say "Done. $label is connected to the $role storage ($(role_pool "$role"))."
-  log "connected $label ($part) to $role"
+  say "Done. $(branch_name "$mp") is connected to the $role storage ($(role_pool "$role"))."
+  log "connected $label ($part, $base) to $role"
   return 0
 }
 
@@ -505,9 +642,9 @@ pick_branch() {
   for mp in $(all_branches); do
     mps+=("$mp")
     if mountpoint -q "$mp"; then
-      items+=("$(basename "$mp")  ($(branch_role "$mp"))  used $(human "$(used_bytes "$mp")") of $(human "$(( $(used_bytes "$mp") + $(avail_bytes "$mp") ))")")
+      items+=("$(branch_name "$mp")  ($(branch_role "$mp"))  used $(human "$(used_bytes "$mp")") of $(human "$(( $(used_bytes "$mp") + $(avail_bytes "$mp") ))")")
     else
-      items+=("$(basename "$mp")  ($(branch_role "$mp"))  NOT CONNECTED")
+      items+=("$(branch_name "$mp")  ($(branch_role "$mp"))  NOT CONNECTED")
     fi
   done
   if [ ${#mps[@]} -eq 0 ]; then note "No drives are connected to a pool yet."; return 1; fi
@@ -531,7 +668,7 @@ drain_branch() {   # copy everything from branch $1 to the emptiest other branch
     return 1
   fi
   target=$best
-  say "Copying $(human "$used") from $(basename "$mp") to $(basename "$target") (pass 1, services keep running)..."
+  say "Copying $(human "$used") from $(branch_name "$mp") to $(branch_name "$target") (pass 1, services keep running)..."
   rsync -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/" || { warn "Copy failed"; return 1; }
   stop_containers "$pool"
   say "Pass 2 (catching changes made during the first pass)..."
@@ -541,13 +678,13 @@ drain_branch() {   # copy everything from branch $1 to the emptiest other branch
     start_containers
     return 1
   fi
-  say "Verified: every file from $(basename "$mp") is also on $(basename "$target")."
+  say "Verified: every file from $(branch_name "$mp") is also on $(branch_name "$target")."
   return 0
 }
 
 detach_branch() {   # detach_branch mountpoint  (leaves the data on the drive untouched)
   local mp=$1 role label pool others dev part
-  role=$(branch_role "$mp"); label=$(basename "$mp"); pool=$(role_pool "$role")
+  role=$(branch_role "$mp"); label=$(branch_name "$mp"); pool=$(role_pool "$role")
   mapfile -t others < <(branches_of "$role" | grep -vx "$mp")
   part=$(branch_part "$mp"); dev=""; [ -n "$part" ] && dev=$(disk_of_part "$part")
 
@@ -582,7 +719,7 @@ detach_branch() {   # detach_branch mountpoint  (leaves the data on the drive un
     die "The pool did not mount after removing $label. fstab was restored."
   fi
   start_containers
-  log "disconnected $label from $role"
+  log "disconnected $label ($(basename "$mp")) from $role"
   say "$label is disconnected from the $role storage. The data on the drive was not touched."
   DETACHED_DEV=$dev
   return 0
@@ -609,7 +746,7 @@ move_flow() {
   role=$(branch_role "$mp"); newrole=$(other_role "$role")
   part=$(branch_part "$mp"); [ -n "$part" ] || die "That drive is not connected, so it cannot be moved."
   dev=$(disk_of_part "$part")
-  say "$(basename "$mp") will move from $role to $newrole storage."
+  say "$(branch_name "$mp") will move from $role to $newrole storage."
   say "Its files are copied to another $role drive first, then the drive is erased and formatted for $newrole."
   yn "Continue?" || { say "Cancelled."; return 1; }
   DETACHED_DEV=""
@@ -632,8 +769,8 @@ adopt_flow() {
   say ""
   say "This converts your current data drive into the first drive of the main pool."
   say "  Drive:        $(disk_summary "$(disk_of_part "$part")")"
-  say "  Now:          mounted directly at $pool (label '$cur')"
-  say "  After:        mounted at $mp (label $label), and $pool becomes the pool"
+  say "  Now:          mounted directly at $pool"
+  say "  After:        mounted as a pool drive, and $pool becomes the pool"
   say "  Your files are not moved or copied. Containers using $pool will be stopped for a minute."
   yn "Continue?" || { say "Cancelled."; return 1; }
 
@@ -665,9 +802,10 @@ adopt_flow() {
   fi
   start_containers
   power_apply "$mp" main
+  name_store_put "$label" "$(disk_base_name "$(disk_of_part "$part")")"
   log "adopted $part as $label; pool at $pool"
   say ""
-  say "Done. $pool is now a pool containing $label. Check: sudo drives status"
+  say "Done. $pool is now a pool containing $(branch_name "$mp"). Check: sudo drives status"
   if [ "$TEST_MODE" != 1 ]; then
     say "Reminder: replace the old STORAGE lines in root's crontab with the new one (see the guide)."
   fi
@@ -697,20 +835,25 @@ status_flow() {
       printf '%-8s %-14s NOT MOUNTED\n' "$role" "$pool"
     fi
   done
+  for role in main backup; do
+    if [ -n "$(branches_of "$role")" ] && ! pool_fills_in_order "$(role_pool "$role")"; then
+      say "Note: the $role pool still spreads files over its drives. Menu option 9 (sudo drives fillorder) makes it fill one drive at a time."
+    fi
+  done
   if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$TEST_MODE" != 1 ]; then
     say "Note: main storage is still one plain drive. Menu option 5 converts it into a pool."
   fi
   say ""
   say "=== Pool drives ==="
-  printf '%-9s %-8s %-12s %-9s %-9s %-9s %s\n' LABEL ROLE DEVICE SIZE USED SMART STATE
+  printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' DRIVE ROLE DEVICE SIZE USED SMART STATE
   for mp in $(all_branches); do
     p=$(branch_part "$mp")
     if [ -n "$p" ] && mountpoint -q "$mp"; then
-      printf '%-9s %-8s %-12s %-9s %-9s %-9s %s\n' "$(basename "$mp")" "$(branch_role "$mp")" "$p" \
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "$p" \
         "$(human "$(( $(used_bytes "$mp") + $(avail_bytes "$mp") ))")" "$(human "$(used_bytes "$mp")")" \
         "$(smart_health "$(disk_of_part "$p")")" "connected"
     else
-      printf '%-9s %-8s %-12s %-9s %-9s %-9s %s\n' "$(basename "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)"
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)"
     fi
   done
   [ -n "$(all_branches)" ] || say "(no drives in a pool yet)"
@@ -749,10 +892,10 @@ recover_flow() {
   for mp in $(all_branches); do
     if ! mount_fstab "$mp" 2>/dev/null; then
       if [ "$(branch_role "$mp")" = main ]; then
-        echo "Drive not found. Check the cable. ($(basename "$mp"))"
+        echo "Drive not found. Check the cable. ($(branch_name "$mp"))"
         fail=1
       else
-        warn "Backup drive $(basename "$mp") not found."
+        warn "Backup drive $(branch_name "$mp") not found."
       fi
     fi
   done
@@ -910,13 +1053,14 @@ replace_flow() {
     say "  - A working drive you want to swap: use  sudo drives  option 3 (disconnect) and option 2 (connect)"
     return 1
   fi
-  for m in "${miss[@]}"; do items+=("$(basename "$m")  ($(branch_role "$m"))  not found"); done
+  for m in "${miss[@]}"; do items+=("$(branch_name "$m")  ($(branch_role "$m"))  not found"); done
   say "Pool drives that cannot be found:"
   idx=$(choose "Which drive is dead? " "${items[@]}") || return 1
   mp=${miss[$idx]}; role=$(branch_role "$mp"); label=$(basename "$mp"); pool=$(role_pool "$role")
+  local shown; shown=$(branch_name "$mp")
 
   say ""
-  say "$label will be replaced by a new drive that gets the same name ($label)."
+  say "$shown will be replaced by a new drive. The new drive takes its place in the $role storage and is named by what it is."
   if [ "$role" = main ]; then
     say "The files that were on the dead drive are copied back from the backup. Only missing files are copied."
     src=$(find_backup_source) || { note "No backup copy of the main storage was found. Nothing was changed."; return 1; }
@@ -963,12 +1107,13 @@ replace_flow() {
   sd_reload
   if ! mount_fstab "$mp"; then fstab_rollback; die "Could not mount $part at $mp. fstab was restored."; fi
   if [ "$role" = main ]; then id -u "$OWNER" >/dev/null 2>&1 && chown "$OWNER:$OWNER" "$mp"; fi
-  log "replaced dead drive $label with $part (UUID $uuid) in the $role pool"
+  name_store_put "$label" "$(disk_base_name "$dev")"
+  log "replaced dead drive $label ($shown) with $part (UUID $uuid) in the $role pool"
 
-  left=$(missing_branches "$role" | xargs -r -n1 basename | tr '\n' ' ')
+  left=$(for m in $(missing_branches "$role"); do printf '%s, ' "$(branch_name "$m")"; done)
   if [ -n "${left// /}" ]; then
     say ""
-    say "$label is replaced. Other $role drives are still missing: $left"
+    say "$(branch_name "$mp") is replaced. Other $role drives are still missing: ${left%, }"
     say "The $role pool cannot start until all of them are replaced. Run  sudo drives replace  again."
     return 0
   fi
@@ -979,7 +1124,7 @@ replace_flow() {
   fi
   power_apply "$mp" "$role"
   say ""
-  say "$label is in place and the $role pool is mounted."
+  say "$(branch_name "$mp") is in place and the $role pool is mounted."
 
   if [ "$role" = main ]; then
     restore_files "$src" || { warn "The restore is not finished. The containers stay stopped."; return 1; }
@@ -996,7 +1141,7 @@ replace_flow() {
     fi
   fi
   say ""
-  say "Done. If the old drive ever turns up again, do not plug it in next to the new one: both are called $label."
+  say "Done. If the old drive ever turns up again, do not plug it in next to the new one: the computer sees both as the same drive."
   return 0
 }
 
@@ -1020,6 +1165,38 @@ test_cleanup() {
   for dev in $(losetup -ln -O NAME,BACK-FILE | awk -v s="$STATE_DIR/" 'index($2, s) == 1 {print $1}'); do losetup -d "$dev"; done
   rm -f "$STATE_DIR"/disk*.img "$STATE_DIR"/fstab "$STATE_DIR"/fstab.bak-drives-*
   say "Test setup removed."
+}
+
+# ---------- fill order ----------
+pool_fills_in_order() {   # pool_fills_in_order /mnt/storage -> true when its fstab line already uses category.create=ff
+  fstab_active | awk -v m="$1" '$2 == m && /category\.create=ff/ {f = 1} END {exit !f}'
+}
+
+fillorder_flow() {   # make the pools of an older setup fill one drive at a time (a new pool already does)
+  local role pool did=0
+  for role in main backup; do
+    [ -n "$(branches_of "$role")" ] || continue
+    pool=$(role_pool "$role")
+    pool_fills_in_order "$pool" && continue
+    [ "$did" = 1 ] || fstab_snapshot
+    did=1
+    fstab_set_pool "$role"
+    sd_reload
+    if mountpoint -q "$pool" && command -v setfattr >/dev/null 2>&1 \
+       && setfattr -n user.mergerfs.category.create -v ff "$pool/.mergerfs" 2>/dev/null \
+       && setfattr -n user.mergerfs.minfreespace -v "$POOL_MINFREE" "$pool/.mergerfs" 2>/dev/null; then
+      say "The $role storage now fills one drive at a time."
+    elif mountpoint -q "$pool" && yn "The $role storage is set to fill one drive at a time. Apply it now? Its services stop for a minute while the pool mounts again."; then
+      stop_containers "$pool"
+      if apply_pool "$role"; then say "The $role storage now fills one drive at a time."
+      else fstab_rollback; mount_fstab "$pool" 2>/dev/null; warn "The $role pool did not mount. fstab was restored."; fi
+      start_containers
+    else
+      say "The $role storage is set to fill one drive at a time. It takes effect after the next restart (or: sudo hdd-recover)."
+    fi
+    log "pool $role set to fill one drive at a time (ff, minfreespace $POOL_MINFREE)"
+  done
+  [ "$did" = 1 ] || say "Your pools already fill one drive at a time."
 }
 
 # ---------- FileBrowser ----------
@@ -1046,6 +1223,7 @@ menu() {
     say "  6) Apply power settings"
     say "  7) Recover after an unplug (same as hdd-recover)"
     say "  8) Replace a dead drive (restores the missing files from the backup)"
+    say "  9) Fill drives one at a time (update an older pool)"
     say "  0) Quit"
     c=$(ask "Choose: ")
     case "$c" in
@@ -1057,6 +1235,7 @@ menu() {
       6) power_all ;;
       7) recover_flow; sync_filebrowser ;;
       8) replace_flow; sync_filebrowser ;;
+      9) fillorder_flow ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -1078,11 +1257,12 @@ main() {
     power)        power_all ;;
     recover)      recover_flow; sync_filebrowser ;;
     replace)      replace_flow; sync_filebrowser ;;
+    fillorder)    fillorder_flow ;;
     restore)      restore_flow; sync_filebrowser ;;
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;
-    *) say "Usage: sudo drives [menu|status|connect|disconnect|move|adopt|power|recover|replace|restore|version]" ;;
+    *) say "Usage: sudo drives [menu|status|connect|disconnect|move|adopt|power|recover|replace|fillorder|restore|version]" ;;
   esac
 }
 

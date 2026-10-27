@@ -164,6 +164,7 @@ commands() {
   cmd "sudo drives status"             "pools, drives, SMART health, last backup"
   cmd "sudo drives replace"            "a drive died: swap it, restore the files from the backup"
   cmd "sudo drives power"              "re-apply the drive power settings"
+  cmd "sudo drives fillorder"          "make an older pool fill one drive at a time"
   cmd "sudo hdd-recover"               "after an unplug or power cut: remount, restart containers"
   section "Backup"
   cmd "sudo homelab-backup"            "run the backup now (about a minute, longer after many new files)"
