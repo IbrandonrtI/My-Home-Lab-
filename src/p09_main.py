@@ -447,10 +447,10 @@ def cmd_filebrowser():
     if BY_ID["stack-filebrowser"].probe() != "done":
         raise Abort("FileBrowser is not running yet. Run `sudo homelab-setup install` first.")
     if s.probe() == "done":
-        say("FileBrowser already shows the drives that are connected: %s." % s.detail())
+        say("FileBrowser already shows the drives that are connected: %s." % (s.detail() or "no backup drive yet"))
         return
     rule("FileBrowser")
-    out("  Updating FileBrowser's drive folders: %s" % s.detail())
+    out("  Updating FileBrowser's drive folders: %s" % (s.detail() or "no backup drive yet"))
     s.run()
     good("FileBrowser now shows: %s" % s.detail())
 
