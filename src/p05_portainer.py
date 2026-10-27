@@ -292,7 +292,7 @@ def filebrowser_destinations():
 
 @step
 class FileBrowserDrives(Step):
-    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows this machine's drives, each in a folder named after the drive"
+    id, group, title = "filebrowser-drives", "Services", "FileBrowser shows the backup drives in a Backup-Pool folder, each in a folder named after the drive"
     needs = ("stack-filebrowser",)
 
     def applies(self):
@@ -307,7 +307,7 @@ class FileBrowserDrives(Step):
         return ", ".join(d.replace("/srv/", "") for _, d in filebrowser_mounts())
 
     def help(self):
-        return ("FileBrowser lists the drives that are connected now. After connecting or removing a drive with `sudo drives`, "
+        return ("FileBrowser lists the backup drives that are connected now. After connecting or removing a drive with `sudo drives`, "
                 "run this to update it (FileBrowser restarts for a few seconds):\n$ sudo homelab-setup refresh")
 
     def run(self):
