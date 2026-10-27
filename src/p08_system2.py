@@ -61,7 +61,7 @@ class BackupConf(Step):
         return "done" if os.path.exists(P("/etc/homelab-backup.conf")) else "todo"
 
     def run(self):
-        write_file(P("/etc/homelab-backup.conf"), 'DEST_FALLBACK="%s/750GB_HDD/backup-interim"\n' % Ctx.home, 0o644)
+        write_file(P("/etc/homelab-backup.conf"), 'DEST_FALLBACK="%s/backup-interim"\n' % boot_share_dir(), 0o644)
 
 
 CRON_LINES = [

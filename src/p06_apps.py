@@ -13,7 +13,7 @@ def find_backups():
     if Opt.backup:
         cands.append(Opt.backup)
     else:
-        cands += [P("/mnt/backup"), P(Ctx.home + "/750GB_HDD/backup-interim")]
+        cands += [P("/mnt/backup"), P(Ctx.home + "/boot-drive-files/backup-interim"), P(Ctx.home + "/750GB_HDD/backup-interim")]
         for pat in ("/media/*/*", "/media/*/*/*", "/mnt/*", "/mnt/*/*", "/mnt/disks/*"):
             cands += glob.glob(P(pat))
     found = []
