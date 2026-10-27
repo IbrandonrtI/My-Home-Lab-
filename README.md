@@ -115,7 +115,6 @@ flowchart TB
             datainfo["<b>Main pool</b> at /mnt/storage<br/>mergerfs, one drive so far:<br/>MAIN1, 1TB HDD, ext4<br/>mounted at /mnt/disks/MAIN1"]
             photos["/mnt/storage/immich<br/>photos and videos"]
             files["/mnt/storage/nextcloud<br/>Nextcloud files"]
-            fb["/mnt/storage/filebrowser<br/>FileBrowser share"]
         end
 
         immichsvc["Immich"]
@@ -126,17 +125,15 @@ flowchart TB
             bootinfo["<b>Boot drive</b><br/>750GB HDD, LVM and ext4<br/>mounted at /"]
             os["Linux Mint, Docker<br/>and Portainer"]
             dbs["Databases<br/>Immich and Nextcloud"]
-            share["FileBrowser share<br/>boot-drive-files"]
         bk["Daily backup copy<br/>(a folder here until<br/>a backup drive is added)"]
             cfg["App files and config<br/>Nextcloud app, Homepage<br/>config, AdGuard settings"]
         end
 
         photos --- immichsvc
         files --- ncsvc
-        fb --- fbsvc
         immichsvc --- dbs
         ncsvc --- dbs
-        fbsvc --- share
+        fbsvc -. "shows the backup" .- bk
         datainfo -. "rsync at 6:00" .-> bk
 
     end
@@ -146,8 +143,8 @@ flowchart TB
     classDef bootc fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e
     classDef infoc fill:#ffffff,stroke:#94a3b8,color:#1f2937,stroke-dasharray: 4 3
     class immichsvc,ncsvc,fbsvc svc
-    class photos,files,fb datac
-    class os,dbs,share,cfg,bk bootc
+    class photos,files datac
+    class os,dbs,cfg,bk bootc
     class datainfo,bootinfo infoc
     style data fill:#f0fdf4,stroke:#86efac
     style boot fill:#f0f9ff,stroke:#7dd3fc
@@ -162,7 +159,7 @@ flowchart TB
 | Computer | HP ProDesk 600 G3 Desktop Mini, Intel Core i5-7500T (4 cores) |
 | Memory | 8GB DDR4-2400 (one SO-DIMM, one slot free) |
 | Boot drive | 750GB 2.5-inch 5400 rpm hard drive in the internal bay (SATA) |
-| Data drive | 1TB 2.5-inch 5400 rpm hard drive on a generic SATA to USB 3.0 adapter. It's `MAIN1`, the first drive of the main pool |
+| Data drive | 1TB 2.5-inch 5400 rpm hard drive on a generic SATA to USB 3.0 adapter. It's the first drive of the main pool |
 | Power | Genuine HP 65W adapter |
 | Display | DisplayPort dummy plug (EDID emulator), so the headless machine behaves as if a monitor is attached |
 | Network | Wired Ethernet, with a fixed address reserved in the router |
@@ -178,7 +175,7 @@ flowchart TB
 | Beszel | Server health and resource graphs | 8090 | `https://pc.your-tailnet.ts.net:1003` |
 | AdGuard Home | DNS filtering | 3000 (web), 53 (DNS) | `https://pc.your-tailnet.ts.net:1004` |
 | Nextcloud | Personal cloud and file sync | 8082 | `https://pc.your-tailnet.ts.net:1005` |
-| FileBrowser | Browser-based file manager | 8081 | `https://pc.your-tailnet.ts.net:1006` |
+| FileBrowser | Browse the backups in a browser | 8081 | `https://pc.your-tailnet.ts.net:1006` |
 | Speedtest Tracker | Internet speed history | 8088 | `https://pc.your-tailnet.ts.net:1007` |
 | Netdata | Live system metrics | 19999 | `https://pc.your-tailnet.ts.net:1008` |
 
@@ -206,7 +203,7 @@ Mostly Linux, Docker and networking the hard way. I set up a DNS filter and free
 
 ## What's next
 
-- **A backup drive.** A second 1TB drive becomes `BACKUP1`, so the daily backup leaves the boot drive ([storage guide](docs/storage.md#12-adding-the-backup-drive)).
+- **A backup drive.** A second 1TB drive becomes the backup pool, so the daily backup leaves the boot drive ([storage guide](docs/storage.md#12-adding-the-backup-drive)).
 - **Replacing a dead drive.** `sudo drives replace` is built and tested with fake drives and once with a USB stick. I haven't had to do it for real, and I hope I never do.
 - **A faster boot drive.** Move the system to a small NVMe SSD and keep the 750GB drive as a spare.
 - **More services I might add:** Uptime Kuma, Vaultwarden, Jellyfin, Paperless-ngx and Home Assistant.
@@ -252,7 +249,7 @@ I leave `/etc/homelab-backup.conf`, `/etc/homelab-drive-names`, the drive mounts
 
 ### Remove everything
 
-> **Warning.** This takes the lab off the machine **and deletes its data**: every container and Docker volume on it (not only this lab's), your Immich photos, Nextcloud files and FileBrowser share, and `~/boot-drive-files`, which holds the interim backup. It also clears root's whole crontab. Copy anything you want to keep first.
+> **Warning.** This takes the lab off the machine **and deletes its data**: every container and Docker volume on it (not only this lab's), your Immich photos and Nextcloud files, and `~/boot-drive-files`, which holds the interim backup. It also clears root's whole crontab. Copy anything you want to keep first.
 
 To remove everything, run:
 
