@@ -81,7 +81,7 @@
         href: https://pc.your-tailnet.ts.net:1006
         siteMonitor: http://192.168.X.X:8081
         icon: filebrowser.svg
-        description: Browse and manage files on this machine's drives
+        description: View and edit the backups
         widget:
           type: filebrowser
           url: http://192.168.X.X:8081
