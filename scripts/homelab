@@ -165,6 +165,7 @@ commands() {
   cmd "sudo drives replace"            "a drive died: swap it, restore the files from the backup"
   cmd "sudo drives power"              "re-apply the drive power settings"
   cmd "sudo drives fillorder"          "make an older pool fill one drive at a time"
+  cmd "sudo drives release"            "take all drives out of the pools (the files stay on the drives)"
   cmd "sudo hdd-recover"               "after an unplug or power cut: remount, restart containers"
   section "Backup"
   cmd "sudo homelab-backup"            "run the backup now (about a minute, longer after many new files)"
@@ -178,6 +179,7 @@ commands() {
   cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
   cmd "sudo homelab-restore-configs check" "preview putting the saved configs back on a rebuilt server"
   cmd "homelab-check"                  "check the GitHub files before you upload them"
+  cmd "sudo homelab-selftest"          "run every read-only command and look for bugs and leftovers (report saved in your home)"
   if command -v homelab-setup >/dev/null 2>&1; then
     section "Setup checklist"
     cmd "sudo homelab-setup"             "the checklist: what is done and what is left"

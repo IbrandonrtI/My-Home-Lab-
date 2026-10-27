@@ -1,0 +1,297 @@
+#!/usr/bin/env bash
+# homelab-selftest - run the lab's read-only commands one by one and look for bugs and for things that should not be there.
+#
+#   sudo homelab-selftest             run everything, print a short verdict, save the full report
+#   sudo homelab-selftest --online    also run the checks that use the internet (homelab-update check)
+#   homelab-selftest version
+#
+# It only reads. It never starts, stops or changes anything: hdd-recover, homelab-backup, drives release,
+# restores and every other command that changes the machine are NOT run. Part 1 runs each command and notes
+# the exit code, the time it took and error words in its output. Part 2 checks the state of the machine:
+# the pools, Docker, the containers, the web pages, the schedule, leftovers from an earlier install, and so on.
+#
+# The full report is saved in your home folder as homelab-selftest-<date>.txt. Known secret formats
+# (tokens, keys, passwords) are hidden in it, but read it before you share it.
+
+VERSION="1.0"
+case "${1:-}" in
+  version|--version) echo "homelab-selftest $VERSION"; exit 0 ;;
+  -h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
+esac
+ONLINE=0
+[ "${1:-}" = "--online" ] && ONLINE=1
+
+[ "$(id -u)" = 0 ] || { echo "Run this with sudo:  sudo homelab-selftest"; exit 1; }
+
+REAL_USER="${HOMELAB_USER:-${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}}"
+REAL_HOME=$(getent passwd "$REAL_USER" | cut -d: -f6)
+REAL_HOME=${REAL_HOME:-/root}
+REPORT="$REAL_HOME/homelab-selftest-$(date +%Y%m%d-%H%M).txt"
+: >"$REPORT" 2>/dev/null || REPORT="/tmp/homelab-selftest-$(date +%Y%m%d-%H%M).txt"
+chmod 600 "$REPORT" 2>/dev/null || true
+[ "$REAL_HOME" != /root ] && chown "$REAL_USER:" "$REPORT" 2>/dev/null
+
+N_OK=0; N_INFO=0; N_WARN=0; N_FAIL=0
+ISSUES=()
+
+mask() {   # hide the secret formats this lab uses
+  sed -E \
+    -e 's/tskey-[A-Za-z0-9_-]+/tskey-***/g' \
+    -e 's/ptr_[A-Za-z0-9+\/=_-]+/ptr_***/g' \
+    -e 's/base64:[A-Za-z0-9+\/=]+/base64:***/g' \
+    -e 's/ssh-ed25519 [A-Za-z0-9+\/=]+/ssh-ed25519 ***/g' \
+    -e 's/([Pp]assword|PASSWORD|[Tt]oken|TOKEN|[Ss]ecret|SECRET|[Aa]pi[_-]?[Kk]ey|API_KEY|APP_KEY)([A-Za-z_]*)([=:][ ]*)[^ ]+/\1\2\3***/g'
+}
+
+emit() { printf '%s\n' "$*" | tee -a "$REPORT" | cat; }
+to_report() { mask >>"$REPORT"; }
+section() { emit ""; emit "== $* =="; }
+ok()   { N_OK=$((N_OK + 1));     emit "  ok    $*"; }
+info() { N_INFO=$((N_INFO + 1)); emit "  info  $*"; }
+warn() { N_WARN=$((N_WARN + 1)); emit "  WARN  $*"; ISSUES+=("WARN  $*"); }
+fail() { N_FAIL=$((N_FAIL + 1)); emit "  FAIL  $*"; ISSUES+=("FAIL  $*"); }
+
+as_user() { sudo -u "$REAL_USER" -H "$@"; }
+
+# ---------------------------------------------------------------- part 1: every command
+run_cmd() {   # run_cmd LABEL SECONDS user|root ALLOWED_EXIT_CODES -- command...
+  local label=$1 secs=$2 who=$3 allowed=$4 out rc start elapsed errwords
+  shift 5
+  if ! command -v "$1" >/dev/null 2>&1 && [ "${1#/}" = "$1" ]; then
+    fail "$label: the command '$1' is not installed"
+    return
+  fi
+  start=$(date +%s)
+  if [ "$who" = user ]; then
+    out=$(cd "$REAL_HOME" && timeout "$secs" sudo -u "$REAL_USER" -H env TERM=dumb "$@" 2>&1 </dev/null); rc=$?
+  else
+    out=$(cd /root && timeout "$secs" env TERM=dumb "$@" 2>&1 </dev/null); rc=$?
+  fi
+  elapsed=$(( $(date +%s) - start ))
+  {
+    printf '\n--- %s   [%s]  exit %s  %ss\n' "$label" "$*" "$rc" "$elapsed"
+    printf '%s\n' "$out" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | head -60
+  } | to_report
+  if [ "$rc" = 124 ]; then
+    fail "$label: no answer after ${secs}s (stuck?)"
+    return
+  fi
+  case " $allowed " in
+    *" $rc "*) ;;
+    *) fail "$label: exit code $rc ($(printf '%s\n' "$out" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | grep -m1 . | cut -c1-110 | mask))"; return ;;
+  esac
+  errwords=$(printf '%s\n' "$out" | grep -Eio 'traceback|command not found|syntax error|unbound variable|bad substitution|permission denied|cannot read docker|no such file or directory' | sort -u | tr '\n' ',' | sed 's/,$//')
+  if [ -n "$errwords" ]; then
+    warn "$label: the output contains: $errwords"
+    return
+  fi
+  if [ "$elapsed" -gt 30 ]; then warn "$label: slow (${elapsed}s)"; return; fi
+  ok "$label (${elapsed}s)"
+}
+
+part_commands() {
+  section "Part 1: the commands (read-only ones)"
+  run_cmd "homelab version"          20  user "0" -- homelab version
+  run_cmd "homelab (login screen)"   90  user "0" -- homelab
+  run_cmd "homelab status"           90  user "0" -- homelab status
+  run_cmd "homelab commands"         20  user "0" -- homelab commands
+  run_cmd "homelab docs"             20  user "0" -- homelab docs
+  run_cmd "homelab secrets"          60  user "0" -- homelab secrets
+  run_cmd "homelab bookmark list"    30  user "0" -- homelab bookmark list
+  run_cmd "homelab-setup version"    20  root "0" -- homelab-setup version
+  run_cmd "homelab-setup (checklist)" 180 root "0" -- homelab-setup
+  run_cmd "homelab-setup --details"  180 root "0" -- homelab-setup --details
+  run_cmd "homelab-setup verify"     180 root "0 1" -- homelab-setup verify
+  run_cmd "drives version"           20  root "0" -- drives version
+  run_cmd "drives status"            120 root "0" -- drives status
+  run_cmd "homelab-update version"   20  root "0" -- homelab-update version
+  run_cmd "homelab-update list"      30  user "0 1" -- homelab-update list
+  run_cmd "homelab-sample version"   20  root "0" -- homelab-sample version
+  if [ "$ONLINE" = 1 ]; then
+    run_cmd "homelab-update check (internet)" 300 root "0" -- homelab-update check
+  else
+    info "homelab-update check was not run (it uses the internet). Add --online to include it."
+  fi
+  local repo=""
+  for repo in "$REAL_HOME/My-Home-Lab-" "$REAL_HOME/My-Home-Lab"; do [ -d "$repo/scripts" ] && break || repo=""; done
+  if [ -n "$repo" ] && command -v homelab-check >/dev/null 2>&1; then
+    run_cmd "homelab-check (the repo copy)" 120 user "0" -- homelab-check "$repo"
+  else
+    info "homelab-check was not run (no repository folder in $REAL_HOME)"
+  fi
+  local f
+  for f in hdd-recover homelab-backup homelab-restore-configs; do
+    if command -v "$f" >/dev/null 2>&1; then
+      if bash -n "$(command -v "$f")" 2>/dev/null; then ok "$f is installed and has no syntax errors (not run: it changes things)"
+      else fail "$f has a syntax error"; fi
+    else
+      fail "$f is not installed"
+    fi
+  done
+}
+
+# ---------------------------------------------------------------- part 2: the state of the machine
+mode_of() { stat -c %a "$1" 2>/dev/null; }
+
+check_scripts_vs_repo() {
+  local repo="" f installed
+  for repo in "$REAL_HOME/My-Home-Lab-" "$REAL_HOME/My-Home-Lab"; do [ -d "$repo/scripts" ] && break || repo=""; done
+  if [ -z "$repo" ]; then info "no repository folder in $REAL_HOME, so the installed scripts were not compared with it"; return; fi
+  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample hdd-recover homelab homelab-check; do
+    installed=$(command -v "$f" 2>/dev/null) || continue
+    # the installer puts this machine's user name into its copy, so a plain byte comparison is not enough
+    if cmp -s "$repo/scripts/$f" "$installed"; then continue; fi
+    if [ "$(wc -l <"$repo/scripts/$f")" = "$(wc -l <"$installed")" ] && [ "$(diff "$repo/scripts/$f" "$installed" | grep -c '^[<>]')" -le 4 ]; then continue; fi
+    warn "the installed $f differs from the copy in $repo (it is older or newer; a fresh install or: cd $repo && git pull, then sudo homelab-setup refresh)"
+  done
+}
+
+part_state() {
+  section "Part 2: the state of the machine"
+  local n b pool names f p
+
+  # ---- system
+  if [ -r /etc/os-release ]; then info "$(grep -m1 '^PRETTY_NAME=' /etc/os-release | cut -d'"' -f2), kernel $(uname -r), up $(uptime -p | sed 's/^up //')"; fi
+  local freepct
+  freepct=$(df --output=pcent / | tail -1 | tr -dc 0-9)
+  if [ "${freepct:-0}" -ge 90 ]; then fail "the boot drive is ${freepct}% full"; else ok "boot drive ${freepct}% used"; fi
+  if [ "$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)" -lt 300 ]; then warn "less than 300 MB of memory is available"; else ok "memory is fine"; fi
+
+  # ---- drives and pools
+  for pool in /mnt/storage /mnt/backup; do
+    if mountpoint -q "$pool"; then
+      info "$pool is mounted ($(findmnt -no FSTYPE "$pool"), $(df -h --output=used,size "$pool" | tail -1 | awk '{print $1" of "$2}'))"
+    else
+      info "$pool is not mounted: a plain folder on the boot drive ($(du -sh "$pool" 2>/dev/null | cut -f1 | grep . || echo empty))"
+    fi
+  done
+  names=$(grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null | awk '$2 ~ "^/mnt/disks/(MAIN|BACKUP)[0-9]+$" {print $2}' | xargs -r -n1 basename | tr '\n' ' ')
+  if [ -n "${names// /}" ]; then
+    info "drives assigned to pools in /etc/fstab: $names"
+    info "on a new install nothing should be listed here until you chose the drives with: sudo drives. To take them out: sudo drives release"
+  else
+    ok "no drive is assigned to a pool in /etc/fstab"
+  fi
+  while read -r b; do
+    [ -n "$b" ] || continue
+    if ! mountpoint -q "$b"; then fail "$b is in /etc/fstab but is not mounted (drive unplugged?)"; fi
+  done < <(grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null | awk '$2 ~ "^/mnt/disks/" {print $2}')
+  for pool in /mnt/storage /mnt/backup; do
+    if ! mountpoint -q "$pool" && [ -n "$(ls -A "$pool" 2>/dev/null)" ] && grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null | awk -v p="$pool" '$2 == p' | grep -q .; then
+      fail "$pool has a pool line in /etc/fstab but is not mounted, and the boot drive folder has files in it"
+    fi
+  done
+  if [ -d /var/lib/homelab-drives ] && [ -z "${names// /}" ]; then warn "/var/lib/homelab-drives exists but no drive is assigned (leftover of an earlier install)"; fi
+  if [ -f /etc/homelab-drive-names ]; then info "/etc/homelab-drive-names exists (drive names you chose): $(tr '\n' ';' </etc/homelab-drive-names | cut -c1-120)"; fi
+  if [ -d /etc/systemd/system/docker.service.d ] && ls /etc/systemd/system/docker.service.d/*.conf >/dev/null 2>&1; then
+    info "Docker has extra settings: $(find /etc/systemd/system/docker.service.d -name '*.conf' -printf '%f ')"
+  fi
+
+  # ---- backup
+  if [ -r /var/lib/homelab-backup/last-run ]; then
+    local stamp result dest
+    IFS='|' read -r stamp result dest _ </var/lib/homelab-backup/last-run
+    if [ -n "$dest" ] && [ "$dest" != none ] && [ ! -d "$dest/main" ]; then
+      warn "the last-backup record ($stamp, $result) points to $dest, which has no backup in it (a record left by an earlier install)"
+    else
+      info "last backup: $stamp $result -> $dest"
+    fi
+  else
+    info "no backup has run yet"
+  fi
+  if [ -f /etc/homelab-backup.conf ]; then
+    # shellcheck disable=SC1091
+    ( . /etc/homelab-backup.conf 2>/dev/null; [ -z "${DEST_FALLBACK:-}" ] || [ -d "$(dirname "$DEST_FALLBACK")" ] ) || warn "the fallback backup folder in /etc/homelab-backup.conf does not exist"
+  fi
+  if [ -d "$REAL_HOME/750GB_HDD" ] && [ -d "$REAL_HOME/boot-drive-files" ]; then info "both ~/750GB_HDD and ~/boot-drive-files exist (the older name is from the original server)"; fi
+
+  # ---- Docker and the containers
+  if systemctl is-active --quiet docker 2>/dev/null; then ok "the Docker service is running"; else fail "the Docker service is not running (sudo systemctl status docker)"; fi
+  if id -nG "$REAL_USER" | tr ' ' '\n' | grep -qx docker; then ok "$REAL_USER is in the docker group"; else fail "$REAL_USER is not in the docker group (log out and in again, or: sudo usermod -aG docker $REAL_USER)"; fi
+  local ps
+  if ps=$(timeout 30 docker ps -a --format '{{.Names}}|{{.Status}}' 2>&1); then
+    local total bad
+    total=$(printf '%s\n' "$ps" | grep -c .)
+    bad=$(printf '%s\n' "$ps" | grep -Ei 'exited|restarting|unhealthy|dead|created' | cut -d'|' -f1 | tr '\n' ' ')
+    if [ "$total" -eq 0 ]; then warn "Docker has no containers";
+    elif [ -n "${bad// /}" ]; then fail "containers not running or not healthy: $bad"
+    else ok "all $total containers are running"; fi
+    printf '\n--- docker ps -a\n%s\n' "$ps" | to_report
+  else
+    fail "docker ps did not answer: $(printf '%s' "$ps" | head -1)"
+  fi
+
+  # ---- the web pages of the apps (answered on this machine)
+  local svc port code
+  for svc in "Homepage:3001" "Portainer:9000" "AdGuard Home:3000" "Beszel:8090" "Netdata:19999" "Speedtest Tracker:8088" "FileBrowser:8081" "Immich:2283" "Nextcloud:8082"; do
+    port=${svc##*:}; svc=${svc%:*}
+    code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://127.0.0.1:$port/" 2>/dev/null)
+    case "$code" in
+      200|301|302|303|307|308|401|403) ok "$svc answers on port $port (HTTP $code)" ;;
+      000) fail "$svc does not answer on port $port" ;;
+      *) warn "$svc answers on port $port with HTTP $code" ;;
+    esac
+  done
+
+  # ---- network
+  if command -v tailscale >/dev/null 2>&1; then
+    if timeout 15 tailscale status >/dev/null 2>&1; then ok "Tailscale is connected"; else fail "Tailscale is not connected (sudo tailscale up)"; fi
+  else
+    fail "Tailscale is not installed"
+  fi
+  local p53
+  p53=$(ss -lntupH 2>/dev/null | awk '$5 ~ /:53$/ {print $0}' | head -3)
+  if printf '%s' "$p53" | grep -q 'systemd-resolve'; then fail "systemd-resolved still holds port 53, so AdGuard Home cannot use it"
+  elif [ -z "$p53" ]; then warn "nothing listens on port 53 (AdGuard Home is not answering DNS)"
+  else ok "port 53 is held by something other than systemd-resolved"; fi
+  if getent hosts example.com >/dev/null 2>&1; then ok "this machine resolves names"; else fail "this machine cannot resolve names"; fi
+  info "name server in /etc/resolv.conf: $(awk '/^nameserver/ {print $2}' /etc/resolv.conf | tr '\n' ' ')"
+
+  # ---- the schedule and the login screen
+  local cron
+  cron=$(crontab -l 2>/dev/null | grep -v '^[[:space:]]*#')
+  for n in homelab-sample homelab-update "drives power"; do
+    local cnt; cnt=$(printf '%s\n' "$cron" | grep -c -- "$n")
+    if [ "$cnt" = 0 ]; then warn "root's crontab has no line for: $n"
+    elif [ "$cnt" -gt 1 ]; then warn "root's crontab has $cnt lines for: $n (duplicates)"
+    else ok "root's crontab has one line for: $n"; fi
+  done
+  if printf '%s\n' "$cron" | grep -q homelab-backup; then ok "root's crontab has the backup line"; else info "root's crontab has no backup line (fine until a backup drive is set up)"; fi
+  if [ -r "$REAL_HOME/.bashrc" ]; then
+    local blocks; blocks=$(grep -c '# >>> homelab login display >>>' "$REAL_HOME/.bashrc")
+    if [ "$blocks" = 1 ]; then ok "the login screen is set up once"; elif [ "$blocks" = 0 ]; then warn "the login screen is not set up in .bashrc"; else warn "the login screen block is in .bashrc $blocks times"; fi
+  fi
+
+  # ---- secrets and permissions
+  if [ -f /root/.homelab-setup/secrets.env ]; then
+    if [ "$(mode_of /root/.homelab-setup/secrets.env)" = 600 ]; then ok "the secrets file is root-only (600)"; else fail "the secrets file has mode $(mode_of /root/.homelab-setup/secrets.env), it should be 600"; fi
+  else
+    info "no secrets file (this machine was not built by the installer)"
+  fi
+  if [ -f "$REAL_HOME/homepage-config/services.yaml" ] && [ "$(stat -c %U "$REAL_HOME/homepage-config/services.yaml")" != "$REAL_USER" ]; then warn "the Homepage config files are not owned by $REAL_USER"; fi
+  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-setup hdd-recover homelab; do
+    p=$(command -v "$f" 2>/dev/null) || continue
+    [ -x "$p" ] || fail "$p is not executable"
+    if grep -q $'\r' "$p" 2>/dev/null; then fail "$p has Windows line endings"; fi
+  done
+  check_scripts_vs_repo
+
+  # ---- ports that listen on all interfaces
+  info "ports open to the whole network: $(ss -lntH 2>/dev/null | awk '$4 ~ /^(0\.0\.0\.0|\*|\[::\]):/ {n=split($4,a,":"); print a[n]}' | sort -un | tr '\n' ' ')"
+}
+
+# ---------------------------------------------------------------- run it
+emit "homelab-selftest $VERSION   $(date '+%F %T')   machine: $(hostname)   user: $REAL_USER"
+part_commands
+part_state
+
+section "Result"
+emit "  $N_OK ok, $N_INFO info, $N_WARN warnings, $N_FAIL failures"
+if [ ${#ISSUES[@]} -gt 0 ]; then
+  emit ""
+  emit "Look at these:"
+  for n in "${ISSUES[@]}"; do emit "  $n"; done
+fi
+emit ""
+emit "Full report with the output of every command: $REPORT"
+[ "$N_FAIL" -eq 0 ]

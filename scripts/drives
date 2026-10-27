@@ -333,6 +333,13 @@ name_store_put() {   # name_store_put LABEL "name"
   rm -f "$tmp"
 }
 
+name_store_del() {   # name_store_del LABEL
+  [ -r "$NAME_STORE" ] || return 0
+  local tmp; tmp=$(mktemp) || return 0
+  awk -F'|' -v k="$1" '$1 != k' "$NAME_STORE" >"$tmp" 2>/dev/null; cat "$tmp" >"$NAME_STORE" 2>/dev/null || true
+  rm -f "$tmp"
+}
+
 name_store_get() { [ -r "$NAME_STORE" ] && awk -F'|' -v k="$1" '$1 == k {print $2; exit}' "$NAME_STORE"; return 0; }
 
 branch_base_name() {   # the name of one pool drive, before numbering: chosen, else scanned now, else the one kept, else the label
@@ -527,6 +534,28 @@ need_tools() {
   fi
 }
 
+# ---------- files that sit in a pool folder on the boot drive ----------
+# Before any drive is assigned, /mnt/storage is a plain folder on the boot drive and the services already put folders
+# (and maybe files) in it. A pool cannot be mounted over a folder that has things in it, so when the first drive of a pool
+# is connected, whatever is in the folder moves onto the new drive first.
+absorb_plain_pool() {   # absorb_plain_pool main|backup /mnt/disks/MAIN1  (the drive is already mounted)
+  local role=$1 drive=$2 pool
+  pool=$(role_pool "$role")
+  mountpoint -q "$pool" && return 0
+  [ -d "$pool" ] || return 0
+  chattr -i "$pool" 2>/dev/null || true
+  [ -n "$(ls -A "$pool" 2>/dev/null)" ] || return 0
+  say "$pool already holds files on the boot drive ($(human "$(du -sb "$pool" 2>/dev/null | awk '{print $1}')")). They move onto the new drive first."
+  rsync -aH --numeric-ids --ignore-existing --exclude=/lost+found "$pool/" "$drive/" || { warn "Copying the files to the new drive failed. Nothing was removed."; return 1; }
+  if rsync -aHn --numeric-ids --ignore-existing --itemize-changes --exclude=/lost+found "$pool/" "$drive/" | grep -q '^[>c]'; then
+    warn "Not every file reached the new drive. Nothing was removed from the boot drive."
+    return 1
+  fi
+  find "$pool" -mindepth 1 -delete 2>/dev/null || true
+  log "moved the files of $pool on the boot drive onto $drive"
+  return 0
+}
+
 # ---------- connect ----------
 pick_new_disk() {
   local -a items=() devs=()
@@ -614,6 +643,12 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase]
   fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"
   sd_reload
   if ! mount_fstab "$mp"; then fstab_rollback; die "Could not mount $part at $mp. fstab was restored."; fi
+  if ! absorb_plain_pool "$role" "$mp"; then
+    fstab_rollback
+    pool_umount "$mp"
+    start_containers
+    die "The files in $(role_pool "$role") could not be moved to the new drive. fstab was restored."
+  fi
   if [ "$mode" = erase ] && [ "$role" = main ]; then
     id -u "$OWNER" >/dev/null 2>&1 && chown "$OWNER:$OWNER" "$mp"
   fi
@@ -1167,6 +1202,61 @@ test_cleanup() {
   say "Test setup removed."
 }
 
+# ---------- release all drives ----------
+release_flow() {   # take every drive out of both pools; the files on the drives are not touched
+  local mp p dir
+  local -a all=()
+  mapfile -t all < <(all_branches)
+  if [ ${#all[@]} -eq 0 ]; then
+    say "No drive is assigned to a pool, so there is nothing to release."
+    return 0
+  fi
+  say "These drives are assigned to the pools:"
+  for mp in "${all[@]}"; do say "  - $(branch_name "$mp")  ($(branch_role "$mp"))"; done
+  say ""
+  say "Releasing takes every drive out of both pools. The files on the drives are NOT touched and nothing is erased."
+  say "Afterwards $MAIN_POOL and $BACKUP_POOL are plain folders on the boot drive, and you choose the drives again with:"
+  say "  sudo drives     (Connect a new drive; for a drive with files, choose 'Keep the data')"
+  say "Immich, Nextcloud and the other services that use the storage are stopped for a minute."
+  yn "Release all drives?" || { say "Cancelled. Nothing was changed."; return 1; }
+
+  stop_containers "$MAIN_POOL" "$BACKUP_POOL" "$DISKS_DIR"
+  sync
+  for p in "$BACKUP_POOL" "$MAIN_POOL"; do
+    if mountpoint -q "$p" && ! pool_umount "$p"; then
+      start_containers
+      die "Could not unmount $p (something is using it). Nothing was changed."
+    fi
+  done
+  fstab_snapshot
+  for mp in "${all[@]}"; do
+    mountpoint -q "$mp" && { umount "$mp" 2>/dev/null || umount -l "$mp"; }
+    fstab_remove_mp "$mp"
+  done
+  [ -n "$(branches_of main)" ] || fstab_remove_mp "$MAIN_POOL"
+  [ -n "$(branches_of backup)" ] || fstab_remove_mp "$BACKUP_POOL"
+  sd_reload
+  for mp in "${all[@]}"; do
+    name_store_del "$(basename "$mp")"
+    chattr -i "$mp" 2>/dev/null || true
+    rmdir "$mp" 2>/dev/null || true
+  done
+  for dir in "$MAIN_POOL" "$BACKUP_POOL"; do
+    mountpoint -q "$dir" && continue
+    chattr -i "$dir" 2>/dev/null || true
+    mkdir -p "$dir"
+  done
+  # the folders the services expect, so they keep running on the boot drive until a drive is chosen again
+  mkdir -p "$MAIN_POOL/immich" "$MAIN_POOL/nextcloud"
+  if id -u "$OWNER" >/dev/null 2>&1; then chown "$OWNER:$OWNER" "$MAIN_POOL/immich"; fi
+  chown 33:33 "$MAIN_POOL/nextcloud" 2>/dev/null || true
+  start_containers
+  log "released all pool drives (${#all[@]})"
+  say ""
+  say "Done. No drive is assigned to a pool now. Their files are still on the drives."
+  say "Choose the drives you want with:  sudo drives"
+}
+
 # ---------- fill order ----------
 pool_fills_in_order() {   # pool_fills_in_order /mnt/storage -> true when its fstab line already uses category.create=ff
   fstab_active | awk -v m="$1" '$2 == m && /category\.create=ff/ {f = 1} END {exit !f}'
@@ -1224,6 +1314,7 @@ menu() {
     say "  7) Recover after an unplug (same as hdd-recover)"
     say "  8) Replace a dead drive (restores the missing files from the backup)"
     say "  9) Fill drives one at a time (update an older pool)"
+    say " 10) Take all drives out of the pools (the files stay on the drives)"
     say "  0) Quit"
     c=$(ask "Choose: ")
     case "$c" in
@@ -1236,6 +1327,7 @@ menu() {
       7) recover_flow; sync_filebrowser ;;
       8) replace_flow; sync_filebrowser ;;
       9) fillorder_flow ;;
+      10) release_flow; sync_filebrowser ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -1258,11 +1350,12 @@ main() {
     recover)      recover_flow; sync_filebrowser ;;
     replace)      replace_flow; sync_filebrowser ;;
     fillorder)    fillorder_flow ;;
+    release)      release_flow; sync_filebrowser ;;
     restore)      restore_flow; sync_filebrowser ;;
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;
-    *) say "Usage: sudo drives [menu|status|connect|disconnect|move|adopt|power|recover|replace|fillorder|restore|version]" ;;
+    *) say "Usage: sudo drives [menu|status|connect|disconnect|move|adopt|power|recover|replace|fillorder|release|restore|version]" ;;
   esac
 }
 
