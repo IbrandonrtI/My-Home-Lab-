@@ -2,7 +2,7 @@
 # Stack name in Portainer: filebrowser. Keep the stack AND the service named "filebrowser":
 # the container is then called filebrowser-filebrowser-1, which hdd-recover and the checks expect.
 # Port:    8081 (web interface).
-# Folders: /home/your-username/750GB_HDD (boot drive) and /mnt/storage/filebrowser (main pool), as on the original server.
+# Folders: /home/your-username/boot-drive-files (boot drive) and /mnt/storage/filebrowser (main pool), as on the original server.
 #          On a new machine the installer replaces these two lines with one line per drive (the system drive's share,
 #          main-storage/<drive> and backup-storage/<drive>), named after the drives. Names: /etc/homelab-drive-names.
 #          Refresh after a drive change: sudo homelab-setup filebrowser
@@ -15,7 +15,7 @@ services:
     ports:
       - "8081:80"
     volumes:
-      - "/home/your-username/750GB_HDD:/srv/750GB_HDD"
+      - "/home/your-username/boot-drive-files:/srv/boot-drive-files"
       - "/mnt/storage/filebrowser:/srv/hdd"
       - filebrowser_data:/database
 
