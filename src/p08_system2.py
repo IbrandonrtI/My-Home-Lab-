@@ -58,7 +58,14 @@ class BackupConf(Step):
     needs = ("scripts",)
 
     def probe(self):
-        return "done" if os.path.exists(P("/etc/homelab-backup.conf")) else "todo"
+        path = P("/etc/homelab-backup.conf")
+        if not os.path.exists(path):
+            return "todo"
+        # a file left by an earlier install can name ~/750GB_HDD, a folder this machine does not have
+        m = re.search(r'DEST_FALLBACK="([^"]*)"', read_file(path))
+        if m and "/750GB_HDD/" in m.group(1) and not os.path.isdir(P(Ctx.home + "/750GB_HDD")):
+            return "todo"
+        return "done"
 
     def run(self):
         write_file(P("/etc/homelab-backup.conf"), 'DEST_FALLBACK="%s/backup-interim"\n' % boot_share_dir(), 0o644)
