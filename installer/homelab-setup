@@ -541,8 +541,21 @@ def have(cmd):
 
 
 def docker(*args, **kw):
-    """Run a docker command and return (exit code, output)."""
+    """Run a docker command and return (exit code, output). A docker command that hangs (a stuck Docker service)
+    is stopped after 3 minutes instead of freezing the installer for ever."""
+    kw.setdefault("timeout", 180)
     return run(["docker"] + list(args), **kw)
+
+
+def docker_answers():
+    """True when the Docker service answers a plain question within 30 seconds."""
+    return docker("info", "--format", "{{.ServerVersion}}", timeout=30)[0] == 0
+
+
+DOCKER_DOWN = ("Docker is not answering, so the apps cannot be reached or checked. Look at it with:\n"
+               "      $ sudo systemctl status docker\n"
+               "      $ sudo journalctl -u docker -n 40 --no-pager\n"
+               "      Then run `sudo homelab-setup refresh` again.")
 
 
 def apt_install(pkgs):
@@ -1291,6 +1304,16 @@ def pool_drives(role):
     if role == "main":
         return ["/mnt/storage"] if os.path.ismount(P("/mnt/storage")) or os.environ.get("HLS_MOUNTED") == "1" else []
     return ["/mnt/backup"] if backup_mounted() else []
+
+
+def fstab_pool_drives():
+    """Mount points of drives that /etc/fstab already assigns to the pools (left by an earlier install): /mnt/disks/MAIN1 ..."""
+    found = []
+    for line in read_file(P("/etc/fstab")).splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and not parts[0].startswith("#") and re.fullmatch(r"/mnt/disks/(MAIN|BACKUP)\d+", parts[1]):
+            found.append(parts[1])
+    return found
 
 
 def unique_names(items):
@@ -2604,6 +2627,12 @@ def ask_restore_plan():
     """Install-time question: restore from a backup? Returns nothing; saves the choice."""
     if "restore" in State.data:
         return
+    old = fstab_pool_drives()
+    if old:
+        out("")
+        warn("This machine already has drive(s) set up for the pools, left by an earlier install (%s). The installer never changes drives, "
+             "so they stay in the pool and mount at every boot. To start with no drive in a pool, run `sudo drives release` once the install is done "
+             "(the files on the drives are not touched), then choose the drives you want with `sudo drives`." % ", ".join(sorted(old)))
     State.data["restore"] = {"path": "", "configs": False, "data": False}
     if Opt.no_restore:
         State.save()
@@ -2836,6 +2865,8 @@ class ImmichAdmin(Step):
         if Opt.dry:
             out("      would create the Immich admin %s with the email address entered at install" % Ctx.admin)
             return
+        if not docker_answers():
+            raise Abort(DOCKER_DOWN)
         pw = need_password("to create the Immich admin account")
         wait_for(lambda: http("GET", url("immich", "/api/server/ping"), timeout=8)[0] == 200, "Immich to answer", 300)
         st, js, _ = http("POST", url("immich", "/api/auth/admin-sign-up"),
@@ -3309,7 +3340,7 @@ _register_widgets()
 # ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
            ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"),
-           ("hdd-recover", "/usr/local/bin"), ("homelab", "/usr/local/bin"), ("homelab-check", "/usr/local/bin")]
+           ("homelab-selftest", "/usr/local/sbin"), ("hdd-recover", "/usr/local/bin"), ("homelab", "/usr/local/bin"), ("homelab-check", "/usr/local/bin")]
 
 
 def render_script(name):
@@ -4104,6 +4135,8 @@ def cmd_refresh():
         return
     if not State.exists():
         raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    if have("docker") and not Opt.dry and not docker_answers():
+        raise Abort(DOCKER_DOWN)
     res = evaluate()
     Live.begin_run(len([s for s in STEPS if s.kind == "auto" and res[s.id].state in ("todo", "failed", "blocked")]))
     rule("Checking and continuing")
