@@ -3813,6 +3813,11 @@ def ask_weather(a):
     warn("No weather city was chosen. The card keeps its default location (New York).")
 
 
+def is_ipv4(text):
+    """Four numbers from 0 to 255 with dots, like 192.168.1.20."""
+    return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", text)) and all(int(x) <= 255 for x in text.split("."))
+
+
 def ask_answers():
     """Ask the first questions of an install: admin name, email, time zone, city, LAN address and the password."""
     a = State.data["answers"]
@@ -3826,8 +3831,9 @@ def ask_answers():
     a["tz"] = ask("Time zone", a.get("tz") or Ctx.tz)
     ask_weather(a)
     a["lan"] = ask("This machine's LAN address (reserve it in your router so it does not change)", a.get("lan") or Ctx.lan)
-    if not re.fullmatch(r"\d+\.\d+\.\d+\.\d+", a["lan"]):
-        raise Abort("That is not an IPv4 address.")
+    while not is_ipv4(a["lan"].strip()):
+        a["lan"] = ask("That is not an address like 192.168.1.20. Enter it again", "")
+    a["lan"] = a["lan"].strip()
     State.save()
     Ctx.detect()
     if not Runtime.password:
