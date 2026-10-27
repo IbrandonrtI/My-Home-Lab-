@@ -1,4 +1,4 @@
-# Build guide for my hardwear 
+# Build guide for my hardware
 
 This is how I built the lab, one service at a time, in the order that worked for me. The installer (`setup.sh`, see [INSTALL.md](../INSTALL.md)) does the same steps for you. Use this guide if you want to see what the installer does, build only part of the lab, or fix something yourself.
 
