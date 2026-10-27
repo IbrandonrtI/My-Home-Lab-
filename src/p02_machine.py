@@ -485,6 +485,18 @@ def nice_drive_name(mountpoint, model, size):
     return clean_folder_name(" ".join(p for p in parts if p))
 
 
+def boot_section_size(mountpoint):
+    """Size in bytes of the file behind a boot drive section (the first column of its /etc/fstab line); 0 when unknown."""
+    for line in read_file(P("/etc/fstab")).splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and not parts[0].startswith("#") and parts[1] == mountpoint:
+            try:
+                return os.path.getsize(P(parts[0]))
+            except OSError:
+                return 0
+    return 0
+
+
 def drive_name(mountpoint, fallback, prefer_label=False):
     """The folder name for a drive: a name you chose (/etc/homelab-drive-names), else the drive's own name
     (its file system label for the boot drive, else its size, maker and HDD or SSD, like "1 TB Samsung HDD"), else the fallback."""
@@ -492,6 +504,9 @@ def drive_name(mountpoint, fallback, prefer_label=False):
     over = drive_name_overrides()
     if base in over:
         return over[base]
+    if base.endswith("BOOT"):                        # a boot drive section: "100 GB boot drive section", from the size of its file
+        size = boot_section_size(mountpoint)
+        return "%s boot drive section" % pretty_size(size) if size else "boot drive section"
     model, size, label = disk_facts(mountpoint)
     generic = re.fullmatch(r"(MAIN|BACKUP)\d*", label or "")
     if prefer_label and label and not generic and clean_folder_name(label):
@@ -509,8 +524,10 @@ def pool_drives(role):
     """Mount points of the drives that are connected for a role (main or backup), as /mnt/disks/MAIN1 ..."""
     import glob
     prefix = "MAIN" if role == "main" else "BACKUP"
-    found = sorted((d[len(ROOT):] if ROOT and d.startswith(ROOT) else d for d in glob.glob(P("/mnt/disks/" + prefix + "[0-9]*"))),
-                   key=lambda d: int(re.sub(r"\D", "", os.path.basename(d)) or 0))
+    # real drives in order (MAIN1, MAIN2, ...); the boot drive section (MAINBOOT) is always last, like in the pool itself
+    found = sorted((d[len(ROOT):] if ROOT and d.startswith(ROOT) else d
+                    for d in glob.glob(P("/mnt/disks/" + prefix + "[0-9]*")) + glob.glob(P("/mnt/disks/" + prefix + "BOOT"))),
+                   key=lambda d: (d.endswith("BOOT"), int(re.sub(r"\D", "", os.path.basename(d)) or 0)))
     found = [d for d in found if is_mount(d)]
     if found:
         return found
@@ -525,7 +542,7 @@ def fstab_pool_drives():
     found = []
     for line in read_file(P("/etc/fstab")).splitlines():
         parts = line.split()
-        if len(parts) >= 2 and not parts[0].startswith("#") and re.fullmatch(r"/mnt/disks/(MAIN|BACKUP)\d+", parts[1]):
+        if len(parts) >= 2 and not parts[0].startswith("#") and re.fullmatch(r"/mnt/disks/(MAIN|BACKUP)(\d+|BOOT)", parts[1]):
             found.append(parts[1])
     return found
 
