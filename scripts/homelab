@@ -87,15 +87,25 @@ suggest() {   # suggest PRIORITY COMMAND WHY  (the same command is kept only onc
   for e in "${SUGG[@]}"; do [[ "$e" == *"|$2|"* ]] && return 0; done
   SUGG+=("$1|$2|$3")
 }
+only_boot_section() {   # only_boot_section MAIN|BACKUP: this pool is made of a boot drive section and no real drive
+  local pfx=$1 d dir="${HOMELAB_DISKS_DIR:-/mnt/disks}"
+  for d in "$dir/$pfx"[0-9]*; do [ -e "$d" ] && findmnt -n "$d" >/dev/null 2>&1 && return 1; done
+  findmnt -n "$dir/${pfx}BOOT" >/dev/null 2>&1
+}
+
 suggestions() {
-  local max="${HOMELAB_SUGGEST_MAX:-4}" n=0 c why
-  # fill up with everyday commands when little needs doing
+  local max="${HOMELAB_SUGGEST_MAX:-6}" n=0 c why
+  # when little needs doing, fill up with the commands used most often (the ones that matter now come first)
+  suggest 6 "sudo drives status" "pools, drives, temperatures and the last backup"
+  suggest 6 "sudo homelab-backup" "run a backup now"
+  suggest 7 "sudo homelab-update check" "look online for newer container images"
+  suggest 7 "docker ps" "what is running right now"
+  suggest 7 "sudo homelab-selftest" "check everything and look for problems or leftovers"
+  suggest 8 "sudo drives" "menu: connect or remove drives, or use part of the boot drive for a pool"
   if [ -d "$HOMEPAGE_DIR" ]; then
     suggest 8 "homelab theme" "change the dashboard's background and card colours"
     suggest 8 "homelab bookmark add NAME URL" "add a bookmark to the dashboard, with its logo"
   fi
-  suggest 9 "sudo homelab-update check" "look online for newer container images"
-  suggest 9 "sudo drives status" "pools, drives, temperatures and the last backup"
   suggest 9 "homelab commands" "every command, in groups"
   suggest 9 "homelab docs" "list the sections of the guides"
   rule "Suggested Commands"
@@ -159,27 +169,47 @@ hint_line() {
 }
 
 commands() {
-  section "Storage"
-  cmd "sudo drives"                    "menu: connect, disconnect or check drives"
-  cmd "sudo drives status"             "pools, drives, SMART health, last backup"
+  section "Every day"
+  cmd "homelab"                        "this machine at a glance: status and what to do next"
+  cmd "sudo drives status"             "pools, drives, SMART health, free space, last backup"
+  cmd "sudo homelab-backup"            "run the backup now (about a minute, longer after many new files)"
+  cmd "sudo homelab-update check"      "only look online for newer container images (changes nothing)"
+  cmd "docker ps"                      "what is running right now"
+  cmd "sudo homelab-selftest"          "check everything and look for problems or leftovers (report saved in your home)"
+  section "Storage and drives"
+  cmd "sudo drives"                    "menu: connect, remove or move drives, boot drive section, and more"
+  cmd "sudo drives bootsection"        "use part of the boot drive for a pool, with a size limit (it is used last)"
+  cmd "sudo hdd-recover"               "after an unplug or power cut: remount, restart containers"
   cmd "sudo drives replace"            "a drive died: swap it, restore the files from the backup"
   cmd "sudo drives power"              "re-apply the drive power settings"
   cmd "sudo drives fillorder"          "make an older pool fill one drive at a time"
   cmd "sudo drives release"            "take all drives out of the pools (the files stay on the drives)"
-  cmd "sudo hdd-recover"               "after an unplug or power cut: remount, restart containers"
+  cmd "findmnt /mnt/storage"           "is the main pool mounted (one path per command)"
+  cmd "df -h /"                        "free space on the boot drive"
   section "Backup"
-  cmd "sudo homelab-backup"            "run the backup now (about a minute, longer after many new files)"
+  cmd "sudo homelab-backup"            "run the backup now"
   cmd "sudo tail -f /var/log/homelab-backup.log" "watch the backup (Ctrl+C to leave)"
-  section "Container updates"
+  cmd "sudo homelab-restore-configs check" "preview putting the saved configs back on a rebuilt server"
+  section "Containers and updates"
   cmd "sudo homelab-update"            "check, download, back up, then list what to update"
-  cmd "sudo homelab-update check"      "only look online: downloads nothing, changes nothing"
   cmd "homelab-update list"            "what is waiting, and in which order to update"
   cmd "sudo homelab-update clean"      "delete old saved versions and leftover images (asks first)"
-  section "Rebuild and safety"
-  cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
-  cmd "sudo homelab-restore-configs check" "preview putting the saved configs back on a rebuilt server"
-  cmd "homelab-check"                  "check the GitHub files before you upload them"
-  cmd "sudo homelab-selftest"          "run every read-only command and look for bugs and leftovers (report saved in your home)"
+  cmd "docker ps --format \"table {{.Names}}\\t{{.Status}}\"" "what is running, with how healthy it is"
+  cmd "docker logs --tail 50 NAME"     "the last 50 lines a container printed"
+  cmd "docker restart NAME"            "restart one container"
+  cmd "docker stats --no-stream"       "CPU and memory of each container"
+  section "System and network"
+  cmd "tailscale status"               "who is on your private network"
+  cmd "sudo apt update && sudo apt upgrade" "install the waiting Linux Mint updates"
+  cmd "sudo reboot"                    "restart the server (afterwards: sudo drives status)"
+  section "Homepage dashboard"
+  cmd "homelab theme"                  "show the look, and how to change the background and card colours"
+  cmd "homelab theme background URL"   "a new background picture (a web address or a file on this machine)"
+  cmd "homelab theme cards blue 40"    "card colour, and how solid the cards are (0 to 100)"
+  cmd "homelab theme reset"            "the shipped look again"
+  cmd "homelab bookmark add NAME URL"  "add a bookmark; its logo is downloaded as an SVG from Brandfetch"
+  cmd "homelab bookmark list"          "the bookmarks on the dashboard"
+  cmd "homelab bookmark remove NAME"   "take a bookmark away"
   if command -v homelab-setup >/dev/null 2>&1; then
     section "Setup checklist"
     cmd "sudo homelab-setup"             "the checklist: what is done and what is left"
@@ -192,27 +222,10 @@ commands() {
     cmd "sudo homelab-setup install"     "set everything up, or carry on after a failed step (safe to repeat)"
     cmd "sudo homelab-setup secrets"     "show the generated passwords and keys once more"
   fi
-  section "Homepage dashboard"
-  cmd "homelab theme"                  "show the look, and how to change the background and card colours"
-  cmd "homelab theme background URL"   "a new background picture (a web address or a file on this machine)"
-  cmd "homelab theme cards blue 40"    "card colour, and how solid the cards are (0 to 100)"
-  cmd "homelab theme reset"            "the shipped look again"
-  cmd "homelab bookmark add NAME URL"  "add a bookmark; its logo is downloaded as an SVG from Brandfetch"
-  cmd "homelab bookmark list"          "the bookmarks on the dashboard"
-  cmd "homelab bookmark remove NAME"   "take a bookmark away"
-  section "Docker, everyday"
-  cmd "docker ps --format \"table {{.Names}}\\t{{.Status}}\"" "what is running"
-  cmd "docker logs --tail 50 NAME"     "the last 50 lines a container printed"
-  cmd "docker restart NAME"            "restart one container"
-  cmd "docker stats --no-stream"       "CPU and memory of each container"
-  section "Network and system"
-  cmd "tailscale status"               "who is on your private network"
-  cmd "findmnt /mnt/storage"           "is the pool mounted (one path per command)"
-  cmd "df -h /"                        "free space on the boot drive"
-  cmd "sudo apt update && sudo apt upgrade" "install the waiting Linux Mint updates"
-  cmd "sudo reboot"                    "restart the server (afterwards: sudo drives status)"
+  section "Rebuild and safety"
+  cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
+  cmd "homelab-check"                  "check the GitHub files before you upload them"
   section "This screen and the guides"
-  cmd "homelab"                        "login screen: summary and status"
   cmd "homelab commands"               "this list"
   cmd "homelab status"                 "only the status block"
   cmd "homelab docs"                   "sections of the README and the guides in docs/"
@@ -825,7 +838,12 @@ status() {
   # main pool
   if command -v findmnt >/dev/null 2>&1 && findmnt -n "$MAIN_POOL" >/dev/null 2>&1; then
     read -r used size < <(df -h --output=used,size "$MAIN_POOL" 2>/dev/null | awk 'NR==2 {print $1, $2}')
-    ok "Main pool" "mounted, ${used:-?} used of ${size:-?}"
+    if only_boot_section MAIN; then
+      warn "Main pool" "mounted, ${used:-?} used of ${size:-?}, but only on a section of the boot drive (no separate drive: sudo drives)"
+      suggest 3 "sudo drives" "the main pool is only a section of the boot drive: connect a real drive"
+    else
+      ok "Main pool" "mounted, ${used:-?} used of ${size:-?}"
+    fi
   elif [ -e "$STATE_DIR/no-data-drive" ]; then
     # written by homelab-setup while no data drive has been set up (or when you skipped that step): not a failure
     warn "Main pool" "no data drive set up yet (when you have one: sudo drives)"
@@ -837,9 +855,15 @@ status() {
 
   # backup pool
   if command -v findmnt >/dev/null 2>&1 && findmnt -n "$BACKUP_POOL" >/dev/null 2>&1; then
-    ok "Backup pool" "mounted"
+    if only_boot_section BACKUP; then
+      warn "Backup pool" "mounted, but only on a section of the boot drive (it does not survive a boot drive failure)"
+      suggest 4 "sudo drives" "connect a real backup drive: the backup is on the boot drive now"
+    else
+      ok "Backup pool" "mounted"
+    fi
   else
     warn "Backup pool" "not connected (the backup goes to the boot drive)"
+    suggest 5 "sudo drives" "connect a backup drive (or use part of the boot drive: sudo drives bootsection)"
   fi
 
   # last backup
@@ -908,6 +932,17 @@ status() {
 
   # boot drive space
   line=$(df -h --output=pcent,avail / 2>/dev/null | awk 'NR==2 {print $1 " used, " $2 " free"}')
+  local sec_dir="${HOMELAB_BOOT_SECTION_DIR:-/var/lib/homelab-boot-sections}" sec_gb="" f free_b
+  for f in "$sec_dir"/*.img; do [ -f "$f" ] && sec_gb="$sec_gb $(( $(stat -c %s "$f") / 1000000000 ))"; done
+  if [ -n "$sec_gb" ]; then
+    line="$line; sections for pools:$(printf '%s' "$sec_gb" | sed 's/ \([0-9]*\)/ \1 GB,/g; s/,$//')"
+    free_b=$(df -B1 --output=avail / 2>/dev/null | awk 'NR==2 {print $1}')
+    if [ -n "$free_b" ] && [ "$free_b" -lt 150000000000 ]; then
+      warn "Boot drive" "$line -> under 150 GB free; free some space (sudo drives status)"
+      suggest 2 "sudo drives status" "the boot drive is getting full and a pool uses part of it"
+      return 0
+    fi
+  fi
   [ -n "$line" ] && ok "Boot drive" "$line"
 }
 
