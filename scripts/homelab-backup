@@ -18,7 +18,7 @@ export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/loc
 
 SRC="/mnt/storage"
 DEST_POOL="/mnt/backup"
-DEST_FALLBACK=""                    # e.g. /home/your-username/750GB_HDD/backup-interim (used only if the pool is not mounted)
+DEST_FALLBACK=""                    # e.g. /home/your-username/boot-drive-files/backup-interim (used only if the pool is not mounted)
 RETENTION_DAYS=30
 LOGFILE="/var/log/homelab-backup.log"
 STATUS_FILE="/var/lib/homelab-backup/last-run"

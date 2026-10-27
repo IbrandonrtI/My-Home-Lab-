@@ -1,7 +1,7 @@
 # /etc/homelab-backup.conf  (optional; every line is a shell setting)
 #
 # Until the backup drives exist, back up into a folder on the boot drive:
-DEST_FALLBACK="/home/your-username/750GB_HDD/backup-interim"   # replace your-username with your own
+DEST_FALLBACK="/home/your-username/boot-drive-files/backup-interim"   # replace your-username with your own
 #
 # Delete the DEST_FALLBACK line once /mnt/backup is a mounted pool.
 # Other settings you can change:
