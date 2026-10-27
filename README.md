@@ -1,6 +1,6 @@
 # My Home Lab
 
-# TLDR 
+# Install 
 Run this command to install this repo and homelab setup on a new Linux Mint 22 or Ubuntu 24.04 machine with internet (about 30 to 60 minutes and 10 GB of downloads):
 
 ```bash
