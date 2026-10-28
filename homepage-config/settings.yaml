@@ -1,6 +1,7 @@
 # Homepage settings. Tested with Homepage 2.6.
 # The background picture below is loaded from Unsplash every time the page opens. To keep the dashboard
 # working offline, save a picture into the config folder's images/ folder and use  image: /images/yourfile.jpg
+# (the homepage stack must mount that folder at /app/public/images, and Homepage must be restarted after a new picture)
 title: Home Lab
 headerStyle: boxedWidgets
 theme: dark
