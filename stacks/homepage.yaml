@@ -2,6 +2,8 @@
 # Stack name in Portainer: homepage
 # Port:    3001 (web interface).
 # Config:  /home/your-username/homepage-config (copy homepage-config/ from this repository into it first).
+# Pictures: /home/your-username/homepage-config/images (create it: mkdir -p ~/homepage-config/images). Homepage only shows
+#          local pictures (/images/name.jpg) from a folder that is mounted at /app/public/images.
 # Edit HOMEPAGE_ALLOWED_HOSTS: Homepage refuses requests from addresses that are not listed.
 # Security note: the Docker socket and the host's root folder are mounted so the widgets can read container and
 # disk status. The ":ro" on the socket does NOT stop write requests to the Docker API, so treat Homepage as a
@@ -17,6 +19,7 @@ services:
       HOMEPAGE_ALLOWED_HOSTS: 192.168.X.X:3001,pc.your-tailnet.ts.net:1000,localhost:3001
     volumes:
       - /home/your-username/homepage-config:/app/config
+      - /home/your-username/homepage-config/images:/app/public/images   # your own pictures (homelab theme background FILE); restart Homepage after adding one
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /:/host:ro
       - /mnt/storage:/mnt/storage:ro
