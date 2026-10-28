@@ -1443,6 +1443,28 @@ def mount_types(mountinfo):
     return types
 
 
+PILL_BEGIN = "/* >>> homelab pill layout"
+PILL_END = "/* <<< homelab pill layout */"
+
+
+def css_block(text):
+    """The marked 'pill layout' block of a custom.css text (empty when there is none)."""
+    a = text.find(PILL_BEGIN)
+    b = text.find(PILL_END, a) if a >= 0 else -1
+    return text[a:b + len(PILL_END)] if a >= 0 and b >= 0 else ""
+
+
+def css_with_block(css, block):
+    """custom.css with the shipped pill layout block: replaces the block that is there, or adds it at the end.
+    Everything outside the block is left as it is."""
+    if not block:
+        return css
+    old = css_block(css)
+    if old:
+        return css.replace(old, block, 1)
+    return css.rstrip("\n") + "\n\n" + block + "\n"
+
+
 def stack_text(name):
     """The stack file for `name` with this machine's values filled in."""
     fn = STACKS[name][0]
@@ -4385,12 +4407,28 @@ def homepage_sees_pools():
     return True
 
 
+def apply_pill_layout():
+    """Put the shipped 'pill layout' block (taller top pills, search bar lower) into this machine's custom.css."""
+    dst = hp_path("custom.css")
+    shipped = css_block(read_file(repo_file("homepage-config", "custom.css")))
+    cur = read_file(dst)
+    if not shipped or not cur:
+        return
+    new = css_with_block(cur, shipped)
+    if new == cur:
+        return
+    rule("Homepage")
+    out("  Updating the look of the top pills in custom.css (taller pills, search bar a little lower). Reload the page to see it")
+    write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
+
+
 def cmd_homepage():
     """Make Homepage see the Main and Backup pool (the two drive pills). sudo drives calls this by itself."""
     load_all()
     if "homepage" not in containers_all():
         say("Homepage is not installed on this machine.")
         return
+    apply_pill_layout()
     changed = False
     manual = ("In Portainer open the stack 'homepage' > Editor. Replace the lines that mount /mnt/storage and /mnt/backup with this one line "
               "under volumes, then click Update the stack:\n      - %s" % HOMEPAGE_PARENT_LINE)
@@ -4569,7 +4607,7 @@ Commands:
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
-  homepage                 let Homepage see the Main and Backup pool (the two drive pills)
+  homepage                 let Homepage see the Main and Backup pool, and update the look of the top pills
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
