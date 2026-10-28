@@ -320,6 +320,8 @@ def cmd_install():
             Ctx.admin = Ctx.user.capitalize()
         if not Ctx.email:
             Ctx.email = "you@example.com"
+    if State.ran("install-started"):
+        wait_for_apps()
     res = evaluate()
     open_auto = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
 
@@ -410,6 +412,23 @@ def run_install(res):
             break
 
 
+def wait_for_apps():
+    """Before the steps are checked: give Docker and the apps a moment if they are busy or still starting (after a reboot or an update),
+    so that a slow answer is not mistaken for something that is missing."""
+    if not have("docker") or Opt.dry:
+        return
+    if not docker_answers():
+        try:
+            wait_for(docker_answers, "Docker to answer (up to 2 minutes)", 3 if FAKE else 120, every=5)
+        except Abort:
+            raise Abort(DOCKER_DOWN) from None
+    if containers_starting():
+        try:
+            wait_for(lambda: not containers_starting(), "the apps to finish starting (up to 5 minutes)", 300, every=5)
+        except Abort as e:
+            warn(str(e) + " Going on anyway.")
+
+
 def cmd_refresh():
     """`refresh`: check every step again and do what is now possible."""
     load_all()
@@ -421,13 +440,7 @@ def cmd_refresh():
         return
     if not State.exists():
         raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
-    if have("docker") and not Opt.dry and not docker_answers():
-        raise Abort(DOCKER_DOWN)
-    if have("docker") and not Opt.dry and containers_starting():   # e.g. right after a reboot
-        try:
-            wait_for(lambda: not containers_starting(), "the apps to finish starting (up to 5 minutes)", 300, every=5)
-        except Abort as e:
-            warn(str(e) + " Going on anyway.")
+    wait_for_apps()
     res = evaluate()
     Live.begin_run(len([s for s in STEPS if s.kind == "auto" and res[s.id].state in ("todo", "failed", "blocked")]))
     rule("Checking and continuing")

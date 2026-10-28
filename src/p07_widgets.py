@@ -6,66 +6,79 @@ def basic(user, pw):
     return {"Authorization": "Basic " + base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()}
 
 
+def judge(st):
+    """For an answer that was not a success: None when the service did not really answer (no connection, too slow, or an error
+    of its own: it may be busy or restarting, so nothing can be said about the key), False when it answered and said no."""
+    return None if st == 0 or st >= 500 else False
+
+
 def v_adguard(v):
-    """Test the AdGuard Home login with a live request."""
+    """Test the AdGuard Home login with a live request. True, False (rejected) or None (no answer)."""
     st, _, _ = http("GET", url("adguard", "/control/status"), headers=basic(v["username"], v["password"]), timeout=10)
-    return st == 200
+    return True if st == 200 else judge(st)
 
 
 def v_tailscale(v):
     """Test the Tailscale API key with a live request."""
     base = os.environ.get("HLS_TS_API", "https://api.tailscale.com")
     st, _, _ = http("GET", "%s/api/v2/device/%s" % (base, v["deviceid"]), headers=basic(v["key"], ""), timeout=20)
-    return st == 200
+    return True if st == 200 else judge(st)
 
 
 def v_beszel(v):
     """Test the Beszel login with a live request."""
+    silent = False
     for path in ("/api/collections/_superusers/auth-with-password", "/api/admins/auth-with-password"):
         st, js, _ = http("POST", url("beszel", path), body={"identity": v["username"], "password": v["password"]}, timeout=15)
         if st == 200 and isinstance(js, dict) and js.get("token"):
             return True
-    return False
+        silent = silent or judge(st) is None
+    return None if silent else False
 
 
 def v_netdata(v):
     """Test that Netdata answers."""
-    return http("GET", url("netdata", "/api/v1/info"), timeout=10)[0] == 200
+    st = http("GET", url("netdata", "/api/v1/info"), timeout=10)[0]
+    return True if st == 200 else judge(st)
 
 
 def v_speedtest(v):
     """Test the Speedtest Tracker token with a live request."""
     st, _, _ = http("GET", url("speedtest", "/api/v1/results/latest"),
-                    headers={"Authorization": "Bearer " + v["key"], "Accept": "application/json"}, timeout=15)
-    return st not in (0, 401, 403)
+                    headers={"Authorization": "Bearer " + v["key"], "Accept": "application/json"}, timeout=30)
+    if st in (401, 403):
+        return False
+    return None if st == 0 or st >= 500 else True
 
 
 def v_portainer(v):
     """Test the Portainer key with a live request."""
     st, _, _ = http("GET", url("portainer", "/api/users/me"), headers={"X-API-Key": v["key"]}, timeout=10)
     if st != 200:
-        return False
+        return judge(st)
     st, _, _ = http("GET", url("portainer", "/api/endpoints/%s" % v["env"]), headers={"X-API-Key": v["key"]}, timeout=10)
-    return st == 200
+    return True if st == 200 else judge(st)
 
 
 def v_filebrowser(v):
     """Test the FileBrowser login with a live request."""
     st, _, _ = http("POST", url("filebrowser", "/api/login"), body={"username": v["username"], "password": v["password"]}, timeout=10)
-    return st == 200
+    return True if st == 200 else judge(st)
 
 
 def v_immich(v):
     """Test the Immich key with a live request."""
     st, _, _ = http("GET", url("immich", "/api/server/statistics"), headers={"x-api-key": v["key"]}, timeout=15)
-    return st == 200
+    return True if st == 200 else judge(st)
 
 
 def v_nextcloud(v):
     """Test the Nextcloud token with a live request."""
     st, js, _ = http("GET", url("nextcloud", "/ocs/v2.php/apps/serverinfo/api/v1/info?format=json"),
                      headers={"NC-Token": v["key"], "OCS-APIRequest": "true", "Accept": "application/json"}, timeout=30)
-    return st == 200 and isinstance(js, dict) and (js.get("ocs") or {}).get("meta", {}).get("statuscode") == 200
+    if st == 200:
+        return isinstance(js, dict) and (js.get("ocs") or {}).get("meta", {}).get("statuscode") == 200
+    return judge(st)
 
 
 class WidgetStep(Step):
@@ -98,6 +111,12 @@ class WidgetStep(Step):
         if last and time.time() - float(last) < 600 and not os.environ.get("HLS_NO_THROTTLE"):
             return "todo"           # tested and failed a few minutes ago: do not hammer the service
         ok = self.verify(v)
+        if ok is None:
+            # The service did not answer (busy, restarting). That says nothing about the key, so the step is NOT redone:
+            # a login or key that is in the Homepage config stays as it is, and it is tested again next time.
+            self.unsure = True
+            return "done"
+        self.unsure = False
         if not ok:
             State.note(key, str(time.time()))
             return "todo"
@@ -105,8 +124,39 @@ class WidgetStep(Step):
             State.note(key, "")
         return "done"
 
+    unsure = False
+
     def detail(self):
-        return "tested"
+        return "kept, the service did not answer just now" if self.unsure else "tested"
+
+    def tested(self, v, patient=True):
+        """True or False from the service. If it does not answer, wait for it (up to 2 minutes); if it still does not, stop."""
+        ok = self.verify(v)
+        if ok is None and patient and not Opt.dry:
+            def answer():
+                nonlocal ok
+                ok = self.verify(v)
+                return ok is not None
+            try:
+                wait_for(answer, "%s to answer" % self.title.split(" (")[0], 3 if FAKE else 120, every=5)
+            except Abort:
+                pass
+        if ok is None:
+            raise Abort("%s did not answer, so nothing was tested or written. It may be busy or still starting: wait a minute, then run `sudo homelab-setup refresh` again." % self.title.split(" (")[0])
+        return ok
+
+    def wait_alive(self):
+        """Before asking for a password or changing anything: wait until the service answers at all (up to 2 minutes)."""
+        svc = self.card[:-5]
+        if svc not in PORTS or Opt.dry:
+            return
+        def alive():
+            st = http("GET", url(svc, "/"), timeout=10)[0]
+            return st != 0 and st < 500
+        try:
+            wait_for(alive, "%s to answer" % svc, 3 if FAKE else 120, every=5)
+        except Abort:
+            raise Abort("%s is not answering at %s right now. Nothing was changed and no password was asked. Wait a minute, then run `sudo homelab-setup refresh` again." % (self.title.split(" (")[0], url(svc))) from None
 
     def help(self):
         if self.help_text:
@@ -117,7 +167,7 @@ class WidgetStep(Step):
         return self.fill_text or self.help()
 
     def _write(self, v):
-        if not self.verify(v):
+        if not self.tested(v):
             raise Abort("The new login or key failed its test against the service, so it was not written to the Homepage configuration.")
         hp_set_widget(self.card, v)
         State.note("vf:" + self.id, "")        # it just passed: never let an older failed test hide that
@@ -128,6 +178,7 @@ class WidgetStep(Step):
         if Opt.dry:
             out("      would create and test the key for %s, then write it into the Homepage config" % self.card)
             return
+        self.wait_alive()
         self._write(self.auto())
 
     def fill(self):
@@ -138,7 +189,12 @@ class WidgetStep(Step):
             cur.setdefault(k, val)
         if callable(getattr(self, "prefill", None)):
             cur.update(self.prefill())
-        if not self.verify(cur):
+        try:
+            ok = self.tested(cur)
+        except Abort as e:
+            bad(str(e))
+            return False
+        if not ok:
             bad("The service rejected it during the test. Nothing was written. Check the value and try again.")
             return False
         hp_set_widget(self.card, cur)
