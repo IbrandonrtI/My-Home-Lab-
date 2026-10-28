@@ -728,25 +728,38 @@ def get_id():
 GENERIC_ICON = "mdi-web"   # Homepage's own plain globe icon: needs no account and no download
 
 
+def image_kind(data):
+    """'svg', 'png' or 'jpeg' when the bytes really are that kind of picture (a web page that says sorry is not)."""
+    head = data[:300].lstrip().lower()
+    if len(data) > 100 and (head.startswith(b"<svg") or head.startswith(b"<?xml")) and b"<svg" in data[:2000].lower():
+        return "svg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) > 100:
+        return "png"
+    if data.startswith(b"\xff\xd8\xff") and len(data) > 100:
+        return "jpeg"
+    return None
+
+
 def brandfetch_icon(domain):
-    """(web address of the logo, message). The address goes into bookmarks.yaml as it is, like the examples in the shipped file."""
+    """(web address of the logo, message). Brandfetch is asked for an SVG first, then a PNG, then a JPEG; each in the symbol, logo and
+    icon version. The address goes into bookmarks.yaml as it is, like the examples in the shipped file."""
     cid = get_id()
     if not cid:
         return None, "No Brandfetch client ID is saved, so it got the plain globe icon. Save yours once with:  homelab bookmark brandfetch YOUR-CLIENT-ID"
     last = ""
-    for kind in ("symbol", "logo", "icon"):
-        url = "%s/%s/theme/dark/%s.svg?c=%s" % (BASE, domain, kind, cid)
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": "homelab-bookmark/1"})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                data = r.read(2000000)
-        except (urllib.error.URLError, OSError, ValueError) as e:
-            last = str(e)
-            continue
-        head = data[:300].lstrip().lower()
-        if len(data) > 100 and (head.startswith(b"<svg") or head.startswith(b"<?xml")) and b"<svg" in data[:2000].lower():
-            return url, "Logo: Brandfetch (%s)." % kind
-    return None, "Brandfetch has no SVG for %s (%s), so it got the plain globe icon." % (domain, last or "not found")
+    for ext in ("svg", "png", "jpeg"):
+        for kind in ("symbol", "logo", "icon"):
+            url = "%s/%s/theme/dark/%s.%s?c=%s" % (BASE, domain, kind, ext, cid)
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "homelab-bookmark/1"})
+                with urllib.request.urlopen(req, timeout=12) as r:
+                    data = r.read(3000000)
+            except (urllib.error.URLError, OSError, ValueError) as e:
+                last = str(e)
+                continue
+            if image_kind(data) == ext:
+                return url, "Logo: Brandfetch (%s, %s)." % (kind, ext.upper())
+    return None, "Brandfetch has no SVG, PNG or JPEG for %s (%s), so it got the plain globe icon." % (domain, last or "not found")
 
 
 def looks_like_icon(t):
