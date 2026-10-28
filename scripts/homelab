@@ -207,10 +207,10 @@ commands() {
   cmd "homelab theme cards COLOR NUMBER" "ALL cards: colour, how solid (NUMBER 0 to 100)"
   cmd "homelab theme cards SERVICE COLOR" "ONE card, e.g. AdGuard Home blue"
   cmd "homelab theme reset"            "the shipped look again"
-  cmd "homelab bookmark list"          "the bookmarks, by category"
-  cmd "homelab bookmark add NAME URL [CATEGORY]" "add one (leave CATEGORY out to pick from a list)"
+  cmd "homelab bookmark list"          "the bookmarks, by category, with their numbers"
+  cmd "homelab bookmark add NAME URL [CATEGORY]" "add one (optional too: ICON LINK, NUMBER)"
   cmd "homelab bookmark remove NAME [CATEGORY]" "take one away (CATEGORY if the name is in two)"
-  cmd "homelab bookmark move NAME CATEGORY" "put a bookmark in another category"
+  cmd "homelab bookmark move NAME CATEGORY" "another category (add a NUMBER for its place)"
   if command -v homelab-setup >/dev/null 2>&1; then
     section "Setup checklist"
     cmd "sudo homelab-setup"             "the checklist: what is done and what is left"
@@ -249,6 +249,7 @@ import os
 import re
 import shutil
 import signal
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -485,6 +486,18 @@ def theme_show():
     print("  Services: " + ", ".join(n for n, i in known_services() if i))
 
 
+def images_mounted():
+    """True or False: does the homepage container have the images folder mounted? None if Docker cannot be asked."""
+    try:
+        r = subprocess.run(["docker", "inspect", "homepage", "--format", "{{range .Mounts}}{{.Destination}} {{end}}"],
+                           capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    return "/app/public/images" in r.stdout.split()
+
+
 def theme_background(src):
     need_dir()
     if re.match(r"^https?://", src):
@@ -502,6 +515,13 @@ def theme_background(src):
         value = "/images/" + name
     write(SETTINGS, bg_set(read(SETTINGS), "image", value))
     print("Background set to %s. %s" % (value.strip("'") if value.startswith("/") else src, REFRESH))
+    if value.startswith("/images/"):
+        mounted = images_mounted()
+        if mounted is False:
+            print("But Homepage cannot see that folder yet. In Portainer, add this line under 'volumes:' of the homepage stack, then update the stack:")
+            print("  %s:/app/public/images" % IMAGES)
+        else:
+            print("Homepage only notices a new local picture after a restart:  docker restart homepage")
 
 
 def theme_key(key, arg):
@@ -705,10 +725,14 @@ def get_id():
     return os.environ.get("HOMELAB_BRANDFETCH_ID", "").strip() or read(IDFILE).strip()
 
 
-def fetch_svg(domain, name):
+GENERIC_ICON = "mdi-web"   # Homepage's own plain globe icon: needs no account and no download
+
+
+def brandfetch_icon(domain):
+    """(web address of the logo, message). The address goes into bookmarks.yaml as it is, like the examples in the shipped file."""
     cid = get_id()
     if not cid:
-        return None, "No Brandfetch client ID is saved yet, so no logo was downloaded. Save yours once with:  homelab bookmark brandfetch YOUR-CLIENT-ID"
+        return None, "No Brandfetch client ID is saved, so it got the plain globe icon. Save yours once with:  homelab bookmark brandfetch YOUR-CLIENT-ID"
     last = ""
     for kind in ("symbol", "logo", "icon"):
         url = "%s/%s/theme/dark/%s.svg?c=%s" % (BASE, domain, kind, cid)
@@ -721,16 +745,19 @@ def fetch_svg(domain, name):
             continue
         head = data[:300].lstrip().lower()
         if len(data) > 100 and (head.startswith(b"<svg") or head.startswith(b"<?xml")) and b"<svg" in data[:2000].lower():
-            os.makedirs(IMAGES, exist_ok=True)
-            p = os.path.join(IMAGES, slug(name) + ".svg")
-            with open(p, "wb") as f:
-                f.write(data)
-            return "/images/" + slug(name) + ".svg", "Logo saved as images/%s.svg (%s)." % (slug(name), kind)
-    return None, "Brandfetch gave no SVG for %s (%s). The bookmark was added without a logo." % (domain, last or "not found")
+            return url, "Logo: Brandfetch (%s)." % kind
+    return None, "Brandfetch has no SVG for %s (%s), so it got the plain globe icon." % (domain, last or "not found")
+
+
+def looks_like_icon(t):
+    """An icon given on the command line: a web address, a file in /images, a Homepage icon name (si-youtube, mdi-web, youtube.svg), or 'generic'."""
+    return bool(t.lower() == "generic" or re.match(r"https?://", t) or t.startswith("/")
+                or re.fullmatch(r"(si|mdi|sh)-[\w-]+", t) or re.search(r"\.(svg|png|jpe?g|webp|ico|gif|avif)$", t, re.I))
 
 
 def make_abbr(name):
-    words = re.findall(r"[A-Za-z0-9]+", name)
+    """The letters shown if the icon cannot be loaded: YouTube -> YT, Good Site -> GS, Spotify -> SPOT."""
+    words = re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", name)
     if len(words) > 1:
         return "".join(w[0] for w in words)[:4].upper()
     return (words[0] if words else "?")[:4].upper()
@@ -792,14 +819,56 @@ def pick_group(groups, what, allow_new):
     raise Fail("'%s' is not one of the numbers above. Nothing was changed." % ans)
 
 
-def marks_add(name, url, group):
+def place(lines, group, entry, order):
+    """The lines with 'entry' added to the category 'group' (made if it is new) at place number 'order' (1 = first; None = last)."""
+    groups, _ = marks_groups("\n".join(lines))
+    target = find_group(groups, group)
+    if not target:
+        body = list(lines)
+        while body and body[-1].strip() == "":
+            body.pop()
+        return body + ([""] if body else []) + ["- %s:" % group] + entry, False
+    if order and order <= len(target[1]):
+        at = target[1][order - 1][1]
+        return lines[:at] + entry + [""] + lines[at:], True
+    at = target[2]
+    while at > 0 and lines[at - 1].strip() == "":
+        at -= 1
+    return lines[:at] + [""] + entry + lines[at:], True
+
+
+def split_extras(extra, what):
+    """The optional words after NAME URL (or after NAME CATEGORY): a category, an icon, a number. They are told apart by what they look like."""
+    group = icon = order = None
+    for t in extra:
+        if re.fullmatch(r"\d+", t):
+            if order is not None:
+                raise Fail("Two numbers were given. One number (the place in the category) is enough.")
+            order = int(t)
+            if order < 1:
+                raise Fail("The place number starts at 1 (1 = first in the category).")
+        elif what == "add" and looks_like_icon(t):
+            if icon is not None:
+                raise Fail("Two icons were given. One is enough.")
+            icon = t
+        elif group is None:
+            group = t
+        else:
+            raise Fail("I did not understand '%s'. A name with spaces goes in quotes:  homelab bookmark %s ..." % (t, what))
+    return group, icon, order
+
+
+def marks_add(name, url, extra):
     need_dir()
+    group, icon, order = split_extras(extra, "add")
     if not re.match(r"^https?://", url):
         url = "https://" + url
-    host = urlparse(url).netloc.lower()
-    if not host or " " in url:
+    parts = urlparse(url)
+    if not parts.netloc or " " in url:
         raise Fail("'%s' is not a web address." % url)
-    domain = re.sub(r"^www\.", "", host.split(":")[0])
+    if not parts.path and not parts.query and not parts.fragment:
+        url += "/"
+    domain = re.sub(r"^www\.", "", parts.netloc.lower().split(":")[0])
     text = read(MARKS)
     groups, lines = marks_groups(text)
     if group is None:   # no category given: ask, or use Others when nobody can answer
@@ -814,22 +883,19 @@ def marks_add(name, url, group):
         for n, s, e in g[1]:
             if n.lower() == name.lower() and g is target:
                 raise Fail("A bookmark named '%s' is already in '%s'. Remove it first:  homelab bookmark remove \"%s\" \"%s\"" % (n, g[0], n, g[0]))
-    icon, msg = fetch_svg(domain, name)
-    entry = ["    - %s:" % name, "        - abbr: %s" % make_abbr(name), "          href: %s" % url]
-    if icon:
-        entry.append("          icon: %s" % icon)
-    if target:
-        at = target[2]
-        while at > 0 and lines[at - 1].strip() == "":
-            at -= 1
-        new = lines[:at] + [""] + entry + lines[at:]
-        out = "\n".join(new).rstrip("\n") + "\n"
+    if icon is None:
+        icon, msg = brandfetch_icon(domain)
+    elif icon.lower() == "generic":
+        icon, msg = None, "Icon: the plain globe."
     else:
-        body = text.rstrip("\n").split("\n") if text.strip() else []
-        out = "\n".join(body + ([""] if body else []) + ["- %s:" % group] + entry).rstrip("\n") + "\n"
-    write(MARKS, out)
-    print("Added '%s' to '%s' (%s). %s" % (name, group, url, msg))
-    if not target and groups:
+        msg = "Icon: %s." % icon
+    entry = ["    - %s:" % name, "        - abbr: %s" % make_abbr(name), "          href: %s" % url, "          icon: %s" % (icon or GENERIC_ICON)]
+    new, existed = place(lines, group, entry, order)
+    write(MARKS, "\n".join(new).rstrip("\n") + "\n")
+    where, _ = marks_groups("\n".join(new))
+    spot = next((i + 1 for g in where if g[0] == group for i, (n, _s, _e) in enumerate(g[1]) if n == name), 1)
+    print("Added '%s' to '%s' as number %d (%s). %s" % (name, group, spot, url, msg))
+    if not existed and groups:
         print("'%s' is a new category (it did not exist yet). The ones before: %s." % (group, ", ".join(g[0] for g in groups)))
     print("Refresh the Homepage page in the browser to see it.")
 
@@ -842,8 +908,8 @@ def marks_list():
         return
     for g in groups:
         print("  %s" % g[0])
-        for n, s, e in g[1]:
-            print("    %-22s %s" % (n, entry_field(lines, s, e, "href")))
+        for i, (n, s, e) in enumerate(g[1], 1):
+            print("    %2d. %-20s %s" % (i, n, entry_field(lines, s, e, "href")))
 
 
 def marks_pick(name, group, verb):
@@ -895,27 +961,23 @@ def marks_remove(name, group):
     print("Removed '%s' from '%s'. Refresh the Homepage page in the browser." % (n, g[0]))
 
 
-def marks_move(name, to, group):
-    """Take a bookmark out of its category and put it in another one (the saved logo stays with it)."""
+def marks_move(name, to, extra):
+    """Put a bookmark in another category (or, with a number, at another place in the same one). Its icon stays with it."""
     need_dir()
+    group, _, order = split_extras(extra, "move")
     (g, n, s, e), text, lines = marks_pick(name, group, "move")
-    if norm(to) == norm(g[0]):
-        raise Fail("'%s' is already in '%s'." % (n, g[0]))
+    if norm(to) == norm(g[0]) and order is None:
+        raise Fail("'%s' is already in '%s'. To change its place there, add a number:  homelab bookmark move \"%s\" \"%s\" 1" % (n, g[0], n, g[0]))
     entry = lines[s:e]
     while entry and entry[-1].strip() == "":
         entry.pop()
     rest = lines[:s] + lines[e:]
-    groups2, lines2 = marks_groups("\n".join(rest))
+    groups2, _ = marks_groups("\n".join(rest))
     dest = find_group(groups2, to)
-    if dest:
-        at = dest[2]
-        while at > 0 and lines2[at - 1].strip() == "":
-            at -= 1
-        new = lines2[:at] + [""] + entry + lines2[at:]
-    else:
-        new = lines2 + ([""] if "".join(lines2).strip() else []) + ["- %s:" % to] + entry
+    new, existed = place(rest, dest[0] if dest else to, entry, order)
     write(MARKS, clean_marks(new))
-    print("Moved '%s' from '%s' to '%s'%s. Refresh the Homepage page in the browser." % (n, g[0], dest[0] if dest else to, "" if dest else " (a new category)"))
+    out_name = dest[0] if dest else to
+    print("Moved '%s' from '%s' to '%s'%s%s. Refresh the Homepage page in the browser." % (n, g[0], out_name, "" if existed else " (a new category)", " as number %d" % order if order else ""))
 
 
 def marks_id(cid):
@@ -929,15 +991,17 @@ def marks_id(cid):
 
 
 USAGE_M = """Bookmarks on the Homepage dashboard (a name with spaces goes in quotes):
-  homelab bookmark list                           every category and the bookmarks in it
-  homelab bookmark add NAME URL [CATEGORY]        add one. Without a CATEGORY you pick from a list.
-                                                  A category that does not exist yet is created.
-  homelab bookmark remove NAME [CATEGORY]         take one away (and its saved logo). If the name is in
-                                                  more than one category, give the CATEGORY or pick it.
-  homelab bookmark move NAME NEW-CATEGORY [FROM]  put a bookmark in another category
-  homelab bookmark brandfetch CLIENT-ID           save your Brandfetch client ID once, so logos are downloaded
-For example:  homelab bookmark add Netflix netflix.com Entertainment
-              homelab bookmark remove YouTube Entertainment"""
+  homelab bookmark list                           every category, with the number of each bookmark
+  homelab bookmark add NAME URL [CATEGORY] [ICON LINK] [NUMBER]
+        CATEGORY   where it goes; leave it out to pick from a list (a new name makes a new category)
+        ICON LINK  a web address of a picture, a Homepage icon name (si-youtube, mdi-web), or the word generic.
+                   Left out: the logo comes from Brandfetch, or the plain globe if you have no Brandfetch ID
+        NUMBER     its place in the category (1 = first). Left out: last
+  homelab bookmark remove NAME [CATEGORY]         take one away. If the name is in more than one category, give it
+  homelab bookmark move NAME CATEGORY [NUMBER]    put it in another category (the same one, plus a NUMBER: change its place)
+  homelab bookmark brandfetch CLIENT-ID           save your Brandfetch client ID once, so logos can be found
+For example:  homelab bookmark add YouTube youtube.com Entertainment
+              homelab bookmark add Netflix netflix.com Entertainment si-netflix 2"""
 
 
 def main(a):
@@ -965,16 +1029,16 @@ def main(a):
         else:
             a = a[1:]
             c = a[0] if a else ""
-            if c == "add" and len(a) in (3, 4):
-                marks_add(a[1], a[2], a[3] if len(a) == 4 else None)
-            elif c == "add" and len(a) > 4:
+            if c == "add" and 3 <= len(a) <= 6:
+                marks_add(a[1], a[2], a[3:])
+            elif c == "add" and len(a) > 6:
                 raise Fail("Too many words. If the name has spaces, put it in quotes:  homelab bookmark add \"My Bank\" mybank.com Productivity")
             elif c == "list" and len(a) == 1:
                 marks_list()
             elif c in ("remove", "rm", "delete") and len(a) in (2, 3):
                 marks_remove(a[1], a[2] if len(a) == 3 else None)
-            elif c == "move" and len(a) in (3, 4):
-                marks_move(a[1], a[2], a[3] if len(a) == 4 else None)
+            elif c == "move" and 3 <= len(a) <= 5:
+                marks_move(a[1], a[2], a[3:])
             elif c == "brandfetch" and len(a) == 2:
                 marks_id(a[1])
             else:
