@@ -56,8 +56,10 @@ BOOT_OPTS="loop,noatime,nofail"
 BOOT_UNIT_BYTES="${BOOT_UNIT_BYTES:-1000000000}"; BOOT_UNIT_NAME="${BOOT_UNIT_NAME:-GB}"
 
 # category.create=ff: a new file goes to the first drive (MAIN1, then MAIN2, ...) that still has room, so the drives fill up
-# one after the other. Every file sits whole on one drive. minfreespace is how much free space a drive keeps before the next one is used.
+# one after the other. Every file sits whole on one drive. A drive keeps 5% of its own size free before the next one is used
+# (set per drive in the pool line: /mnt/disks/MAIN1=RW,<size>). POOL_MINFREE is only the fallback for a drive whose size is unknown.
 POOL_MINFREE="${POOL_MINFREE:-20G}"
+POOL_FREE_PERCENT="${POOL_FREE_PERCENT:-5}"
 POOL_OPTS_BASE="allow_other,cache.files=off,category.create=ff,moveonenospc=true,dropcacheonclose=true,minfreespace=$POOL_MINFREE,nofail"
 # A drive is shown by what it is, e.g. "1 TB Samsung HDD", never by its internal label (MAIN1, BACKUP1). The names you chose
 # yourself are in DRIVE_NAMES_FILE (LABEL=Name per line); the name scanned when a drive was connected is kept in NAME_STORE,
@@ -167,12 +169,31 @@ cache_opt() {   # mergerfs docs: kernel 6.6 or newer uses cache.files=off, older
   if [ "$(printf '%s\n6.6\n' "$k" | sort -V | head -1)" = "6.6" ]; then echo off; else echo auto-full; fi
 }
 
+branch_minfree() {   # branch_minfree MOUNTPOINT -> the space to keep free on that drive (5% of its size), e.g. 48828125K; nothing if unknown
+  local sz
+  mountpoint -q "$1" 2>/dev/null || return 0
+  sz=$(df -B1 --output=size "$1" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}')
+  [[ "$sz" =~ ^[0-9]+$ ]] && [ "$sz" -gt 0 ] || return 0
+  echo "$(( sz * POOL_FREE_PERCENT / 100 / 1024 ))K"
+}
+
+branch_spec() {   # branch_spec MOUNTPOINT -> "/mnt/disks/MAIN1=RW,48828125K" (the drive with its own free-space limit)
+  local f; f=$(branch_minfree "$1")
+  if [ -n "$f" ]; then printf '%s=RW,%s' "$1" "$f"; else printf '%s' "$1"; fi
+}
+
+branches_string() {   # branches_string main|backup -> the drives of a pool, in order, each with its limit
+  local b joined=""
+  for b in $(branches_of "$1"); do joined="${joined:+$joined:}$(branch_spec "$b")"; done
+  printf '%s' "$joined"
+}
+
 pool_line() {   # pool_line main|backup
   local role=$1 mp b joined="" req="" opts
   opts=${POOL_OPTS_BASE/cache.files=off/cache.files=$(cache_opt)}
   mp=$(role_pool "$role")
   for b in $(branches_of "$role"); do
-    joined="${joined:+$joined:}$b"
+    joined="${joined:+$joined:}$(branch_spec "$b")"
     req="$req,x-systemd.requires-mounts-for=$b"
   done
   [ -n "$joined" ] || return 1
@@ -927,7 +948,7 @@ status_flow() {
   done
   for role in main backup; do
     if [ -n "$(branches_of "$role")" ] && ! pool_fills_in_order "$(role_pool "$role")"; then
-      say "Note: the $role pool still spreads files over its drives. Run  sudo drives fillorder  (menu: Settings and upgrades) to make it fill one drive at a time."
+      say "Note: the $role pool uses an older setting. Run  sudo drives fillorder  (menu: Settings and upgrades) to make it fill one drive at a time and keep ${POOL_FREE_PERCENT}% of each drive free."
     fi
   done
   if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$TEST_MODE" != 1 ]; then
@@ -1331,8 +1352,8 @@ release_flow() {   # take every drive out of both pools; the files on the drives
 }
 
 # ---------- fill order ----------
-pool_fills_in_order() {   # pool_fills_in_order /mnt/storage -> true when its fstab line already uses category.create=ff
-  fstab_active | awk -v m="$1" '$2 == m && /category\.create=ff/ {f = 1} END {exit !f}'
+pool_fills_in_order() {   # pool_fills_in_order /mnt/storage -> true when its fstab line already fills in order with a limit per drive
+  fstab_active | awk -v m="$1" '$2 == m && /category\.create=ff/ && /=RW,[0-9]+K/ {f = 1} END {exit !f}'
 }
 
 fillorder_flow() {   # make the pools of an older setup fill one drive at a time (a new pool already does)
@@ -1347,7 +1368,8 @@ fillorder_flow() {   # make the pools of an older setup fill one drive at a time
     sd_reload
     if mountpoint -q "$pool" && command -v setfattr >/dev/null 2>&1 \
        && setfattr -n user.mergerfs.category.create -v ff "$pool/.mergerfs" 2>/dev/null \
-       && setfattr -n user.mergerfs.minfreespace -v "$POOL_MINFREE" "$pool/.mergerfs" 2>/dev/null; then
+       && setfattr -n user.mergerfs.minfreespace -v "$POOL_MINFREE" "$pool/.mergerfs" 2>/dev/null \
+       && setfattr -n user.mergerfs.branches -v "$(branches_string "$role")" "$pool/.mergerfs" 2>/dev/null; then
       say "The $role storage now fills one drive at a time."
     elif mountpoint -q "$pool" && yn "The $role storage is set to fill one drive at a time. Apply it now? Its services stop for a minute while the pool mounts again."; then
       stop_containers "$pool"
@@ -1357,7 +1379,7 @@ fillorder_flow() {   # make the pools of an older setup fill one drive at a time
     else
       say "The $role storage is set to fill one drive at a time. It takes effect after the next restart (or: sudo hdd-recover)."
     fi
-    log "pool $role set to fill one drive at a time (ff, minfreespace $POOL_MINFREE)"
+    log "pool $role set to fill one drive at a time (ff, each drive keeps ${POOL_FREE_PERCENT}% free)"
   done
   [ "$did" = 1 ] || say "Your pools already fill one drive at a time."
 }
@@ -1421,22 +1443,25 @@ bootsection_flow() {
     keep=$BOOT_KEEP_FREE_BYTES; min=$BOOT_MIN_BYTES
     free=$(( $(boot_free_bytes) + old ))
     max=$(( free - keep ))
+    max=$(( max / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))   # whole GB (rounded DOWN), so the number shown is a number that is accepted
+    max=$(( max / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))     # whole units only: what is shown is exactly what can be typed
     say ""
     say "Free space on the boot drive now: $(gb_text "$free"). It always keeps at least $(gb_text "$keep") free for the system and your other services."
     if [ "$max" -lt "$min" ]; then
       note "A section would have to be at least $(gb_text "$min"), but at most $(gb_text "$(( max > 0 ? max : 0 ))") can be used. Nothing was changed."
       return 1
     fi
-    say "A section can be from $(gb_text "$min") to $(gb_text "$max")."
+    say "A section can be from $(( min / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME to $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME."   # in the unit you type, so the shown maximum is exactly what is accepted
+    say "The pool stops putting files in the section when only ${POOL_FREE_PERCENT}% of it is left, like on every other drive."
     typed "CONTINUE" "Type CONTINUE to go on, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
     while :; do
-      prompt="How many $BOOT_UNIT_NAME should the section have? [$(gb_text "$min") to $(gb_text "$max"), Enter to cancel]: "
+      prompt="How many $BOOT_UNIT_NAME should the section have? [$(( min / BOOT_UNIT_BYTES )) to $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME, Enter to cancel]: "
       gb=$(ask "$prompt"); gb=${gb//[GgMm][Bb]/}; gb=${gb//[GgMm]/}; gb=${gb// /}
       [ -n "$gb" ] || { say "Cancelled. Nothing was changed."; return 1; }
       if [[ "$gb" =~ ^[0-9]+$ ]]; then
         bytes=$(( gb * BOOT_UNIT_BYTES ))
         [ "$bytes" -lt "$min" ] && { note "That is too small. The smallest section is $(gb_text "$min")."; continue; }
-        [ "$bytes" -gt "$max" ] && { note "That is too big. The boot drive must keep $(gb_text "$keep") free, so the most is $(gb_text "$max")."; continue; }
+        [ "$bytes" -gt "$max" ] && { note "That is too big. The boot drive must keep $(gb_text "$keep") free, so the most is $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME."; continue; }
         break
       fi
       note "Please type a number of $BOOT_UNIT_NAME, for example 100."
