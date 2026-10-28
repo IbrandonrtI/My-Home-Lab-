@@ -5,11 +5,20 @@
     cputemp: true
     uptime: true
 
+# One pill for each pool. homelab-sample changes the label to "Connect Main Drive" / "Connect Backup Drive"
+# while that pool is not mounted, and back again when it is. The expanded view shows free space and the total.
 - resources:
-    label: Drives
-    disk:
-      - /
-      - /mnt/storage
+    label: Main pool
+    disk: /mnt/storage
+    expanded: true
+
+- resources:
+    label: Backup pool
+    disk: /mnt/backup
+    expanded: true
+
+- resources:
+    label: Network
     network: true
 
 - datetime:
