@@ -193,7 +193,7 @@ part_state() {
   done
   if ls /var/lib/homelab-boot-sections/*.img >/dev/null 2>&1; then
     local bfree; bfree=$(df -B1 --output=avail / | tail -1 | tr -d ' ')
-    if [ "${bfree:-0}" -lt 150000000000 ]; then warn "the boot drive has less than 150 GB free while boot drive sections exist"; fi
+    if [ "${bfree:-0}" -lt 128000000000 ]; then warn "the boot drive has less than 128 GB free while boot drive sections exist"; fi
   fi
   if [ -d /var/lib/homelab-drives ] && [ -z "${names// /}" ]; then warn "/var/lib/homelab-drives exists but no drive is assigned (leftover of an earlier install)"; fi
   if [ -f /etc/homelab-drive-names ]; then info "/etc/homelab-drive-names exists (drive names you chose): $(tr '\n' ';' </etc/homelab-drive-names | cut -c1-120)"; fi

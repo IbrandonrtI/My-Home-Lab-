@@ -5,6 +5,8 @@
 #   temps      one line per drive:  LABEL|DEVICE|TEMP_C|EPOCH     (TEMP_C is "standby" for a sleeping drive)
 #   apt        UPGRADABLE_PACKAGES|EPOCH
 #   schedule   MINUTE|HOUR|DAY|MONTH|WEEKDAY|EPOCH               (the cron line of homelab-backup)
+# It also keeps the drive pills of the Homepage dashboard right: "Main pool" and "Backup pool" while the pool is
+# connected, "Connect Main Drive" / "Connect Backup Drive" while it is not.
 # The homelab command only reads these files.
 #
 # It never wakes a sleeping drive (smartctl -n standby) and never changes anything except these files.
@@ -13,6 +15,7 @@
 # when the schedule runs it (typed by hand, it takes every reading).
 #
 #   sudo homelab-sample            take the readings now and print what was saved
+#   sudo homelab-sample widgets    only update the drive names on the Homepage dashboard (the drive tool runs this)
 #   homelab-sample version
 
 set -u
@@ -24,8 +27,8 @@ OUT_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"
 case "${1:-}" in
   version|--version) echo "homelab-sample $VERSION"; exit 0 ;;
   help|--help|-h) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
-  "") ;;
-  *) echo "Usage: sudo homelab-sample   (or: homelab-sample version)" >&2; exit 1 ;;
+  ""|widgets) ;;
+  *) echo "Usage: sudo homelab-sample   (or: homelab-sample widgets | version)" >&2; exit 1 ;;
 esac
 
 [ "$(id -u)" -eq 0 ] || { echo "Run it with sudo."; exit 1; }
@@ -122,9 +125,120 @@ sample_schedule() {
   printf '%s|%s|%s|%s|%s|%s\n' "$m" "$h" "$dom" "$mon" "$dow" "$NOW" | put schedule
 }
 
+# ---------- the drive pills on the Homepage dashboard ----------
+# widgets.yaml has one pill per pool: label "Main pool" (disk /mnt/storage) and "Backup pool" (disk /mnt/backup).
+# While a pool is not mounted the pill's label asks for the drive instead, and goes back when it is mounted.
+# An older file with one "Drives" pill (disk: / and /mnt/storage) is turned into the new pills once.
+homepage_dir() {   # prints the folder Homepage reads its settings from (remembered between runs)
+  local d=""
+  [ -r "$OUT_DIR/homepage-dir" ] && d=$(cat "$OUT_DIR/homepage-dir")
+  if [ -z "$d" ] || [ ! -d "$d" ]; then
+    d=$(timeout 10 docker inspect homepage --format '{{range .Mounts}}{{if eq .Destination "/app/config"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)
+    [ -n "$d" ] && [ -d "$d" ] && printf '%s\n' "$d" | put homepage-dir
+  fi
+  [ -n "$d" ] && [ -d "$d" ] && printf '%s\n' "$d"
+}
+
+sample_widgets() {
+  command -v python3 >/dev/null 2>&1 || return 0
+  local dir file main_ok=0 backup_ok=0
+  dir=$(homepage_dir) || return 0
+  file="$dir/widgets.yaml"; [ -w "$file" ] || return 0
+  mountpoint -q "${HOMELAB_MAIN_POOL:-/mnt/storage}" 2>/dev/null && main_ok=1
+  mountpoint -q "${HOMELAB_BACKUP_POOL:-/mnt/backup}" 2>/dev/null && backup_ok=1
+  python3 - "$file" "$main_ok" "$backup_ok" <<'PY' || true
+import re, sys
+
+path, main_ok, backup_ok = sys.argv[1], sys.argv[2] == "1", sys.argv[3] == "1"
+text = open(path).read()
+lines = text.split("\n")
+blocks, cur = [], []          # the file is a list: every top-level "- " starts a new item
+for ln in lines:
+    if ln.startswith("- ") and cur:
+        blocks.append(cur)
+        cur = []
+    cur.append(ln)
+blocks.append(cur)
+
+
+def disks(b):
+    """The disk paths a resources block shows (one 'disk: /x' or a list under 'disk:')."""
+    out, grab = [], False
+    for ln in b:
+        m = re.match(r"^\s+disk:\s*(\S.*)?$", ln)
+        if m:
+            if m.group(1):
+                out.append(m.group(1).strip())
+                grab = False
+            else:
+                grab = True
+            continue
+        if grab:
+            m = re.match(r"^\s+-\s+(\S+)\s*$", ln)
+            if m:
+                out.append(m.group(1))
+                continue
+            grab = False
+    return out
+
+
+def pill(label, path):
+    return ["- resources:", "    label: " + label, "    disk: " + path, "    expanded: true", ""]
+
+
+NET = ["- resources:", "    label: Network", "    network: true", ""]
+out, has_main, has_backup = [], False, False
+for b in blocks:
+    if b[0].strip() == "- resources:" and "/mnt/backup" in disks(b):
+        has_backup = True
+for b in blocks:
+    d = disks(b) if b[0].strip() == "- resources:" else []
+    if "/mnt/storage" in d:
+        old_style = len(d) > 1 or any(re.match(r"^\s+network:\s*true", ln) for ln in b)
+        if old_style:                       # the old "Drives" pill: one pill per pool and a Network pill
+            out += pill("Main pool", "/mnt/storage")
+            if not has_backup:
+                out += pill("Backup pool", "/mnt/backup")
+                has_backup = True
+            if any(re.match(r"^\s+network:\s*true", ln) for ln in b):
+                out += NET
+            has_main = True
+            continue
+        has_main = True
+        if not has_backup:
+            out += b[:-1] if b[-1] == "" else b
+            if b[-1] == "":
+                out.append("")
+            out += pill("Backup pool", "/mnt/backup")
+            has_backup = True
+            continue
+    out += b
+new = "\n".join(out)
+
+
+def relabel(txt, path, label):
+    """Set the label of the resources block that shows 'path'."""
+    parts = re.split(r"(?m)^(?=- )", txt)
+    for i, part in enumerate(parts):
+        if part.startswith("- resources:") and re.search(r"(?m)^\s+disk:\s*" + re.escape(path) + r"\s*$", part):
+            parts[i] = re.sub(r"(?m)^(\s+label:).*$", lambda m: m.group(1) + " " + label, part, count=1)
+    return "".join(parts)
+
+
+new = relabel(new, "/mnt/storage", "Main pool" if main_ok else "Connect Main Drive")
+new = relabel(new, "/mnt/backup", "Backup pool" if backup_ok else "Connect Backup Drive")
+if new != text:
+    open(path, "w").write(new)
+PY
+  return 0
+}
+
+if [ "${1:-}" = widgets ]; then sample_widgets; exit 0; fi
+
 sample_temps
 sample_apt
 sample_schedule
+sample_widgets
 
 echo "Saved to $OUT_DIR:"
 for f in temps apt schedule; do

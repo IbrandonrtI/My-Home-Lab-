@@ -36,6 +36,7 @@ if [ "$TEST_MODE" = 1 ]; then
   BOOT_SECTION_DIR="${BOOT_SECTION_DIR:-$STATE_DIR/boot-sections}"
   BOOT_KEEP_FREE_BYTES="${DRIVES_BOOT_KEEP:-100000000}"     # the test machine is small: keep 100 MB, smallest section 16 MB
   BOOT_MIN_BYTES="${DRIVES_BOOT_MIN:-16000000}"
+  BOOT_SMALL_BYTES="${DRIVES_BOOT_SMALL:-0}"                # a boot drive this small (or smaller) cannot lend a section (0 = never, for the tests)
   BOOT_UNIT_BYTES=1000000; BOOT_UNIT_NAME=MB               # sizes are typed in MB in test mode
 else
   STATE_DIR="${DRIVES_STATE_DIR:-/var/lib/homelab-drives}"
@@ -47,7 +48,8 @@ else
   BACKUP_PREFIX="${BACKUP_PREFIX:-BACKUP}"
   LOGFILE="${LOGFILE:-/var/log/homelab-drives.log}"
   BOOT_SECTION_DIR="${BOOT_SECTION_DIR:-/var/lib/homelab-boot-sections}"
-  BOOT_KEEP_FREE_BYTES="${HOMELAB_BOOT_KEEP_BYTES:-150000000000}"   # the boot drive always keeps 150 GB free for the system and the apps
+  BOOT_KEEP_FREE_BYTES="${HOMELAB_BOOT_KEEP_BYTES:-128000000000}"   # the boot drive always keeps 128 GB free for the system and the apps
+  BOOT_SMALL_BYTES="${HOMELAB_BOOT_SMALL_BYTES:-130000000000}"      # a "128 GB" boot drive (or smaller) cannot lend any space: the system needs all of it
   BOOT_MIN_BYTES="${HOMELAB_BOOT_MIN_BYTES:-30000000000}"          # a section smaller than 30 GB is refused (the pool keeps 20 GB free per drive)
 fi
 BOOT_OPTS="loop,noatime,nofail"
@@ -1366,11 +1368,18 @@ fillorder_flow() {   # make the pools of an older setup fill one drive at a time
 # more than the size chosen, and the boot drive always keeps BOOT_KEEP_FREE_BYTES free for the system and other services.
 # It is always the last drive of its pool, so it receives files only when the real drives are full.
 boot_free_bytes() { mkdir -p "$BOOT_SECTION_DIR" 2>/dev/null; avail_bytes "$BOOT_SECTION_DIR"; }
+boot_total_bytes() { mkdir -p "$BOOT_SECTION_DIR" 2>/dev/null; df -B1 --output=size "$BOOT_SECTION_DIR" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}'; }
 
 bootsection_flow() {
   need_tools || return 1
   command -v fallocate >/dev/null 2>&1 || { note "The tool 'fallocate' is missing (package util-linux)."; return 1; }
-  local role idx label mp img free old=0 max min keep gb bytes reuse=0 other prompt
+  local role idx label mp img free old=0 max min keep gb bytes reuse=0 other prompt total
+  total=$(boot_total_bytes)
+  if [ -n "$total" ] && [ "$total" -le "$BOOT_SMALL_BYTES" ]; then
+    note "The boot drive is only $(gb_text "$total"). The system and your apps need $(gb_text "$BOOT_KEEP_FREE_BYTES") of it, so no part of it can be used for a storage pool."
+    note "Connect a separate drive instead (sudo drives). Nothing was changed."
+    return 1
+  fi
   idx=$(choose "Add a boot drive section to which storage? " "Main storage (photos and files used by your services)" "Backup storage (daily copy of main)") || return 1
   if [ "$idx" = 0 ]; then role=main; else role=backup; fi
   other=$(other_role "$role")
@@ -1473,6 +1482,8 @@ bootsection_flow() {
 # helper updates those folders (FileBrowser restarts for a few seconds). Without homelab-setup (a hand-built server) nothing happens.
 sync_filebrowser() {
   [ "$TEST_MODE" = 1 ] && return 0
+  # the Homepage drive pills ("Main pool" / "Connect Backup Drive" ...) follow the pools
+  command -v homelab-sample >/dev/null 2>&1 && { homelab-sample widgets 9>&- >/dev/null 2>&1 || true; }
   command -v homelab-setup >/dev/null 2>&1 || return 0
   homelab-setup filebrowser 9>&- || note "FileBrowser's drive folders were not updated. Later, run:  sudo homelab-setup filebrowser"
 }

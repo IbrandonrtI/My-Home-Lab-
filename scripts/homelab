@@ -194,7 +194,7 @@ commands() {
   cmd "sudo tail -f /var/log/homelab-backup.log" "watch a backup while it runs (Ctrl+C to leave)"
   cmd "sudo homelab-restore-configs check" "after a rebuild: preview restoring saved settings"
   section "Containers and updates"
-  cmd "sudo homelab-update"            "check, download, back up, then list what to update"
+  cmd "sudo homelab-update"            "check, download, then update each stack (asks first)"
   cmd "homelab-update list"            "what is waiting, and the order to update in (no sudo)"
   cmd "sudo homelab-update clean"      "delete old saved versions and leftover images (asks first)"
   cmd "docker logs --tail 50 NAME"     "the last 50 lines a container printed"
@@ -870,6 +870,7 @@ def place(lines, group, entry, order):
 def split_extras(extra, what):
     """The optional words after NAME URL (or after NAME CATEGORY): a category, an icon, a number. They are told apart by what they look like."""
     group = icon = order = None
+    words = []
     for t in extra:
         if re.fullmatch(r"\d+", t):
             if order is not None:
@@ -881,10 +882,9 @@ def split_extras(extra, what):
             if icon is not None:
                 raise Fail("Two icons were given. One is enough.")
             icon = t
-        elif group is None:
-            group = t
         else:
-            raise Fail("I did not understand '%s'. A name with spaces goes in quotes:  homelab bookmark %s ..." % (t, what))
+            words.append(t)     # a category may be several words, typed without quotes: Online Shopping
+    group = " ".join(words) if words else None
     return group, icon, order
 
 
@@ -1020,7 +1020,7 @@ def marks_id(cid):
     print("Brandfetch client ID saved in %s. New bookmarks now get their logo from Brandfetch." % IDFILE)
 
 
-USAGE_M = """Bookmarks on the Homepage dashboard (a name with spaces goes in quotes):
+USAGE_M = """Bookmarks on the Homepage dashboard (a NAME with spaces goes in quotes; a CATEGORY does not need them):
   homelab bookmark list                           every category, with the number of each bookmark
   homelab bookmark add NAME URL [CATEGORY] [ICON LINK] [NUMBER]
         CATEGORY   where it goes; leave it out to pick from a list (a new name makes a new category)
@@ -1029,6 +1029,7 @@ USAGE_M = """Bookmarks on the Homepage dashboard (a name with spaces goes in quo
         NUMBER     its place in the category (1 = first). Left out: last
   homelab bookmark remove NAME [CATEGORY]         take one away. If the name is in more than one category, give it
   homelab bookmark move NAME CATEGORY [NUMBER]    put it in another category (the same one, plus a NUMBER: change its place)
+                                                  a category with spaces needs no quotes: Online Shopping
   homelab bookmark brandfetch CLIENT-ID           save your Brandfetch client ID once, so logos can be found
 For example:  homelab bookmark add YouTube youtube.com Entertainment
               homelab bookmark add Netflix netflix.com Entertainment si-netflix 2"""
@@ -1063,16 +1064,20 @@ def main(a):
         else:
             a = a[1:]
             c = a[0] if a else ""
-            if c == "add" and 3 <= len(a) <= 6:
+            if c == "add" and 3 <= len(a) <= 9:
                 marks_add(a[1], a[2], a[3:])
-            elif c == "add" and len(a) > 6:
+            elif c == "add" and len(a) > 9:
                 raise Fail("Too many words. If the name has spaces, put it in quotes:  homelab bookmark add \"My Bank\" mybank.com Productivity")
             elif c == "list" and len(a) == 1:
                 marks_list()
-            elif c in ("remove", "rm", "delete") and len(a) in (2, 3):
-                marks_remove(a[1], a[2] if len(a) == 3 else None)
-            elif c == "move" and 3 <= len(a) <= 5:
-                marks_move(a[1], a[2], a[3:])
+            elif c in ("remove", "rm", "delete") and 2 <= len(a) <= 5:
+                marks_remove(a[1], " ".join(a[2:]) if len(a) > 2 else None)
+            elif c == "move" and 3 <= len(a) <= 7:
+                to_words = a[2:]
+                if len(to_words) > 1 and re.fullmatch(r"\d+", to_words[-1]):
+                    marks_move(a[1], " ".join(to_words[:-1]), [to_words[-1]])
+                else:
+                    marks_move(a[1], " ".join(to_words), [])
             elif c == "brandfetch" and len(a) == 2:
                 marks_id(a[1])
             else:
@@ -1200,7 +1205,7 @@ updates_line() {
   fi
   if [ "${n:-0}" -gt 0 ] || [ "$img_n" -gt 0 ]; then
     warn "Updates" "$text"
-    [ "$img_n" -gt 0 ] && suggest 4 "sudo homelab-update" "newer container images are waiting"
+    [ "$img_n" -gt 0 ] && suggest 4 "sudo homelab-update" "newer container versions are waiting: it downloads and updates them"
     [ "${n:-0}" -gt 0 ] && suggest 5 "sudo apt update && sudo apt upgrade" "install the waiting system updates"
   else ok "Updates" "$text"; fi
 }
@@ -1316,8 +1321,8 @@ status() {
   if [ -n "$sec_gb" ]; then
     line="$line; sections for pools:$(printf '%s' "$sec_gb" | sed 's/ \([0-9]*\)/ \1 GB,/g; s/,$//')"
     free_b=$(df -B1 --output=avail / 2>/dev/null | awk 'NR==2 {print $1}')
-    if [ -n "$free_b" ] && [ "$free_b" -lt 150000000000 ]; then
-      warn "Boot drive" "$line -> under 150 GB free; free some space (sudo drives status)"
+    if [ -n "$free_b" ] && [ "$free_b" -lt 128000000000 ]; then
+      warn "Boot drive" "$line -> under 128 GB free; free some space (sudo drives status)"
       suggest 2 "sudo drives status" "the boot drive is getting full and a pool uses part of it"
       return 0
     fi

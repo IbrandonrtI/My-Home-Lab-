@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# homelab-update - find newer container images, download them, back up, and say what to update.
+# homelab-update - find newer container images, download them, and update the containers one stack at a time.
 #
-#   sudo homelab-update            check, download, back up, then list what to update (asks first)
+#   sudo homelab-update            check, download, then update each stack that has something new (asks before each)
+#   sudo homelab-update --yes      the same without the questions (a Nextcloud major version jump is still left to you)
+#   sudo homelab-update --now      do not wait for uploads or a running backup to finish (see below)
+#   sudo homelab-update --backup   also run the full backup first (by default only a quick database dump is made)
 #   sudo homelab-update check      only look: which images have a newer version online (downloads nothing)
 #   homelab-update list            show the last result and the order to update in (no sudo needed)
 #   sudo homelab-update clean      delete the saved old versions and leftover old images NOW (shows first, asks)
@@ -10,14 +13,16 @@
 #   sudo homelab-update refresh    for cron: re-read the list without using the internet
 #   homelab-update version
 #
-# It NEVER recreates a container. The last step (Portainer: Update the stack) is always yours.
-# It compares the image behind the tag a container runs. A tag fixed to one version (v1.2.3) rarely
-# changes, so for those also look at the project's release page (docs/updating.md, "Sources").
-# It never touches images that are locked to an exact fingerprint (@sha256) or listed in HOLD.
+# What it does for each stack: a quick dump of the database (Nextcloud and Immich only, seconds), then the same as
+# "Update the stack" in Portainer (it asks Portainer through the key the installer saved), then it waits until the
+# containers are running and healthy. Portainer itself is recreated from the terminal. It stops BEFORE touching
+# anything while files are being written to a pool (an upload) or a backup is running; run it again when that is done.
+# It compares the image behind the tag a container runs. For a tag fixed to one version (v2.6.0) it also looks up newer
+# version numbers at the registry (v2.7.0). It never touches images locked to an exact fingerprint (@sha256) or listed in HOLD.
 #
 # Files it writes in /var/lib/homelab/:
 #   image-updates   what the login screen reads: line 1 = time of the last check, then one line per stack
-#   image-state     the details behind it (stack, image, fingerprint found online, time found)
+#   image-state     the details behind it (stack, image, fingerprint or new version found online, time found)
 # Settings can be changed in /etc/homelab-update.conf (see the guide).
 
 set -u
@@ -75,6 +80,177 @@ kv() {   # kv KEY TEXT: an indented "key  text" line; long text wraps under itse
   done < <(printf '%s\n' "$2" | fold -s -w "$w")
 }
 hb()        { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1 B"; }
+
+# The registry and Portainer talk is done in Python (python3 is on every Linux Mint). Subcommands:
+#   tags IMAGE          the newest version number newer than the running tag (v2.6.0 -> v2.7.0), or nothing
+#   pt-has STACK        yes / no: does Portainer have a stack with that name
+#   pt-update STACK [OLD NEW]...   change image names in the saved stack file and redeploy it
+read -r -d '' PYLIB <<'PY' || true
+import json, os, re, sys, urllib.error, urllib.parse, urllib.request
+
+
+def split_ref(ref):
+    """'ghcr.io/gethomepage/homepage:v2.6.0' -> (registry host, repository, tag)."""
+    first, _, rest = ref.partition("/")
+    if rest and ("." in first or ":" in first or first == "localhost"):
+        host, path = first, rest
+    else:
+        host, path = "docker.io", ref
+    name, _, tag = path.rpartition(":") if ":" in path.split("/")[-1] else (path, "", "")
+    if host == "docker.io":
+        host = "registry-1.docker.io"
+        if "/" not in name:
+            name = "library/" + name
+    elif host == "lscr.io":
+        host = "ghcr.io"
+    return host, name, tag
+
+
+def fetch(url, headers=None, timeout=20):
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read(), r.headers
+
+
+def registry_get(base, path, auth=None):
+    """GET from a registry; follows the token login that registries ask for."""
+    url = base + path
+    hdr = {"Accept": "application/json"}
+    if auth:
+        hdr["Authorization"] = "Bearer " + auth
+    try:
+        return fetch(url, hdr), auth
+    except urllib.error.HTTPError as e:
+        if e.code != 401 or auth:
+            raise
+        ch = e.headers.get("WWW-Authenticate", "")
+        realm = re.search(r'realm="([^"]+)"', ch)
+        if not realm:
+            raise
+        q = {k: v for k, v in re.findall(r'(service|scope)="([^"]+)"', ch)}
+        tok, _ = fetch(realm.group(1) + "?" + urllib.parse.urlencode(q))
+        js = json.loads(tok)
+        token = js.get("token") or js.get("access_token")
+        return registry_get(base, path, token)
+
+
+def all_tags(ref):
+    host, name, _ = split_ref(ref)
+    base = os.environ.get("HLU_REGISTRY_BASE") or "https://" + host
+    path, tags, token = "/v2/%s/tags/list?n=1000" % name, [], None
+    for _ in range(40):
+        (body, hdrs), token = registry_get(base, path, token)
+        tags += json.loads(body).get("tags") or []
+        nxt = re.search(r'<([^>]+)>;\s*rel="next"', hdrs.get("Link", "") or "")
+        if not nxt:
+            break
+        path = nxt.group(1)
+        if path.startswith("http"):
+            path = "/" + path.split("/", 3)[3]
+    return tags
+
+
+def newer_tag(ref):
+    """The highest tag that has the same shape as the running one (v2.6.0 -> v2.7.0) and is newer, or ''."""
+    _, _, cur = split_ref(ref)
+    m = re.fullmatch(r"(v?)(\d+(?:\.\d+)+)", cur)
+    if not m:
+        return ""
+    pre, nums = m.group(1), tuple(int(x) for x in m.group(2).split("."))
+    best = nums
+    best_tag = ""
+    for t in all_tags(ref):
+        mt = re.fullmatch(r"(v?)(\d+(?:\.\d+)+)", t)
+        if not mt or mt.group(1) != pre:
+            continue
+        v = tuple(int(x) for x in mt.group(2).split("."))
+        if len(v) == len(nums) and v > best:
+            best, best_tag = v, t
+    return best_tag
+
+
+# ---------------------------------------------------------------- Portainer
+def pt_token():
+    path = os.environ.get("HLU_SECRETS") or "/root/.homelab-setup/secrets.env"
+    try:
+        for line in open(path):
+            if line.startswith("PORTAINER_TOKEN="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+def pt(method, path, body=None):
+    base = os.environ.get("HLU_PORTAINER") or "http://127.0.0.1:9000"
+    key = pt_token()
+    if not key:
+        raise RuntimeError("no Portainer key is saved on this server")
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(base + path, data=data, method=method,
+                                 headers={"X-API-Key": key, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=900) as r:
+            raw = r.read()
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = json.loads(e.read()).get("details", "")
+        except Exception:
+            pass
+        raise RuntimeError("Portainer answered HTTP %d %s" % (e.code, detail))
+    except urllib.error.URLError as e:
+        raise RuntimeError("cannot reach Portainer (%s)" % e.reason)
+
+
+def find_stack(name):
+    for s in pt("GET", "/api/stacks"):
+        if s.get("Name") == name:
+            return s
+    return None
+
+
+def stack_update(name, pairs):
+    """Change image names in the saved stack file (pairs of OLD NEW) and redeploy it, like 'Update the stack'."""
+    s = find_stack(name)
+    if not s:
+        raise RuntimeError("Portainer has no stack named '%s'" % name)
+    sid, eid = s["Id"], s.get("EndpointId") or 1
+    text = pt("GET", "/api/stacks/%s/file?endpointId=%s" % (sid, eid)).get("StackFileContent", "")
+    if not text:
+        raise RuntimeError("could not read the stack file of '%s'" % name)
+    for old, new in pairs:
+        if old != new:
+            if old not in text:
+                raise RuntimeError("the stack file does not contain '%s' (it may use a variable), so its version cannot be changed here" % old)
+            text = text.replace(old, new)
+    env = [{"name": e["name"], "value": e["value"]} for e in (s.get("Env") or [])]
+    pt("PUT", "/api/stacks/%s?endpointId=%s" % (sid, eid),
+       {"stackFileContent": text, "env": env, "prune": False, "pullImage": False})
+
+
+def main(a):
+    cmd = a[0]
+    try:
+        if cmd == "tags":
+            print(newer_tag(a[1]))
+        elif cmd == "pt-has":
+            print("yes" if find_stack(a[1]) else "no")
+        elif cmd == "pt-update":
+            pairs = [(a[i], a[i + 1]) for i in range(2, len(a) - 1, 2)]
+            stack_update(a[1], pairs)
+        else:
+            return 2
+    except (RuntimeError, urllib.error.URLError, OSError, ValueError, KeyError) as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    return 0
+
+
+sys.exit(main(sys.argv[1:]))
+PY
+pylib() { python3 -c "$PYLIB" "$@"; }
 
 STATE_FILE="$STATE_DIR/image-state"
 SUMMARY_FILE="$STATE_DIR/image-updates"
@@ -153,8 +329,18 @@ local_has() {   # local_has IMAGE DIGEST: is that exact version already download
   docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null | grep -qF -- "@$2"
 }
 
+pull_ref() {   # pull_ref IMAGE DIGEST -> what to download: the image itself, or the newer version tag found for it
+  if [[ "$2" == tag=* ]]; then printf '%s:%s\n' "${1%:*}" "${2#tag=}"; else printf '%s\n' "$1"; fi
+}
+
 classify() {   # classify IMAGE DIGEST -> new (not downloaded) | downloaded (downloaded, container still old) | current
-  local ref=$1 d=$2 tagid i
+  local ref=$1 d=$2 tagid i running=0
+  if [[ "$d" == tag=* ]]; then   # a newer version number was found (v2.6.0 -> v2.7.0)
+    for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$ref" ] && running=1; done
+    [ "$running" -eq 1 ] || { echo current; return; }          # no container runs the old version any more
+    if docker image inspect "$(pull_ref "$ref" "$d")" >/dev/null 2>&1; then echo downloaded; else echo new; fi
+    return
+  fi
   local_has "$ref" "$d" || { echo new; return; }
   tagid=$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null)
   for i in "${!CI[@]}"; do
@@ -206,9 +392,11 @@ evaluate_state() {   # prints the saved lines that still need action, with their
 
 # ---------- check ----------
 CHECK_NEW=(); CHECK_DL=(); CHECK_FAILED=(); CHECK_OK=0
+declare -A NEWTAG=()       # image -> a newer version number found for it (v2.7.0)
+TAG_UNSURE=()              # pinned images whose newer versions could not be looked up
 do_check() {   # do_check show(0/1)
-  local show=$1 img d st n=0 now line stacks i
-  CHECK_NEW=(); CHECK_DL=(); CHECK_FAILED=(); CHECK_OK=0
+  local show=$1 img d st n=0 now line stacks i nt
+  CHECK_NEW=(); CHECK_DL=(); CHECK_FAILED=(); CHECK_OK=0; NEWTAG=(); TAG_UNSURE=()
   now=$(date +%s)
   mkdir -p "$STATE_DIR" && echo "$now" | put image-check-attempt
   load_containers || die "Cannot talk to Docker. Is it running? (docker ps)"
@@ -219,6 +407,13 @@ do_check() {   # do_check show(0/1)
   for img in "${IMG_LIST[@]}"; do
     n=$((n + 1))
     if d=$(remote_digest "$img"); then
+      if [[ "$img" =~ :v?[0-9]+(\.[0-9]+)+$ ]]; then      # pinned to a version number: is there a newer one?
+        if nt=$(pylib tags "$img" 2>/dev/null); then
+          if [ -n "$nt" ]; then d="tag=$nt"; NEWTAG[$img]=$nt; fi
+        else
+          TAG_UNSURE+=("$img")
+        fi
+      fi
       st=$(classify "$img" "$d"); STAT[$img]=$st
       case "$st" in
         new) CHECK_NEW+=("$img") ;;
@@ -245,15 +440,15 @@ do_check() {   # do_check show(0/1)
       local who=${IMG_STACKS[$img]//,/+} short=${img##*/}
       if [ "$who" = "$prev" ]; then who=""; else prev=$who; fi
       case "${STAT[$img]}" in
-        new)        img_row "$Y" "$S_UP"   "$who" "$short" "newer online" ;;
-        downloaded) img_row "$C" "$S_PEND" "$who" "$short" "downloaded, not updated yet" ;;
+        new)        img_row "$Y" "$S_UP"   "$who" "$short" "newer ${NEWTAG[$img]:+version ${NEWTAG[$img]} }online" ;;
+        downloaded) img_row "$C" "$S_PEND" "$who" "$short" "${NEWTAG[$img]:+${NEWTAG[$img]} }downloaded, not updated yet" ;;
         failed)     img_row "$R" "$S_BAD"  "$who" "$short" "could not check" ;;
         *)          img_row "$G" "$S_OK"   "$who" "$short" "up to date" ;;
       esac
     done
     echo
     [ "${#HELD_LIST[@]}" -eq 0 ] || line_note "Left alone on purpose (locked to an exact version): ${HELD_LIST[*]}"
-    [ "${#PINNED_LIST[@]}" -eq 0 ] || line_note "Pinned to an exact version, so new releases are NOT seen here; check by hand: ${PINNED_LIST[*]}"
+    [ "${#TAG_UNSURE[@]}" -eq 0 ] || line_note "Pinned to an exact version, and its newer versions could not be looked up (check by hand): ${TAG_UNSURE[*]##*/}"
   fi
 
   if [ "${#CHECK_FAILED[@]}" -eq 0 ]; then
@@ -325,110 +520,311 @@ warn_block() {   # warn_block "text..." : a yellow ! line that wraps under itsel
   done < <(printf '%s\n' "$text" | fold -s -w "$w")
 }
 
-print_plan() {
-  local line stacks img dig at st s i
-  local -a stacks_order=(); local -A SIMG=() SST=()
+PLAN_STACKS=(); declare -A SIMG=() SST=() SNT=()      # the stacks waiting, their images, each image's status, each image's newer version
+build_plan() {   # reads the saved state and fills PLAN_STACKS (in the order to update) / SIMG / SST / SNT
+  local line stacks img dig at st s
+  PLAN_STACKS=(); SIMG=(); SST=(); SNT=()
   read_state
+  local -a seen=()
   while IFS= read -r line; do
     [ -n "$line" ] || continue
     IFS='|' read -r stacks img dig at st <<<"$line"
     for s in ${stacks//,/ }; do
-      if [ -z "${SIMG[$s]+x}" ]; then stacks_order+=("$s"); SIMG[$s]="$img"; else SIMG[$s]+=" $img"; fi
+      if [ -z "${SIMG[$s]+x}" ]; then seen+=("$s"); SIMG[$s]="$img"; else SIMG[$s]+=" $img"; fi
       SST["$s|$img"]=$st
+      [[ "$dig" == tag=* ]] && SNT["$s|$img"]=${dig#tag=}
     done
   done < <(evaluate_state)
-
-  if [ "${#stacks_order[@]}" -eq 0 ]; then line_ok "Nothing is waiting: every container runs the newest image."; return 0; fi
-
+  [ "${#seen[@]}" -eq 0 ] && return 0
   local sorted
-  sorted=$(for s in "${stacks_order[@]}"; do printf '%s %s\n' "$(rank_of "$s")" "$s"; done | sort -k1,1n -k2,2 | awk '{print $2}')
+  sorted=$(for s in "${seen[@]}"; do printf '%s %s\n' "$(rank_of "$s")" "$s"; done | sort -k1,1n -k2,2 | awk '{print $2}')
+  while IFS= read -r s; do [ -n "$s" ] && PLAN_STACKS+=("$s"); done <<<"$sorted"
+}
 
-  local n=0 todl=0
+print_stack() {   # print_stack N STACK: what is waiting in one stack, with the notes that matter
+  local n=$1 s=$2 img any_new=0 oldid newv oldv m i
+  for img in ${SIMG[$s]}; do [ "${SST["$s|$img"]}" = new ] && any_new=1; done
+  if [ "$any_new" -eq 1 ]; then
+    printf '   %s%d%s  %s%s%s   %s[not downloaded yet]%s\n' "$C" "$n" "$N" "$B" "$s" "$N" "$Y" "$N"
+  else
+    printf '   %s%d%s  %s%s%s\n' "$C" "$n" "$N" "$B" "$s" "$N"
+  fi
+  for img in ${SIMG[$s]}; do
+    kv image "$img"
+    if [ -n "${SNT["$s|$img"]:-}" ]; then
+      kv version "${img##*:} $S_ARR ${SNT["$s|$img"]}"
+      continue
+    fi
+    [ "${SST["$s|$img"]}" = new ] && continue
+    oldid=""; for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$img" ] && { oldid=${CD[$i]}; break; }; done
+    newv=$(img_version "$img"); oldv=""; [ -n "$oldid" ] && oldv=$(img_version "$oldid")
+    if [ -n "$newv" ] && [ -n "$oldv" ] && [ "$newv" != "$oldv" ]; then kv version "$oldv $S_ARR $newv"; fi
+  done
+  for i in "${!CN[@]}"; do
+    [ "${CS[$i]}" = "$s" ] || continue
+    m=$(anon_volumes_of "${CX[$i]}")
+    if [ -n "$m" ]; then
+      warn_block "WARNING: ${CN[$i]} keeps data in an anonymous volume ($(echo "$m" | paste -sd, -))." \
+        "Updating can leave it EMPTY (see B6 in docs/troubleshooting.md), so it is NOT updated here. Copy that data out first."
+    fi
+  done
+  case "${s,,}" in
+    adguard*) kv note "This is your DNS server. DNS is down for a few seconds while it restarts, so pick a quiet moment." ;;
+    immich*)
+      kv note "Read the release notes first: https://github.com/immich-app/immich/releases"
+      kv "" "A quick dump of its database is made right before. Do it alone, not together with Nextcloud." ;;
+    nextcloud*) nextcloud_notes "$s" ;;
+    portainer*)
+      kv note "Portainer is recreated from the terminal (it is not a stack). Its page and the Homepage card are down for a minute." ;;
+  esac
+}
+
+anon_volumes_of() {   # anon_volumes_of CONTAINER: the paths kept in anonymous volumes (a 64-character name)
+  docker inspect "$1" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{.Destination}}{{println}}{{end}}{{end}}' 2>/dev/null | awk '$1 ~ /^[0-9a-f]{64}$/ {print $2}'
+}
+
+print_plan() {   # for "list": every waiting stack, in order
+  build_plan
+  if [ "${#PLAN_STACKS[@]}" -eq 0 ]; then line_ok "Nothing is waiting: every container runs the newest image."; return 0; fi
+  local n=0 todl=0 s img
   echo "  Update these one at a time, in this order. The riskier ones are last."
   echo
-  while IFS= read -r s; do
-    [ -n "$s" ] || continue
-    n=$((n + 1))
-    [ "$n" -gt 1 ] && echo
-    local any_new=0 oldid newv oldv m
-    for img in ${SIMG[$s]}; do [ "${SST["$s|$img"]}" = new ] && any_new=1; done
-    if [ "$any_new" -eq 1 ]; then
-      todl=$((todl + 1)); printf '   %s%d%s  %s%s%s   %s[not downloaded yet]%s\n' "$C" "$n" "$N" "$B" "$s" "$N" "$Y" "$N"
-    else
-      printf '   %s%d%s  %s%s%s\n' "$C" "$n" "$N" "$B" "$s" "$N"
-    fi
-    for img in ${SIMG[$s]}; do
-      kv image "$img"
-      [ "${SST["$s|$img"]}" = new ] && continue
-      oldid=""; for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$img" ] && { oldid=${CD[$i]}; break; }; done
-      newv=$(img_version "$img"); oldv=""; [ -n "$oldid" ] && oldv=$(img_version "$oldid")
-      if [ -n "$newv" ] && [ -n "$oldv" ] && [ "$newv" != "$oldv" ]; then kv version "$oldv $S_ARR $newv"; fi
-    done
-    for i in "${!CN[@]}"; do
-      [ "${CS[$i]}" = "$s" ] || continue
-      m=$(docker inspect "${CX[$i]}" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{.Destination}}{{println}}{{end}}{{end}}' 2>/dev/null | awk '$1 ~ /^[0-9a-f]{64}$/ {print $2}')
-      if [ -n "$m" ]; then
-        warn_block "WARNING: ${CN[$i]} keeps data in an anonymous volume ($(echo "$m" | paste -sd, -))." \
-          "Update the stack can leave it EMPTY (see B6 in docs/troubleshooting.md). Copy that data out first."
-      fi
-    done
-    case "${s,,}" in
-      adguard*) kv note "This is your DNS server. DNS is down for a few seconds while it restarts, so pick a quiet moment." ;;
-      immich*)
-        kv note "Read the release notes first: https://github.com/immich-app/immich/releases"
-        kv "" "Do it alone, not together with Nextcloud. If the update fails after Immich changed its database, restore from its own dump (welcome page, 'Restore from backup'); going back to the old image alone may not work." ;;
-      nextcloud*) nextcloud_notes "$s" ;;
-      portainer*)
-        kv note "Portainer is not a stack. Do not use 'Update the stack' for it."
-        kv "" "Follow the Portainer section of docs/updating.md." ;;
-    esac
-  done <<<"$sorted"
-
-  rule "How to update each one"
-  echo "   1  Portainer ${S_ARR} Stacks ${S_ARR} the stack name ${S_ARR} Editor"
-  echo "   2  Leave the YAML alone. If you see \"Re-pull image and redeploy\", switch it on. Click Update the stack."
-  echo "   3  Check it:  docker ps --format \"table {{.Names}}\\t{{.Status}}\""
-  echo "   4  Wait until it says (healthy), then do the next one."
-  [ "$todl" -eq 0 ] || { echo; line_warn "Stacks marked [not downloaded yet]: run  sudo homelab-update  again first. Do not update them before that."; }
+  for s in "${PLAN_STACKS[@]}"; do
+    n=$((n + 1)); [ "$n" -gt 1 ] && echo
+    for img in ${SIMG[$s]}; do [ "${SST["$s|$img"]}" = new ] && { todl=$((todl + 1)); break; }; done
+    print_stack "$n" "$s"
+  done
+  [ "$todl" -eq 0 ] || { echo; line_warn "Stacks marked [not downloaded yet]: run  sudo homelab-update  first."; }
   echo
+  echo "  ${D}To update them, run:${N}  sudo homelab-update   ${D}(it downloads, then asks before each stack)${N}"
   echo "  ${D}Going back:${N} the old version of each image is saved as homelab-rollback:<name>-<date>."
-  echo "  ${D}Point the image name at it (docker tag homelab-rollback:<name>-<date> <image name>), then Update the stack${N}"
-  echo "  ${D}with Re-pull OFF. That brings back the program only, not the data (for data, use the backup).${N}"
   echo "  ${D}When everything runs fine, free the disk space with:${N}  sudo homelab-update clean"
 }
 
-nextcloud_notes() {   # nextcloud_notes STACK   (uses SST from print_plan)
-  local s=$1 i name="" ref="" old new om nm
+nc_versions() {   # nc_versions STACK -> "OLD NEW" Nextcloud version numbers (the running one and the downloaded one), or nothing
+  local s=$1 i name="" ref="" old new
   for i in "${!CS[@]}"; do
     if [ "${CS[$i]}" = "$s" ] && [[ "${CI[$i]}" == nextcloud:* || "${CI[$i]}" == nextcloud ]]; then
       if [ -z "$name" ] || [ "${CN[$i]}" = nextcloud ]; then name=${CN[$i]}; ref=${CI[$i]}; fi
     fi
   done
-  if [ -n "$name" ]; then
-    if [ "${SST["$s|$ref"]:-}" = downloaded ]; then
-      old=$(docker exec "$name" cat /var/www/html/version.php 2>/dev/null | nc_version_of)
-      new=$(docker run --rm --network none --entrypoint cat "$ref" /usr/src/nextcloud/version.php 2>/dev/null | nc_version_of)
-      if [ -n "$old" ] && [ -n "$new" ]; then
-        om=${old%%.*}; nm=${new%%.*}
-        if [[ "$om" =~ ^[0-9]+$ && "$nm" =~ ^[0-9]+$ ]]; then
-          if [ "$nm" -gt $((om + 1)) ]; then
-            warn_block "STOP: Nextcloud would jump from $old to $new and skip a major version. Do NOT update." \
-              "Nextcloud can only go up one major version at a time. Read the Nextcloud section of docs/updating.md first."
-          elif [ "$nm" -gt "$om" ]; then
-            warn_block "MAJOR upgrade: $old $S_ARR $new. Read the release notes and the Nextcloud section of docs/updating.md first;" \
-              "check that your apps support it."
-          elif [ "$old" = "$new" ]; then
-            kv version "$old (same number, rebuilt image)"
-          else
-            kv version "$old $S_ARR $new"
-          fi
-        fi
-      fi
+  [ -n "$name" ] || return 0
+  [ "${SST["$s|$ref"]:-}" = downloaded ] || return 0
+  old=$(docker exec "$name" cat /var/www/html/version.php 2>/dev/null | nc_version_of)
+  new=$(docker run --rm --network none --entrypoint cat "$ref" /usr/src/nextcloud/version.php 2>/dev/null | nc_version_of)
+  [ -n "$old" ] && [ -n "$new" ] && printf '%s %s\n' "$old" "$new"
+  return 0
+}
+
+nc_jump() {   # nc_jump OLD NEW -> skip (more than one major version) | major | same | minor
+  local om=${1%%.*} nm=${2%%.*}
+  [[ "$om" =~ ^[0-9]+$ && "$nm" =~ ^[0-9]+$ ]] || { echo minor; return; }
+  if [ "$nm" -gt $((om + 1)) ]; then echo skip
+  elif [ "$nm" -gt "$om" ]; then echo major
+  elif [ "$1" = "$2" ]; then echo same
+  else echo minor; fi
+}
+
+nextcloud_notes() {   # nextcloud_notes STACK   (uses SST from build_plan)
+  local s=$1 old new
+  if read -r old new < <(nc_versions "$s") && [ -n "${new:-}" ]; then
+    case "$(nc_jump "$old" "$new")" in
+      skip) warn_block "STOP: Nextcloud would jump from $old to $new and skip a major version. It is NOT updated here." \
+              "Nextcloud can only go up one major version at a time. Read the Nextcloud section of docs/updating.md first." ;;
+      major) warn_block "MAJOR upgrade: $old $S_ARR $new. Read the release notes and the Nextcloud section of docs/updating.md first;" \
+              "check that your apps support it. It is only done when you type yes yourself (not with --yes)." ;;
+      same) kv version "$old (same number, rebuilt image)" ;;
+      *) kv version "$old $S_ARR $new" ;;
+    esac
+  else
+    local img
+    for img in ${SIMG[$s]}; do
+      [ "${SST["$s|$img"]:-}" = new ] && { kv note "The version change is shown after the image is downloaded."; break; }
+    done
+  fi
+  kv note "A quick dump of its database is made right before. Do it alone, not together with Immich. Never skip a major version."
+}
+
+# ---------- is anything being written right now? ----------
+# An update restarts containers. If files are being uploaded to a pool (or a backup is copying), wait for that to finish.
+pool_devices() {   # the whole drives behind the pools (not the boot drive), one name per line
+  if [ -n "${HLU_POOL_DEVS:-}" ]; then printf '%s\n' $HLU_POOL_DEVS; return; fi
+  local src dsk
+  while read -r src; do
+    [[ "$src" == /dev/* ]] || continue
+    dsk=$(lsblk -no pkname "$src" 2>/dev/null | head -n 1)
+    [ -n "$dsk" ] && printf '%s\n' "$dsk"
+  done < <(findmnt -rn -o SOURCE,TARGET 2>/dev/null | awk '$2 ~ "^/mnt/(disks/|storage$|backup$)" {print $1}') | sort -u
+}
+
+sectors_written() {   # sectors written to the pool drives so far (field 7 of /sys/block/DEV/stat)
+  local d t=0 w
+  while read -r d; do
+    [ -n "$d" ] || continue
+    w=$(awk '{print $7}' "${HLU_SYS_BLOCK:-/sys/block}/$d/stat" 2>/dev/null)
+    [[ "$w" =~ ^[0-9]+$ ]] && t=$((t + w))
+  done < <(pool_devices)
+  echo "$t"
+}
+
+busy_reason() {   # prints why it is a bad moment to restart containers, or nothing
+  if [ -n "${HLU_BUSY:-}" ]; then [ "$HLU_BUSY" = none ] || echo "$HLU_BUSY"; return 0; fi   # test hook
+  if ! ( exec 7>"${HLU_BACKUP_LOCK:-/var/lock/homelab-backup.lock}" && flock -n 7 ) 2>/dev/null; then
+    echo "a backup is running right now"; return 0
+  fi
+  local a b secs=${HLU_SAMPLE_SECS:-5}
+  a=$(sectors_written); sleep "$secs"; b=$(sectors_written)
+  # more than about 300 KB per second written to the pool drives: files are coming in
+  if [ $(( (b - a) * 512 / secs )) -gt 300000 ]; then echo "files are being written to a storage pool (an upload?)"; fi
+  return 0
+}
+
+# ---------- quick database dump (instead of a full backup) ----------
+dump_dir() {
+  if mountpoint -q /mnt/backup 2>/dev/null; then echo "${HLU_DUMP_DIR:-/mnt/backup/db-dumps/pre-update}"; else echo "${HLU_DUMP_DIR:-$STATE_DIR/pre-update-dumps}"; fi
+}
+
+dump_stack_db() {   # dump_stack_db STACK: dump every PostgreSQL database in the stack. 0 = all saved (or nothing to dump)
+  local s=$1 i c img dir stamp user db f n=0 free
+  stamp=$(date +%Y%m%d-%H%M%S); dir=$(dump_dir)
+  for i in "${!CN[@]}"; do
+    [ "${CS[$i]}" = "$s" ] || continue
+    c=${CN[$i]}; img=${CI[$i]}
+    [[ "${img,,}" == *postgres* ]] || continue
+    user=$(docker exec "$c" printenv POSTGRES_USER 2>/dev/null); user=${user:-postgres}
+    db=$(docker exec "$c" printenv POSTGRES_DB 2>/dev/null); db=${db:-$user}
+    mkdir -p "$dir" 2>/dev/null || { line_bad "Cannot create $dir for the database dump."; return 1; }
+    free=$(df -B1G --output=avail "$dir" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}')
+    if [ -n "$free" ] && [ "$free" -lt "$MIN_FREE_GB" ]; then line_bad "Only ${free} GB free at $dir; need at least $MIN_FREE_GB for the dump."; return 1; fi
+    f="$dir/$c-$stamp.sql.gz"
+    if nice -n 19 docker exec "$c" pg_dump -U "$user" "$db" 2>/dev/null | gzip -c >"$f.tmp" && gzip -t "$f.tmp" 2>/dev/null \
+       && [ "$(stat -c %s "$f.tmp")" -gt "${HLU_DUMP_MIN:-200}" ]; then
+      mv "$f.tmp" "$f"; chmod 600 "$f"
+      line_ok "Database dump saved: $f ($(hb "$(stat -c %s "$f")"))"
+      # keep the newest 3 dumps of this database
+      # shellcheck disable=SC2012
+      ls -1t "$dir/$c"-*.sql.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
+      n=$((n + 1))
     else
-      kv note "The version change is shown after the image is downloaded."
+      rm -f "$f.tmp"; line_bad "The dump of the $c database failed, so $s is not updated."; return 1
+    fi
+  done
+  return 0
+}
+
+# ---------- updating one stack ----------
+wait_stack() {   # wait_stack STACK: wait until every container of the stack runs again (and is healthy). 0 = yes
+  local s=$1 i c st h deadline ok bad_names
+  deadline=$(( $(date +%s) + ${HLU_WAIT:-300} ))
+  while :; do
+    ok=1; bad_names=""
+    while IFS= read -r c; do
+      [ -n "$c" ] || continue
+      read -r st h < <(docker inspect "$c" --format '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' 2>/dev/null)
+      if [ "$st" != running ] || { [ "$h" != none ] && [ "$h" != healthy ]; }; then ok=0; bad_names="$bad_names$c "; fi
+    done < <(docker ps -a --filter "label=com.docker.compose.project=$s" --format '{{.Names}}' 2>/dev/null)
+    [ "$ok" -eq 1 ] && return 0
+    [ "$(date +%s)" -ge "$deadline" ] && { WAIT_BAD=${bad_names% }; return 1; }
+    sleep "${HLU_WAIT_EVERY:-5}"
+  done
+}
+
+manual_steps() {   # manual_steps STACK WHY
+  line_warn "$2"
+  echo "      Do it by hand in Portainer: Stacks ${S_ARR} $1 ${S_ARR} Editor ${S_ARR} (change the version on the image: line if one is listed above)"
+  echo "      ${S_ARR} Update the stack. Then check:  docker ps --format \"table {{.Names}}\\t{{.Status}}\""
+}
+
+update_portainer() {   # recreate the Portainer container itself from the terminal (it is not a stack)
+  local img="" i restart ports mounts args old="portainer-before-update"
+  for i in "${!CN[@]}"; do [ "${CN[$i]}" = portainer ] && img=${CI[$i]}; done
+  [ -n "$img" ] || { line_bad "No container named portainer is running."; return 1; }
+  restart=$(docker inspect portainer --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null); restart=${restart:-always}
+  ports=$(docker inspect portainer --format '{{range $p, $b := .HostConfig.PortBindings}}{{range $b}}-p {{.HostPort}}:{{$p}} {{end}}{{end}}' 2>/dev/null)
+  mounts=$(docker inspect portainer --format '{{range .Mounts}}{{if eq .Type "volume"}}-v {{.Name}}:{{.Destination}} {{else if eq .Type "bind"}}-v {{.Source}}:{{.Destination}}{{if not .RW}}:ro{{end}} {{end}}{{end}}' 2>/dev/null)
+  args=$(docker inspect portainer --format '{{range .Args}}{{.}} {{end}}' 2>/dev/null)
+  docker rm -f "$old" >/dev/null 2>&1
+  docker stop portainer >/dev/null 2>&1 || { line_bad "Could not stop Portainer."; return 1; }
+  docker rename portainer "$old" >/dev/null 2>&1
+  # shellcheck disable=SC2086
+  if docker run -d --name portainer --restart="$restart" $ports $mounts "$img" ${args:-} >/dev/null 2>&1 \
+     && wait_http "${HLU_PORTAINER:-http://127.0.0.1:9000}/api/status" "${HLU_WAIT:-120}"; then
+    docker rm "$old" >/dev/null 2>&1
+    return 0
+  fi
+  line_bad "The new Portainer did not start. Putting the old one back."
+  docker rm -f portainer >/dev/null 2>&1
+  docker rename "$old" portainer >/dev/null 2>&1
+  docker start portainer >/dev/null 2>&1
+  return 1
+}
+
+wait_http() {   # wait_http URL SECONDS: wait until the address answers 200
+  local url=$1 deadline=$(( $(date +%s) + $2 ))
+  until curl -fsS -m 5 -o /dev/null "$url" 2>/dev/null; do
+    [ "$(date +%s)" -ge "$deadline" ] && return 1
+    sleep "${HLU_WAIT_EVERY:-5}"
+  done
+}
+
+update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop here), 2 left for you (nothing was changed)
+  local s=$1 yes=$2 img nt pairs=() old_ids="" i c v old new
+  for img in ${SIMG[$s]}; do
+    if [ "${SST["$s|$img"]}" = new ]; then manual_steps "$s" "$s was not downloaded yet: run  sudo homelab-update  again first."; return 2; fi
+    nt=${SNT["$s|$img"]:-}
+    [ -n "$nt" ] && pairs+=("$img" "${img%:*}:$nt")
+  done
+  # data in an anonymous volume can be lost when the container is recreated
+  for i in "${!CN[@]}"; do
+    [ "${CS[$i]}" = "$s" ] || continue
+    v=$(anon_volumes_of "${CX[$i]}")
+    if [ -n "$v" ]; then manual_steps "$s" "${CN[$i]} keeps data in an anonymous volume, so it is not updated here (B6 in docs/troubleshooting.md). Copy that data out first."; return 2; fi
+  done
+  case "${s,,}" in
+    nextcloud*)
+      if read -r old new < <(nc_versions "$s") && [ -n "${new:-}" ]; then
+        case "$(nc_jump "$old" "$new")" in
+          skip) line_bad "Nextcloud would skip a major version ($old $S_ARR $new). Not updated. Read docs/updating.md."; return 2 ;;
+          major)
+            if [ "$yes" -eq 1 ]; then line_warn "Nextcloud $old $S_ARR $new is a MAJOR upgrade. It is left for you: run  sudo homelab-update  without --yes."; return 2; fi
+            confirm "This is a MAJOR Nextcloud upgrade ($old $S_ARR $new). Did you read the release notes and check your apps? Continue?" 0 || { line_note "Nextcloud left as it is."; return 2; } ;;
+        esac
+      fi ;;
+  esac
+  case "${s,,}" in
+    nextcloud*|immich*) echo "      Quick database dump first..."; dump_stack_db "$s" || return 1 ;;
+  esac
+  for i in "${!CN[@]}"; do [ "${CS[$i]}" = "$s" ] && old_ids="$old_ids${CN[$i]}=${CD[$i]} "; done
+  if [ "${s,,}" = portainer ]; then
+    echo "      Recreating Portainer..."
+    update_portainer || return 1
+  else
+    local why
+    if ! why=$(pylib pt-has "$s" 2>&1); then manual_steps "$s" "Portainer could not be asked ($why)."; return 2; fi
+    if [ "$why" != yes ]; then manual_steps "$s" "Portainer has no stack named '$s' (it was not made with Portainer)."; return 2; fi
+    echo "      Updating the stack through Portainer..."
+    if ! why=$(pylib pt-update "$s" "${pairs[@]}" 2>&1); then
+      line_bad "Portainer did not update '$s': $why"
+      echo "      Nothing else was changed. You can do it by hand in Portainer (Stacks ${S_ARR} $s ${S_ARR} Update the stack)."
+      return 1
     fi
   fi
-  kv note "Do it alone, not together with Immich. Never skip a major version."
+  WAIT_BAD=""
+  echo "      Waiting for the containers to come back (up to 5 minutes)..."
+  if ! wait_stack "$s"; then
+    line_bad "$s is not healthy yet: ${WAIT_BAD:-unknown}. Look:  docker ps -a   and   docker logs --tail 50 NAME"
+    echo "      Going back: the old version of each image is saved as homelab-rollback:<name>-<date> (docs/updating.md)."
+    return 1
+  fi
+  # did the containers really change?
+  load_containers
+  for c in $old_ids; do
+    for i in "${!CN[@]}"; do
+      [ "${CN[$i]}" = "${c%%=*}" ] && [ "${CD[$i]}" = "${c#*=}" ] && { line_warn "${CN[$i]} still runs the old image (Docker found nothing to change)."; }
+    done
+  done
+  line_ok "$s is updated and running."
+  return 0
 }
 
 # ---------- commands ----------
@@ -486,13 +882,13 @@ cmd_list() {
   print_plan
   echo
   [ "${#HELD_LIST[@]}" -eq 0 ] || line_note "Left alone on purpose: ${HELD_LIST[*]}"
-  [ "${#PINNED_LIST[@]}" -eq 0 ] || line_note "Pinned to an exact version (check by hand): ${PINNED_LIST[*]}"
+  [ "${#PINNED_LIST[@]}" -eq 0 ] || line_note "Pinned to an exact version (newer version numbers are looked up at each check): ${PINNED_LIST[*]}"
   echo
 }
 
 confirm() {   # confirm TEXT yes(0/1)
   [ "$2" -eq 1 ] && return 0
-  [ -t 0 ] || die "Not a terminal. Add --yes to go on without asking."
+  [ -t 0 ] || [ "${HLU_TEST_STDIN:-}" = 1 ] || die "Not a terminal. Add --yes to go on without asking."
   local a; read -r -p "  $1 [y/N] " a
   [[ "$a" == [yY]* ]]
 }
@@ -510,7 +906,7 @@ cmd_run() {
   if [ "${#CHECK_NEW[@]}" -eq 0 ] && [ "${#CHECK_DL[@]}" -eq 0 ]; then
     line_ok "Nothing to do: every checked container runs the newest image."; echo; return 0
   fi
-  confirm "Download ${#CHECK_NEW[@]} image(s), then run the backup. No running container is changed. Continue?" "$yes" || { echo; echo "  Stopped. Nothing was downloaded."; return 0; }
+  confirm "Download ${#CHECK_NEW[@]} image(s)? No running container is changed yet. Continue?" "$yes" || { echo; echo "  Stopped. Nothing was downloaded."; return 0; }
 
   rule "Step 2 of 4 ${S_DOT} Download"
   if [ "${#CHECK_NEW[@]}" -eq 0 ]; then line_ok "Nothing new to download (the newer images are already here)."; else
@@ -518,11 +914,12 @@ cmd_run() {
     if [ "$free" -lt "$MIN_FREE_GB" ]; then die "Only ${free} GB free where Docker keeps its images; need at least $MIN_FREE_GB. Free some space (sudo homelab-update clean) and try again."; fi
     echo "  One at a time. Big images take a few minutes."
     echo
-    local out prc msg failed_pull=()
+    local out prc msg pr failed_pull=()
     for img in "${CHECK_NEW[@]}"; do
-      printf '   %s%s%s  %s\n' "$C" "$S_DL" "$N" "$img"
+      pr=$img; [ -n "${NEWTAG[$img]:-}" ] && pr="${img%:*}:${NEWTAG[$img]}"
+      printf '   %s%s%s  %s\n' "$C" "$S_DL" "$N" "$pr"
       rollback_tag "$img"
-      out=$(docker pull "$img" 2>&1); prc=$?
+      out=$(docker pull "$pr" 2>&1); prc=$?
       if [ "$prc" -ne 0 ]; then
         failed_pull+=("$img")
         printf '      %s%s FAILED:%s %s\n' "$R" "$S_BAD" "$N" "$(printf '%s\n' "$out" | tail -n 1)"
@@ -537,29 +934,73 @@ cmd_run() {
     [ "${#failed_pull[@]}" -eq 0 ] || { echo; line_warn "${#failed_pull[@]} download(s) failed; they are marked [not downloaded yet] below. Run homelab-update again later."; }
   fi
 
-  # save what we know now (so the login screen shows the new state even if the backup fails)
+  # save what we know now (so the login screen shows the new state even if something stops later)
   load_containers; build_images; read_state
   evaluate_state | write_outputs "$(summary_epoch || date +%s)"
 
-  rule "Step 3 of 4 ${S_DOT} Back up everything first"
-  BACKUP_WHEN=""
-  if ! run_backup; then
-    echo
-    line_bad "STOPPED: no backup, so no update. The downloaded images are safe; nothing running was changed."
-    echo "      Fix the backup (sudo drives status shows why), then run: sudo homelab-update"
-    echo
-    return 1
+  rule "Step 3 of 4 ${S_DOT} Is anything being uploaded?"
+  local why
+  if [ "$NOW" -eq 1 ]; then
+    line_note "Skipped (--now)."
+  else
+    echo "  Looking at the storage drives for a few seconds..."
+    why=$(busy_reason)
+    if [ -n "$why" ]; then
+      echo
+      line_warn "Not now: $why."
+      echo "      Wait for it to finish, then run  sudo homelab-update  again. The downloads are done, so it goes quickly."
+      echo "      (Running it anyway: sudo homelab-update --now)"
+      echo
+      return 0
+    fi
+    line_ok "Nothing is being written to the storage pools."
   fi
-  line_ok "Backup finished OK at $BACKUP_WHEN."
+  if [ "$FULL_BACKUP" -eq 1 ]; then
+    echo
+    echo "  Running the full backup first (--backup)..."
+    BACKUP_WHEN=""
+    if ! run_backup; then
+      echo; line_bad "STOPPED: the backup did not finish OK, so nothing was updated."; echo; return 1
+    fi
+    line_ok "Backup finished OK at $BACKUP_WHEN."
+  fi
 
-  rule "Step 4 of 4 ${S_DOT} What to update"
-  load_containers; build_images; read_state
-  print_plan
+  rule "Step 4 of 4 ${S_DOT} Update, one stack at a time"
+  load_containers; build_images
+  build_plan
+  if [ "${#PLAN_STACKS[@]}" -eq 0 ]; then line_ok "Nothing is waiting any more."; echo; return 0; fi
+  local n=0 s r updated=0 left=0
+  for s in "${PLAN_STACKS[@]}"; do
+    n=$((n + 1)); [ "$n" -gt 1 ] && echo
+    print_stack "$n" "$s"
+    echo
+    if ! confirm "Update $s now?" "$yes"; then line_note "$s left as it is."; left=$((left + 1)); continue; fi
+    if [ "$NOW" -eq 0 ] && [ "$n" -gt 1 ]; then
+      why=$(busy_reason)
+      if [ -n "$why" ]; then
+        line_warn "Not now: $why. Stopped before $s. Run  sudo homelab-update  again when it is done."
+        return 0
+      fi
+    fi
+    r=0; update_stack "$s" "$yes" || r=$?
+    case "$r" in
+      0) updated=$((updated + 1)) ;;
+      2) left=$((left + 1)) ;;
+      *) echo; line_bad "Stopped at $s. The stacks after it were not touched."; echo; refresh_state; return 1 ;;
+    esac
+    # the containers changed: read them again so the next stack and the login screen see the truth
+    refresh_state
+  done
   echo
-  echo "  The backup above is from $BACKUP_WHEN. If you wait more than a day before updating Nextcloud or Immich,"
-  echo "  run sudo homelab-backup again first."
+  line_ok "$updated stack(s) updated${left:+, $left left as they were}."
+  echo "  ${D}When everything runs fine for a few days, free the disk space with:${N}  sudo homelab-update clean"
   echo
   return 0
+}
+
+refresh_state() {   # re-read the containers and save what is still waiting
+  load_containers; build_images; read_state
+  evaluate_state | write_outputs "$(summary_epoch || date +%s)"
 }
 
 free_bytes() {
@@ -663,8 +1104,9 @@ cmd_clean() {   # cmd_clean YES OLD_ONLY
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
-YES=0; OLD=0; ARGS=()
-for a in "$@"; do case "$a" in --yes|-y) YES=1 ;; --old) OLD=1 ;; *) ARGS+=("$a") ;; esac; done
+[ "${HLU_SOURCE_ONLY:-}" = 1 ] && return 0   # tests load the functions only
+YES=0; OLD=0; NOW=0; FULL_BACKUP=0; ARGS=()
+for a in "$@"; do case "$a" in --yes|-y) YES=1 ;; --old) OLD=1 ;; --now) NOW=1 ;; --backup) FULL_BACKUP=1 ;; *) ARGS+=("$a") ;; esac; done
 case "${ARGS[0]:-run}" in
   version|--version) echo "homelab-update $VERSION" ;;
   help|--help|-h) usage ;;

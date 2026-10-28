@@ -78,6 +78,23 @@ exec 8>/var/lock/homelab-backup.lock
 flock -n 8 || { log "another backup is already running, skipping"; exit 0; }
 log "start"
 
+# ---- keep the backup drives awake while this runs, then let them sleep again when idle ----
+# (the drive tool sets "sleep after 10 minutes idle" on backup drives; a backup must never be put to sleep half way)
+backup_drive_timers() {   # backup_drive_timers 0 (stay awake) | 120 (sleep after 10 minutes idle)
+  command -v hdparm >/dev/null 2>&1 || return 0
+  local mp src dsk
+  for mp in "${HOMELAB_DISKS_DIR:-/mnt/disks}"/BACKUP*; do
+    case "$mp" in *BOOT) continue ;; esac
+    mountpoint -q "$mp" 2>/dev/null || continue
+    src=$(findmnt -no SOURCE "$mp" 2>/dev/null) || continue
+    dsk=$(lsblk -no pkname "$src" 2>/dev/null | head -n 1)
+    [ -n "$dsk" ] && hdparm -S "$1" "/dev/$dsk" >/dev/null 2>&1
+  done
+  return 0
+}
+backup_drive_timers 0
+trap 'backup_drive_timers 120' EXIT
+
 # ---- where to write ----
 if mountpoint -q "$DEST_POOL"; then
   DEST="$DEST_POOL"
