@@ -22,4 +22,5 @@ services:
       - /home/your-username/homepage-config/images:/app/public/images   # your own pictures (homelab theme background FILE); restart Homepage after adding one
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /:/host:ro
-      - /mnt/storage:/mnt/storage:ro
+      - /mnt/storage:/mnt/storage:ro,rslave   # the Main pool pill; rslave: a pool mounted after Homepage started still shows
+      - /mnt/backup:/mnt/backup:ro,rslave     # the Backup pool pill
