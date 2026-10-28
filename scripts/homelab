@@ -28,6 +28,9 @@ STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"        # readings saved by ho
 TEMP_WARN="${HOMELAB_TEMP_WARN:-50}"                       # drive temperature (C) that turns yellow
 TEMP_BAD="${HOMELAB_TEMP_BAD:-60}"                         # ... and red
 SAMPLE_STALE_MIN="${HOMELAB_SAMPLE_STALE_MIN:-60}"         # minutes before the readings count as old
+LOGIN_CACHE_SECS="${HOMELAB_LOGIN_CACHE_SECS:-120}"        # a login screen this young is shown again as it was (terminals opened close together)
+BOOT_GRACE_SECS="${HOMELAB_BOOT_GRACE_SECS:-600}"          # after a boot the login screen only does light checks for this long
+JUST_BOOTED=0
 
 # colours only when printing to a terminal that supports them
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
@@ -1268,7 +1271,10 @@ status() {
   updates_line
 
   # containers (a stopped container whose restart policy is "no" was stopped on purpose, so it is ignored)
-  if command -v docker >/dev/null 2>&1 && timeout 5 docker info >/dev/null 2>&1; then
+  if [ "$JUST_BOOTED" -eq 1 ]; then
+    # first minutes after a boot: Docker is busy starting the apps, so the login screen leaves it alone
+    warn "Containers" "the server just started and the apps are still starting (live check in a few minutes: homelab status)"
+  elif command -v docker >/dev/null 2>&1 && timeout 5 docker info >/dev/null 2>&1; then
     n_run=0; n_all=0; down=""
     now=$(date +%s)
     while read -r cname cstate cpol crc cstart; do
@@ -1461,6 +1467,42 @@ LIST
   echo
 }
 
+screen() {   # the full login screen, checked live
+  BUFFERING=1; status; BUFFERING=0
+  header; summary_line; setup_line
+  rule "Status"; printf '%s\n' "$STATUS_BUF"
+  suggestions
+  hint_line
+}
+
+uptime_secs() {
+  local u=${HOMELAB_UPTIME:-$(cut -d. -f1 /proc/uptime 2>/dev/null)}
+  [[ "$u" =~ ^[0-9]+$ ]] || u=999999
+  echo "$u"
+}
+
+# login_screen: what ~/.bashrc runs when a terminal opens.
+#  - A screen made less than 2 minutes ago (for the same window width) is shown again as it was, so opening
+#    several terminals in a row does the checks once. "homelab" and "homelab status" are always live.
+#  - In the first 10 minutes after a boot the apps are still starting: only light checks run, so SSH stays quick.
+login_screen() {
+  local dir="${HOMELAB_CACHE_DIR:-${XDG_RUNTIME_DIR:-$HOME/.cache}}/homelab-login" file cols now mt age up text
+  file="$dir/screen"; cols=$(term_cols); now=$(date +%s); up=$(uptime_secs)
+  mt=$(stat -c %Y "$file" 2>/dev/null || echo 0); age=$(( now - mt ))
+  if [ -r "$file" ] && [ "$age" -ge 0 ] && [ "$age" -lt "$LOGIN_CACHE_SECS" ] && [ "$age" -lt "$up" ] \
+     && [ "$(head -n 1 "$file")" = "$cols|$B" ]; then
+    tail -n +2 "$file"
+    printf '  %sShown as it was %s seconds ago, so opening terminals stays quick. Live: homelab status%s\n\n' "$D" "$age" "$N"
+    return 0
+  fi
+  [ "$up" -lt "$BOOT_GRACE_SECS" ] && JUST_BOOTED=1
+  text=$(screen)
+  printf '%s\n' "$text"
+  if mkdir -p "$dir" 2>/dev/null && chmod 700 "$dir" 2>/dev/null; then
+    { printf '%s|%s\n' "$cols" "$B"; printf '%s\n' "$text"; } >"$file.$$" 2>/dev/null && mv -f "$file.$$" "$file" 2>/dev/null || rm -f "$file.$$"
+  fi
+}
+
 case "${1:-}" in
   theme)  homepage_edit theme "${@:2}" ;;
   bookmark|bookmarks) homepage_edit bookmark "${@:2}" ;;
@@ -1473,11 +1515,8 @@ case "${1:-}" in
   commands|command)
           header; commands
           echo; printf '  %sType%s %shomelab%s %sto see the status.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N" ;;
-  "")     BUFFERING=1; status; BUFFERING=0
-          header; summary_line; setup_line
-          rule "Status"; printf '%s\n' "$STATUS_BUF"
-          suggestions
-          hint_line ;;
+  login)  login_screen ;;
+  "")     screen ;;
   *)      echo "Unknown option '$1'. Try: homelab, homelab commands, homelab status, homelab docs, homelab secrets, homelab theme, homelab bookmark" >&2; exit 1 ;;
 esac
 

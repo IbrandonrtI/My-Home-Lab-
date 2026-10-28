@@ -453,7 +453,13 @@ cmd_refresh() {
 }
 
 cmd_auto() {
-  need_root auto; take_lock quiet
+  need_root auto
+  # the first 10 minutes after a boot: the apps are still starting, so this waits for the next hourly run
+  local up=${HOMELAB_UPTIME:-$(cut -d. -f1 /proc/uptime 2>/dev/null)}
+  if [[ "${up:-}" =~ ^[0-9]+$ ]] && [ "$up" -lt 600 ]; then return 0; fi
+  renice -n 19 -p $$ >/dev/null 2>&1 || true
+  ionice -c3 -p $$ >/dev/null 2>&1 || true
+  take_lock quiet
   local ep att now; now=$(date +%s)
   if ep=$(summary_epoch); then
     load_containers || exit 0

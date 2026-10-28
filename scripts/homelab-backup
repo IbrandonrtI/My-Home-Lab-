@@ -100,6 +100,10 @@ if [ -z "$(find "$SRC" -mindepth 1 -maxdepth 1 ! -name lost+found -print -quit)"
   finish
 fi
 
+# ---- run quietly: lowest priority for CPU and drive, so SSH and the apps stay responsive ----
+renice -n 19 -p $$ >/dev/null 2>&1 || true
+ionice -c3 -p $$ >/dev/null 2>&1 || true
+
 # ---- free space ----
 free_gb=$(( $(df -B1 --output=avail "$DEST" | tail -1 | tr -d ' ') / 1073741824 ))
 if [ "$free_gb" -lt "$MIN_FREE_GB" ]; then

@@ -8,6 +8,9 @@
 # The homelab command only reads these files.
 #
 # It never wakes a sleeping drive (smartctl -n standby) and never changes anything except these files.
+# To keep the machine quiet it runs at the lowest priority, only reads the drive temperatures in the first
+# 10 minutes after a boot (apps are still starting), and looks for system updates at most every 6 hours
+# when the schedule runs it (typed by hand, it takes every reading).
 #
 #   sudo homelab-sample            take the readings now and print what was saved
 #   homelab-sample version
@@ -29,6 +32,14 @@ esac
 mkdir -p "$OUT_DIR" || { echo "Cannot create $OUT_DIR"; exit 1; }
 chmod 755 "$OUT_DIR"
 NOW=$(date +%s)
+# lowest priority for CPU and drive, so the readings never slow the apps or an SSH session down
+renice -n 19 -p $$ >/dev/null 2>&1 || true
+ionice -c3 -p $$ >/dev/null 2>&1 || true
+
+BOOT_GRACE=600
+UPDATES_EVERY=21600
+up=${HOMELAB_UPTIME:-$(cut -d. -f1 /proc/uptime 2>/dev/null)}
+[[ "${up:-}" =~ ^[0-9]+$ ]] || up=999999
 
 put() {   # put NAME  (content on stdin): write atomically, readable by everyone
   local tmp
@@ -90,7 +101,12 @@ sample_temps() {
 
 # ---------- system updates ----------
 sample_apt() {
-  local n
+  local n last
+  if [ ! -t 1 ]; then      # started by the schedule, not by hand
+    [ "$up" -ge "$BOOT_GRACE" ] || return 0
+    last=$(cut -d'|' -f2 "$OUT_DIR/apt" 2>/dev/null)
+    if [[ "${last:-}" =~ ^[0-9]+$ ]] && [ $((NOW - last)) -lt "$UPDATES_EVERY" ]; then return 0; fi
+  fi
   if command -v apt-get >/dev/null 2>&1; then
     n=$(apt-get -s upgrade 2>/dev/null | grep -c '^Inst ')
     printf '%s|%s\n' "${n:-0}" "$NOW" | put apt
