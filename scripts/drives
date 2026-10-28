@@ -740,7 +740,7 @@ pick_branch() {
   done
   if [ ${#mps[@]} -eq 0 ]; then note "No drives are connected to a pool yet."; return 1; fi
   local idx
-  idx=$(choose "Which drive? " "${items[@]}") || return 1
+  idx=$(choose "${1:-Which drive? }" "${items[@]}") || return 1
   echo "${mps[$idx]}"
 }
 
@@ -836,7 +836,7 @@ detach_branch() {   # detach_branch mountpoint  (leaves the data on the drive un
 
 disconnect_flow() {
   local mp dev
-  mp=$(pick_branch) || return 1
+  mp=$(pick_branch "Which drive do you want to disconnect? ") || return 1
   DETACHED_DEV=""
   detach_branch "$mp" || return 1
   dev=$DETACHED_DEV
@@ -852,7 +852,7 @@ disconnect_flow() {
 
 move_flow() {
   local mp role newrole part dev
-  mp=$(pick_branch) || return 1
+  mp=$(pick_branch "Which drive do you want to move? ") || return 1
   role=$(branch_role "$mp"); newrole=$(other_role "$role")
   if is_boot_section "$mp"; then note "A boot drive section cannot be moved. Remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; fi
   part=$(branch_part "$mp"); [ -n "$part" ] || die "That drive is not connected, so it cannot be moved."
@@ -1510,6 +1510,9 @@ sync_filebrowser() {
   # the Homepage drive pills ("Main pool" / "Connect Backup Drive" ...) follow the pools
   command -v homelab-sample >/dev/null 2>&1 && { homelab-sample widgets 9>&- >/dev/null 2>&1 || true; }
   command -v homelab-setup >/dev/null 2>&1 || return 0
+  # Homepage can only measure a pool that is mounted inside its own container: after a pool was mounted or changed it must see it
+  # (the helper changes nothing when Homepage already sees the pools; otherwise it fixes the stack or restarts Homepage)
+  homelab-setup homepage 9>&- || note "Homepage was not updated. Later, run:  sudo homelab-setup homepage"
   homelab-setup filebrowser 9>&- || note "FileBrowser's drive folders were not updated. Later, run:  sudo homelab-setup filebrowser"
 }
 
@@ -1519,7 +1522,22 @@ sync_filebrowser() {
 #   2) Add or remove drives      connect, disconnect, move, boot drive section, take all out
 #   3) Fix a problem             recover after an unplug, replace a dead drive, copy back missing files
 #   4) Settings and upgrades     power settings, fill order, convert the old single data drive
-ask_choice() { ask "Choose: "; }
+ask_choice() { ask "Type a number and press Enter: "; }
+
+# After a menu choice: say what was chosen and what will happen, so it is clear before anything is asked or changed.
+# intro_ask also asks whether to go on (Enter or n goes back to the menu without changing anything). The flows that ask their own
+# "Continue?" later use intro, which only explains.
+intro() {   # intro "Title" "line" ...
+  local t=$1 l; shift
+  say ""
+  say "You chose: $t"
+  for l in "$@"; do say "  $l"; done
+  say ""
+}
+intro_ask() {   # intro_ask "Title" "line" ...  -> 0 to go on, 1 to go back
+  intro "$@"
+  yn "Do you want to go on?" || { say "Okay. Nothing was changed."; return 1; }
+}
 
 drives_menu() {
   local c
@@ -1534,11 +1552,28 @@ drives_menu() {
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
-      1) connect_flow; sync_filebrowser ;;
-      2) disconnect_flow; sync_filebrowser ;;
-      3) move_flow; sync_filebrowser ;;
-      4) bootsection_flow; sync_filebrowser ;;
-      5) release_flow; sync_filebrowser ;;
+      1) intro_ask "Connect a new drive" \
+           "Next I list the drives that are plugged in and not used yet. You pick one," \
+           "then you say if it is for the Main storage or the Backup storage." \
+           "If the drive has files on it you can keep them. Nothing is erased without you typing ERASE." &&
+         { connect_flow && sync_filebrowser; } ;;
+      2) intro_ask "Disconnect a drive" \
+           "Next I list the drives that are in the pools and you pick one." \
+           "If it holds files, you are asked if they should be copied to another drive first." \
+           "The files on the drive are not erased." &&
+         { disconnect_flow && sync_filebrowser; } ;;
+      3) intro_ask "Move a drive between main and backup" \
+           "Next you pick a drive. Its files are copied to the other drives of its storage first," \
+           "then the drive is erased and formatted for the other storage." &&
+         { move_flow && sync_filebrowser; } ;;
+      4) intro "Use part of the boot drive for a pool" \
+           "Next you choose the Main or the Backup storage, read the warning and choose the size." \
+           "You are asked again before anything is made. Cancel any time by pressing Enter." &&
+         { bootsection_flow && sync_filebrowser; } ;;
+      5) intro "Take all drives out of the pools" \
+           "Next I list the drives and ask before anything is released." \
+           "The files on the drives are not erased." &&
+         { release_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -1556,9 +1591,19 @@ problem_menu() {
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
-      1) recover_flow; sync_filebrowser ;;
-      2) replace_flow; sync_filebrowser ;;
-      3) restore_flow; sync_filebrowser ;;
+      1) intro_ask "Recover after an unplug or power cut" \
+           "The services that use the storage are stopped, the drives are mounted again and the services start again." \
+           "No files are changed. It takes about a minute." &&
+         { recover_flow && sync_filebrowser; } ;;
+      2) intro "Replace a dead drive" \
+           "Next I list the pool drives that cannot be found and you pick the dead one." \
+           "Then you pick the new drive. The missing files are copied back from the backup." \
+           "You are asked again before anything is erased." &&
+         { replace_flow && sync_filebrowser; } ;;
+      3) intro "Copy back only the files that are missing from the backup" \
+           "Next I look for the backup copy and show what it holds." \
+           "Only files that are missing in the main storage are copied back. Nothing is overwritten." &&
+         { restore_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -1576,9 +1621,18 @@ settings_menu() {
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
-      1) power_all ;;
-      2) fillorder_flow ;;
-      3) adopt_flow; sync_filebrowser ;;
+      1) intro_ask "Apply the drive power settings" \
+           "Main drives never go to sleep. Backup drives sleep after 10 minutes without use." \
+           "No files are touched." &&
+         power_all ;;
+      2) intro_ask "Fill drives one at a time" \
+           "A pool uses its first drive until only ${POOL_FREE_PERCENT}% of it is free, then the next one." \
+           "Newer pools already work like this. This updates an older pool. No files are moved." &&
+         fillorder_flow ;;
+      3) intro "Convert the current single data drive into the main pool" \
+           "Only for older setups where one drive is mounted directly as the main storage." \
+           "Next you see what changes and are asked before anything is done." &&
+         { adopt_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
