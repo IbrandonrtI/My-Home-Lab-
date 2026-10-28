@@ -203,7 +203,7 @@ commands() {
   cmd "sudo reboot"                    "restart the server (afterwards: sudo drives status)"
   section "Homepage dashboard"
   cmd "homelab theme"                  "show the look and how to change it (no sudo)"
-  cmd "homelab theme background URL"   "new background picture (web address or file)"
+  cmd "homelab theme background [BLUR] URL" "new picture; optional BLUR: none sm md lg xl 2xl 3xl"
   cmd "homelab theme cards COLOR NUMBER" "ALL cards: colour, how solid (NUMBER 0 to 100)"
   cmd "homelab theme cards SERVICE COLOR" "ONE card, e.g. AdGuard Home blue"
   cmd "homelab theme reset"            "the shipped look again"
@@ -474,9 +474,9 @@ def theme_show():
     print("  Card colours  " + (", ".join(changed) if changed else "the shipped colours"))
     print()
     print("  Change it with:")
-    print("    homelab theme background URL-or-FILE     a picture from the web, or one on this machine")
+    print("    homelab theme background [BLUR] URL-or-FILE   a picture from the web, or one on this machine, with an optional BLUR")
     print("    homelab theme brightness 0-100           how dark the picture is (shipped: 42)")
-    print("    homelab theme blur none|sm|md|lg|xl      blur the picture (shipped: md)")
+    print("    homelab theme blur none|sm|md|lg|xl|2xl|3xl   only the blur, low to high (shipped: md)")
     print("    homelab theme saturate 0-100 | opacity 0-100")
     print("    homelab theme cards COLOR NUMBER         ALL cards: the colour, and how solid (NUMBER 0-100)")
     print("    homelab theme cards SERVICE COLOR        ONE card, for example:  homelab theme cards AdGuard Home blue")
@@ -498,8 +498,10 @@ def images_mounted():
     return "/app/public/images" in r.stdout.split()
 
 
-def theme_background(src):
+def theme_background(src, blur=None):
     need_dir()
+    if blur is not None:
+        blur = (blur_value(blur),)   # checked first, so a typo changes nothing
     if re.match(r"^https?://", src):
         value = quote(src)
     else:
@@ -513,8 +515,12 @@ def theme_background(src):
         name = "background" + ext
         shutil.copyfile(p, os.path.join(IMAGES, name))
         value = "/images/" + name
-    write(SETTINGS, bg_set(read(SETTINGS), "image", value))
-    print("Background set to %s. %s" % (value.strip("'") if value.startswith("/") else src, REFRESH))
+    text = bg_set(read(SETTINGS), "image", value)
+    if blur is not None:
+        text = bg_set(text, "blur", blur[0])
+    write(SETTINGS, text)
+    print("Background set to %s%s. %s" % (value.strip("'") if value.startswith("/") else src,
+                                         "" if blur is None else (", blur %s" % blur[0] if blur[0] else ", no blur"), REFRESH))
     if value.startswith("/images/"):
         mounted = images_mounted()
         if mounted is False:
@@ -524,16 +530,24 @@ def theme_background(src):
             print("Homepage only notices a new local picture after a restart:  docker restart homepage")
 
 
+def is_blur(word):
+    return word.lower() in BLURS or word.lower() in ("none", "off")
+
+
+def blur_value(arg):
+    """The blur word for settings.yaml: None for no blur at all. The sizes from low to high: sm, md, lg, xl, 2xl, 3xl."""
+    a = arg.lower()
+    if a in ("none", "off"):
+        return None
+    if a in BLURS:
+        return a
+    raise Fail("blur must be none, " + ", ".join(BLURS) + " (low to high; the shipped look is md).")
+
+
 def theme_key(key, arg):
     need_dir()
     if key == "blur":
-        a = arg.lower()
-        if a in ("none", "off"):
-            write(SETTINGS, bg_set(read(SETTINGS), "blur", None))
-        elif a in BLURS:
-            write(SETTINGS, bg_set(read(SETTINGS), "blur", a))
-        else:
-            raise Fail("blur must be none, " + ", ".join(BLURS) + ".")
+        write(SETTINGS, bg_set(read(SETTINGS), "blur", blur_value(arg)))
     else:
         write(SETTINGS, bg_set(read(SETTINGS), key, str(number(arg, key))))
     print("%s changed. %s" % (key.capitalize(), REFRESH))
@@ -1028,6 +1042,10 @@ def main(a):
                 theme_show()
             elif c in ("background", "bg") and len(a) == 2:
                 theme_background(a[1])
+            elif c in ("background", "bg") and len(a) == 3:
+                if not is_blur(a[1]):
+                    raise Fail("'%s' is not a blur. Use:  homelab theme background BLUR URL-or-FILE   (BLUR: none, %s)" % (a[1], ", ".join(BLURS)))
+                theme_background(a[2], a[1])
             elif c in ("brightness", "blur", "saturate", "opacity") and len(a) == 2:
                 theme_key(c, a[1])
             elif c == "cards" and len(a) >= 2:
