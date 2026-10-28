@@ -535,19 +535,60 @@ def cmd_secrets():
         write_progress(evaluate())
 
 
+def uptime_seconds():
+    """Seconds since the machine booted (HLS_UPTIME overrides it, for tests)."""
+    try:
+        return float(os.environ.get("HLS_UPTIME") or open("/proc/uptime").read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 1e9
+
+
+def started_by_cron():
+    """True when the output goes to /dev/null: the schedule started this, nobody is reading."""
+    try:
+        return os.stat("/dev/null").st_rdev == os.fstat(1).st_rdev and not os.isatty(1)
+    except OSError:
+        return False
+
+
+def drop_progress_line():
+    """Take the progress line out of root's crontab, so nothing keeps running for no reason."""
+    if Opt.dry:
+        return
+    cur = crontab_text()
+    kept = [l for l in cur.splitlines() if CRON_PROGRESS[0] not in l]
+    if len(kept) != len(cur.splitlines()):
+        run(["crontab", "-"], input_text="\n".join(kept) + "\n")
+
+
 def cmd_progress():
-    """`progress`: write the progress counts for the login screen."""
+    """`progress`: write the progress counts for the login screen.
+
+    Run by the schedule it stays light: nothing in the first 10 minutes after a boot (apps are still
+    starting, and a full check of every step would only slow the machine down), nothing while the saved
+    counts are less than 50 minutes old, and once setup is finished the schedule line removes itself.
+    """
+    quiet = len(sys.argv) > 2 and sys.argv[2] == "--quiet"
+    if quiet or started_by_cron():
+        if uptime_seconds() < BOOT_GRACE:
+            return
+        try:
+            if time.time() - os.path.getmtime(PROGRESS_FILE) < 50 * 60:
+                return
+        except OSError:
+            pass            # no counts saved: either never written, or setup is finished; one check tells which
+        try:
+            os.nice(19)
+        except OSError:
+            pass
+        quiet = True
     load_all()
     res = evaluate()
     write_progress(res)
     done, total = counts(res)
-    if len(sys.argv) > 2 and sys.argv[2] == "--quiet":
-        # finished: take the schedule line away, so nothing keeps running for no reason
-        if done >= total and not Opt.dry:
-            cur = crontab_text()
-            kept = [l for l in cur.splitlines() if CRON_PROGRESS[0] not in l]
-            if len(kept) != len(cur.splitlines()):
-                run(["crontab", "-"], input_text="\n".join(kept) + "\n")
+    if quiet:
+        if done >= total:
+            drop_progress_line()
         return
     out("%d of %d steps done" % (done, total))
 

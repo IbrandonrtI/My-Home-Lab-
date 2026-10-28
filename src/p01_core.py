@@ -50,6 +50,7 @@ STATE_DIR = P("/var/lib/homelab-setup")
 STATE_FILE = STATE_DIR + "/state.json"
 PROGRESS_DIR = P("/var/lib/homelab")
 PROGRESS_FILE = PROGRESS_DIR + "/setup-progress"
+BOOT_GRACE = 600      # seconds after a boot during which scheduled checks wait (apps are still starting)
 SECRET_DIR = P("/root/.homelab-setup")
 SECRET_FILE = SECRET_DIR + "/secrets.env"
 LOG_FILE = P("/var/log/homelab-setup.log")

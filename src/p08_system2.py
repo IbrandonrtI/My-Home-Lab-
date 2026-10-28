@@ -121,8 +121,9 @@ class CronLines(Step):
         return CRON_LINES + ([] if Mode.existing else [CRON_PROGRESS])
 
     def probe(self):
+        # the progress line is not required: it removes itself once setup is finished
         act_lines = crontab_active(crontab_text())
-        return "done" if all(k in act_lines for k, _ in self._lines()) else "todo"
+        return "done" if all(k in act_lines for k, _ in CRON_LINES) else "todo"
 
     def run(self):
         crontab_add(self._lines())
@@ -160,7 +161,7 @@ class CronBackup(Step):
 LOGIN_BLOCK = """
 # >>> homelab login display >>>
 if [[ $- == *i* ]] && [ -t 1 ] && command -v homelab >/dev/null 2>&1; then
-  timeout 20 homelab
+  timeout 20 homelab login
 fi
 # <<< homelab login display <<<
 """
@@ -172,11 +173,24 @@ class LoginHook(Step):
     needs = ("scripts",)
 
     def probe(self):
-        return "done" if "# >>> homelab login display >>>" in read_file(P(Ctx.home + "/.bashrc")) else "todo"
+        txt = read_file(P(Ctx.home + "/.bashrc"))
+        # an older block (without "homelab login" on its command line) is replaced: the new one remembers the screen for 2 minutes
+        if "# >>> homelab login display >>>" not in txt:
+            return "todo"
+        # a server built by hand is only looked at, so its older block counts too
+        return "done" if Mode.existing or "timeout 20 homelab login" in txt else "todo"
 
     def run(self):
         path = P(Ctx.home + "/.bashrc")
         cur = read_file(path)
+        if "# >>> homelab login display >>>" in cur:
+            new = re.sub(r"\n?# >>> homelab login display >>>.*?# <<< homelab login display <<<\n", LOGIN_BLOCK, cur, flags=re.S)
+            if not Opt.dry:
+                bak = path + ".bak-homelab-setup"
+                if not os.path.exists(bak):
+                    write_file(bak, cur, 0o644, (Ctx.uid, Ctx.gid))
+            write_file(path, new, 0o644, (Ctx.uid, Ctx.gid))
+            return
         if not Opt.dry and cur:
             bak = path + ".bak-homelab-setup"
             if not os.path.exists(bak):
@@ -304,7 +318,7 @@ class AckStep(Step):
 
     def help(self):
         if self.auto:
-            tail = ("This step is detected automatically (a check runs every 10 minutes and each time "
+            tail = ("This step is detected automatically (a check runs about once an hour and each time "
                     "`sudo homelab-setup refresh` runs). To mark it as done manually:")
         else:
             tail = "When it is done, run:"
