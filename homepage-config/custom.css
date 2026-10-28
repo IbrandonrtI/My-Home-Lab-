@@ -347,3 +347,29 @@ div[id$="-card"] > div {
     margin-right: auto !important;
   }
 }
+
+/* >>> homelab pill layout (kept up to date by: sudo homelab-setup homepage; change the numbers in :root, a re-run puts them back)
+   Desktop: the top pills are taller so the name under each one (Main pool, Backup pool, ...) fits inside it,
+   and the search bar and the cards below move down by the same amount. */
+:root {
+  --d-pill-height: 80px;    /* height of every pill in the top row (was 62px) */
+  --d-search-top: 100px;    /* the search bar: pill height + 10px margin + a gap of 10px */
+  --d-search-space: 110px;  /* space kept free under the pills and the search bar for the cards below */
+}
+@media (min-width: 1500px) {
+  .widget-container {
+    height: var(--d-pill-height) !important;
+    padding: 6px 16px !important;
+  }
+  .widget-container:has(.information-widget-resource) {
+    flex-direction: column !important;
+    justify-content: center !important;
+    gap: 3px !important;
+  }
+  .widget-container:has(.information-widget-resource) > div:last-child {
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 1.15 !important;
+  }
+}
+/* <<< homelab pill layout */
