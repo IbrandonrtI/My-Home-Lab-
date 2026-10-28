@@ -22,5 +22,6 @@ services:
       - /home/your-username/homepage-config/images:/app/public/images   # your own pictures (homelab theme background FILE); restart Homepage after adding one
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /:/host:ro
-      - /mnt/storage:/mnt/storage:ro,rslave   # the Main pool pill; rslave: a pool mounted after Homepage started still shows
-      - /mnt/backup:/mnt/backup:ro,rslave     # the Backup pool pill
+      - /mnt:/mnt:ro,rslave   # the Main pool and Backup pool pills. The whole /mnt folder, with rslave: a pool that is mounted or
+                              # remounted after Homepage started still shows. (A folder bound on its own, like /mnt/backup, is a
+                              # snapshot from when the container was created and shows the pill as "API Error".)
