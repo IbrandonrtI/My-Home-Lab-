@@ -419,7 +419,7 @@ def folder_plan():
         ("/mnt/storage/nextcloud", 33, 33),
         (h + "/nextcloud", u, g), (h + "/nextcloud/html", 33, 33), (h + "/nextcloud/db", 0, 0),
         (h + "/immich", u, g), (h + "/immich/postgres", 0, 0),
-        (h + "/speedtest-tracker", u, g), (h + "/homepage-config", u, g), (boot_share_dir(), u, g),
+        (h + "/speedtest-tracker", u, g), (h + "/homepage-config", u, g), (h + "/homepage-config/images", u, g), (boot_share_dir(), u, g),
         ("/opt/adguard-docker", 0, 0), ("/opt/adguard-docker/conf", 0, 0), ("/opt/adguard-docker/work", 0, 0),
     ]
 
