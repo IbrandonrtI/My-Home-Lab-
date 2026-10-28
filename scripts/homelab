@@ -71,7 +71,7 @@ flush_cmds() {
   cols=$(term_cols)
   for i in "${!CMDS_C[@]}"; do [ "${#CMDS_C[$i]}" -gt "$w" ] && w=${#CMDS_C[$i]}; done
   w=$((w + 3))
-  for i in "${!CMDS_C[@]}"; do [ $(( 3 + w + ${#CMDS_D[$i]} )) -gt "$cols" ] && fits=0; done
+  for i in "${!CMDS_C[@]}"; do [ $(( 3 + w + ${#CMDS_D[$i]} )) -ge "$cols" ] && fits=0; done
   for i in "${!CMDS_C[@]}"; do
     if [ "$fits" -eq 1 ]; then printf '   %s%-*s%s%s\n' "$B" "$w" "${CMDS_C[$i]}" "$N" "${CMDS_D[$i]}"
     else printf '   %s%s%s\n       %s\n' "$B" "${CMDS_C[$i]}" "$N" "${CMDS_D[$i]}"; fi
@@ -169,32 +169,31 @@ hint_line() {
 }
 
 commands() {
+  # keep every description short: a section prints as a table only if its longest line fits the window (about 100 columns)
   section "Every day"
   cmd "homelab"                        "this machine at a glance: status and what to do next"
   cmd "sudo drives status"             "pools, drives, SMART health, free space, last backup"
   cmd "sudo homelab-backup"            "run the backup now (about a minute, longer after many new files)"
-  cmd "sudo homelab-update check"      "only look online for newer container images (changes nothing)"
-  cmd "docker ps"                      "what is running right now"
-  cmd "sudo homelab-selftest"          "check everything and look for problems or leftovers (report saved in your home)"
+  cmd "sudo homelab-update check"      "look online for newer container images (changes nothing)"
+  cmd "docker ps"                      "what is running right now, and how healthy it is"
+  cmd "sudo homelab-selftest"          "check everything for problems or leftovers (report saved in ~)"
   section "Storage and drives"
-  cmd "sudo drives"                    "menu: connect, remove or move drives, boot drive section, and more"
-  cmd "sudo drives bootsection"        "use part of the boot drive for a pool, with a size limit (it is used last)"
+  cmd "sudo drives"                    "menu: connect, remove or move drives, boot drive section, more"
+  cmd "sudo drives bootsection"        "use part of the boot drive for a pool (size limit, used last)"
   cmd "sudo hdd-recover"               "after an unplug or power cut: remount, restart containers"
   cmd "sudo drives replace"            "a drive died: swap it, restore the files from the backup"
   cmd "sudo drives power"              "re-apply the drive power settings"
   cmd "sudo drives fillorder"          "make an older pool fill one drive at a time"
-  cmd "sudo drives release"            "take all drives out of the pools (the files stay on the drives)"
-  cmd "findmnt /mnt/storage"           "is the main pool connected? (prints nothing if not; ask again with /mnt/backup)"
+  cmd "sudo drives release"            "take all drives out of the pools (files stay on the drives)"
+  cmd "findmnt /mnt/storage"           "is the main pool connected? (prints nothing if not)"
   cmd "df -h /"                        "free space on the boot drive (the one the system runs from)"
   section "Backup"
-  cmd "sudo homelab-backup"            "run the backup now (about a minute, longer after many new files)"
   cmd "sudo tail -f /var/log/homelab-backup.log" "watch a backup while it runs (Ctrl+C to leave)"
-  cmd "sudo homelab-restore-configs check" "after a rebuild: preview putting the saved settings back (changes nothing)"
+  cmd "sudo homelab-restore-configs check" "after a rebuild: preview restoring saved settings"
   section "Containers and updates"
-  cmd "sudo homelab-update"            "check, download the new images, back up, then list what to update (you update in Portainer)"
-  cmd "homelab-update list"            "what is waiting, and in which order to update (no sudo needed)"
+  cmd "sudo homelab-update"            "check, download, back up, then list what to update"
+  cmd "homelab-update list"            "what is waiting, and the order to update in (no sudo)"
   cmd "sudo homelab-update clean"      "delete old saved versions and leftover images (asks first)"
-  cmd "docker ps --format \"table {{.Names}}\\t{{.Status}}\"" "the same list in a tidier table, with each container's health"
   cmd "docker logs --tail 50 NAME"     "the last 50 lines a container printed"
   cmd "docker restart NAME"            "restart one container"
   cmd "docker stats --no-stream"       "CPU and memory of each container"
@@ -203,14 +202,14 @@ commands() {
   cmd "sudo apt update && sudo apt upgrade" "install the waiting Linux Mint updates"
   cmd "sudo reboot"                    "restart the server (afterwards: sudo drives status)"
   section "Homepage dashboard"
-  cmd "homelab theme"                  "show the look, and how to change it (no sudo)"
-  cmd "homelab theme background URL"   "a new background picture (a web address or a file on this machine)"
-  cmd "homelab theme cards blue 40"    "ALL cards: colour, and how solid they are (0 to 100)"
-  cmd "homelab theme cards AdGuard Home blue" "ONE card: any service from the dashboard, any colour"
+  cmd "homelab theme"                  "show the look and how to change it (no sudo)"
+  cmd "homelab theme background URL"   "new background picture (web address or file)"
+  cmd "homelab theme cards COLOR NUMBER" "ALL cards: colour, how solid (NUMBER 0 to 100)"
+  cmd "homelab theme cards SERVICE COLOR" "ONE card, e.g. AdGuard Home blue"
   cmd "homelab theme reset"            "the shipped look again"
   cmd "homelab bookmark list"          "the bookmarks, by category"
-  cmd "homelab bookmark add NAME URL"  "add a bookmark; you pick the category (or add it at the end:  ... Entertainment)"
-  cmd "homelab bookmark remove NAME"   "take one away (add the category if the name is in two)"
+  cmd "homelab bookmark add NAME URL [CATEGORY]" "add one (leave CATEGORY out to pick from a list)"
+  cmd "homelab bookmark remove NAME [CATEGORY]" "take one away (CATEGORY if the name is in two)"
   cmd "homelab bookmark move NAME CATEGORY" "put a bookmark in another category"
   if command -v homelab-setup >/dev/null 2>&1; then
     section "Setup checklist"
@@ -219,19 +218,20 @@ commands() {
     cmd "sudo homelab-setup --details"   "the full instructions of every open step"
     cmd "sudo homelab-setup verify"      "check that every container and service is up"
     cmd "sudo homelab-setup fill"        "walk through the logins and keys that need you"
-    cmd "sudo homelab-setup done STEP"   "mark a step you did by hand as done (STEP is the name in the checklist)"
-    cmd "sudo homelab-setup skip STEP"   "mark an optional step as not wanted (STEP is the name in the checklist)"
-    cmd "sudo homelab-setup install"     "set everything up, or carry on after a failed step (safe to repeat)"
+    cmd "sudo homelab-setup done STEP"   "mark a step you did by hand as done (see the checklist)"
+    cmd "sudo homelab-setup skip STEP"   "mark an optional step as not wanted"
+    cmd "sudo homelab-setup install"     "set everything up, or carry on after a failure (safe to repeat)"
     cmd "sudo homelab-setup secrets"     "show the generated passwords and keys once more"
   fi
   section "Rebuild and safety"
   cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
-  cmd "homelab-check ~/My-Home-Lab-"   "look for mistakes in the repository files before you upload them to GitHub"
+  cmd "homelab-check ~/My-Home-Lab-"   "look for mistakes in the repository files before upload"
   section "This screen and the guides"
   cmd "homelab commands"               "this list"
   cmd "homelab status"                 "only the status block"
   cmd "homelab docs"                   "sections of the README and the guides in docs/"
-  cmd "git -C ~/My-Home-Lab- pull"     "download the newest guides and scripts from GitHub (then: cd ~/My-Home-Lab- && sudo bash setup.sh install)"
+  cmd "git -C ~/My-Home-Lab- pull"     "download the newest guides and scripts from GitHub"
+  cmd "sudo bash ~/My-Home-Lab-/setup.sh install" "after the pull: put the new scripts on this server"
   flush_cmds
 }
 
@@ -279,6 +279,8 @@ DEFAULT_SERVICES = [("AdGuard Home", "adguard-card"), ("Tailscale", "tailscale-c
                     ("Speedtest Tracker", "speedtest-card"), ("Portainer", "portainer-card"), ("FileBrowser", "filebrowser-card"),
                     ("Immich", "immich-card"), ("Nextcloud", "nextcloud-card")]
 DEFAULT_WORDS = ("default", "reset", "normal", "shipped")
+CARD_TABLE = dict(COLORS)   # the colour names for one service card (the bright ones win over the dark ones of the same name)
+CARD_TABLE.update(ACCENT)
 BLURS = ("sm", "md", "lg", "xl", "2xl", "3xl")
 
 
@@ -394,37 +396,56 @@ def fmt_alpha(a):
 
 
 def css_state(block):
-    """cards = the colour of every card, card = {service: colour of that one card}, accent = {service: glow colour}"""
-    st = {"cards": None, "card": {}, "accent": {}}
+    """cards = the colour of every card (the only thing the marked block holds)"""
+    st = {"cards": None}
     m = re.search(r"(?m)^\.service-card\s*\{\s*background:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)", block)
     if m:
         st["cards"] = (int(m.group(1)), int(m.group(2)), int(m.group(3)), float(m.group(4)))
-    for m in re.finditer(r"#([\w-]+)-card\s+\.service-card\s*\{\s*background:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)", block):
-        st["card"][m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)), float(m.group(5)))
-    for m in re.finditer(r"#([\w-]+)-card\s*\{\s*--accent:\s*(\d+),\s*(\d+),\s*(\d+);", block):
-        st["accent"][m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
     return st
 
 
 def css_build(st):
-    if not st["cards"] and not st["card"] and not st["accent"]:
+    if not st["cards"]:
         return ""
-    out = [B1 + " written by: homelab theme. Remove it with: homelab theme reset */"]
-    if st["cards"]:
-        out.append(".service-card { background: rgba(%d, %d, %d, %s) !important; }" % (st["cards"][:3] + (fmt_alpha(st["cards"][3]),)))
-    for s in sorted(st["card"]):
-        out.append("#%s-card .service-card { background: rgba(%d, %d, %d, %s) !important; }" % ((s,) + st["card"][s][:3] + (fmt_alpha(st["card"][s][3]),)))
-    for s in sorted(st["accent"]):
-        out.append("#%s-card { --accent: %d, %d, %d; }" % ((s,) + st["accent"][s]))
-    out.append(B2)
+    out = [B1 + " written by: homelab theme. Remove it with: homelab theme reset */",
+           ".service-card { background: rgba(%d, %d, %d, %s) !important; }" % (st["cards"][:3] + (fmt_alpha(st["cards"][3]),)), B2]
     return "\n".join(out) + "\n"
 
 
-def css_save(st):
+# The colour of one service card is the "accent colors (R, G, B)" line of that service in custom.css (it paints the glow and the edge).
+ACCENT_LINE = r"(?m)^(#%s-card\s*\{\s*--accent:\s*)(\d+),\s*(\d+),\s*(\d+);\s*\}(?:[ \t]*/\*.*?\*/)?"
+
+
+def accent_get(text):
+    """{service key: (r, g, b)} from the accent lines of a custom.css text"""
+    return {m.group(1): (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            for m in re.finditer(r"(?m)^#([\w-]+)-card\s*\{\s*--accent:\s*(\d+),\s*(\d+),\s*(\d+);", text)}
+
+
+def accent_set(text, key, rgb, label):
+    """Change the three numbers of one service's accent line (the spacing of the file is kept). (new text, changed?)"""
+    nums = "%-5s%-5s%-6s}" % ("%d," % rgb[0], "%d," % rgb[1], "%d;" % rgb[2])
+    return re.subn(ACCENT_LINE % re.escape(key), lambda m: m.group(1) + nums + "   /* %s */" % label, text, count=1)
+
+
+def shipped_css():
+    shipped = read(os.path.join(DOCS, "homepage-config", "custom.css")) if DOCS else ""
+    return shipped or read(CSS + ".before-theme")
+
+
+def css_save(st, change=None):
+    """Write the marked block for st, and (optionally) first change the text above it with change(text)."""
     text = read(CSS)
     head, _ = css_split(text)
+    if change:
+        head = change(head)
     block = css_build(st)
     write(CSS, head + ("\n" + block if block else ""))
+
+
+def split_head():
+    """custom.css without the block homelab theme writes"""
+    return css_split(read(CSS))[0]
 
 
 def cur_css():
@@ -446,26 +467,21 @@ def theme_show():
         r, g, b, a = st["cards"]
         print("  All cards     rgb(%d, %d, %d), %d%% solid" % (r, g, b, round(a * 100)))
     else:
-        print("  All cards     the shipped look (dark slate, 58%% solid)")
-    for k in sorted(st["card"]):
-        r, g, b, a = st["card"][k]
-        print("  Card          %s: rgb(%d, %d, %d), %d%% solid" % (names.get(k, k), r, g, b, round(a * 100)))
-    if st["accent"]:
-        print("  Glow colours  " + ", ".join("%s rgb(%d, %d, %d)" % ((names.get(k, k),) + v) for k, v in sorted(st["accent"].items())))
-    else:
-        print("  Glow colours  the shipped colours")
+        print("  All cards     the shipped look (dark slate, 58% solid)")
+    now, was = accent_get(split_head()), accent_get(shipped_css())
+    changed = ["%s rgb(%d, %d, %d)" % ((names.get(k, k),) + v) for k, v in sorted(now.items()) if k in was and was[k] != v]
+    print("  Card colours  " + (", ".join(changed) if changed else "the shipped colours"))
     print()
     print("  Change it with:")
     print("    homelab theme background URL-or-FILE     a picture from the web, or one on this machine")
     print("    homelab theme brightness 0-100           how dark the picture is (shipped: 42)")
     print("    homelab theme blur none|sm|md|lg|xl      blur the picture (shipped: md)")
     print("    homelab theme saturate 0-100 | opacity 0-100")
-    print("    homelab theme cards COLOR [0-100]        ALL cards: colour, and how solid they are (0-100)")
-    print("    homelab theme cards SERVICE COLOR [0-100]   ONE card, for example:  homelab theme cards AdGuard Home blue")
-    print("    homelab theme cards SERVICE default      that card goes back to the shipped look")
-    print("    homelab theme accent SERVICE COLOR       only the glow and edge colour of one card (or: all)")
+    print("    homelab theme cards COLOR NUMBER         ALL cards: the colour, and how solid (NUMBER 0-100)")
+    print("    homelab theme cards SERVICE COLOR        ONE card, for example:  homelab theme cards AdGuard Home blue")
+    print("    homelab theme cards SERVICE default      that card goes back to its shipped colour")
     print("    homelab theme reset                      the shipped look again, everywhere")
-    print("  Colour names: " + ", ".join(sorted(COLORS)) + "  (or a hex code such as #1e3a8a)")
+    print("  Colour names: " + ", ".join(sorted(CARD_TABLE)) + "  (or a hex code such as #1e3a8a)")
     print("  Services: " + ", ".join(n for n, i in known_services() if i))
 
 
@@ -569,34 +585,30 @@ def theme_cards(color, opacity):
     print("All cards set to rgb(%d, %d, %d), %d%% solid. %s" % (r, g, b, round(a * 100), REFRESH))
 
 
-def theme_card_one(words, color, opacity):
-    """One card: its background and its glow and edge get the colour. 'default' puts that card back."""
+def theme_service_color(words, color):
+    """One service card: the three numbers of its line in the 'accent colors (R, G, B)' list of custom.css. 'default' puts the shipped numbers back."""
     need_dir()
     name, cid = find_service(words)
     key = cid[:-5]
     st = cur_css()
     if color.lower() in DEFAULT_WORDS:
-        st["card"].pop(key, None)
-        st["accent"].pop(key, None)
-        css_save(st)
-        print("The %s card is back to the shipped look. %s" % (name, REFRESH))
-        return
-    r, g, b = parse_color(color, COLORS, "card")
-    a = st["card"][key][3] if key in st["card"] else (st["cards"][3] if st["cards"] else 0.58)
-    if opacity is not None:
-        a = number(opacity, "How solid the card is", 0, 100) / 100.0
-    st["card"][key] = (r, g, b, a)
-    glow = ACCENT.get(color.lower())
-    if glow is None and re.fullmatch(r"#?[0-9a-fA-F]{6}", color):
-        glow = (r, g, b)
-    if glow:
-        st["accent"][key] = glow
-    css_save(st)
-    print("The %s card is now %s (rgb(%d, %d, %d), %d%% solid)%s. %s" % (name, color, r, g, b, round(a * 100), ", with a matching glow" if glow else "", REFRESH))
+        line = next((x for x in shipped_css().split("\n") if re.match(r"#%s-card\s*\{\s*--accent:" % re.escape(key), x)), None)
+        if not line:
+            raise Fail("The shipped custom.css has no colour line for %s." % name)
+        rgb = accent_get(line).get(key)
+        text, n = re.subn(r"(?m)^#%s-card\s*\{\s*--accent:.*$" % re.escape(key), lambda _m: line, split_head(), count=1)
+    else:
+        rgb, label = parse_color(color, CARD_TABLE, "card"), "%s %s" % (name, color.lower())
+        text, n = accent_set(split_head(), key, rgb, label)
+    if not n:
+        raise Fail("custom.css has no colour line for the %s card. The lines are in the list that starts with '/* accent colors (R, G, B) */'; "
+                   "the glow rules there only cover the cards that came with the lab." % name)
+    css_save(st, lambda _head: text)
+    print("The %s card is now %s: --accent: %d, %d, %d in custom.css. %s" % (name, color if color.lower() not in DEFAULT_WORDS else "its shipped colour", rgb[0], rgb[1], rgb[2], REFRESH))
 
 
 def theme_cards_cmd(words):
-    """homelab theme cards [SERVICE] COLOR [0-100]  (the service name may have spaces and needs no quotes)"""
+    """homelab theme cards COLOR [NUMBER]  or  homelab theme cards SERVICE COLOR  (the service name may have spaces and needs no quotes)"""
     words = list(words)
     opacity = None
     if len(words) >= 2 and re.fullmatch(r"\d{1,3}%?", words[-1]):
@@ -614,33 +626,32 @@ def theme_cards_cmd(words):
             raise Fail("To put every card back to the shipped look, use:  homelab theme reset")
         theme_cards(color, opacity)
     else:
-        theme_card_one(" ".join(words), color, opacity)
+        if opacity is not None:
+            raise Fail("A number (how solid) only goes with the all-cards form:  homelab theme cards COLOR NUMBER")
+        theme_service_color(" ".join(words), color)
 
 
 def theme_accent_cmd(words):
-    """homelab theme accent SERVICE COLOR  (SERVICE may be several words, or: all)"""
-    theme_accent(" ".join(words[:-1]), words[-1])
-
-
-def theme_accent(service, color):
-    need_dir()
-    rgb = parse_color(color, ACCENT, "accent")
-    st = cur_css()
-    if norm(service) == "all":
-        targets = [i[:-5] for _, i in known_services() if i]
-        label = "every card"
-    else:
-        name, cid = find_service(service)
-        targets, label = [cid[:-5]], "the " + name + " card"
-    for t in targets:
-        st["accent"][t] = rgb
-    css_save(st)
-    print("The glow and edge of %s is now rgb(%d, %d, %d). %s" % (label, rgb[0], rgb[1], rgb[2], REFRESH))
+    """homelab theme accent SERVICE|all COLOR: the older name of cards SERVICE COLOR; 'all' colours every card that has a colour line"""
+    name = " ".join(words[:-1])
+    if norm(name) != "all":
+        theme_service_color(name, words[-1])
+        return
+    have = accent_get(split_head())
+    for service, cid in known_services():
+        if cid and cid[:-5] in have:
+            theme_service_color(service, words[-1])
 
 
 def theme_reset():
     need_dir()
-    css_save({"cards": None, "card": {}, "accent": {}})
+    def restore(head):   # every colour line goes back to the shipped line (the rest of the file is not touched)
+        for line in shipped_css().split("\n"):
+            m = re.match(r"#([\w-]+)-card\s*\{\s*--accent:", line)
+            if m:
+                head = re.sub(r"(?m)^#%s-card\s*\{\s*--accent:.*$" % re.escape(m.group(1)), lambda _m, keep=line: keep, head, count=1)
+        return head
+    css_save({"cards": None}, restore)
     shipped = read(os.path.join(DOCS, "homepage-config", "settings.yaml")) if DOCS else ""
     if not shipped:
         shipped = read(SETTINGS + ".before-theme")
