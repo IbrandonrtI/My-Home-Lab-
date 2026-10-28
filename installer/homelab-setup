@@ -50,6 +50,7 @@ STATE_DIR = P("/var/lib/homelab-setup")
 STATE_FILE = STATE_DIR + "/state.json"
 PROGRESS_DIR = P("/var/lib/homelab")
 PROGRESS_FILE = PROGRESS_DIR + "/setup-progress"
+BOOT_GRACE = 600      # seconds after a boot during which scheduled checks wait (apps are still starting)
 SECRET_DIR = P("/root/.homelab-setup")
 SECRET_FILE = SECRET_DIR + "/secrets.env"
 LOG_FILE = P("/var/log/homelab-setup.log")
@@ -3543,8 +3544,9 @@ class CronLines(Step):
         return CRON_LINES + ([] if Mode.existing else [CRON_PROGRESS])
 
     def probe(self):
+        # the progress line is not required: it removes itself once setup is finished
         act_lines = crontab_active(crontab_text())
-        return "done" if all(k in act_lines for k, _ in self._lines()) else "todo"
+        return "done" if all(k in act_lines for k, _ in CRON_LINES) else "todo"
 
     def run(self):
         crontab_add(self._lines())
@@ -3582,7 +3584,7 @@ class CronBackup(Step):
 LOGIN_BLOCK = """
 # >>> homelab login display >>>
 if [[ $- == *i* ]] && [ -t 1 ] && command -v homelab >/dev/null 2>&1; then
-  timeout 20 homelab
+  timeout 20 homelab login
 fi
 # <<< homelab login display <<<
 """
@@ -3594,11 +3596,24 @@ class LoginHook(Step):
     needs = ("scripts",)
 
     def probe(self):
-        return "done" if "# >>> homelab login display >>>" in read_file(P(Ctx.home + "/.bashrc")) else "todo"
+        txt = read_file(P(Ctx.home + "/.bashrc"))
+        # an older block (without "homelab login" on its command line) is replaced: the new one remembers the screen for 2 minutes
+        if "# >>> homelab login display >>>" not in txt:
+            return "todo"
+        # a server built by hand is only looked at, so its older block counts too
+        return "done" if Mode.existing or "timeout 20 homelab login" in txt else "todo"
 
     def run(self):
         path = P(Ctx.home + "/.bashrc")
         cur = read_file(path)
+        if "# >>> homelab login display >>>" in cur:
+            new = re.sub(r"\n?# >>> homelab login display >>>.*?# <<< homelab login display <<<\n", LOGIN_BLOCK, cur, flags=re.S)
+            if not Opt.dry:
+                bak = path + ".bak-homelab-setup"
+                if not os.path.exists(bak):
+                    write_file(bak, cur, 0o644, (Ctx.uid, Ctx.gid))
+            write_file(path, new, 0o644, (Ctx.uid, Ctx.gid))
+            return
         if not Opt.dry and cur:
             bak = path + ".bak-homelab-setup"
             if not os.path.exists(bak):
@@ -3726,7 +3741,7 @@ class AckStep(Step):
 
     def help(self):
         if self.auto:
-            tail = ("This step is detected automatically (a check runs every 10 minutes and each time "
+            tail = ("This step is detected automatically (a check runs about once an hour and each time "
                     "`sudo homelab-setup refresh` runs). To mark it as done manually:")
         else:
             tail = "When it is done, run:"
@@ -4347,19 +4362,60 @@ def cmd_secrets():
         write_progress(evaluate())
 
 
+def uptime_seconds():
+    """Seconds since the machine booted (HLS_UPTIME overrides it, for tests)."""
+    try:
+        return float(os.environ.get("HLS_UPTIME") or open("/proc/uptime").read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 1e9
+
+
+def started_by_cron():
+    """True when the output goes to /dev/null: the schedule started this, nobody is reading."""
+    try:
+        return os.stat("/dev/null").st_rdev == os.fstat(1).st_rdev and not os.isatty(1)
+    except OSError:
+        return False
+
+
+def drop_progress_line():
+    """Take the progress line out of root's crontab, so nothing keeps running for no reason."""
+    if Opt.dry:
+        return
+    cur = crontab_text()
+    kept = [l for l in cur.splitlines() if CRON_PROGRESS[0] not in l]
+    if len(kept) != len(cur.splitlines()):
+        run(["crontab", "-"], input_text="\n".join(kept) + "\n")
+
+
 def cmd_progress():
-    """`progress`: write the progress counts for the login screen."""
+    """`progress`: write the progress counts for the login screen.
+
+    Run by the schedule it stays light: nothing in the first 10 minutes after a boot (apps are still
+    starting, and a full check of every step would only slow the machine down), nothing while the saved
+    counts are less than 50 minutes old, and once setup is finished the schedule line removes itself.
+    """
+    quiet = len(sys.argv) > 2 and sys.argv[2] == "--quiet"
+    if quiet or started_by_cron():
+        if uptime_seconds() < BOOT_GRACE:
+            return
+        try:
+            if time.time() - os.path.getmtime(PROGRESS_FILE) < 50 * 60:
+                return
+        except OSError:
+            pass            # no counts saved: either never written, or setup is finished; one check tells which
+        try:
+            os.nice(19)
+        except OSError:
+            pass
+        quiet = True
     load_all()
     res = evaluate()
     write_progress(res)
     done, total = counts(res)
-    if len(sys.argv) > 2 and sys.argv[2] == "--quiet":
-        # finished: take the schedule line away, so nothing keeps running for no reason
-        if done >= total and not Opt.dry:
-            cur = crontab_text()
-            kept = [l for l in cur.splitlines() if CRON_PROGRESS[0] not in l]
-            if len(kept) != len(cur.splitlines()):
-                run(["crontab", "-"], input_text="\n".join(kept) + "\n")
+    if quiet:
+        if done >= total:
+            drop_progress_line()
         return
     out("%d of %d steps done" % (done, total))
 
