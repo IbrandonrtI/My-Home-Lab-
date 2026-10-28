@@ -2232,7 +2232,7 @@ def folder_plan():
     h = Ctx.home
     u, g = Ctx.uid, Ctx.gid
     return [
-        ("/mnt/storage", 0, 0), ("/mnt/storage/immich", u, g),
+        ("/mnt/storage", 0, 0), ("/mnt/backup", 0, 0), ("/mnt/storage/immich", u, g),
         ("/mnt/storage/nextcloud", 33, 33),
         (h + "/nextcloud", u, g), (h + "/nextcloud/html", 33, 33), (h + "/nextcloud/db", 0, 0),
         (h + "/immich", u, g), (h + "/immich/postgres", 0, 0),
