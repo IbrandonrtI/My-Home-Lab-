@@ -474,6 +474,81 @@ def cmd_filebrowser():
     good("FileBrowser now shows: %s" % s.detail())
 
 
+def host_mount_types():
+    try:
+        return mount_types(open("/proc/self/mountinfo").read())
+    except OSError:
+        return {}
+
+
+def homepage_sees_pools():
+    """True when Homepage shows each pool the way the host has it (a mounted pool as a mounted pool, no pool as no pool).
+    Homepage can only measure a pool that is a mount point inside its own container."""
+    rc, txt = docker("exec", "homepage", "cat", "/proc/self/mountinfo", timeout=30)
+    if rc != 0:
+        return True          # cannot look inside: do not restart for nothing
+    inside, host = mount_types(txt), host_mount_types()
+    for pool in ("/mnt/storage", "/mnt/backup"):
+        h = host.get(pool, "").startswith("fuse")
+        c = inside.get(pool, "").startswith("fuse")
+        if h != c:
+            return False
+    return True
+
+
+def cmd_homepage():
+    """Make Homepage see the Main and Backup pool (the two drive pills). sudo drives calls this by itself."""
+    load_all()
+    if "homepage" not in containers_all():
+        say("Homepage is not installed on this machine.")
+        return
+    changed = False
+    manual = ("In Portainer open the stack 'homepage' > Editor. Replace the lines that mount /mnt/storage and /mnt/backup with this one line "
+              "under volumes, then click Update the stack:\n      - %s" % HOMEPAGE_PARENT_LINE)
+    if not Secrets.get("PORTAINER_TOKEN") or not Portainer.alive():
+        warn("Portainer cannot be reached with a saved key, so the Homepage stack is not changed here. " + manual)
+    else:
+        s = next((x for x in Portainer.stacks() if x.get("Name") == "homepage"), None)
+        if not s:
+            warn("Portainer has no stack named 'homepage'. " + manual)
+        else:
+            eid = s.get("EndpointId") or Portainer.endpoint_id()
+            st, js, _ = Portainer.call("GET", "/api/stacks/%s/file?endpointId=%s" % (s["Id"], eid), timeout=30)
+            text = js.get("StackFileContent", "") if st == 200 and isinstance(js, dict) else ""
+            if not text:
+                warn("Could not read the Homepage stack from Portainer. " + manual)
+            else:
+                new = homepage_volumes(text)
+                if new != text:
+                    rule("Homepage")
+                    out("  Letting Homepage see the pools: its stack mounts the whole /mnt folder now (Homepage restarts for a few seconds)")
+                    if Opt.dry:
+                        out("      would update the Homepage stack in Portainer")
+                        return
+                    env = [{"name": e["name"], "value": e["value"]} for e in (s.get("Env") or [])]
+                    st, js, _ = Portainer.call("PUT", "/api/stacks/%s?endpointId=%s" % (s["Id"], eid),
+                                               body={"stackFileContent": new, "env": env, "prune": False,
+                                                     "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
+                    if st not in (200, 201):
+                        msg = js.get("details") or js.get("message") if isinstance(js, dict) else str(js)
+                        raise Abort("Portainer refused to change the Homepage stack (HTTP %s): %s" % (st, str(msg)[:300]))
+                    wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
+                    changed = True
+    if not changed and "homepage" in containers_running() and not homepage_sees_pools():
+        rule("Homepage")
+        out("  Homepage does not see the pools the way they are mounted now. Restarting Homepage")
+        if Opt.dry:
+            out("      would restart Homepage")
+            return
+        act(["docker", "restart", "homepage"], timeout=120)
+        wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
+        changed = True
+    if changed:
+        good("Homepage can see the Main and Backup pool")
+    else:
+        say("Homepage already sees the pools.")
+
+
 def cmd_fill():
     """`fill`: enter the keys that cannot be created automatically."""
     load_all()
@@ -605,6 +680,7 @@ Commands:
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
+  homepage                 let Homepage see the Main and Backup pool (the two drive pills)
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -660,7 +736,7 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify", "filebrowser"):
+    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify", "filebrowser", "homepage"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
@@ -686,6 +762,8 @@ def main(argv):
             cmd_verify()
         elif cmd == "filebrowser":
             cmd_filebrowser()
+        elif cmd == "homepage":
+            cmd_homepage()
     except Abort as e:
         Live.close()
         out("")

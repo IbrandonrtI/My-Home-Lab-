@@ -586,6 +586,68 @@ def filebrowser_volumes(text):
     return text[:m.start(2)] + "\n".join(new) + "\n" + text[m.end(2):]
 
 
+HOMEPAGE_PARENT_LINE = "/mnt:/mnt:ro,rslave"
+
+
+def homepage_volumes(text):
+    """Make the Homepage stack file mount the whole /mnt folder with rslave, so a pool that is mounted (or remounted) after
+    Homepage started shows up inside it. A folder bound on its own (/mnt/backup) is a snapshot taken when the container was
+    created: a pool mounted later is NOT in it, and the pill says 'API Error'. The single-pool lines are replaced by the parent
+    line. Everything else in the file is left as it is. Returns the new text (the same text when nothing has to change)."""
+    lines = text.split("\n")
+    item = re.compile(r"^(\s*)-\s*(['\"]?)(/[^\s:'\"]*):(/[^\s:'\"]*)((?::[^\s'\"#]*)?)\2\s*(#.*)?$")
+    single = [i for i, l in enumerate(lines)
+              if (m := item.match(l)) and m.group(3) in ("/mnt/storage", "/mnt/backup") and m.group(4) == m.group(3)]
+    parent = [i for i, l in enumerate(lines) if (m := item.match(l)) and m.group(3) == "/mnt" and m.group(4) == "/mnt"]
+    if parent:
+        m = item.match(lines[parent[0]])
+        opts = m.group(5)
+        if "rslave" in opts or "rshared" in opts:
+            if not single:
+                return text
+        else:
+            mode = "rw" if re.search(r"(^|[:,])rw($|,)", opts) else "ro"
+            note = ("   " + m.group(6)) if m.group(6) else ""
+            lines[parent[0]] = "%s- /mnt:/mnt:%s,rslave%s" % (m.group(1), mode, note)
+        for i in reversed(single):
+            del lines[i]
+        return "\n".join(lines)
+    if single:
+        indent = item.match(lines[single[0]]).group(1)
+        for i in reversed(single[1:]):
+            del lines[i]
+        lines[single[0]] = "%s- %s   # the Main and Backup pool pills; rslave: a pool mounted later still shows" % (indent, HOMEPAGE_PARENT_LINE)
+        return "\n".join(lines)
+    # no pool line at all: add the parent line after the last item of the volumes list
+    for n, l in enumerate(lines):
+        if re.match(r"^\s*volumes:\s*$", l):
+            j = n + 1
+            last = None
+            while j < len(lines) and (lines[j].strip() == "" or lines[j].lstrip().startswith(("-", "#"))):
+                if lines[j].lstrip().startswith("-"):
+                    last = j
+                j += 1
+            if last is None:
+                return text
+            indent = re.match(r"^(\s*)", lines[last]).group(1)
+            lines.insert(last + 1, "%s- %s   # the Main and Backup pool pills; rslave: a pool mounted later still shows" % (indent, HOMEPAGE_PARENT_LINE))
+            return "\n".join(lines)
+    return text
+
+
+def mount_types(mountinfo):
+    """{mount point: file system type of the LAST mount on it} from the text of /proc/self/mountinfo."""
+    types = {}
+    for l in mountinfo.splitlines():
+        if " - " not in l:
+            continue
+        head, tail = l.split(" - ", 1)
+        f = head.split()
+        if len(f) > 4 and tail.split():
+            types[f[4].replace("\\040", " ")] = tail.split()[0]
+    return types
+
+
 def stack_text(name):
     """The stack file for `name` with this machine's values filled in."""
     fn = STACKS[name][0]
