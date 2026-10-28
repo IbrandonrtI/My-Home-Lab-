@@ -496,12 +496,28 @@ def homepage_sees_pools():
     return True
 
 
+def apply_pill_layout():
+    """Put the shipped 'pill layout' block (taller top pills, search bar lower) into this machine's custom.css."""
+    dst = hp_path("custom.css")
+    shipped = css_block(read_file(repo_file("homepage-config", "custom.css")))
+    cur = read_file(dst)
+    if not shipped or not cur:
+        return
+    new = css_with_block(cur, shipped)
+    if new == cur:
+        return
+    rule("Homepage")
+    out("  Updating the look of the top pills in custom.css (taller pills, search bar a little lower). Reload the page to see it")
+    write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
+
+
 def cmd_homepage():
     """Make Homepage see the Main and Backup pool (the two drive pills). sudo drives calls this by itself."""
     load_all()
     if "homepage" not in containers_all():
         say("Homepage is not installed on this machine.")
         return
+    apply_pill_layout()
     changed = False
     manual = ("In Portainer open the stack 'homepage' > Editor. Replace the lines that mount /mnt/storage and /mnt/backup with this one line "
               "under volumes, then click Update the stack:\n      - %s" % HOMEPAGE_PARENT_LINE)
@@ -680,7 +696,7 @@ Commands:
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
-  homepage                 let Homepage see the Main and Backup pool (the two drive pills)
+  homepage                 let Homepage see the Main and Backup pool, and update the look of the top pills
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help

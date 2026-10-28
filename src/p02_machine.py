@@ -648,6 +648,28 @@ def mount_types(mountinfo):
     return types
 
 
+PILL_BEGIN = "/* >>> homelab pill layout"
+PILL_END = "/* <<< homelab pill layout */"
+
+
+def css_block(text):
+    """The marked 'pill layout' block of a custom.css text (empty when there is none)."""
+    a = text.find(PILL_BEGIN)
+    b = text.find(PILL_END, a) if a >= 0 else -1
+    return text[a:b + len(PILL_END)] if a >= 0 and b >= 0 else ""
+
+
+def css_with_block(css, block):
+    """custom.css with the shipped pill layout block: replaces the block that is there, or adds it at the end.
+    Everything outside the block is left as it is."""
+    if not block:
+        return css
+    old = css_block(css)
+    if old:
+        return css.replace(old, block, 1)
+    return css.rstrip("\n") + "\n\n" + block + "\n"
+
+
 def stack_text(name):
     """The stack file for `name` with this machine's values filled in."""
     fn = STACKS[name][0]
