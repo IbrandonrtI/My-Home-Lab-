@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# drive-bench - launcher. Run it with sudo:
+#     sudo bash tools/drive-bench/drive-bench --level quick        about 20 minutes
+#     sudo bash tools/drive-bench/drive-bench                      standard: a few hours
+#     sudo bash tools/drive-bench/drive-bench --level full         many hours (leave it overnight)
+# Everything is explained in tools/drive-bench/README.md. The report is written to /var/tmp/drive-bench/report.html and report.txt.
+set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ "$(id -u)" = 0 ] || { echo "Run it with sudo:  sudo $0 $*"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { echo "python3 is needed."; exit 1; }
+case "${1:-}" in -h|--help) exec python3 "$HERE/bench.py" --help ;; esac
+exec python3 "$HERE/bench.py" "$@"
