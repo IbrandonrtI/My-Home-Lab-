@@ -306,6 +306,55 @@ def kill_sleepers(env):
         os.remove(pidf)
 
 
+UDEV_RULE = "/run/udev/rules.d/99-drive-bench.rules"
+
+
+def block_automount(env):
+    """A desktop (udisks) mounts every new drive it sees under /media; then the loop devices can not be released and pile up.
+    This rule tells udisks to leave the bench's fake drives alone (removed again at the end)."""
+    try:
+        os.makedirs(os.path.dirname(UDEV_RULE), exist_ok=True)
+        with open(UDEV_RULE, "w") as f:
+            f.write('SUBSYSTEM=="block", KERNEL=="loop[0-9]*p[0-9]*", ENV{UDISKS_IGNORE}="1", ENV{UDISKS_AUTO}="0"\n'
+                    'SUBSYSTEM=="block", KERNEL=="loop[0-9]*", ATTR{loop/backing_file}=="%s/*", ENV{UDISKS_IGNORE}="1", ENV{UDISKS_AUTO}="0"\n' % env.work)
+        sh("udevadm control --reload", timeout=20)
+    except OSError:
+        pass
+
+
+def unblock_automount():
+    try:
+        os.remove(UDEV_RULE)
+        sh("udevadm control --reload", timeout=20)
+    except OSError:
+        pass
+
+
+def bench_loops(env):
+    r = sh("losetup -ln -O NAME,BACK-FILE")
+    out = []
+    for line in r.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and parts[1].strip().startswith(env.work + "/"):
+            out.append(parts[0])
+    return out
+
+
+def unmount_loops(env):
+    """Unmount whatever is mounted from the bench's loop drives, wherever it is (the desktop may have mounted them under /media)."""
+    loops = bench_loops(env)
+    if not loops:
+        return
+    r = sh("findmnt -rn -o SOURCE,TARGET")
+    for line in r.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        src, tgt = parts[0], parts[1].replace("\\x20", " ")
+        if any(src == d or re.match(re.escape(d) + r"p\d+$", src) for d in loops) and sh(["umount", tgt], timeout=30).returncode != 0:
+            sh(["umount", "-l", tgt], timeout=30)
+
+
 def teardown(env):
     """Stop everything the bench started: sleepers, mounts (pools first), loop devices."""
     kill_sleepers(env)
@@ -318,11 +367,9 @@ def teardown(env):
             r = sh(["umount", m], timeout=30)
             if r.returncode != 0:
                 sh(["umount", "-l", m], timeout=30)
-    r = sh("losetup -ln -O NAME,BACK-FILE")
-    for line in r.stdout.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) == 2 and parts[1].strip().startswith(env.work + "/"):
-            sh(["losetup", "-d", parts[0]])
+    unmount_loops(env)
+    for dev in bench_loops(env):
+        sh(["losetup", "-d", dev])
 
 
 def teardown_pools(env):
@@ -1106,6 +1153,7 @@ def main():
         json.dump({"level": a.level, "drives": os.path.abspath(a.drives), "started": time.strftime("%F %T"), "host": os.uname().nodename,
                    "budget": st["budget"]}, f)
     env = Env(os.path.join(a.work, "env"), a.drives, a.scripts, a.timeout)
+    block_automount(env)
     t_start = time.time()
 
     def log(*x):
@@ -1151,6 +1199,7 @@ def main():
             others.run(env, rec, a, log)
     finally:
         teardown(env)
+        unblock_automount()
         log("finished %d runs in %.0f minutes" % (rec.count, (time.time() - t_start) / 60))
     report.build(results, out_dir)
     log("report: %s/report.html and %s/report.txt" % (out_dir, out_dir))
