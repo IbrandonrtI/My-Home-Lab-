@@ -16,13 +16,17 @@
 import atexit
 import base64
 import getpass
+import glob
+import gzip
 import hashlib
+import ipaddress
 import json
 import os
 import pwd
 import re
 import secrets as pysecrets
 import shutil
+import signal
 import socket
 import string
 import subprocess
@@ -105,6 +109,17 @@ S_OK, S_TODO, S_BAD, S_WAIT, S_NA, S_RULE, S_DOT = (
     ("✓", "○", "✗", "·", "–", "─", "·") if _utf else ("+", "o", "x", ".", "-", "-", "-"))
 
 
+def _terminal_size():
+    """The size of the real terminal (asked of stdout, stderr or stdin, whichever is one), or None when there is none."""
+    for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
+        try:
+            if stream is not None and stream.isatty():
+                return os.get_terminal_size(stream.fileno())
+        except (OSError, ValueError):
+            pass
+    return None
+
+
 def window_cols():
     """The real width of the window. The terminal itself is asked first: the COLUMNS variable is only a copy made
     when the shell started (and `sudo` passes it on), so it goes stale as soon as the window is resized.
@@ -112,12 +127,9 @@ def window_cols():
     forced = os.environ.get("HLS_COLS", "")
     if forced.isdigit():
         return int(forced)
-    for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
-        try:
-            if stream is not None and stream.isatty():
-                return os.get_terminal_size(stream.fileno()).columns
-        except (OSError, ValueError):
-            pass
+    size = _terminal_size()
+    if size:
+        return size.columns
     try:
         return int(os.environ.get("COLUMNS", "") or 80)
     except ValueError:
@@ -129,13 +141,8 @@ def window_rows():
     forced = os.environ.get("HLS_ROWS", "")
     if forced.isdigit():
         return int(forced)
-    for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
-        try:
-            if stream is not None and stream.isatty():
-                return os.get_terminal_size(stream.fileno()).lines
-        except (OSError, ValueError):
-            pass
-    return 0
+    size = _terminal_size()
+    return size.lines if size else 0
 
 
 def term_cols():
@@ -226,16 +233,20 @@ def good(msg):
     out("  %s%s%s %s" % (G, S_OK, N, msg))
 
 
+def _flagged(flag, msg):
+    """Print a message whose first line starts with a coloured flag."""
+    for i, l in enumerate(styled(msg, 4)):
+        out(("  %s " % flag + l[4:]) if i == 0 else l)
+
+
 def warn(msg):
     """Print a message marked as a warning."""
-    for i, l in enumerate(styled(msg, 4)):
-        out(("  %s!%s " % (Y, N) + l[4:]) if i == 0 else l)
+    _flagged("%s!%s" % (Y, N), msg)
 
 
 def bad(msg):
     """Print a message marked as a failure (red cross)."""
-    for i, l in enumerate(styled(msg, 4)):
-        out(("  %s%s%s " % (R, S_BAD, N) + l[4:]) if i == 0 else l)
+    _flagged("%s%s%s" % (R, S_BAD, N), msg)
 
 
 def log(msg):
@@ -559,10 +570,19 @@ DOCKER_DOWN = ("Docker is not answering, so the apps cannot be reached or checke
                "      Then run `sudo homelab-setup refresh` again.")
 
 
+def apt_env():
+    """The environment for apt commands: they must never stop to ask a question."""
+    return dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+
+
+def apt_distro():
+    """The name of this system's family in the Docker and Tailscale package addresses: debian or ubuntu (Mint counts as ubuntu)."""
+    return "debian" if Ctx.os_id == "debian" else "ubuntu"
+
+
 def apt_install(pkgs):
     """Install packages with apt without asking questions (does nothing in a dry run)."""
-    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-    act(["apt-get", "install", "-y", "-q"] + list(pkgs), env=env, check=True, timeout=1800)
+    act(["apt-get", "install", "-y", "-q"] + list(pkgs), env=apt_env(), check=True, timeout=1800)
 
 
 # ---------------------------------------------------------------- files
@@ -738,19 +758,22 @@ def ask(prompt, default=""):
         return _ask(prompt, default)
 
 
+def _read_piped(label):
+    """Show `label`, then read one answer from standard input when it is not a terminal (EOFError when there is none)."""
+    sys.stdout.write(label)
+    sys.stdout.flush()
+    v = stdin_line()
+    if v == "":
+        raise EOFError
+    out("")
+    return v.rstrip("\n")
+
+
 def _ask(prompt, default=""):
     """Read one answer from the terminal (or from standard input when it is not a terminal)."""
+    label = "  %s%s: " % (prompt, (" [%s]" % default) if default else "")
     try:
-        if interactive():
-            v = input("  %s%s: " % (prompt, (" [%s]" % default) if default else ""))
-        else:
-            sys.stdout.write("  %s%s: " % (prompt, (" [%s]" % default) if default else ""))
-            sys.stdout.flush()
-            v = stdin_line()
-            if v == "":
-                raise EOFError
-            v = v.rstrip("\n")
-            out("")
+        v = input(label) if interactive() else _read_piped(label)
     except EOFError:
         raise Abort("An answer is required for: %s (no input was available)." % prompt) from None
     return v.strip() or default
@@ -764,16 +787,9 @@ def ask_secret(prompt):
 
 def _ask_secret(prompt):
     """Read one secret from the terminal without echo."""
+    label = "  %s: " % prompt
     try:
-        if interactive():
-            return getpass.getpass("  %s: " % prompt)
-        sys.stdout.write("  %s: " % prompt)
-        sys.stdout.flush()
-        v = stdin_line()
-        if v == "":
-            raise EOFError
-        out("")
-        return v.rstrip("\n")
+        return getpass.getpass(label) if interactive() else _read_piped(label)
     except EOFError:
         raise Abort("An answer is required for: %s (no input was available)." % prompt) from None
 
@@ -799,6 +815,7 @@ def typed(word, prompt):
 class State:
     """Non-secret facts: the answers given, which one-time actions ran, and what was acknowledged."""
     data = {}
+    readonly = False
 
     @classmethod
     def load(cls):
@@ -811,8 +828,6 @@ class State:
         cls.data.setdefault("ack", {})
         cls.data.setdefault("skip", {})
         cls.data.setdefault("notes", {})
-
-    readonly = False
 
     @classmethod
     def save(cls):
@@ -927,7 +942,7 @@ class Ctx:
     admin = email = ""
     fqdn = tailnet = ts_id = ""
     repo = ""
-    os_id = os_name = os_codename = os_version = ""
+    os_id = os_like = os_name = os_codename = os_version = ""
 
     @classmethod
     def detect(cls):
@@ -1071,10 +1086,15 @@ def ts_status():
 
 
 # ================================================================ docker facts
+def _container_names(*flags):
+    """Names of the containers `docker ps` lists with these flags (an empty set when Docker does not answer)."""
+    rc, txt = docker("ps", *flags, "--format", "{{.Names}}", timeout=30)
+    return set(txt.split()) if rc == 0 else set()
+
+
 def containers_running():
     """Names of the containers that are running."""
-    rc, txt = docker("ps", "--format", "{{.Names}}", timeout=30)
-    return set(txt.split()) if rc == 0 else set()
+    return _container_names()
 
 
 def containers_starting():
@@ -1087,8 +1107,7 @@ def containers_starting():
 
 def containers_all():
     """Names of all containers, running or not."""
-    rc, txt = docker("ps", "-a", "--format", "{{.Names}}", timeout=30)
-    return set(txt.split()) if rc == 0 else set()
+    return _container_names("-a")
 
 
 def stack_up(name):
@@ -1317,7 +1336,6 @@ def drive_name(mountpoint, fallback, prefer_label=False):
 
 def pool_drives(role):
     """Mount points of the drives that are connected for a role (main or backup), as /mnt/disks/MAIN1 ..."""
-    import glob
     prefix = "MAIN" if role == "main" else "BACKUP"
     # real drives in order (MAIN1, MAIN2, ...); the boot drive section (MAINBOOT) is always last, like in the pool itself
     found = sorted((d[len(ROOT):] if ROOT and d.startswith(ROOT) else d
@@ -1382,6 +1400,7 @@ def filebrowser_volumes(text):
 
 
 HOMEPAGE_PARENT_LINE = "/mnt:/mnt:ro,rslave"
+HOMEPAGE_PARENT_NOTE = "   # the Main and Backup pool pills; rslave: a pool mounted later still shows"
 
 
 def homepage_volumes(text):
@@ -1411,7 +1430,7 @@ def homepage_volumes(text):
         indent = item.match(lines[single[0]]).group(1)
         for i in reversed(single[1:]):
             del lines[i]
-        lines[single[0]] = "%s- %s   # the Main and Backup pool pills; rslave: a pool mounted later still shows" % (indent, HOMEPAGE_PARENT_LINE)
+        lines[single[0]] = "%s- %s%s" % (indent, HOMEPAGE_PARENT_LINE, HOMEPAGE_PARENT_NOTE)
         return "\n".join(lines)
     # no pool line at all: add the parent line after the last item of the volumes list
     for n, l in enumerate(lines):
@@ -1425,7 +1444,7 @@ def homepage_volumes(text):
             if last is None:
                 return text
             indent = re.match(r"^(\s*)", lines[last]).group(1)
-            lines.insert(last + 1, "%s- %s   # the Main and Backup pool pills; rslave: a pool mounted later still shows" % (indent, HOMEPAGE_PARENT_LINE))
+            lines.insert(last + 1, "%s- %s%s" % (indent, HOMEPAGE_PARENT_LINE, HOMEPAGE_PARENT_NOTE))
             return "\n".join(lines)
     return text
 
@@ -1443,26 +1462,31 @@ def mount_types(mountinfo):
     return types
 
 
-PILL_BEGIN = "/* >>> homelab pill layout"
-PILL_END = "/* <<< homelab pill layout */"
+CSS_LAYOUT_MARK = "How this file is organised"      # in the header of the shipped custom.css since it was tidied up
+THEME_BEGIN, THEME_END = "/* >>> homelab theme >>>", "/* <<< homelab theme <<< */"      # the block `homelab theme` writes
 
 
-def css_block(text):
-    """The marked 'pill layout' block of a custom.css text (empty when there is none)."""
-    a = text.find(PILL_BEGIN)
-    b = text.find(PILL_END, a) if a >= 0 else -1
-    return text[a:b + len(PILL_END)] if a >= 0 and b >= 0 else ""
-
-
-def css_with_block(css, block):
-    """custom.css with the shipped pill layout block: replaces the block that is there, or adds it at the end.
-    Everything outside the block is left as it is."""
-    if not block:
-        return css
-    old = css_block(css)
-    if old:
-        return css.replace(old, block, 1)
-    return css.rstrip("\n") + "\n\n" + block + "\n"
+def css_new_layout(live, shipped):
+    """This machine's custom.css moved to the shipped, tidier layout, with everything that is this machine's own kept:
+    the accent colour of every card, the numbers in :root that were changed (the last value wins, like in the browser) and
+    the block `homelab theme` wrote. A file that is already in the new layout is returned as it is (it may have been edited)."""
+    if CSS_LAYOUT_MARK in live or not shipped:
+        return live
+    out = shipped
+    for m in re.finditer(r"(?m)^#([\w-]+)-card\s*\{\s*--accent:[^}]*\}[ \t]*(?:/\*.*?\*/)?", live):
+        line = m.group(0)
+        out = re.sub(r"(?m)^#%s-card\s*\{\s*--accent:[^}]*\}[ \t]*(?:/\*.*?\*/)?" % re.escape(m.group(1)), lambda _m, keep=line: keep, out, count=1)
+    mine = {}
+    for blk in re.finditer(r":root\s*\{(.*?)\}", live, re.S):
+        for k, v in re.findall(r"(--[\w-]+):\s*([^;]+);", blk.group(1)):
+            mine[k] = v.strip()
+    for k, v in mine.items():
+        out = re.sub(r"(?m)^(\s*%s:\s*)[^;]+;" % re.escape(k), lambda m, val=v: m.group(1) + val + ";", out, count=1)
+    a = live.find(THEME_BEGIN)
+    z = live.find(THEME_END, a) if a >= 0 else -1
+    if a >= 0 and z >= 0:
+        out = out.rstrip("\n") + "\n\n" + live[a:z + len(THEME_END)] + "\n"
+    return out
 
 
 def stack_text(name):
@@ -1680,11 +1704,15 @@ STEPS = []
 BY_ID = {}
 
 
-def step(cls):
-    """Class decorator: register a checklist step."""
-    inst = cls()
+def register(inst):
+    """Add a step (an instance) to the checklist."""
     STEPS.append(inst)
     BY_ID[inst.id] = inst
+
+
+def step(cls):
+    """Class decorator: register a checklist step."""
+    register(cls())
     return cls
 
 
@@ -1708,6 +1736,17 @@ def topo():
     return order
 
 
+def safe_probe(s):
+    """What a step's check says ("done", "todo" or "na"). A check must never crash the checklist: an error means "todo"."""
+    try:
+        return s.probe()
+    except Abort:
+        return "todo"
+    except Exception as e:
+        log("probe %s failed: %r" % (s.id, e))
+        return "todo"
+
+
 def evaluate():
     """Check every step and return {step id: Result}, in dependency order."""
     res = {}
@@ -1725,13 +1764,7 @@ def evaluate():
         if waits:
             res[s.id] = Result("blocked", "waits for: " + "; ".join(waits[:2]))
             continue
-        try:
-            st = s.probe()
-        except Abort:
-            st = "todo"
-        except Exception as e:                        # a probe must never crash the checklist
-            log("probe %s failed: %r" % (s.id, e))
-            st = "todo"
+        st = safe_probe(s)
         if st == "done":
             res[s.id] = Result("done", s.detail())
         elif st == "na":
@@ -1842,10 +1875,7 @@ def unblock(res, dry=False):
             if dry:
                 res[t.id] = Result("todo", "")
                 continue
-            try:
-                st = t.probe()
-            except Exception:
-                st = "todo"
+            st = safe_probe(t)
             res[t.id] = Result("done", t.detail()) if st == "done" else Result("na") if st == "na" else Result("todo", "")
 
 
@@ -1965,9 +1995,8 @@ class AptUpgrade(Step):
         return State.data["ran"].get("apt-upgrade", "")
 
     def run(self):
-        env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-        act(["apt-get", "update", "-q"], env=env, check=True, timeout=900)
-        act(["apt-get", "upgrade", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"], env=env, check=True, timeout=3600)
+        act(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=900)
+        act(["apt-get", "upgrade", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"], env=apt_env(), check=True, timeout=3600)
         if not Opt.dry:
             State.mark("apt-upgrade")
 
@@ -1990,7 +2019,7 @@ class Packages(Step):
             apt_install(need)
         for p in OPTIONAL_PKGS:
             if not pkg_installed(p):
-                rc, txt = act(["apt-get", "install", "-y", "-q", p], env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+                rc, txt = act(["apt-get", "install", "-y", "-q", p], env=apt_env())
                 if rc != 0 and not Opt.dry:
                     warn("Optional package %s could not be installed (%s). The drives tool needs it later." % (p, txt.strip()[-120:]))
 
@@ -2007,7 +2036,7 @@ class DockerInstalled(Step):
         return "done" if rc == 0 and rc2 == 0 and rc3 == 0 else "todo"
 
     def run(self):
-        distro = "debian" if Ctx.os_id == "debian" else "ubuntu"
+        distro = apt_distro()
         suite = Ctx.os_codename
         if not suite:
             raise Abort("Could not read the release name from /etc/os-release.")
@@ -2015,7 +2044,7 @@ class DockerInstalled(Step):
             if containers_all():
                 raise Abort("Another Docker package is installed and has containers. The installer does not remove it. Remove it manually first.")
             act(["apt-get", "remove", "-y", "-q", "docker.io", "docker-compose", "podman-docker", "containerd", "runc"],
-                env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+                env=apt_env())
         if Opt.dry:
             out("      would add Docker's apt repository for %s %s and install docker-ce" % (distro, suite))
             return
@@ -2031,7 +2060,7 @@ class DockerInstalled(Step):
         write_file(P("/etc/apt/sources.list.d/docker.sources"),
                    "Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\n"
                    "Architectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n" % (distro, suite, arch), 0o644)
-        run(["apt-get", "update", "-q"], env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"), check=True, timeout=600)
+        run(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=600)
         apt_install(["docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"])
         act(["systemctl", "enable", "--now", "docker"])
 
@@ -2059,7 +2088,7 @@ class TailscaleInstalled(Step):
         return "done" if have("tailscale") and have("tailscaled") else "todo"
 
     def run(self):
-        distro = "debian" if Ctx.os_id == "debian" else "ubuntu"
+        distro = apt_distro()
         suite = Ctx.os_codename
         if Opt.dry:
             out("      would add Tailscale's apt repository for %s %s and install tailscale" % (distro, suite))
@@ -2072,8 +2101,7 @@ class TailscaleInstalled(Step):
                 f.write(fetch_bytes(base + ".noarmor.gpg"))
             with open(P("/etc/apt/sources.list.d/tailscale.list"), "wb") as f:
                 f.write(fetch_bytes(base + ".tailscale-keyring.list"))
-            env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-            run(["apt-get", "update", "-q"], env=env, check=True, timeout=600)
+            run(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=600)
             apt_install(["tailscale"])
         except Abort:
             raise
@@ -2103,7 +2131,6 @@ def do_tailscale_login():
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     shown = False
     end = time.time() + float(os.environ.get("HLS_TS_WAIT", "900"))
-    import threading
     lines = []
 
     def reader():
@@ -2226,6 +2253,15 @@ class ServeMappings(Step):
 
 
 # ---------------------------------------------------------------- Network: port 53
+def set_resolv_conf(text):
+    """Replace /etc/resolv.conf (it may be a link to the resolver's file, so it is removed first)."""
+    try:
+        os.remove(P("/etc/resolv.conf"))
+    except OSError:
+        pass
+    write_file(P("/etc/resolv.conf"), text, 0o644)
+
+
 def port53_listeners():
     """Names of the processes that listen on port 53."""
     rc, txt = run(["ss", "-H", "-tulpn", "sport = :53"])
@@ -2263,11 +2299,7 @@ class Port53(Step):
             # can lose its upstream servers after a reboot or an update, and the machine then cannot look up names.
             act(["tailscale", "set", "--accept-dns=false"])
         if not Opt.dry:
-            try:
-                os.remove(P("/etc/resolv.conf"))
-            except OSError:
-                pass
-            write_file(P("/etc/resolv.conf"), "nameserver %s\n" % gw, 0o644)
+            set_resolv_conf("nameserver %s\n" % gw)
         if run(["systemctl", "is-active", "tailscaled"])[1].strip() == "active":
             act(["systemctl", "restart", "tailscaled"])
         if not Opt.dry:
@@ -2298,11 +2330,7 @@ class DnsStable(Step):
             old = read_file(backup)
             if "nameserver" not in old or "100.100.100.100" in old:
                 old = "nameserver %s\n" % (Ctx.gateway or "1.1.1.1")
-            try:
-                os.remove(P("/etc/resolv.conf"))
-            except OSError:
-                pass
-            write_file(P("/etc/resolv.conf"), old, 0o644)
+            set_resolv_conf(old)
         if not FAKE:
             try:
                 socket.gethostbyname("github.com")
@@ -2438,22 +2466,45 @@ class Portainer:
         return js if st == 200 and isinstance(js, list) else []
 
     @classmethod
+    def stack_named(cls, name):
+        """The stack called `name` as Portainer lists it, or None."""
+        return next((s for s in cls.stacks() if s.get("Name") == name), None)
+
+    @classmethod
+    def stack_file(cls, stack):
+        """The saved file of a stack, as text ('' when it cannot be read)."""
+        eid = stack.get("EndpointId") or cls.endpoint_id()
+        st, js, _ = cls.call("GET", "/api/stacks/%s/file?endpointId=%s" % (stack["Id"], eid), timeout=30)
+        return js.get("StackFileContent", "") if st == 200 and isinstance(js, dict) else ""
+
+    @classmethod
+    def redeploy(cls, stack, text, env):
+        """Give an existing stack a new file and redeploy it. `env` is a list of {"name", "value"}. Returns (status, answer)."""
+        eid = stack.get("EndpointId") or cls.endpoint_id()
+        st, js, _ = cls.call("PUT", "/api/stacks/%s?endpointId=%s" % (stack["Id"], eid),
+                             body={"stackFileContent": text, "env": env, "prune": False,
+                                   "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
+        return st, js
+
+    @staticmethod
+    def error_text(js):
+        """What Portainer said when it refused something."""
+        return str(js.get("details") or js.get("message") if isinstance(js, dict) else js)
+
+    @classmethod
     def deploy(cls, name, text, env):
         eid = cls.endpoint_id()
         if not eid:
             raise Abort("Portainer has no Docker environment yet.")
         envl = [{"name": k, "value": v} for k, v in env]
-        existing = next((s for s in cls.stacks() if s.get("Name") == name), None)
+        existing = cls.stack_named(name)
         if existing:
-            st, js, _ = cls.call("PUT", "/api/stacks/%s?endpointId=%s" % (existing["Id"], existing.get("EndpointId", eid)),
-                                 body={"stackFileContent": text, "env": envl, "prune": False,
-                                       "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
+            st, js = cls.redeploy(existing, text, envl)
         else:
             st, js, _ = cls.call("POST", "/api/stacks/create/standalone/string?endpointId=%s" % eid,
                                  body={"name": name, "stackFileContent": text, "env": envl}, timeout=900)
         if st not in (200, 201):
-            msg = js.get("details") or js.get("message") if isinstance(js, dict) else str(js)
-            raise Abort("Portainer refused to deploy stack '%s' (HTTP %s): %s" % (name, st, str(msg)[:400]))
+            raise Abort("Portainer refused to deploy stack '%s' (HTTP %s): %s" % (name, st, cls.error_text(js)[:400]))
 
 
 def setup_tokens():
@@ -2497,6 +2548,13 @@ class PortainerRunning(Step):
             wait_for(Portainer.alive, "Portainer to start", 120)
 
 
+def restart_portainer():
+    """Restart Portainer and wait until it answers again (its first-setup window then opens afresh)."""
+    docker("restart", "portainer")
+    wait_for(Portainer.alive, "Portainer to restart", 120)
+    time.sleep(2 if not FAKE else 0)
+
+
 @step
 class PortainerAdmin(Step):
     id, group, title = "portainer-admin", "Platform", "Portainer admin account created"
@@ -2517,9 +2575,7 @@ class PortainerAdmin(Step):
                 return
             if state == 303:
                 out("      the first-setup window closed; restarting Portainer to reopen it")
-                docker("restart", "portainer")
-                wait_for(Portainer.alive, "Portainer to restart", 120)
-                time.sleep(2 if not FAKE else 0)
+                restart_portainer()
             for tok in (setup_tokens() or [None]):
                 hdr = {"X-Setup-Token": tok} if tok else {}
                 st, js, _ = http("POST", Portainer.base() + "/api/users/admin/init", headers=hdr,
@@ -2533,9 +2589,7 @@ class PortainerAdmin(Step):
                     break
             if attempt < 3:
                 out("      Portainer refused (HTTP %s); restarting it to open a fresh setup window" % last[0])
-                docker("restart", "portainer")
-                wait_for(Portainer.alive, "Portainer to restart", 120)
-                time.sleep(2 if not FAKE else 0)
+                restart_portainer()
         raise Abort("Portainer refused the admin account (HTTP %s): %s" % (last[0], str(last[1])[:200]))
 
 
@@ -2657,12 +2711,11 @@ def _register_stacks():
         ("beszel-agent", base + ("beszel-agent-key",), "Beszel agent stack"),
     ]
     for name, needs, title in spec:
-        s = StackStep(name, needs, title, 900 if name == "nextcloud" else 300)
-        STEPS.append(s)
-        BY_ID[s.id] = s
+        register(StackStep(name, needs, title, 900 if name == "nextcloud" else 300))
 
 
 _register_stacks()
+
 
 def filebrowser_destinations():
     """The folders FileBrowser has mounted right now (read from the running container)."""
@@ -2693,7 +2746,7 @@ class FileBrowserDrives(Step):
     def run(self):
         text = stack_text("filebrowser")
         if Opt.dry:
-            out("      would redeploy FileBrowser with: %s" % ", ".join(d.replace("/srv/", "") for _, d in filebrowser_mounts()))
+            out("      would redeploy FileBrowser with: %s" % self.detail())
             return
         Portainer.deploy("filebrowser", text, stack_env("filebrowser"))
         wait_for(lambda: stack_up("filebrowser"), "FileBrowser to restart", 120)
@@ -2702,6 +2755,12 @@ class FileBrowserDrives(Step):
 
 
 # ================================================================ restore from a backup (only when one is found and you said yes)
+def need_email():
+    """The email address given at the start, or a message saying how to give it (Immich and Beszel need one)."""
+    if not Ctx.email:
+        raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
+
+
 def restore_choice():
     """What the person chose to restore from a backup (saved in the state file)."""
     return State.data.get("restore", {})
@@ -2709,7 +2768,6 @@ def restore_choice():
 
 def find_backups():
     """Folders that look like a backup of an earlier lab (they hold main/ and boot-configs/)."""
-    import glob
     cands = []
     if Opt.backup:
         cands.append(Opt.backup)
@@ -2758,7 +2816,7 @@ def ask_restore_plan():
     say("Backup found: %s" % path.replace(ROOT, ""))
     if len(found) > 1:
         say("(Other candidates: %s)" % ", ".join(f.replace(ROOT, "") for f in found[1:]))
-    users = os.listdir((path + "/boot-configs/home")) if os.path.isdir((path + "/boot-configs/home")) else []
+    users = os.listdir(path + "/boot-configs/home") if os.path.isdir(path + "/boot-configs/home") else []
     if users and Ctx.user not in users:
         warn("The backup belongs to the user %s, but this machine's user is %s. Restoring would write into /home/%s, so the saved settings are not restored. Create a user named %s to restore them."
              % (", ".join(users), Ctx.user, users[0], users[0]))
@@ -2835,12 +2893,25 @@ class RestoreData(Step):
 
 def immich_restored():
     """True when data was restored from a backup and Immich's own database dumps are present."""
-    import glob
     return bool(restore_choice().get("data")) and bool(glob.glob(P("/mnt/storage/immich/backups/*")))
 
 
 # ================================================================ Homepage config files
 HP_FILES = ["services.yaml", "settings.yaml", "widgets.yaml", "bookmarks.yaml", "custom.css"]
+
+
+def widgets_for_machine(body):
+    """widgets.yaml for a new machine: its first resources pill carries this machine's name (the repository file calls it
+    "Server"), and the weather city chosen at the start is put in."""
+    body = re.sub(r"(- resources:\n\s+label:) Server\b", lambda m: "%s %s" % (m.group(1), Ctx.hostname), body, count=1)
+    w = State.data["answers"].get("weather")
+    if w:
+        new = weather_apply(body, w)
+        if new is not None:
+            body = new
+            State.data["weather_set"] = w["name"]
+            State.save()
+    return body
 
 
 @step
@@ -2870,15 +2941,7 @@ class HomepageFiles(Step):
                 if f == "services.yaml":
                     body = hp_strip_widgets(body)
                 if f == "widgets.yaml":
-                    # the first resources pill is named "Server" in the repository file; use this machine's name
-                    body = re.sub(r"(- resources:\n\s+label:) Server\b", lambda m: "%s %s" % (m.group(1), Ctx.hostname), body, count=1)
-                if f == "widgets.yaml" and State.data["answers"].get("weather"):
-                    w = State.data["answers"]["weather"]
-                    new = weather_apply(body, w)
-                    if new is not None:
-                        body = new
-                        State.data["weather_set"] = w["name"]
-                        State.save()
+                    body = widgets_for_machine(body)
                 write_file(dst, body, 0o644, (Ctx.uid, Ctx.gid))
             elif f in ("services.yaml", "bookmarks.yaml"):
                 old = read_file(dst)
@@ -2970,8 +3033,7 @@ class ImmichAdmin(Step):
     def run(self):
         if immich_restored():
             raise Abort("The backup contains Immich database dumps, so no new admin account is created (it would block the restore). Open %s, choose 'Restore from backup' on the first screen and pick the newest dump. Then run `sudo homelab-setup refresh`." % url("immich"))
-        if not Ctx.email:
-            raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
+        need_email()
         if Opt.dry:
             out("      would create the Immich admin %s with the email address entered at install" % Ctx.admin)
             return
@@ -2999,7 +3061,7 @@ def nc_installed():
 FORCED_NC_KEYS = ("overwritehost", "overwriteprotocol")
 
 
-def occ(*args, stdin=None):
+def occ(*args):
     """Run Nextcloud's `occ` command inside its container."""
     return docker("exec", "-u", "www-data", "nextcloud", "php", "occ", *args, timeout=300)
 
@@ -3057,7 +3119,6 @@ class NextcloudRestoreDb(Step):
         return "done" if State.ran("nextcloud-restore-db") else "todo"
 
     def run(self):
-        import glob
         dumps = sorted(glob.glob(restore_choice()["path"] + "/db-dumps/nextcloud-*.sql.gz"))
         if not dumps:
             State.mark("nextcloud-restore-db")
@@ -3072,7 +3133,6 @@ class NextcloudRestoreDb(Step):
         psql = ["exec", "-i", "nextcloud_db", "psql", "-U", "nextcloud", "-v", "ON_ERROR_STOP=1"]
         run(["docker"] + psql + ["-d", "postgres", "-c", "DROP DATABASE IF EXISTS nextcloud"], check=True)
         run(["docker"] + psql + ["-d", "postgres", "-c", "CREATE DATABASE nextcloud OWNER nextcloud"], check=True)
-        import gzip
         with gzip.open(dump, "rt") as f:
             rc, txt = run(["docker"] + psql + ["-d", "nextcloud"], input_text=f.read(), timeout=1800)
         if rc != 0:
@@ -3109,8 +3169,7 @@ class BeszelUser(Step):
         return "Open %s and create the account with your email address and the admin password. Then run `sudo homelab-setup refresh`." % url("beszel")
 
     def run(self):
-        if not Ctx.email:
-            raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
+        need_email()
         if Opt.dry:
             out("      would create the Beszel hub account for the email address entered at install")
             return
@@ -3174,17 +3233,22 @@ def judge(st):
     return None if st == 0 or st >= 500 else False
 
 
+def verdict(st):
+    """The result of a test whose success is HTTP 200: True, or what judge() says about any other answer."""
+    return True if st == 200 else judge(st)
+
+
 def v_adguard(v):
     """Test the AdGuard Home login with a live request. True, False (rejected) or None (no answer)."""
     st, _, _ = http("GET", url("adguard", "/control/status"), headers=basic(v["username"], v["password"]), timeout=10)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_tailscale(v):
     """Test the Tailscale API key with a live request."""
     base = os.environ.get("HLS_TS_API", "https://api.tailscale.com")
     st, _, _ = http("GET", "%s/api/v2/device/%s" % (base, v["deviceid"]), headers=basic(v["key"], ""), timeout=20)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_beszel(v):
@@ -3201,7 +3265,7 @@ def v_beszel(v):
 def v_netdata(v):
     """Test that Netdata answers."""
     st = http("GET", url("netdata", "/api/v1/info"), timeout=10)[0]
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_speedtest(v):
@@ -3219,19 +3283,19 @@ def v_portainer(v):
     if st != 200:
         return judge(st)
     st, _, _ = http("GET", url("portainer", "/api/endpoints/%s" % v["env"]), headers={"X-API-Key": v["key"]}, timeout=10)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_filebrowser(v):
     """Test the FileBrowser login with a live request."""
     st, _, _ = http("POST", url("filebrowser", "/api/login"), body={"username": v["username"], "password": v["password"]}, timeout=10)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_immich(v):
     """Test the Immich key with a live request."""
     st, _, _ = http("GET", url("immich", "/api/server/statistics"), headers={"x-api-key": v["key"]}, timeout=15)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_nextcloud(v):
@@ -3245,6 +3309,7 @@ def v_nextcloud(v):
 
 class WidgetStep(Step):
     group = "Homepage"
+    unsure = False          # the last test got no answer from the service (the saved key was kept)
 
     def __init__(self, sid, card, title, needs, fields, verify, auto=None, prompts=None, kind="auto", help_text="", pre=None, fill_text=""):
         self.id, self.card, self.title = sid, card, title
@@ -3286,10 +3351,13 @@ class WidgetStep(Step):
             State.note(key, "")
         return "done"
 
-    unsure = False
-
     def detail(self):
         return "kept, the service did not answer just now" if self.unsure else "tested"
+
+    @property
+    def service_name(self):
+        """The title without the part in brackets: 'AdGuard Home widget login'."""
+        return self.title.split(" (")[0]
 
     def tested(self, v, patient=True):
         """True or False from the service. If it does not answer, wait for it (up to 2 minutes); if it still does not, stop."""
@@ -3300,11 +3368,11 @@ class WidgetStep(Step):
                 ok = self.verify(v)
                 return ok is not None
             try:
-                wait_for(answer, "%s to answer" % self.title.split(" (")[0], 3 if FAKE else 120, every=5)
+                wait_for(answer, "%s to answer" % self.service_name, 3 if FAKE else 120, every=5)
             except Abort:
                 pass
         if ok is None:
-            raise Abort("%s did not answer, so nothing was tested or written. It may be busy or still starting: wait a minute, then run `sudo homelab-setup refresh` again." % self.title.split(" (")[0])
+            raise Abort("%s did not answer, so nothing was tested or written. It may be busy or still starting: wait a minute, then run `sudo homelab-setup refresh` again." % self.service_name)
         return ok
 
     def wait_alive(self):
@@ -3318,7 +3386,7 @@ class WidgetStep(Step):
         try:
             wait_for(alive, "%s to answer" % svc, 3 if FAKE else 120, every=5)
         except Abort:
-            raise Abort("%s is not answering at %s right now. Nothing was changed and no password was asked. Wait a minute, then run `sudo homelab-setup refresh` again." % (self.title.split(" (")[0], url(svc))) from None
+            raise Abort("%s is not answering at %s right now. Nothing was changed and no password was asked. Wait a minute, then run `sudo homelab-setup refresh` again." % (self.service_name, url(svc))) from None
 
     def help(self):
         if self.help_text:
@@ -3327,6 +3395,10 @@ class WidgetStep(Step):
 
     def fill_help(self):
         return self.fill_text or self.help()
+
+    def prefill(self):
+        """Values the person is not asked for in `fill` (a widget with such values overrides this)."""
+        return {}
 
     def _write(self, v):
         if not self.tested(v):
@@ -3349,8 +3421,7 @@ class WidgetStep(Step):
             cur[f] = ask_secret(label) if hidden else ask(label, hp_get(self.card, f) or "")
         for k, val in self.pre.items():
             cur.setdefault(k, val)
-        if callable(getattr(self, "prefill", None)):
-            cur.update(self.prefill())
+        cur.update(self.prefill())
         try:
             ok = self.tested(cur)
         except Abort as e:
@@ -3500,8 +3571,7 @@ def _register_widgets():
            v_nextcloud, auto_nextcloud, [("key", "Nextcloud NC-Token", True)]),
     ]
     for s in items:
-        STEPS.append(s)
-        BY_ID[s.id] = s
+        register(s)
 
 
 _register_widgets()
@@ -3690,19 +3760,15 @@ class LoginHook(Step):
     def run(self):
         path = P(Ctx.home + "/.bashrc")
         cur = read_file(path)
-        if "# >>> homelab login display >>>" in cur:
-            new = re.sub(r"\n?# >>> homelab login display >>>.*?# <<< homelab login display <<<\n", LOGIN_BLOCK, cur, flags=re.S)
-            if not Opt.dry:
-                bak = path + ".bak-homelab-setup"
-                if not os.path.exists(bak):
-                    write_file(bak, cur, 0o644, (Ctx.uid, Ctx.gid))
-            write_file(path, new, 0o644, (Ctx.uid, Ctx.gid))
-            return
         if not Opt.dry and cur:
-            bak = path + ".bak-homelab-setup"
+            bak = path + ".bak-homelab-setup"          # the first copy of the file, kept once
             if not os.path.exists(bak):
                 write_file(bak, cur, 0o644, (Ctx.uid, Ctx.gid))
-        write_file(path, cur.rstrip("\n") + "\n" + LOGIN_BLOCK, 0o644, (Ctx.uid, Ctx.gid))
+        if "# >>> homelab login display >>>" in cur:
+            new = re.sub(r"\n?# >>> homelab login display >>>.*?# <<< homelab login display <<<\n", LOGIN_BLOCK, cur, flags=re.S)
+        else:
+            new = cur.rstrip("\n") + "\n" + LOGIN_BLOCK
+        write_file(path, new, 0o644, (Ctx.uid, Ctx.gid))
 
 
 # ================================================================ things only you can do
@@ -3755,7 +3821,6 @@ def chk_devices_dns():
     st, js, _ = http("GET", url("adguard", "/control/stats"), headers=basic(user, pw), timeout=15)
     if st != 200 or not isinstance(js, dict):
         return False
-    import ipaddress
     docker_net = ipaddress.ip_network("172.16.0.0/12")
     try:
         lan_in_docker = ipaddress.ip_address(Ctx.lan) in docker_net
@@ -3855,8 +3920,7 @@ def _register_acks():
                 "Reboot once and confirm that everything comes back: after about two minutes, log in again. The login screen should show all containers running, and `docker ps` should list them.\n$ sudo reboot", needs=("stack-homepage",), auto=chk_reboot),
     ]
     for s in items:
-        STEPS.append(s)
-        BY_ID[s.id] = s
+        register(s)
 
 
 BLOCKLISTS = [
@@ -4031,6 +4095,14 @@ def preflight():
         good("Free space on the boot drive: %.0f GB" % free)
 
 
+def show_secret_values():
+    """The generated passwords and keys, one per line."""
+    out("")
+    for k in sorted(Secrets.vals):
+        out("   %-28s %s" % (k, Secrets.vals[k]))
+    out("")
+
+
 def final_report(res):
     """End of install: how it went, the generated passwords (then wait for Enter), the checklist, the next step."""
     Live.close()
@@ -4051,10 +4123,7 @@ def final_report(res):
         rule("Generated passwords and keys")
         say("Stored in %s (root only). Copy them into your password manager now. "
             "This file stays on this machine and is never part of the repository." % SECRET_FILE.replace(ROOT, ""))
-        out("")
-        for k in sorted(Secrets.vals):
-            out("   %-28s %s" % (k, Secrets.vals[k]))
-        out("")
+        show_secret_values()
         say("Show them again at any time:\n$ sudo homelab-setup secrets")
         say("The admin password you chose is not stored anywhere. Keep it in your password manager.")
         out("")
@@ -4202,6 +4271,59 @@ def welcome():
             out(l)
 
 
+def plan_install(res):
+    """Sort the open steps into (todo, later, by_hand): the ones the installer runs now, the ones it runs by itself once
+    a step that needs the person is done, and the ones only the person can do."""
+    open_auto = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
+
+    def runs_now(s, seen=()):
+        """True when everything this step needs is done or will be done by the installer itself in this run."""
+        for n in s.needs:
+            if res[n].state in ("done", "na", "skip"):
+                continue
+            d = BY_ID[n]
+            if n in seen or not (d.kind == "auto" or n in DURING_INSTALL) or not runs_now(d, seen + (s.id,)):
+                return False
+        return True
+    todo = [s for s in open_auto if runs_now(s)]
+    later = [s for s in open_auto if s not in todo]          # wait for a step that only the person can do
+    by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"
+               and not (s.id == "weather" and (Opt.dry or State.data["answers"].get("weather")))]   # set from the city answer
+    return todo, later, by_hand
+
+
+def by_hand_tag(s):
+    """When the person will be asked to do this step."""
+    if s.id in DURING_INSTALL:
+        return "during the install"
+    if s.id == "secrets-saved":
+        return "at the end of the install, when you press Enter after copying them"
+    if getattr(s, "auto", None):
+        return "afterwards, detected automatically once done"
+    return "afterwards"
+
+
+def show_plan(todo, later, by_hand):
+    """Print what the install will do, and what needs the person."""
+    rule("Planned steps")
+    say("%d steps run automatically, in this order:" % len(todo))
+    out("")
+    for g in GROUPS:
+        n = len([s for s in todo if s.group == g])
+        if n:
+            out("   %s%-22s%s %2d  %s%s%s" % (B, g, N, n, D, GROUP_BLURB.get(g, ""), N))
+    if later:
+        out("")
+        say("%d more %s by itself once the steps that need you are done: %s" % (
+            len(later), "step runs" if len(later) == 1 else "steps run", "; ".join(s.title for s in later)))
+    if by_hand:
+        out("")
+        say("%d steps need you:" % len(by_hand))
+        out("")
+        for s in by_hand:
+            out("   %s%s%s %s  %s(%s)%s" % (Y, S_TODO, N, s.title, D, by_hand_tag(s), N))
+
+
 def cmd_install():
     """`install`: plan, ask, then build the lab."""
     load_all()
@@ -4234,53 +4356,15 @@ def cmd_install():
     if State.ran("install-started"):
         wait_for_apps()
     res = evaluate()
-    open_auto = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
-
-    def runs_now(s, seen=()):
-        """True when everything this step needs is done or will be done by the installer itself in this run."""
-        for n in s.needs:
-            if res[n].state in ("done", "na", "skip"):
-                continue
-            d = BY_ID[n]
-            if n in seen or not (d.kind == "auto" or n in DURING_INSTALL) or not runs_now(d, seen + (s.id,)):
-                return False
-        return True
-    todo = [s for s in open_auto if runs_now(s)]
-    later = [s for s in open_auto if s not in todo]          # wait for a step that only the person can do
-    by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"
-               and not (s.id == "weather" and (Opt.dry or State.data["answers"].get("weather")))]   # set from the city answer
+    todo, later, by_hand = plan_install(res)
     if not todo and not by_hand and not later:
         out("")
         say("Nothing to do: all steps are complete.")
         show_checklist(res, "Setup")
         next_step_section(res)
         return
-    rule("Planned steps")
+    show_plan(todo, later, by_hand)
     during = [s for s in by_hand if s.id in DURING_INSTALL]
-    say("%d steps run automatically, in this order:" % len(todo))
-    out("")
-    for g in GROUPS:
-        n = len([s for s in todo if s.group == g])
-        if n:
-            out("   %s%-22s%s %2d  %s%s%s" % (B, g, N, n, D, GROUP_BLURB.get(g, ""), N))
-    if later:
-        out("")
-        say("%d more %s by itself once the steps that need you are done: %s" % (
-            len(later), "step runs" if len(later) == 1 else "steps run", "; ".join(s.title for s in later)))
-    if by_hand:
-        out("")
-        say("%d steps need you:" % len(by_hand))
-        out("")
-        for s in by_hand:
-            if s.id in DURING_INSTALL:
-                tag = "during the install"
-            elif s.id == "secrets-saved":
-                tag = "at the end of the install, when you press Enter after copying them"
-            elif getattr(s, "auto", None):
-                tag = "afterwards, detected automatically once done"
-            else:
-                tag = "afterwards"
-            out("   %s%s%s %s  %s(%s)%s" % (Y, S_TODO, N, s.title, D, tag, N))
     out("")
     if not Opt.dry and not Opt.yes:
         if not typed("yes", "Type yes to start (nothing has been changed yet)"):
@@ -4318,7 +4402,8 @@ def run_install(res):
                 bad(str(e))
     for _ in range(4):
         gained = run_pass(res)
-        res.update(evaluate()) if not Opt.dry else None
+        if not Opt.dry:
+            res.update(evaluate())
         if not gained:
             break
 
@@ -4386,6 +4471,7 @@ def cmd_filebrowser():
 
 
 def host_mount_types():
+    """{mount point: file system type} as the host sees its own mounts."""
     try:
         return mount_types(open("/proc/self/mountinfo").read())
     except OSError:
@@ -4407,19 +4493,65 @@ def homepage_sees_pools():
     return True
 
 
-def apply_pill_layout():
-    """Put the shipped 'pill layout' block (taller top pills, search bar lower) into this machine's custom.css."""
+def apply_custom_css():
+    """Move this machine's custom.css to the shipped, tidier layout (the old file is saved first)."""
     dst = hp_path("custom.css")
-    shipped = css_block(read_file(repo_file("homepage-config", "custom.css")))
     cur = read_file(dst)
-    if not shipped or not cur:
-        return
-    new = css_with_block(cur, shipped)
+    new = css_new_layout(cur, read_file(repo_file("homepage-config", "custom.css"))) if cur else cur
     if new == cur:
         return
     rule("Homepage")
-    out("  Updating the look of the top pills in custom.css (taller pills, search bar a little lower). Reload the page to see it")
+    out("  Moving custom.css to the new, tidier layout. Your accent colours, the numbers you changed and the homelab theme block are kept.")
+    out("  The old file is saved as custom.css.before-layout2. Reload the page to see it (Ctrl+Shift+R)")
+    write_file(dst + ".before-layout2", cur, 0o644, (Ctx.uid, Ctx.gid))
     write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
+
+
+def update_homepage_stack():
+    """Make the Homepage stack in Portainer mount the whole /mnt folder (see homepage_volumes).
+    Returns "changed", "unchanged", or "dry" (a dry run only said what it would do)."""
+    manual = ("In Portainer open the stack 'homepage' > Editor. Replace the lines that mount /mnt/storage and /mnt/backup with this one line "
+              "under volumes, then click Update the stack:\n      - %s" % HOMEPAGE_PARENT_LINE)
+    if not Secrets.get("PORTAINER_TOKEN") or not Portainer.alive():
+        warn("Portainer cannot be reached with a saved key, so the Homepage stack is not changed here. " + manual)
+        return "unchanged"
+    stack = Portainer.stack_named("homepage")
+    if not stack:
+        warn("Portainer has no stack named 'homepage'. " + manual)
+        return "unchanged"
+    text = Portainer.stack_file(stack)
+    if not text:
+        warn("Could not read the Homepage stack from Portainer. " + manual)
+        return "unchanged"
+    new = homepage_volumes(text)
+    if new == text:
+        return "unchanged"
+    rule("Homepage")
+    out("  Letting Homepage see the pools: its stack mounts the whole /mnt folder now (Homepage restarts for a few seconds)")
+    if Opt.dry:
+        out("      would update the Homepage stack in Portainer")
+        return "dry"
+    env = [{"name": e["name"], "value": e["value"]} for e in (stack.get("Env") or [])]
+    st, js = Portainer.redeploy(stack, new, env)
+    if st not in (200, 201):
+        raise Abort("Portainer refused to change the Homepage stack (HTTP %s): %s" % (st, Portainer.error_text(js)[:300]))
+    wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
+    return "changed"
+
+
+def restart_homepage_if_blind():
+    """Restart Homepage when it does not see the pools the way the host has them mounted.
+    Returns "changed", "unchanged", or "dry"."""
+    if "homepage" not in containers_running() or homepage_sees_pools():
+        return "unchanged"
+    rule("Homepage")
+    out("  Homepage does not see the pools the way they are mounted now. Restarting Homepage")
+    if Opt.dry:
+        out("      would restart Homepage")
+        return "dry"
+    act(["docker", "restart", "homepage"], timeout=120)
+    wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
+    return "changed"
 
 
 def cmd_homepage():
@@ -4428,49 +4560,13 @@ def cmd_homepage():
     if "homepage" not in containers_all():
         say("Homepage is not installed on this machine.")
         return
-    apply_pill_layout()
-    changed = False
-    manual = ("In Portainer open the stack 'homepage' > Editor. Replace the lines that mount /mnt/storage and /mnt/backup with this one line "
-              "under volumes, then click Update the stack:\n      - %s" % HOMEPAGE_PARENT_LINE)
-    if not Secrets.get("PORTAINER_TOKEN") or not Portainer.alive():
-        warn("Portainer cannot be reached with a saved key, so the Homepage stack is not changed here. " + manual)
-    else:
-        s = next((x for x in Portainer.stacks() if x.get("Name") == "homepage"), None)
-        if not s:
-            warn("Portainer has no stack named 'homepage'. " + manual)
-        else:
-            eid = s.get("EndpointId") or Portainer.endpoint_id()
-            st, js, _ = Portainer.call("GET", "/api/stacks/%s/file?endpointId=%s" % (s["Id"], eid), timeout=30)
-            text = js.get("StackFileContent", "") if st == 200 and isinstance(js, dict) else ""
-            if not text:
-                warn("Could not read the Homepage stack from Portainer. " + manual)
-            else:
-                new = homepage_volumes(text)
-                if new != text:
-                    rule("Homepage")
-                    out("  Letting Homepage see the pools: its stack mounts the whole /mnt folder now (Homepage restarts for a few seconds)")
-                    if Opt.dry:
-                        out("      would update the Homepage stack in Portainer")
-                        return
-                    env = [{"name": e["name"], "value": e["value"]} for e in (s.get("Env") or [])]
-                    st, js, _ = Portainer.call("PUT", "/api/stacks/%s?endpointId=%s" % (s["Id"], eid),
-                                               body={"stackFileContent": new, "env": env, "prune": False,
-                                                     "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
-                    if st not in (200, 201):
-                        msg = js.get("details") or js.get("message") if isinstance(js, dict) else str(js)
-                        raise Abort("Portainer refused to change the Homepage stack (HTTP %s): %s" % (st, str(msg)[:300]))
-                    wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
-                    changed = True
-    if not changed and "homepage" in containers_running() and not homepage_sees_pools():
-        rule("Homepage")
-        out("  Homepage does not see the pools the way they are mounted now. Restarting Homepage")
-        if Opt.dry:
-            out("      would restart Homepage")
-            return
-        act(["docker", "restart", "homepage"], timeout=120)
-        wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
-        changed = True
-    if changed:
+    apply_custom_css()
+    result = update_homepage_stack()
+    if result == "unchanged":                 # the stack was fine; the container may still be looking at an old mount
+        result = restart_homepage_if_blind()
+    if result == "dry":
+        return
+    if result == "changed":
         good("Homepage can see the Main and Backup pool")
     else:
         say("Homepage already sees the pools.")
@@ -4526,10 +4622,7 @@ def cmd_secrets():
         say("No generated passwords or keys are stored on this machine.")
         return
     say("Saved in %s (root only):" % SECRET_FILE.replace(ROOT, ""))
-    out("")
-    for k in sorted(Secrets.vals):
-        out("   %-28s %s" % (k, Secrets.vals[k]))
-    out("")
+    show_secret_values()
     say("The admin password you chose is not stored. Keep it in your password manager.")
     if not State.readonly:
         State.data["secrets_shown"] = State.data.get("secrets_shown") or time.strftime("%F %T")
@@ -4607,7 +4700,7 @@ Commands:
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
-  homepage                 let Homepage see the Main and Backup pool, and update the look of the top pills
+  homepage                 let Homepage see the Main and Backup pool, and move custom.css to the current layout
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -4617,9 +4710,14 @@ The installer never formats or modifies a drive and never saves the admin passwo
 """
 
 
+# every command that needs no more than its name (done STEP and skip STEP also take the step)
+COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
+            "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
+            "homepage": cmd_homepage}
+
+
 def main(argv):
     """Read the command line and run the command."""
-    import signal
     try:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     except (AttributeError, ValueError):
@@ -4663,34 +4761,18 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify", "filebrowser", "homepage"):
+    if cmd not in COMMANDS and cmd not in ("done", "skip"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
     try:
-        if cmd in ("checklist", "check"):
-            cmd_checklist()
-        elif cmd == "install":
-            cmd_install()
-        elif cmd == "refresh":
-            cmd_refresh()
-        elif cmd == "fill":
-            cmd_fill()
-        elif cmd in ("done", "skip"):
+        if cmd in ("done", "skip"):
             if len(pos) < 2:
                 out("Which step? Example: homelab-setup %s reboot-test" % cmd)
                 return 1
             cmd_mark("ack" if cmd == "done" else "skip", pos[1])
-        elif cmd == "secrets":
-            cmd_secrets()
-        elif cmd == "progress":
-            cmd_progress()
-        elif cmd == "verify":
-            cmd_verify()
-        elif cmd == "filebrowser":
-            cmd_filebrowser()
-        elif cmd == "homepage":
-            cmd_homepage()
+        else:
+            COMMANDS[cmd]()
     except Abort as e:
         Live.close()
         out("")
