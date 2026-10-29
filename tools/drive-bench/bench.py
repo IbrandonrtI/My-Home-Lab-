@@ -17,6 +17,7 @@ How it works
 """
 import argparse
 import collections
+import fcntl
 import hashlib
 import itertools
 import json
@@ -1087,6 +1088,15 @@ def main():
     if a.report_only:
         report.build(results, out_dir)
         return
+    lock = open("/var/tmp/drive-bench.lock", "w")      # kept open until the program ends; not passed on to the commands it starts
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit("Another drive-bench is already running on this server. Two runs at once break each other.\n"
+                 "Look at it with: tmux attach -t bench     (leave it again with Ctrl+B, then D)\n"
+                 "To stop it: tmux attach -t bench, then press Ctrl+C and wait until it says 'finished'.")
+    lock.write("%d\n" % os.getpid())
+    lock.flush()
     if not a.resume and os.path.exists(results):
         os.rename(results, results + ".old")
     st = level_settings(a.level)
