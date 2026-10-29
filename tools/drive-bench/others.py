@@ -145,7 +145,7 @@ def layout_pass(env, rec, layouts, log):
             state = os.path.join(env.work, "homelab-state")
             os.makedirs(state, exist_ok=True)
             with open(conf, "w") as f:
-                f.write('SRC="%s"\nDEST_POOL="%s"\nLOGFILE="%s/backup.log"\nSTATUS_FILE="%s/last-run"\nCONFIG_PATHS=()\nMIN_FREE_GB=0\n'
+                f.write('SRC="%s"\nDEST_POOL="%s"\nLOGFILE="%s/backup.log"\nSTATUS_FILE="%s/last-run"\nCONFIG_PATHS=()\nMIN_FREE_GB=0\nNEXTCLOUD_DB_CONTAINER="nextcloud"\n'
                         % (env.main, env.backup, state, state))
             e = env.environ()
             e.update({"HOMELAB_MAIN_POOL": env.main, "HOMELAB_BACKUP_POOL": env.backup, "HOMELAB_DISKS_DIR": env.disks,

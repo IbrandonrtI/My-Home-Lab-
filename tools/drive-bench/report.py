@@ -261,7 +261,7 @@ def wishes(R):
         if r["flow"] != "wish":
             continue
         word, _, what = r["note"].partition(": ")
-        usage = "Usage:" in r["output"] and r["rc"] == 0 and not r["changed"]
+        usage = ("Usage:" in r["output"] or "Unknown command" in r["output"]) and not r["changed"]
         out.append({"word": word, "what": what, "supported": not usage, "output": last_lines(r["output"], 2)})
     return out
 
@@ -325,7 +325,7 @@ IDEAS = [
      "Pass the arguments to connect_flow and add --yes for the typed confirmations (keep the ERASE confirmation unless --force-erase is given).",
      lambda w, c, s, f: any(x["note"] == "connect with a device and a pool" and x["prompts"] for x in c)),
     ("dryrun", "A dry run (--dry-run) for every change", "The installer has one; the drive tool shows what it will do only through its own questions.",
-     "Print the steps (fstab lines, mounts, containers to stop) and exit before the first change.", lambda w, c, s, f: any(x["note"] == "--dry-run" and "Usage:" in x["output"] for x in c)),
+     "Print the steps (fstab lines, mounts, containers to stop) and exit before the first change.", lambda w, c, s, f: any(x["note"] == "--dry-run" and ("Usage:" in x["output"] or "Unknown command" in x["output"]) for x in c)),
     ("exitcodes", "Exit code 1 when a command is refused", "Commands that refuse ('is the only main drive', 'No new drive found') exit with 0, so a script cannot tell.",
      "Make each flow's refusal end with `exit 1` (the dispatcher already runs `sync_filebrowser` after, which hides the code).",
      lambda w, c, s, f: any(x["severity"] == "LOW" and x["problem"].startswith("exit 0 although") for x in f)),

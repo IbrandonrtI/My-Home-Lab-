@@ -177,6 +177,9 @@ class Env:
             "BENCH_COUNTER": self.counter, "BENCH_SLEEPERS": os.path.join(self.ctl, "sleepers"), "BENCH_FLAGS": self.flags, "BENCH_PROPS": self.props,
             "DRIVES_MINFREE": "2M", "DRIVES_OWNER": "root", "LC_ALL": "C",
             "DRAIN_SPARE_BYTES": "1048576",      # the real tool keeps 2 GB free when it copies a drive off; the fake drives are tiny
+            # `drives` offers to run the backup and looks for the newest backup: both must use the fake pools, never the real backup
+            "HOMELAB_BACKUP_CMD": os.path.join(self.bin, "homelab-backup"), "BACKUP_CONF": os.path.join(self.work, "backup.conf"),
+            "BACKUP_STATUS_FILE": os.path.join(self.work, "homelab-state", "last-run"),
         })
         e.pop("BENCH_FAULT_AT", None)
         e.pop("BENCH_FAULT_CMD", None)
@@ -210,6 +213,7 @@ case "$1" in
     shift
     if [ -e "$D/start-fails" ]; then echo "Error response from daemon: cannot start container" >&2; exit 1; fi
     for n in "$@"; do grep -vx "$n" "$D/stopped" >"$D/stopped.new" 2>/dev/null; mv -f "$D/stopped.new" "$D/stopped" 2>/dev/null; echo "$n"; done ;;
+  exec) head -c 4096 /dev/urandom ;;
   *) exit 0 ;;
 esac
 '''
@@ -249,6 +253,35 @@ exit 0
 '''
 
 
+def real_backup_stamp():
+    """When the real backup log and status were last written: the fake-drive tests must never change them."""
+    out = []
+    for f in ("/var/log/homelab-backup.log", "/var/lib/homelab-backup/last-run"):
+        try:
+            st = os.stat(f)
+            out.append((f, st.st_mtime_ns, st.st_size))
+        except OSError:
+            out.append((f, 0, 0))
+    return out
+
+
+def install_fake_backup(env):
+    """The real homelab-backup script, pointed at the fake pools (own settings, own log, no lock, fake docker)."""
+    state = os.path.join(env.work, "homelab-state")
+    os.makedirs(state, exist_ok=True)
+    with open(os.path.join(env.work, "backup.conf"), "w") as f:
+        f.write('SRC="%s"\nDEST_POOL="%s"\nDEST_FALLBACK=""\nLOGFILE="%s/backup.log"\nSTATUS_FILE="%s/last-run"\n'
+                'CONFIG_PATHS=()\nMIN_FREE_GB=0\nNEXTCLOUD_DB_CONTAINER="nextcloud"\n' % (env.main, env.backup, state, state))
+    nolock = os.path.join(env.work, "nolock.sh")
+    with open(nolock, "w") as f:
+        f.write("flock() { return 0; }\n")     # a test run must not take the lock of the real backup
+    path = os.path.join(env.bin, "homelab-backup")
+    with open(path, "w") as f:
+        f.write('#!/bin/bash\nexport BACKUP_CONF="%s" BASH_ENV="%s" HOMELAB_USER=root HOMELAB_ALLOW_ROOT=1\nexec bash "%s" "$@"\n'
+                % (os.path.join(env.work, "backup.conf"), nolock, os.path.join(env.scripts, "homelab-backup")))
+    os.chmod(path, 0o755)
+
+
 def install_fakes(env):
     for d in (env.bin, env.ctl, env.flags):
         os.makedirs(d, exist_ok=True)
@@ -258,6 +291,7 @@ def install_fakes(env):
         with open(path, "w") as f:
             f.write(body)
         os.chmod(path, 0o755)
+    install_fake_backup(env)
     with open(os.path.join(env.flags, "containers"), "w") as f:
         f.write("immich_server|%s %s\nnextcloud|%s\nfilebrowser|%s %s %s\n" % (
             env.main, env.disks, env.main, env.main, env.backup, env.disks))
@@ -614,6 +648,9 @@ def build_layout(env, layout, log=print):
                                          timeout=120)
         if "Done." not in out:
             problems.append("could not make the %s boot section: %s" % (role, out.strip().splitlines()[-1:]))
+    if layout.backup or "backup" in layout.boot:
+        # a backup copy of the main pool, so restore and "replace a dead drive" have something to copy back from
+        sh([os.path.join(env.bin, "homelab-backup")], timeout=300, env=env.environ())
     if layout.kind == "oldpool" and not problems:
         # an older pool: no per-drive free-space limit and "most free space" instead of "fill the first drive first"
         teardown_pools(env)
@@ -649,16 +686,17 @@ def restore_layout(env):
 
 
 # ---------------------------------------------------------------------------------------------------------------- results
+SH = r"(?m)^[^\n]*?: (?:eval: )?line \d+: [^\n]*"      # a shell error line: "drives: line 120: ..."
 BASH_ERRORS = [
-    (re.compile(r"unbound variable"), "unbound variable"),
-    (re.compile(r"syntax error"), "syntax error"),
-    (re.compile(r"command not found"), "command not found"),
-    (re.compile(r"bad substitution"), "bad substitution"),
-    (re.compile(r"integer expression expected"), "integer expression expected"),
-    (re.compile(r"unary operator expected"), "unary operator expected"),
-    (re.compile(r"line \d+: .*: (No such file|Permission denied|ambiguous redirect)"), "shell error on a line"),
+    (re.compile(SH + "unbound variable"), "unbound variable"),
+    (re.compile(SH + "syntax error"), "syntax error"),
+    (re.compile(SH + "command not found"), "command not found"),
+    (re.compile(SH + "bad substitution"), "bad substitution"),
+    (re.compile(SH + "integer expression expected"), "integer expression expected"),
+    (re.compile(SH + "unary operator expected"), "unary operator expected"),
+    (re.compile(SH + "(No such file or directory|Permission denied|ambiguous redirect)"), "shell error on a line"),
     (re.compile(r"Traceback \(most recent call last\)"), "python traceback"),
-    (re.compile(r"arithmetic syntax error|division by 0|value too great for base"), "arithmetic error"),
+    (re.compile(SH + "(arithmetic syntax error|division by 0|value too great for base)"), "arithmetic error"),
 ]
 
 
@@ -698,6 +736,8 @@ def classify(rc, out, timed_out, events, changed, flow=""):
             flags.append("exit 0 although the command refused")
         else:
             outcome = "NOTHING"
+    elif rc == 1 and (re.search(r"Cancelled", out) or (events and events[-1].get("answer") == "<EOF>" and not msg)):
+        outcome = "CANCELLED"
     elif rc == 1 and (msg or has_message(out, events)):
         outcome = "REFUSED"
     elif rc == 1:
@@ -709,7 +749,7 @@ def classify(rc, out, timed_out, events, changed, flow=""):
     return outcome, flags, msg
 
 
-def check_invariants(env, flow, out, before_files, changed=False, unplugged=False):
+def check_invariants(env, flow, out, before_files, changed=False, unplugged=False, rc=0, mountfail=False):
     """Look at the machine after a run. Returns a list of problems (strings)."""
     bad = []
     try:
@@ -742,9 +782,13 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
     # containers
     stopped = os.path.join(env.flags, "stopped")
     if os.path.exists(stopped) and open(stopped).read().strip():
-        if "still STOPPED" in out:
+        if "stay stopped on purpose" in out or "stay stopped until the" in out:
+            pass     # kept down on purpose (a drive is missing, or a restore is not finished): the message says what to do
+        elif mountfail and "still STOPPED" in out:
+            pass     # every mount fails in this run: the pools cannot come back, so the containers must not start
+        elif "still STOPPED" in out:
             bad.append("INV-left-stopped: the command stopped the services and failed, so they stay down until 'sudo hdd-recover' is run")
-        else:
+        elif rc == 0 or "did not start" not in out:
             bad.append("INV-containers: containers were left stopped but the command ended as if all was well%s"
                        % (" (it printed a warning)" if "did not start" in out else " (nothing was said)"))
     # files
@@ -788,6 +832,19 @@ def case_id(layout, args, answers, fault, pre=()):
     return "|".join([layout, " ".join(args), "\x1e".join(answers), "%s:%s" % fault if fault else "", ",".join(pre)])
 
 
+def lose_files(env, n=3):
+    """Some files vanish from the main pool (what `drives restore` is for)."""
+    gone = 0
+    for root, _dirs, files in os.walk(env.main):
+        for f in sorted(files):
+            if gone < n and not f.startswith("."):
+                try:
+                    os.remove(os.path.join(root, f))
+                    gone += 1
+                except OSError:
+                    pass
+
+
 def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_env=None, timeout=None, probe=True, pre=()):
     """One scripted run of `drives` on the saved layout. `pre` = things that went wrong BEFORE the command starts
     (for example a drive that was unplugged). Returns the record, or None when it was already done."""
@@ -799,7 +856,10 @@ def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_e
         env.current = layout.key
     if pre:
         for spec in pre:
-            run_shim(env, ["__call", "__bench_fault"] + spec.split(), timeout=60)
+            if spec == "lose-files":
+                lose_files(env)
+            else:
+                run_shim(env, ["__call", "__bench_fault"] + spec.split(), timeout=60)
         env.base_fp = fingerprint(env)
         env.base_files = {r: set(listing(p)) for r, p in (("main", env.main), ("backup", env.backup))}
         env.dirty = True
@@ -815,7 +875,8 @@ def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_e
     changed = fp != env.base_fp
     outcome, flags, msg = classify(rc, out, to, events, changed, flow)
     invariants = check_invariants(env, flow, out, before_files, changed,
-                                    any("unplug" in x for x in list(pre) + [fault[1] if fault else ""])) if not to else []
+                                    any("unplug" in x for x in list(pre) + [fault[1] if fault else ""]), rc,
+                                    bool(fault) and "mount-fails" in fault[1]) if not to else []
     probe_rec = None
     if probe and changed:
         pdoc = run_shim(env, ["status"], timeout=60)
@@ -911,9 +972,10 @@ def candidates(ev, transcript_before, level, layout):
     return c
 
 
-def explore(env, rec, layout, flow, args, level, budget, max_dev, max_depth=8, pre=(), note=""):
-    """Run a command with answer sequences, most normal first. Returns the list of records run."""
-    heap = [(0, 0, [])]      # (deviations, order, answers)
+def explore(env, rec, layout, flow, args, level, budget, max_dev, max_depth=8, pre=(), note="", prefix=()):
+    """Run a command with answer sequences, most normal first. `prefix` = answers that are always given first.
+    Returns the list of records run."""
+    heap = [(0, 0, list(prefix))]      # (deviations, order, answers)
     seq = itertools.count(1)
     seen = set()
     out = []
@@ -1059,6 +1121,13 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
         bad = sum(1 for r in results if r["outcome"] in ("CRASH", "SILENT-FAIL") or any(f.startswith("INV-") for f in r["flags"]))
         log("  %-12s %3d runs  %4.0fs%s" % (name, len(results), time.time() - t0, ("   !! %d problem(s)" % bad) if bad else ""))
     deep = st["faults"] and (st["deep"] is None or any(re.search(p, layout.name) for p in st["deep"]))
+    if st["variants"] and (not only_flows or "connect" in only_flows) and len(layout.spares) >= 2 and layout.spares[1].fs == "ext4data":
+        # the second spare drive already holds files: connect it and choose "Erase everything" (too deep in the answer tree to be reached by chance)
+        explore(env, rec, layout, "connect", FLOWS_BY_NAME["connect"], level, 6, 1, st["depth"], prefix=("2", "1", "2"),
+                note="a spare drive with files: choose to erase it")
+    if deep and (not only_flows or "restore" in only_flows or "faults" in only_flows):
+        explore(env, rec, layout, "restore", FLOWS_BY_NAME["restore"], level, max(6, st["budget"] // 2), 1, st["depth"],
+                pre=("lose-files",), note="before the command: some files are gone from the main pool")
     if deep:
         for sname, specs in PRE_SCENARIOS[:st["pre"]]:
             real = [resolve_fault(layout, x) for x in specs]
@@ -1182,12 +1251,16 @@ def main():
         sys.exit("This drives script does not use the bench's test folders (it printed: %s). Refusing to run, so that nothing real is touched." % out.strip()[-300:])
     try:
         if not a.other_only:
+            before = real_backup_stamp()
             lay = layouts_for(a.level, a.layout)
             log("level %s: %d layouts, up to %d runs per flow" % (a.level, len(lay), st["budget"]))
             flows = set(a.flow or [])
             for i, layout in enumerate(lay, 1):
                 log("[%d/%d] layout %s  (%s)" % (i, len(lay), layout.name, layout.describe()))
                 run_layout(env, rec, layout, a.level, st, flows, log)
+            after = real_backup_stamp()
+            if after != before:
+                log("WARNING: the real backup log or status changed while the fake drives were tested. Something started the real backup.")
             if st["wishes"] and (not flows or "wish" in flows):
                 lay0 = layouts_for(a.level, ["^m2-b1$"]) or layouts_for(a.level)[:1]
                 if lay0:
