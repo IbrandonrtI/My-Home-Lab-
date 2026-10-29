@@ -552,6 +552,10 @@ stop_containers() {   # stop_containers PATH...
   STOPPED=$list
 }
 
+sync_fs() {   # write out the data of just these drives (sync -f); a plain `sync` waits for every write on the whole computer and can take minutes on a busy one
+  sync -f "$@" 2>/dev/null || sync
+}
+
 start_containers() {
   [ -n "${STOPPED// /}" ] || return 0
   local n failed=""
@@ -857,7 +861,7 @@ detach_branch() {   # detach_branch mountpoint  (leaves the data on the drive un
   fi
 
   if [ -z "${STOPPED// /}" ]; then stop_containers "$pool"; fi
-  sync
+  sync_fs "$mp"
   fstab_snapshot
   pool_umount "$pool"
   mountpoint -q "$mp" && { umount "$mp" 2>/dev/null || umount -l "$mp"; }
@@ -944,7 +948,7 @@ adopt_flow() {
   before=$(ls -A "$pool" | wc -l)
   stop_containers "$pool"
   fstab_snapshot
-  sync
+  sync_fs "$pool"
   umount "$pool" 2>/dev/null || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
   if [ "$cur" != "$label" ]; then e2label "$part" "$label" || { fstab_rollback; mount_fstab "$pool"; start_containers; die "Could not set the label."; }; fi
   ensure_mp "$mp"
@@ -1197,7 +1201,9 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
   local prog=--info=stats1
   [ -t 1 ] && prog=--info=progress2
   rsync -aH --numeric-ids --ignore-existing --exclude=/lost+found "$prog" "$base" "$MAIN_POOL/" || { warn "The copy stopped with an error."; return 1; }
-  sync
+  local -a mains=()
+  mapfile -t mains < <(branches_of main)
+  sync_fs "${mains[@]}" "$MAIN_POOL"
   say ""
   say "Checking that every file in the backup is now in the pool..."
   miss=$(comm -23 -z \
@@ -1379,7 +1385,7 @@ release_flow() {   # take every drive out of both pools; the files on the drives
   yn "Release all drives?" || { say "Cancelled. Nothing was changed."; return 1; }
 
   stop_containers "$MAIN_POOL" "$BACKUP_POOL" "$DISKS_DIR"
-  sync
+  sync_fs "${all[@]}"
   for p in "$BACKUP_POOL" "$MAIN_POOL"; do
     if mountpoint -q "$p" && ! pool_umount "$p"; then
       start_containers
