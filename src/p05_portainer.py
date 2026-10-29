@@ -58,22 +58,45 @@ class Portainer:
         return js if st == 200 and isinstance(js, list) else []
 
     @classmethod
+    def stack_named(cls, name):
+        """The stack called `name` as Portainer lists it, or None."""
+        return next((s for s in cls.stacks() if s.get("Name") == name), None)
+
+    @classmethod
+    def stack_file(cls, stack):
+        """The saved file of a stack, as text ('' when it cannot be read)."""
+        eid = stack.get("EndpointId") or cls.endpoint_id()
+        st, js, _ = cls.call("GET", "/api/stacks/%s/file?endpointId=%s" % (stack["Id"], eid), timeout=30)
+        return js.get("StackFileContent", "") if st == 200 and isinstance(js, dict) else ""
+
+    @classmethod
+    def redeploy(cls, stack, text, env):
+        """Give an existing stack a new file and redeploy it. `env` is a list of {"name", "value"}. Returns (status, answer)."""
+        eid = stack.get("EndpointId") or cls.endpoint_id()
+        st, js, _ = cls.call("PUT", "/api/stacks/%s?endpointId=%s" % (stack["Id"], eid),
+                             body={"stackFileContent": text, "env": env, "prune": False,
+                                   "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
+        return st, js
+
+    @staticmethod
+    def error_text(js):
+        """What Portainer said when it refused something."""
+        return str(js.get("details") or js.get("message") if isinstance(js, dict) else js)
+
+    @classmethod
     def deploy(cls, name, text, env):
         eid = cls.endpoint_id()
         if not eid:
             raise Abort("Portainer has no Docker environment yet.")
         envl = [{"name": k, "value": v} for k, v in env]
-        existing = next((s for s in cls.stacks() if s.get("Name") == name), None)
+        existing = cls.stack_named(name)
         if existing:
-            st, js, _ = cls.call("PUT", "/api/stacks/%s?endpointId=%s" % (existing["Id"], existing.get("EndpointId", eid)),
-                                 body={"stackFileContent": text, "env": envl, "prune": False,
-                                       "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
+            st, js = cls.redeploy(existing, text, envl)
         else:
             st, js, _ = cls.call("POST", "/api/stacks/create/standalone/string?endpointId=%s" % eid,
                                  body={"name": name, "stackFileContent": text, "env": envl}, timeout=900)
         if st not in (200, 201):
-            msg = js.get("details") or js.get("message") if isinstance(js, dict) else str(js)
-            raise Abort("Portainer refused to deploy stack '%s' (HTTP %s): %s" % (name, st, str(msg)[:400]))
+            raise Abort("Portainer refused to deploy stack '%s' (HTTP %s): %s" % (name, st, cls.error_text(js)[:400]))
 
 
 def setup_tokens():
@@ -117,6 +140,13 @@ class PortainerRunning(Step):
             wait_for(Portainer.alive, "Portainer to start", 120)
 
 
+def restart_portainer():
+    """Restart Portainer and wait until it answers again (its first-setup window then opens afresh)."""
+    docker("restart", "portainer")
+    wait_for(Portainer.alive, "Portainer to restart", 120)
+    time.sleep(2 if not FAKE else 0)
+
+
 @step
 class PortainerAdmin(Step):
     id, group, title = "portainer-admin", "Platform", "Portainer admin account created"
@@ -137,9 +167,7 @@ class PortainerAdmin(Step):
                 return
             if state == 303:
                 out("      the first-setup window closed; restarting Portainer to reopen it")
-                docker("restart", "portainer")
-                wait_for(Portainer.alive, "Portainer to restart", 120)
-                time.sleep(2 if not FAKE else 0)
+                restart_portainer()
             for tok in (setup_tokens() or [None]):
                 hdr = {"X-Setup-Token": tok} if tok else {}
                 st, js, _ = http("POST", Portainer.base() + "/api/users/admin/init", headers=hdr,
@@ -153,9 +181,7 @@ class PortainerAdmin(Step):
                     break
             if attempt < 3:
                 out("      Portainer refused (HTTP %s); restarting it to open a fresh setup window" % last[0])
-                docker("restart", "portainer")
-                wait_for(Portainer.alive, "Portainer to restart", 120)
-                time.sleep(2 if not FAKE else 0)
+                restart_portainer()
         raise Abort("Portainer refused the admin account (HTTP %s): %s" % (last[0], str(last[1])[:200]))
 
 
@@ -277,12 +303,11 @@ def _register_stacks():
         ("beszel-agent", base + ("beszel-agent-key",), "Beszel agent stack"),
     ]
     for name, needs, title in spec:
-        s = StackStep(name, needs, title, 900 if name == "nextcloud" else 300)
-        STEPS.append(s)
-        BY_ID[s.id] = s
+        register(StackStep(name, needs, title, 900 if name == "nextcloud" else 300))
 
 
 _register_stacks()
+
 
 def filebrowser_destinations():
     """The folders FileBrowser has mounted right now (read from the running container)."""
@@ -313,7 +338,7 @@ class FileBrowserDrives(Step):
     def run(self):
         text = stack_text("filebrowser")
         if Opt.dry:
-            out("      would redeploy FileBrowser with: %s" % ", ".join(d.replace("/srv/", "") for _, d in filebrowser_mounts()))
+            out("      would redeploy FileBrowser with: %s" % self.detail())
             return
         Portainer.deploy("filebrowser", text, stack_env("filebrowser"))
         wait_for(lambda: stack_up("filebrowser"), "FileBrowser to restart", 120)

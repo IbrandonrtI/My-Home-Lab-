@@ -1,6 +1,12 @@
 
 
 # ================================================================ restore from a backup (only when one is found and you said yes)
+def need_email():
+    """The email address given at the start, or a message saying how to give it (Immich and Beszel need one)."""
+    if not Ctx.email:
+        raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
+
+
 def restore_choice():
     """What the person chose to restore from a backup (saved in the state file)."""
     return State.data.get("restore", {})
@@ -8,7 +14,6 @@ def restore_choice():
 
 def find_backups():
     """Folders that look like a backup of an earlier lab (they hold main/ and boot-configs/)."""
-    import glob
     cands = []
     if Opt.backup:
         cands.append(Opt.backup)
@@ -57,7 +62,7 @@ def ask_restore_plan():
     say("Backup found: %s" % path.replace(ROOT, ""))
     if len(found) > 1:
         say("(Other candidates: %s)" % ", ".join(f.replace(ROOT, "") for f in found[1:]))
-    users = os.listdir((path + "/boot-configs/home")) if os.path.isdir((path + "/boot-configs/home")) else []
+    users = os.listdir(path + "/boot-configs/home") if os.path.isdir(path + "/boot-configs/home") else []
     if users and Ctx.user not in users:
         warn("The backup belongs to the user %s, but this machine's user is %s. Restoring would write into /home/%s, so the saved settings are not restored. Create a user named %s to restore them."
              % (", ".join(users), Ctx.user, users[0], users[0]))
@@ -134,12 +139,25 @@ class RestoreData(Step):
 
 def immich_restored():
     """True when data was restored from a backup and Immich's own database dumps are present."""
-    import glob
     return bool(restore_choice().get("data")) and bool(glob.glob(P("/mnt/storage/immich/backups/*")))
 
 
 # ================================================================ Homepage config files
 HP_FILES = ["services.yaml", "settings.yaml", "widgets.yaml", "bookmarks.yaml", "custom.css"]
+
+
+def widgets_for_machine(body):
+    """widgets.yaml for a new machine: its first resources pill carries this machine's name (the repository file calls it
+    "Server"), and the weather city chosen at the start is put in."""
+    body = re.sub(r"(- resources:\n\s+label:) Server\b", lambda m: "%s %s" % (m.group(1), Ctx.hostname), body, count=1)
+    w = State.data["answers"].get("weather")
+    if w:
+        new = weather_apply(body, w)
+        if new is not None:
+            body = new
+            State.data["weather_set"] = w["name"]
+            State.save()
+    return body
 
 
 @step
@@ -169,15 +187,7 @@ class HomepageFiles(Step):
                 if f == "services.yaml":
                     body = hp_strip_widgets(body)
                 if f == "widgets.yaml":
-                    # the first resources pill is named "Server" in the repository file; use this machine's name
-                    body = re.sub(r"(- resources:\n\s+label:) Server\b", lambda m: "%s %s" % (m.group(1), Ctx.hostname), body, count=1)
-                if f == "widgets.yaml" and State.data["answers"].get("weather"):
-                    w = State.data["answers"]["weather"]
-                    new = weather_apply(body, w)
-                    if new is not None:
-                        body = new
-                        State.data["weather_set"] = w["name"]
-                        State.save()
+                    body = widgets_for_machine(body)
                 write_file(dst, body, 0o644, (Ctx.uid, Ctx.gid))
             elif f in ("services.yaml", "bookmarks.yaml"):
                 old = read_file(dst)
@@ -269,8 +279,7 @@ class ImmichAdmin(Step):
     def run(self):
         if immich_restored():
             raise Abort("The backup contains Immich database dumps, so no new admin account is created (it would block the restore). Open %s, choose 'Restore from backup' on the first screen and pick the newest dump. Then run `sudo homelab-setup refresh`." % url("immich"))
-        if not Ctx.email:
-            raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
+        need_email()
         if Opt.dry:
             out("      would create the Immich admin %s with the email address entered at install" % Ctx.admin)
             return
@@ -298,7 +307,7 @@ def nc_installed():
 FORCED_NC_KEYS = ("overwritehost", "overwriteprotocol")
 
 
-def occ(*args, stdin=None):
+def occ(*args):
     """Run Nextcloud's `occ` command inside its container."""
     return docker("exec", "-u", "www-data", "nextcloud", "php", "occ", *args, timeout=300)
 
@@ -356,7 +365,6 @@ class NextcloudRestoreDb(Step):
         return "done" if State.ran("nextcloud-restore-db") else "todo"
 
     def run(self):
-        import glob
         dumps = sorted(glob.glob(restore_choice()["path"] + "/db-dumps/nextcloud-*.sql.gz"))
         if not dumps:
             State.mark("nextcloud-restore-db")
@@ -371,7 +379,6 @@ class NextcloudRestoreDb(Step):
         psql = ["exec", "-i", "nextcloud_db", "psql", "-U", "nextcloud", "-v", "ON_ERROR_STOP=1"]
         run(["docker"] + psql + ["-d", "postgres", "-c", "DROP DATABASE IF EXISTS nextcloud"], check=True)
         run(["docker"] + psql + ["-d", "postgres", "-c", "CREATE DATABASE nextcloud OWNER nextcloud"], check=True)
-        import gzip
         with gzip.open(dump, "rt") as f:
             rc, txt = run(["docker"] + psql + ["-d", "nextcloud"], input_text=f.read(), timeout=1800)
         if rc != 0:
@@ -408,8 +415,7 @@ class BeszelUser(Step):
         return "Open %s and create the account with your email address and the admin password. Then run `sudo homelab-setup refresh`." % url("beszel")
 
     def run(self):
-        if not Ctx.email:
-            raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
+        need_email()
         if Opt.dry:
             out("      would create the Beszel hub account for the email address entered at install")
             return

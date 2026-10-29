@@ -175,11 +175,15 @@ STEPS = []
 BY_ID = {}
 
 
-def step(cls):
-    """Class decorator: register a checklist step."""
-    inst = cls()
+def register(inst):
+    """Add a step (an instance) to the checklist."""
     STEPS.append(inst)
     BY_ID[inst.id] = inst
+
+
+def step(cls):
+    """Class decorator: register a checklist step."""
+    register(cls())
     return cls
 
 
@@ -203,6 +207,17 @@ def topo():
     return order
 
 
+def safe_probe(s):
+    """What a step's check says ("done", "todo" or "na"). A check must never crash the checklist: an error means "todo"."""
+    try:
+        return s.probe()
+    except Abort:
+        return "todo"
+    except Exception as e:
+        log("probe %s failed: %r" % (s.id, e))
+        return "todo"
+
+
 def evaluate():
     """Check every step and return {step id: Result}, in dependency order."""
     res = {}
@@ -220,13 +235,7 @@ def evaluate():
         if waits:
             res[s.id] = Result("blocked", "waits for: " + "; ".join(waits[:2]))
             continue
-        try:
-            st = s.probe()
-        except Abort:
-            st = "todo"
-        except Exception as e:                        # a probe must never crash the checklist
-            log("probe %s failed: %r" % (s.id, e))
-            st = "todo"
+        st = safe_probe(s)
         if st == "done":
             res[s.id] = Result("done", s.detail())
         elif st == "na":
@@ -337,10 +346,7 @@ def unblock(res, dry=False):
             if dry:
                 res[t.id] = Result("todo", "")
                 continue
-            try:
-                st = t.probe()
-            except Exception:
-                st = "todo"
+            st = safe_probe(t)
             res[t.id] = Result("done", t.detail()) if st == "done" else Result("na") if st == "na" else Result("todo", "")
 
 

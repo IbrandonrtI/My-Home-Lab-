@@ -120,6 +120,14 @@ def preflight():
         good("Free space on the boot drive: %.0f GB" % free)
 
 
+def show_secret_values():
+    """The generated passwords and keys, one per line."""
+    out("")
+    for k in sorted(Secrets.vals):
+        out("   %-28s %s" % (k, Secrets.vals[k]))
+    out("")
+
+
 def final_report(res):
     """End of install: how it went, the generated passwords (then wait for Enter), the checklist, the next step."""
     Live.close()
@@ -140,10 +148,7 @@ def final_report(res):
         rule("Generated passwords and keys")
         say("Stored in %s (root only). Copy them into your password manager now. "
             "This file stays on this machine and is never part of the repository." % SECRET_FILE.replace(ROOT, ""))
-        out("")
-        for k in sorted(Secrets.vals):
-            out("   %-28s %s" % (k, Secrets.vals[k]))
-        out("")
+        show_secret_values()
         say("Show them again at any time:\n$ sudo homelab-setup secrets")
         say("The admin password you chose is not stored anywhere. Keep it in your password manager.")
         out("")
@@ -291,6 +296,59 @@ def welcome():
             out(l)
 
 
+def plan_install(res):
+    """Sort the open steps into (todo, later, by_hand): the ones the installer runs now, the ones it runs by itself once
+    a step that needs the person is done, and the ones only the person can do."""
+    open_auto = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
+
+    def runs_now(s, seen=()):
+        """True when everything this step needs is done or will be done by the installer itself in this run."""
+        for n in s.needs:
+            if res[n].state in ("done", "na", "skip"):
+                continue
+            d = BY_ID[n]
+            if n in seen or not (d.kind == "auto" or n in DURING_INSTALL) or not runs_now(d, seen + (s.id,)):
+                return False
+        return True
+    todo = [s for s in open_auto if runs_now(s)]
+    later = [s for s in open_auto if s not in todo]          # wait for a step that only the person can do
+    by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"
+               and not (s.id == "weather" and (Opt.dry or State.data["answers"].get("weather")))]   # set from the city answer
+    return todo, later, by_hand
+
+
+def by_hand_tag(s):
+    """When the person will be asked to do this step."""
+    if s.id in DURING_INSTALL:
+        return "during the install"
+    if s.id == "secrets-saved":
+        return "at the end of the install, when you press Enter after copying them"
+    if getattr(s, "auto", None):
+        return "afterwards, detected automatically once done"
+    return "afterwards"
+
+
+def show_plan(todo, later, by_hand):
+    """Print what the install will do, and what needs the person."""
+    rule("Planned steps")
+    say("%d steps run automatically, in this order:" % len(todo))
+    out("")
+    for g in GROUPS:
+        n = len([s for s in todo if s.group == g])
+        if n:
+            out("   %s%-22s%s %2d  %s%s%s" % (B, g, N, n, D, GROUP_BLURB.get(g, ""), N))
+    if later:
+        out("")
+        say("%d more %s by itself once the steps that need you are done: %s" % (
+            len(later), "step runs" if len(later) == 1 else "steps run", "; ".join(s.title for s in later)))
+    if by_hand:
+        out("")
+        say("%d steps need you:" % len(by_hand))
+        out("")
+        for s in by_hand:
+            out("   %s%s%s %s  %s(%s)%s" % (Y, S_TODO, N, s.title, D, by_hand_tag(s), N))
+
+
 def cmd_install():
     """`install`: plan, ask, then build the lab."""
     load_all()
@@ -323,53 +381,15 @@ def cmd_install():
     if State.ran("install-started"):
         wait_for_apps()
     res = evaluate()
-    open_auto = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
-
-    def runs_now(s, seen=()):
-        """True when everything this step needs is done or will be done by the installer itself in this run."""
-        for n in s.needs:
-            if res[n].state in ("done", "na", "skip"):
-                continue
-            d = BY_ID[n]
-            if n in seen or not (d.kind == "auto" or n in DURING_INSTALL) or not runs_now(d, seen + (s.id,)):
-                return False
-        return True
-    todo = [s for s in open_auto if runs_now(s)]
-    later = [s for s in open_auto if s not in todo]          # wait for a step that only the person can do
-    by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"
-               and not (s.id == "weather" and (Opt.dry or State.data["answers"].get("weather")))]   # set from the city answer
+    todo, later, by_hand = plan_install(res)
     if not todo and not by_hand and not later:
         out("")
         say("Nothing to do: all steps are complete.")
         show_checklist(res, "Setup")
         next_step_section(res)
         return
-    rule("Planned steps")
+    show_plan(todo, later, by_hand)
     during = [s for s in by_hand if s.id in DURING_INSTALL]
-    say("%d steps run automatically, in this order:" % len(todo))
-    out("")
-    for g in GROUPS:
-        n = len([s for s in todo if s.group == g])
-        if n:
-            out("   %s%-22s%s %2d  %s%s%s" % (B, g, N, n, D, GROUP_BLURB.get(g, ""), N))
-    if later:
-        out("")
-        say("%d more %s by itself once the steps that need you are done: %s" % (
-            len(later), "step runs" if len(later) == 1 else "steps run", "; ".join(s.title for s in later)))
-    if by_hand:
-        out("")
-        say("%d steps need you:" % len(by_hand))
-        out("")
-        for s in by_hand:
-            if s.id in DURING_INSTALL:
-                tag = "during the install"
-            elif s.id == "secrets-saved":
-                tag = "at the end of the install, when you press Enter after copying them"
-            elif getattr(s, "auto", None):
-                tag = "afterwards, detected automatically once done"
-            else:
-                tag = "afterwards"
-            out("   %s%s%s %s  %s(%s)%s" % (Y, S_TODO, N, s.title, D, tag, N))
     out("")
     if not Opt.dry and not Opt.yes:
         if not typed("yes", "Type yes to start (nothing has been changed yet)"):
@@ -407,7 +427,8 @@ def run_install(res):
                 bad(str(e))
     for _ in range(4):
         gained = run_pass(res)
-        res.update(evaluate()) if not Opt.dry else None
+        if not Opt.dry:
+            res.update(evaluate())
         if not gained:
             break
 
@@ -475,6 +496,7 @@ def cmd_filebrowser():
 
 
 def host_mount_types():
+    """{mount point: file system type} as the host sees its own mounts."""
     try:
         return mount_types(open("/proc/self/mountinfo").read())
     except OSError:
@@ -496,19 +518,65 @@ def homepage_sees_pools():
     return True
 
 
-def apply_pill_layout():
-    """Put the shipped 'pill layout' block (taller top pills, search bar lower) into this machine's custom.css."""
+def apply_custom_css():
+    """Move this machine's custom.css to the shipped, tidier layout (the old file is saved first)."""
     dst = hp_path("custom.css")
-    shipped = css_block(read_file(repo_file("homepage-config", "custom.css")))
     cur = read_file(dst)
-    if not shipped or not cur:
-        return
-    new = css_with_block(cur, shipped)
+    new = css_new_layout(cur, read_file(repo_file("homepage-config", "custom.css"))) if cur else cur
     if new == cur:
         return
     rule("Homepage")
-    out("  Updating the look of the top pills in custom.css (taller pills, search bar a little lower). Reload the page to see it")
+    out("  Moving custom.css to the new, tidier layout. Your accent colours, the numbers you changed and the homelab theme block are kept.")
+    out("  The old file is saved as custom.css.before-layout2. Reload the page to see it (Ctrl+Shift+R)")
+    write_file(dst + ".before-layout2", cur, 0o644, (Ctx.uid, Ctx.gid))
     write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
+
+
+def update_homepage_stack():
+    """Make the Homepage stack in Portainer mount the whole /mnt folder (see homepage_volumes).
+    Returns "changed", "unchanged", or "dry" (a dry run only said what it would do)."""
+    manual = ("In Portainer open the stack 'homepage' > Editor. Replace the lines that mount /mnt/storage and /mnt/backup with this one line "
+              "under volumes, then click Update the stack:\n      - %s" % HOMEPAGE_PARENT_LINE)
+    if not Secrets.get("PORTAINER_TOKEN") or not Portainer.alive():
+        warn("Portainer cannot be reached with a saved key, so the Homepage stack is not changed here. " + manual)
+        return "unchanged"
+    stack = Portainer.stack_named("homepage")
+    if not stack:
+        warn("Portainer has no stack named 'homepage'. " + manual)
+        return "unchanged"
+    text = Portainer.stack_file(stack)
+    if not text:
+        warn("Could not read the Homepage stack from Portainer. " + manual)
+        return "unchanged"
+    new = homepage_volumes(text)
+    if new == text:
+        return "unchanged"
+    rule("Homepage")
+    out("  Letting Homepage see the pools: its stack mounts the whole /mnt folder now (Homepage restarts for a few seconds)")
+    if Opt.dry:
+        out("      would update the Homepage stack in Portainer")
+        return "dry"
+    env = [{"name": e["name"], "value": e["value"]} for e in (stack.get("Env") or [])]
+    st, js = Portainer.redeploy(stack, new, env)
+    if st not in (200, 201):
+        raise Abort("Portainer refused to change the Homepage stack (HTTP %s): %s" % (st, Portainer.error_text(js)[:300]))
+    wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
+    return "changed"
+
+
+def restart_homepage_if_blind():
+    """Restart Homepage when it does not see the pools the way the host has them mounted.
+    Returns "changed", "unchanged", or "dry"."""
+    if "homepage" not in containers_running() or homepage_sees_pools():
+        return "unchanged"
+    rule("Homepage")
+    out("  Homepage does not see the pools the way they are mounted now. Restarting Homepage")
+    if Opt.dry:
+        out("      would restart Homepage")
+        return "dry"
+    act(["docker", "restart", "homepage"], timeout=120)
+    wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
+    return "changed"
 
 
 def cmd_homepage():
@@ -517,49 +585,13 @@ def cmd_homepage():
     if "homepage" not in containers_all():
         say("Homepage is not installed on this machine.")
         return
-    apply_pill_layout()
-    changed = False
-    manual = ("In Portainer open the stack 'homepage' > Editor. Replace the lines that mount /mnt/storage and /mnt/backup with this one line "
-              "under volumes, then click Update the stack:\n      - %s" % HOMEPAGE_PARENT_LINE)
-    if not Secrets.get("PORTAINER_TOKEN") or not Portainer.alive():
-        warn("Portainer cannot be reached with a saved key, so the Homepage stack is not changed here. " + manual)
-    else:
-        s = next((x for x in Portainer.stacks() if x.get("Name") == "homepage"), None)
-        if not s:
-            warn("Portainer has no stack named 'homepage'. " + manual)
-        else:
-            eid = s.get("EndpointId") or Portainer.endpoint_id()
-            st, js, _ = Portainer.call("GET", "/api/stacks/%s/file?endpointId=%s" % (s["Id"], eid), timeout=30)
-            text = js.get("StackFileContent", "") if st == 200 and isinstance(js, dict) else ""
-            if not text:
-                warn("Could not read the Homepage stack from Portainer. " + manual)
-            else:
-                new = homepage_volumes(text)
-                if new != text:
-                    rule("Homepage")
-                    out("  Letting Homepage see the pools: its stack mounts the whole /mnt folder now (Homepage restarts for a few seconds)")
-                    if Opt.dry:
-                        out("      would update the Homepage stack in Portainer")
-                        return
-                    env = [{"name": e["name"], "value": e["value"]} for e in (s.get("Env") or [])]
-                    st, js, _ = Portainer.call("PUT", "/api/stacks/%s?endpointId=%s" % (s["Id"], eid),
-                                               body={"stackFileContent": new, "env": env, "prune": False,
-                                                     "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
-                    if st not in (200, 201):
-                        msg = js.get("details") or js.get("message") if isinstance(js, dict) else str(js)
-                        raise Abort("Portainer refused to change the Homepage stack (HTTP %s): %s" % (st, str(msg)[:300]))
-                    wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
-                    changed = True
-    if not changed and "homepage" in containers_running() and not homepage_sees_pools():
-        rule("Homepage")
-        out("  Homepage does not see the pools the way they are mounted now. Restarting Homepage")
-        if Opt.dry:
-            out("      would restart Homepage")
-            return
-        act(["docker", "restart", "homepage"], timeout=120)
-        wait_for(lambda: stack_up("homepage"), "Homepage to restart", 120)
-        changed = True
-    if changed:
+    apply_custom_css()
+    result = update_homepage_stack()
+    if result == "unchanged":                 # the stack was fine; the container may still be looking at an old mount
+        result = restart_homepage_if_blind()
+    if result == "dry":
+        return
+    if result == "changed":
         good("Homepage can see the Main and Backup pool")
     else:
         say("Homepage already sees the pools.")
@@ -615,10 +647,7 @@ def cmd_secrets():
         say("No generated passwords or keys are stored on this machine.")
         return
     say("Saved in %s (root only):" % SECRET_FILE.replace(ROOT, ""))
-    out("")
-    for k in sorted(Secrets.vals):
-        out("   %-28s %s" % (k, Secrets.vals[k]))
-    out("")
+    show_secret_values()
     say("The admin password you chose is not stored. Keep it in your password manager.")
     if not State.readonly:
         State.data["secrets_shown"] = State.data.get("secrets_shown") or time.strftime("%F %T")
@@ -696,7 +725,7 @@ Commands:
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
-  homepage                 let Homepage see the Main and Backup pool, and update the look of the top pills
+  homepage                 let Homepage see the Main and Backup pool, and move custom.css to the current layout
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -706,9 +735,14 @@ The installer never formats or modifies a drive and never saves the admin passwo
 """
 
 
+# every command that needs no more than its name (done STEP and skip STEP also take the step)
+COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
+            "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
+            "homepage": cmd_homepage}
+
+
 def main(argv):
     """Read the command line and run the command."""
-    import signal
     try:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     except (AttributeError, ValueError):
@@ -752,34 +786,18 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in ("checklist", "check", "install", "refresh", "fill", "done", "skip", "secrets", "progress", "verify", "filebrowser", "homepage"):
+    if cmd not in COMMANDS and cmd not in ("done", "skip"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
     try:
-        if cmd in ("checklist", "check"):
-            cmd_checklist()
-        elif cmd == "install":
-            cmd_install()
-        elif cmd == "refresh":
-            cmd_refresh()
-        elif cmd == "fill":
-            cmd_fill()
-        elif cmd in ("done", "skip"):
+        if cmd in ("done", "skip"):
             if len(pos) < 2:
                 out("Which step? Example: homelab-setup %s reboot-test" % cmd)
                 return 1
             cmd_mark("ack" if cmd == "done" else "skip", pos[1])
-        elif cmd == "secrets":
-            cmd_secrets()
-        elif cmd == "progress":
-            cmd_progress()
-        elif cmd == "verify":
-            cmd_verify()
-        elif cmd == "filebrowser":
-            cmd_filebrowser()
-        elif cmd == "homepage":
-            cmd_homepage()
+        else:
+            COMMANDS[cmd]()
     except Abort as e:
         Live.close()
         out("")

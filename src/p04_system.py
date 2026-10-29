@@ -64,9 +64,8 @@ class AptUpgrade(Step):
         return State.data["ran"].get("apt-upgrade", "")
 
     def run(self):
-        env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-        act(["apt-get", "update", "-q"], env=env, check=True, timeout=900)
-        act(["apt-get", "upgrade", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"], env=env, check=True, timeout=3600)
+        act(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=900)
+        act(["apt-get", "upgrade", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"], env=apt_env(), check=True, timeout=3600)
         if not Opt.dry:
             State.mark("apt-upgrade")
 
@@ -89,7 +88,7 @@ class Packages(Step):
             apt_install(need)
         for p in OPTIONAL_PKGS:
             if not pkg_installed(p):
-                rc, txt = act(["apt-get", "install", "-y", "-q", p], env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+                rc, txt = act(["apt-get", "install", "-y", "-q", p], env=apt_env())
                 if rc != 0 and not Opt.dry:
                     warn("Optional package %s could not be installed (%s). The drives tool needs it later." % (p, txt.strip()[-120:]))
 
@@ -106,7 +105,7 @@ class DockerInstalled(Step):
         return "done" if rc == 0 and rc2 == 0 and rc3 == 0 else "todo"
 
     def run(self):
-        distro = "debian" if Ctx.os_id == "debian" else "ubuntu"
+        distro = apt_distro()
         suite = Ctx.os_codename
         if not suite:
             raise Abort("Could not read the release name from /etc/os-release.")
@@ -114,7 +113,7 @@ class DockerInstalled(Step):
             if containers_all():
                 raise Abort("Another Docker package is installed and has containers. The installer does not remove it. Remove it manually first.")
             act(["apt-get", "remove", "-y", "-q", "docker.io", "docker-compose", "podman-docker", "containerd", "runc"],
-                env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+                env=apt_env())
         if Opt.dry:
             out("      would add Docker's apt repository for %s %s and install docker-ce" % (distro, suite))
             return
@@ -130,7 +129,7 @@ class DockerInstalled(Step):
         write_file(P("/etc/apt/sources.list.d/docker.sources"),
                    "Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\n"
                    "Architectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n" % (distro, suite, arch), 0o644)
-        run(["apt-get", "update", "-q"], env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"), check=True, timeout=600)
+        run(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=600)
         apt_install(["docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"])
         act(["systemctl", "enable", "--now", "docker"])
 
@@ -158,7 +157,7 @@ class TailscaleInstalled(Step):
         return "done" if have("tailscale") and have("tailscaled") else "todo"
 
     def run(self):
-        distro = "debian" if Ctx.os_id == "debian" else "ubuntu"
+        distro = apt_distro()
         suite = Ctx.os_codename
         if Opt.dry:
             out("      would add Tailscale's apt repository for %s %s and install tailscale" % (distro, suite))
@@ -171,8 +170,7 @@ class TailscaleInstalled(Step):
                 f.write(fetch_bytes(base + ".noarmor.gpg"))
             with open(P("/etc/apt/sources.list.d/tailscale.list"), "wb") as f:
                 f.write(fetch_bytes(base + ".tailscale-keyring.list"))
-            env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-            run(["apt-get", "update", "-q"], env=env, check=True, timeout=600)
+            run(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=600)
             apt_install(["tailscale"])
         except Abort:
             raise
@@ -202,7 +200,6 @@ def do_tailscale_login():
     proc = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     shown = False
     end = time.time() + float(os.environ.get("HLS_TS_WAIT", "900"))
-    import threading
     lines = []
 
     def reader():
@@ -325,6 +322,15 @@ class ServeMappings(Step):
 
 
 # ---------------------------------------------------------------- Network: port 53
+def set_resolv_conf(text):
+    """Replace /etc/resolv.conf (it may be a link to the resolver's file, so it is removed first)."""
+    try:
+        os.remove(P("/etc/resolv.conf"))
+    except OSError:
+        pass
+    write_file(P("/etc/resolv.conf"), text, 0o644)
+
+
 def port53_listeners():
     """Names of the processes that listen on port 53."""
     rc, txt = run(["ss", "-H", "-tulpn", "sport = :53"])
@@ -362,11 +368,7 @@ class Port53(Step):
             # can lose its upstream servers after a reboot or an update, and the machine then cannot look up names.
             act(["tailscale", "set", "--accept-dns=false"])
         if not Opt.dry:
-            try:
-                os.remove(P("/etc/resolv.conf"))
-            except OSError:
-                pass
-            write_file(P("/etc/resolv.conf"), "nameserver %s\n" % gw, 0o644)
+            set_resolv_conf("nameserver %s\n" % gw)
         if run(["systemctl", "is-active", "tailscaled"])[1].strip() == "active":
             act(["systemctl", "restart", "tailscaled"])
         if not Opt.dry:
@@ -397,11 +399,7 @@ class DnsStable(Step):
             old = read_file(backup)
             if "nameserver" not in old or "100.100.100.100" in old:
                 old = "nameserver %s\n" % (Ctx.gateway or "1.1.1.1")
-            try:
-                os.remove(P("/etc/resolv.conf"))
-            except OSError:
-                pass
-            write_file(P("/etc/resolv.conf"), old, 0o644)
+            set_resolv_conf(old)
         if not FAKE:
             try:
                 socket.gethostbyname("github.com")

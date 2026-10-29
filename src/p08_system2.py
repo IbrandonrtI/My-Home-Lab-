@@ -183,19 +183,15 @@ class LoginHook(Step):
     def run(self):
         path = P(Ctx.home + "/.bashrc")
         cur = read_file(path)
-        if "# >>> homelab login display >>>" in cur:
-            new = re.sub(r"\n?# >>> homelab login display >>>.*?# <<< homelab login display <<<\n", LOGIN_BLOCK, cur, flags=re.S)
-            if not Opt.dry:
-                bak = path + ".bak-homelab-setup"
-                if not os.path.exists(bak):
-                    write_file(bak, cur, 0o644, (Ctx.uid, Ctx.gid))
-            write_file(path, new, 0o644, (Ctx.uid, Ctx.gid))
-            return
         if not Opt.dry and cur:
-            bak = path + ".bak-homelab-setup"
+            bak = path + ".bak-homelab-setup"          # the first copy of the file, kept once
             if not os.path.exists(bak):
                 write_file(bak, cur, 0o644, (Ctx.uid, Ctx.gid))
-        write_file(path, cur.rstrip("\n") + "\n" + LOGIN_BLOCK, 0o644, (Ctx.uid, Ctx.gid))
+        if "# >>> homelab login display >>>" in cur:
+            new = re.sub(r"\n?# >>> homelab login display >>>.*?# <<< homelab login display <<<\n", LOGIN_BLOCK, cur, flags=re.S)
+        else:
+            new = cur.rstrip("\n") + "\n" + LOGIN_BLOCK
+        write_file(path, new, 0o644, (Ctx.uid, Ctx.gid))
 
 
 # ================================================================ things only you can do
@@ -248,7 +244,6 @@ def chk_devices_dns():
     st, js, _ = http("GET", url("adguard", "/control/stats"), headers=basic(user, pw), timeout=15)
     if st != 200 or not isinstance(js, dict):
         return False
-    import ipaddress
     docker_net = ipaddress.ip_network("172.16.0.0/12")
     try:
         lan_in_docker = ipaddress.ip_address(Ctx.lan) in docker_net
@@ -348,8 +343,7 @@ def _register_acks():
                 "Reboot once and confirm that everything comes back: after about two minutes, log in again. The login screen should show all containers running, and `docker ps` should list them.\n$ sudo reboot", needs=("stack-homepage",), auto=chk_reboot),
     ]
     for s in items:
-        STEPS.append(s)
-        BY_ID[s.id] = s
+        register(s)
 
 
 BLOCKLISTS = [

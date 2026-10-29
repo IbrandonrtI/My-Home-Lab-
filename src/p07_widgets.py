@@ -12,17 +12,22 @@ def judge(st):
     return None if st == 0 or st >= 500 else False
 
 
+def verdict(st):
+    """The result of a test whose success is HTTP 200: True, or what judge() says about any other answer."""
+    return True if st == 200 else judge(st)
+
+
 def v_adguard(v):
     """Test the AdGuard Home login with a live request. True, False (rejected) or None (no answer)."""
     st, _, _ = http("GET", url("adguard", "/control/status"), headers=basic(v["username"], v["password"]), timeout=10)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_tailscale(v):
     """Test the Tailscale API key with a live request."""
     base = os.environ.get("HLS_TS_API", "https://api.tailscale.com")
     st, _, _ = http("GET", "%s/api/v2/device/%s" % (base, v["deviceid"]), headers=basic(v["key"], ""), timeout=20)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_beszel(v):
@@ -39,7 +44,7 @@ def v_beszel(v):
 def v_netdata(v):
     """Test that Netdata answers."""
     st = http("GET", url("netdata", "/api/v1/info"), timeout=10)[0]
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_speedtest(v):
@@ -57,19 +62,19 @@ def v_portainer(v):
     if st != 200:
         return judge(st)
     st, _, _ = http("GET", url("portainer", "/api/endpoints/%s" % v["env"]), headers={"X-API-Key": v["key"]}, timeout=10)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_filebrowser(v):
     """Test the FileBrowser login with a live request."""
     st, _, _ = http("POST", url("filebrowser", "/api/login"), body={"username": v["username"], "password": v["password"]}, timeout=10)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_immich(v):
     """Test the Immich key with a live request."""
     st, _, _ = http("GET", url("immich", "/api/server/statistics"), headers={"x-api-key": v["key"]}, timeout=15)
-    return True if st == 200 else judge(st)
+    return verdict(st)
 
 
 def v_nextcloud(v):
@@ -83,6 +88,7 @@ def v_nextcloud(v):
 
 class WidgetStep(Step):
     group = "Homepage"
+    unsure = False          # the last test got no answer from the service (the saved key was kept)
 
     def __init__(self, sid, card, title, needs, fields, verify, auto=None, prompts=None, kind="auto", help_text="", pre=None, fill_text=""):
         self.id, self.card, self.title = sid, card, title
@@ -124,10 +130,13 @@ class WidgetStep(Step):
             State.note(key, "")
         return "done"
 
-    unsure = False
-
     def detail(self):
         return "kept, the service did not answer just now" if self.unsure else "tested"
+
+    @property
+    def service_name(self):
+        """The title without the part in brackets: 'AdGuard Home widget login'."""
+        return self.title.split(" (")[0]
 
     def tested(self, v, patient=True):
         """True or False from the service. If it does not answer, wait for it (up to 2 minutes); if it still does not, stop."""
@@ -138,11 +147,11 @@ class WidgetStep(Step):
                 ok = self.verify(v)
                 return ok is not None
             try:
-                wait_for(answer, "%s to answer" % self.title.split(" (")[0], 3 if FAKE else 120, every=5)
+                wait_for(answer, "%s to answer" % self.service_name, 3 if FAKE else 120, every=5)
             except Abort:
                 pass
         if ok is None:
-            raise Abort("%s did not answer, so nothing was tested or written. It may be busy or still starting: wait a minute, then run `sudo homelab-setup refresh` again." % self.title.split(" (")[0])
+            raise Abort("%s did not answer, so nothing was tested or written. It may be busy or still starting: wait a minute, then run `sudo homelab-setup refresh` again." % self.service_name)
         return ok
 
     def wait_alive(self):
@@ -156,7 +165,7 @@ class WidgetStep(Step):
         try:
             wait_for(alive, "%s to answer" % svc, 3 if FAKE else 120, every=5)
         except Abort:
-            raise Abort("%s is not answering at %s right now. Nothing was changed and no password was asked. Wait a minute, then run `sudo homelab-setup refresh` again." % (self.title.split(" (")[0], url(svc))) from None
+            raise Abort("%s is not answering at %s right now. Nothing was changed and no password was asked. Wait a minute, then run `sudo homelab-setup refresh` again." % (self.service_name, url(svc))) from None
 
     def help(self):
         if self.help_text:
@@ -165,6 +174,10 @@ class WidgetStep(Step):
 
     def fill_help(self):
         return self.fill_text or self.help()
+
+    def prefill(self):
+        """Values the person is not asked for in `fill` (a widget with such values overrides this)."""
+        return {}
 
     def _write(self, v):
         if not self.tested(v):
@@ -187,8 +200,7 @@ class WidgetStep(Step):
             cur[f] = ask_secret(label) if hidden else ask(label, hp_get(self.card, f) or "")
         for k, val in self.pre.items():
             cur.setdefault(k, val)
-        if callable(getattr(self, "prefill", None)):
-            cur.update(self.prefill())
+        cur.update(self.prefill())
         try:
             ok = self.tested(cur)
         except Abort as e:
@@ -338,8 +350,7 @@ def _register_widgets():
            v_nextcloud, auto_nextcloud, [("key", "Nextcloud NC-Token", True)]),
     ]
     for s in items:
-        STEPS.append(s)
-        BY_ID[s.id] = s
+        register(s)
 
 
 _register_widgets()

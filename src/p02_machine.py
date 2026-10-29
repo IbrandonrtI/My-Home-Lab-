@@ -4,6 +4,7 @@
 class State:
     """Non-secret facts: the answers given, which one-time actions ran, and what was acknowledged."""
     data = {}
+    readonly = False
 
     @classmethod
     def load(cls):
@@ -16,8 +17,6 @@ class State:
         cls.data.setdefault("ack", {})
         cls.data.setdefault("skip", {})
         cls.data.setdefault("notes", {})
-
-    readonly = False
 
     @classmethod
     def save(cls):
@@ -132,7 +131,7 @@ class Ctx:
     admin = email = ""
     fqdn = tailnet = ts_id = ""
     repo = ""
-    os_id = os_name = os_codename = os_version = ""
+    os_id = os_like = os_name = os_codename = os_version = ""
 
     @classmethod
     def detect(cls):
@@ -276,10 +275,15 @@ def ts_status():
 
 
 # ================================================================ docker facts
+def _container_names(*flags):
+    """Names of the containers `docker ps` lists with these flags (an empty set when Docker does not answer)."""
+    rc, txt = docker("ps", *flags, "--format", "{{.Names}}", timeout=30)
+    return set(txt.split()) if rc == 0 else set()
+
+
 def containers_running():
     """Names of the containers that are running."""
-    rc, txt = docker("ps", "--format", "{{.Names}}", timeout=30)
-    return set(txt.split()) if rc == 0 else set()
+    return _container_names()
 
 
 def containers_starting():
@@ -292,8 +296,7 @@ def containers_starting():
 
 def containers_all():
     """Names of all containers, running or not."""
-    rc, txt = docker("ps", "-a", "--format", "{{.Names}}", timeout=30)
-    return set(txt.split()) if rc == 0 else set()
+    return _container_names("-a")
 
 
 def stack_up(name):
@@ -522,7 +525,6 @@ def drive_name(mountpoint, fallback, prefer_label=False):
 
 def pool_drives(role):
     """Mount points of the drives that are connected for a role (main or backup), as /mnt/disks/MAIN1 ..."""
-    import glob
     prefix = "MAIN" if role == "main" else "BACKUP"
     # real drives in order (MAIN1, MAIN2, ...); the boot drive section (MAINBOOT) is always last, like in the pool itself
     found = sorted((d[len(ROOT):] if ROOT and d.startswith(ROOT) else d
@@ -587,6 +589,7 @@ def filebrowser_volumes(text):
 
 
 HOMEPAGE_PARENT_LINE = "/mnt:/mnt:ro,rslave"
+HOMEPAGE_PARENT_NOTE = "   # the Main and Backup pool pills; rslave: a pool mounted later still shows"
 
 
 def homepage_volumes(text):
@@ -616,7 +619,7 @@ def homepage_volumes(text):
         indent = item.match(lines[single[0]]).group(1)
         for i in reversed(single[1:]):
             del lines[i]
-        lines[single[0]] = "%s- %s   # the Main and Backup pool pills; rslave: a pool mounted later still shows" % (indent, HOMEPAGE_PARENT_LINE)
+        lines[single[0]] = "%s- %s%s" % (indent, HOMEPAGE_PARENT_LINE, HOMEPAGE_PARENT_NOTE)
         return "\n".join(lines)
     # no pool line at all: add the parent line after the last item of the volumes list
     for n, l in enumerate(lines):
@@ -630,7 +633,7 @@ def homepage_volumes(text):
             if last is None:
                 return text
             indent = re.match(r"^(\s*)", lines[last]).group(1)
-            lines.insert(last + 1, "%s- %s   # the Main and Backup pool pills; rslave: a pool mounted later still shows" % (indent, HOMEPAGE_PARENT_LINE))
+            lines.insert(last + 1, "%s- %s%s" % (indent, HOMEPAGE_PARENT_LINE, HOMEPAGE_PARENT_NOTE))
             return "\n".join(lines)
     return text
 
@@ -648,26 +651,31 @@ def mount_types(mountinfo):
     return types
 
 
-PILL_BEGIN = "/* >>> homelab pill layout"
-PILL_END = "/* <<< homelab pill layout */"
+CSS_LAYOUT_MARK = "How this file is organised"      # in the header of the shipped custom.css since it was tidied up
+THEME_BEGIN, THEME_END = "/* >>> homelab theme >>>", "/* <<< homelab theme <<< */"      # the block `homelab theme` writes
 
 
-def css_block(text):
-    """The marked 'pill layout' block of a custom.css text (empty when there is none)."""
-    a = text.find(PILL_BEGIN)
-    b = text.find(PILL_END, a) if a >= 0 else -1
-    return text[a:b + len(PILL_END)] if a >= 0 and b >= 0 else ""
-
-
-def css_with_block(css, block):
-    """custom.css with the shipped pill layout block: replaces the block that is there, or adds it at the end.
-    Everything outside the block is left as it is."""
-    if not block:
-        return css
-    old = css_block(css)
-    if old:
-        return css.replace(old, block, 1)
-    return css.rstrip("\n") + "\n\n" + block + "\n"
+def css_new_layout(live, shipped):
+    """This machine's custom.css moved to the shipped, tidier layout, with everything that is this machine's own kept:
+    the accent colour of every card, the numbers in :root that were changed (the last value wins, like in the browser) and
+    the block `homelab theme` wrote. A file that is already in the new layout is returned as it is (it may have been edited)."""
+    if CSS_LAYOUT_MARK in live or not shipped:
+        return live
+    out = shipped
+    for m in re.finditer(r"(?m)^#([\w-]+)-card\s*\{\s*--accent:[^}]*\}[ \t]*(?:/\*.*?\*/)?", live):
+        line = m.group(0)
+        out = re.sub(r"(?m)^#%s-card\s*\{\s*--accent:[^}]*\}[ \t]*(?:/\*.*?\*/)?" % re.escape(m.group(1)), lambda _m, keep=line: keep, out, count=1)
+    mine = {}
+    for blk in re.finditer(r":root\s*\{(.*?)\}", live, re.S):
+        for k, v in re.findall(r"(--[\w-]+):\s*([^;]+);", blk.group(1)):
+            mine[k] = v.strip()
+    for k, v in mine.items():
+        out = re.sub(r"(?m)^(\s*%s:\s*)[^;]+;" % re.escape(k), lambda m, val=v: m.group(1) + val + ";", out, count=1)
+    a = live.find(THEME_BEGIN)
+    z = live.find(THEME_END, a) if a >= 0 else -1
+    if a >= 0 and z >= 0:
+        out = out.rstrip("\n") + "\n\n" + live[a:z + len(THEME_END)] + "\n"
+    return out
 
 
 def stack_text(name):

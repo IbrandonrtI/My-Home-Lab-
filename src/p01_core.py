@@ -16,13 +16,17 @@
 import atexit
 import base64
 import getpass
+import glob
+import gzip
 import hashlib
+import ipaddress
 import json
 import os
 import pwd
 import re
 import secrets as pysecrets
 import shutil
+import signal
 import socket
 import string
 import subprocess
@@ -105,6 +109,17 @@ S_OK, S_TODO, S_BAD, S_WAIT, S_NA, S_RULE, S_DOT = (
     ("✓", "○", "✗", "·", "–", "─", "·") if _utf else ("+", "o", "x", ".", "-", "-", "-"))
 
 
+def _terminal_size():
+    """The size of the real terminal (asked of stdout, stderr or stdin, whichever is one), or None when there is none."""
+    for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
+        try:
+            if stream is not None and stream.isatty():
+                return os.get_terminal_size(stream.fileno())
+        except (OSError, ValueError):
+            pass
+    return None
+
+
 def window_cols():
     """The real width of the window. The terminal itself is asked first: the COLUMNS variable is only a copy made
     when the shell started (and `sudo` passes it on), so it goes stale as soon as the window is resized.
@@ -112,12 +127,9 @@ def window_cols():
     forced = os.environ.get("HLS_COLS", "")
     if forced.isdigit():
         return int(forced)
-    for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
-        try:
-            if stream is not None and stream.isatty():
-                return os.get_terminal_size(stream.fileno()).columns
-        except (OSError, ValueError):
-            pass
+    size = _terminal_size()
+    if size:
+        return size.columns
     try:
         return int(os.environ.get("COLUMNS", "") or 80)
     except ValueError:
@@ -129,13 +141,8 @@ def window_rows():
     forced = os.environ.get("HLS_ROWS", "")
     if forced.isdigit():
         return int(forced)
-    for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
-        try:
-            if stream is not None and stream.isatty():
-                return os.get_terminal_size(stream.fileno()).lines
-        except (OSError, ValueError):
-            pass
-    return 0
+    size = _terminal_size()
+    return size.lines if size else 0
 
 
 def term_cols():
@@ -226,16 +233,20 @@ def good(msg):
     out("  %s%s%s %s" % (G, S_OK, N, msg))
 
 
+def _flagged(flag, msg):
+    """Print a message whose first line starts with a coloured flag."""
+    for i, l in enumerate(styled(msg, 4)):
+        out(("  %s " % flag + l[4:]) if i == 0 else l)
+
+
 def warn(msg):
     """Print a message marked as a warning."""
-    for i, l in enumerate(styled(msg, 4)):
-        out(("  %s!%s " % (Y, N) + l[4:]) if i == 0 else l)
+    _flagged("%s!%s" % (Y, N), msg)
 
 
 def bad(msg):
     """Print a message marked as a failure (red cross)."""
-    for i, l in enumerate(styled(msg, 4)):
-        out(("  %s%s%s " % (R, S_BAD, N) + l[4:]) if i == 0 else l)
+    _flagged("%s%s%s" % (R, S_BAD, N), msg)
 
 
 def log(msg):
@@ -559,10 +570,19 @@ DOCKER_DOWN = ("Docker is not answering, so the apps cannot be reached or checke
                "      Then run `sudo homelab-setup refresh` again.")
 
 
+def apt_env():
+    """The environment for apt commands: they must never stop to ask a question."""
+    return dict(os.environ, DEBIAN_FRONTEND="noninteractive")
+
+
+def apt_distro():
+    """The name of this system's family in the Docker and Tailscale package addresses: debian or ubuntu (Mint counts as ubuntu)."""
+    return "debian" if Ctx.os_id == "debian" else "ubuntu"
+
+
 def apt_install(pkgs):
     """Install packages with apt without asking questions (does nothing in a dry run)."""
-    env = dict(os.environ, DEBIAN_FRONTEND="noninteractive")
-    act(["apt-get", "install", "-y", "-q"] + list(pkgs), env=env, check=True, timeout=1800)
+    act(["apt-get", "install", "-y", "-q"] + list(pkgs), env=apt_env(), check=True, timeout=1800)
 
 
 # ---------------------------------------------------------------- files
@@ -738,19 +758,22 @@ def ask(prompt, default=""):
         return _ask(prompt, default)
 
 
+def _read_piped(label):
+    """Show `label`, then read one answer from standard input when it is not a terminal (EOFError when there is none)."""
+    sys.stdout.write(label)
+    sys.stdout.flush()
+    v = stdin_line()
+    if v == "":
+        raise EOFError
+    out("")
+    return v.rstrip("\n")
+
+
 def _ask(prompt, default=""):
     """Read one answer from the terminal (or from standard input when it is not a terminal)."""
+    label = "  %s%s: " % (prompt, (" [%s]" % default) if default else "")
     try:
-        if interactive():
-            v = input("  %s%s: " % (prompt, (" [%s]" % default) if default else ""))
-        else:
-            sys.stdout.write("  %s%s: " % (prompt, (" [%s]" % default) if default else ""))
-            sys.stdout.flush()
-            v = stdin_line()
-            if v == "":
-                raise EOFError
-            v = v.rstrip("\n")
-            out("")
+        v = input(label) if interactive() else _read_piped(label)
     except EOFError:
         raise Abort("An answer is required for: %s (no input was available)." % prompt) from None
     return v.strip() or default
@@ -764,16 +787,9 @@ def ask_secret(prompt):
 
 def _ask_secret(prompt):
     """Read one secret from the terminal without echo."""
+    label = "  %s: " % prompt
     try:
-        if interactive():
-            return getpass.getpass("  %s: " % prompt)
-        sys.stdout.write("  %s: " % prompt)
-        sys.stdout.flush()
-        v = stdin_line()
-        if v == "":
-            raise EOFError
-        out("")
-        return v.rstrip("\n")
+        return getpass.getpass(label) if interactive() else _read_piped(label)
     except EOFError:
         raise Abort("An answer is required for: %s (no input was available)." % prompt) from None
 
