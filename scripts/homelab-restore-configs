@@ -134,7 +134,6 @@ preview() {
   NEW_N=$(wc -l <"$STATS.new"); CHG_N=$(wc -l <"$STATS.chg")
   BYTES=$(awk -F': ' '/^Total transferred file size/ {gsub(/[^0-9]/,"",$2); print $2}' "$OUT")
   BYTES=${BYTES:-0}
-  # the stats block is at the end of $OUT; keep only the item lines for display
   NEW_LIST=$STATS.new; CHG_LIST=$STATS.chg
 }
 
@@ -147,6 +146,21 @@ show_names() {   # show_names LISTFILE TITLE
 }
 
 cleanup_preview() { rm -f "${OUT:-}" "${STATS:-}" "${STATS:-}.err" "${STATS:-}.new" "${STATS:-}.chg" 2>/dev/null || true; }
+
+report_preview() {   # report_preview NEW_TEXT CHANGED_TEXT  -> the counts, size and first names
+  say "$1: $NEW_N"
+  say "$2: $CHG_N"
+  say "Total size to copy: $(human "$BYTES")"
+  say ""
+  show_names "$NEW_LIST" "New files"
+  show_names "$CHG_LIST" "Would be replaced"
+  say ""
+}
+
+confirm_restore() {   # asks for RESTORE; on "no" it cleans up and fails
+  if typed RESTORE "Type RESTORE (capitals) to copy these $((NEW_N + CHG_N)) files: "; then cleanup_preview; return 0; fi
+  say "Cancelled. Nothing was copied."; cleanup_preview; return 1
+}
 
 # ---------- restore the config files ----------
 restore_configs() {
@@ -167,13 +181,7 @@ restore_configs() {
     cleanup_preview; return 0
   fi
   say ""
-  say "New files (not on this server yet): $NEW_N"
-  say "Files that exist here and differ (they would be REPLACED by the backup copy): $CHG_N"
-  say "Total size to copy: $(human "$BYTES")"
-  say ""
-  show_names "$NEW_LIST" "New files"
-  show_names "$CHG_LIST" "Would be replaced"
-  say ""
+  report_preview "New files (not on this server yet)" "Files that exist here and differ (they would be REPLACED by the backup copy)"
   if [ "$PREVIEW_ONLY" = 1 ]; then
     say "Preview only. Nothing was copied. (Files that differ are normal on a server that is running: they changed after the backup.)"
     cleanup_preview; return 0
@@ -182,8 +190,7 @@ restore_configs() {
   say "  - It does not touch /etc/fstab, /usr/local/ (the scripts), the crontab or Docker's own folders."
   say "  - It deletes nothing. Owners and permissions are kept as they were in the backup."
   say "  - The files are as old as the last backup."
-  typed RESTORE "Type RESTORE (capitals) to copy these $((NEW_N + CHG_N)) files: " || { say "Cancelled. Nothing was copied."; cleanup_preview; return 1; }
-  cleanup_preview
+  confirm_restore || return 1
   say "Copying..."
   if ! rsync -aH --numeric-ids "${EXCLUDES[@]}" "$src/" "$ROOT/"; then
     log "restore of config files from $bk FAILED"
@@ -235,16 +242,9 @@ restore_volume() {   # restore_volume NAME [backup]
     cleanup_preview; return 0
   fi
   say ""
-  say "New files: $NEW_N"
-  say "Files that differ (they would be REPLACED): $CHG_N"
-  say "Total size to copy: $(human "$BYTES")"
-  say ""
-  show_names "$NEW_LIST" "New files"
-  show_names "$CHG_LIST" "Would be replaced"
-  say ""
+  report_preview "New files" "Files that differ (they would be REPLACED)"
   say "The containers that use this volume are stopped while the files are copied, then started again."
-  typed RESTORE "Type RESTORE (capitals) to copy these $((NEW_N + CHG_N)) files: " || { say "Cancelled. Nothing was copied."; cleanup_preview; return 1; }
-  cleanup_preview
+  confirm_restore || return 1
   stop_for_volume "$name"
   if ! rsync -aH --numeric-ids "$src/" "$dst/"; then
     log "restore of volume $name FAILED"

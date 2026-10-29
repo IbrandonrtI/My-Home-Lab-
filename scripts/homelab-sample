@@ -63,17 +63,16 @@ temp_from_smart() {   # reads smartctl -A output on stdin -> integer degrees C, 
 }
 
 read_temp() {   # read_temp /dev/sdX -> prints a number or "standby"; prints nothing if there is no reading
-  local dev=$1 out t
+  local dev=$1 out t opts
   command -v smartctl >/dev/null 2>&1 || return 1
-  out=$(smartctl -n standby -A "$dev" 2>/dev/null)
-  if printf '%s' "$out" | grep -qi 'STANDBY'; then echo standby; return 0; fi
-  t=$(printf '%s' "$out" | temp_from_smart)
-  if [ -z "$t" ]; then
-    out=$(smartctl -n standby -A -d sat "$dev" 2>/dev/null)
+  for opts in "" "-d sat"; do      # some USB boxes only answer when told they speak SATA
+    # shellcheck disable=SC2086
+    out=$(smartctl -n standby -A $opts "$dev" 2>/dev/null)
     if printf '%s' "$out" | grep -qi 'STANDBY'; then echo standby; return 0; fi
     t=$(printf '%s' "$out" | temp_from_smart)
-  fi
-  [ -n "$t" ] && echo "$t"
+    [ -n "$t" ] && { echo "$t"; return 0; }
+  done
+  return 1
 }
 
 disk_label() {   # disk_label NAME -> MAIN1, BACKUP1 ... or "boot", or the model name

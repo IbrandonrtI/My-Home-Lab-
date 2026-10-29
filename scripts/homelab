@@ -286,6 +286,7 @@ DEFAULT_WORDS = ("default", "reset", "normal", "shipped")
 CARD_TABLE = dict(COLORS)   # the colour names for one service card (the bright ones win over the dark ones of the same name)
 CARD_TABLE.update(ACCENT)
 BLURS = ("sm", "md", "lg", "xl", "2xl", "3xl")
+NO_BLUR = ("none", "off")
 
 
 class Fail(Exception):
@@ -432,24 +433,28 @@ def accent_set(text, key, rgb, label):
     return re.subn(ACCENT_LINE % re.escape(key), lambda m: m.group(1) + nums + "   /* %s */" % label, text, count=1)
 
 
+def shipped_copy(name, current):
+    """The shipped version of a Homepage file: the one in the repository, else the first copy saved before the first change."""
+    shipped = read(os.path.join(DOCS, "homepage-config", name)) if DOCS else ""
+    return shipped or read(current + ".before-theme")
+
+
 def shipped_css():
-    shipped = read(os.path.join(DOCS, "homepage-config", "custom.css")) if DOCS else ""
-    return shipped or read(CSS + ".before-theme")
-
-
-def css_save(st, change=None):
-    """Write the marked block for st, and (optionally) first change the text above it with change(text)."""
-    text = read(CSS)
-    head, _ = css_split(text)
-    if change:
-        head = change(head)
-    block = css_build(st)
-    write(CSS, head + ("\n" + block if block else ""))
+    return shipped_copy("custom.css", CSS)
 
 
 def split_head():
     """custom.css without the block homelab theme writes"""
     return css_split(read(CSS))[0]
+
+
+def css_save(st, change=None):
+    """Write the marked block for st, and (optionally) first change the text above it with change(text)."""
+    head = split_head()
+    if change:
+        head = change(head)
+    block = css_build(st)
+    write(CSS, head + ("\n" + block if block else ""))
 
 
 def cur_css():
@@ -534,13 +539,13 @@ def theme_background(src, blur=None):
 
 
 def is_blur(word):
-    return word.lower() in BLURS or word.lower() in ("none", "off")
+    return word.lower() in BLURS + NO_BLUR
 
 
 def blur_value(arg):
     """The blur word for settings.yaml: None for no blur at all. The sizes from low to high: sm, md, lg, xl, 2xl, 3xl."""
     a = arg.lower()
-    if a in ("none", "off"):
+    if a in NO_BLUR:
         return None
     if a in BLURS:
         return a
@@ -617,7 +622,6 @@ def theme_cards(color, opacity):
     if opacity is not None:
         a = number(opacity, "How solid the cards are", 0, 100) / 100.0
     st["cards"] = (r, g, b, a)
-    st["card"] = {}
     css_save(st)
     print("All cards set to rgb(%d, %d, %d), %d%% solid. %s" % (r, g, b, round(a * 100), REFRESH))
 
@@ -689,10 +693,7 @@ def theme_reset():
                 head = re.sub(r"(?m)^#%s-card\s*\{\s*--accent:.*$" % re.escape(m.group(1)), lambda _m, keep=line: keep, head, count=1)
         return head
     css_save({"cards": None}, restore)
-    shipped = read(os.path.join(DOCS, "homepage-config", "settings.yaml")) if DOCS else ""
-    if not shipped:
-        shipped = read(SETTINGS + ".before-theme")
-    sb = bg_get(shipped)
+    sb = bg_get(shipped_copy("settings.yaml", SETTINGS))
     text = read(SETTINGS)
     for k in ("image", "blur", "saturate", "brightness", "opacity"):
         text = bg_set(text, k, sb.get(k))
@@ -1106,12 +1107,12 @@ in_words() {
 
 # next_run MINUTE HOUR DAY MONTH WEEKDAY -> "06:00 (in 11 h)" for a daily line, or "see root's crontab"
 next_run() {
-  local m=$1 h=$2 dom=$3 mon=$4 dow=$5 t now
+  local m=$1 h=$2 dom=$3 mon=$4 dow=$5 t now hhmm
   if [[ "$m" =~ ^[0-9]+$ ]] && [[ "$h" =~ ^[0-9]+$ ]] && [ "$dom" = "*" ] && [ "$mon" = "*" ] && [ "$dow" = "*" ]; then
-    now=$(date +%s)
-    t=$(date -d "$(printf '%02d:%02d' "$h" "$m")" +%s 2>/dev/null) || { echo "see root's crontab"; return; }
-    [ "$t" -gt "$now" ] || t=$(date -d "tomorrow $(printf '%02d:%02d' "$h" "$m")" +%s)
-    printf '%02d:%02d (%s)' "$h" "$m" "$(in_words $(( t - now )))"
+    now=$(date +%s); hhmm=$(printf '%02d:%02d' "$h" "$m")
+    t=$(date -d "$hhmm" +%s 2>/dev/null) || { echo "see root's crontab"; return; }
+    [ "$t" -gt "$now" ] || t=$(date -d "tomorrow $hhmm" +%s)
+    printf '%s (%s)' "$hhmm" "$(in_words $(( t - now )))"
   else
     echo "see root's crontab"
   fi
@@ -1142,17 +1143,21 @@ backup_size_line() {
 # The name of a pool drive as "sudo drives status" shows it ("1 TB Samsung HDD"), not the label on the drive (MAIN2).
 # The name you chose in /etc/homelab-drive-names wins, then the name "drives" saved. A name two drives share keeps the label too.
 drive_shown_name() {   # drive_shown_name LABEL TEMPS-FILE
-  local lab=$1 file=$2 name="" n
+  local lab=$1 file=$2 name="" other n=0 names_file="${HOMELAB_NAMES_FILE:-/etc/homelab-drive-names}"
   case "$lab" in MAIN[0-9]*|BACKUP[0-9]*) ;; *) printf '%s' "$lab"; return 0 ;; esac
-  [ -r "${HOMELAB_NAMES_FILE:-/etc/homelab-drive-names}" ] && name=$(awk -F= -v k="$lab" '{ gsub(/^[ \t]+|[ \t]+$/, "", $1) } $1 == k && !/^[ \t]*#/ { sub(/^[^=]*=/, ""); print; exit }' "${HOMELAB_NAMES_FILE:-/etc/homelab-drive-names}")
-  [ -n "$name" ] || { [ -r "$STATE_DIR/drive-names" ] && name=$(awk -F'|' -v k="$lab" '$1 == k {print $2; exit}' "$STATE_DIR/drive-names"); }
+  [ -r "$names_file" ] && name=$(awk -F= -v k="$lab" '{ gsub(/^[ \t]+|[ \t]+$/, "", $1) } $1 == k && !/^[ \t]*#/ { sub(/^[^=]*=/, ""); print; exit }' "$names_file")
+  [ -n "$name" ] || name=$(saved_drive_name "$lab")
   [ -n "$name" ] || { printf '%s' "$lab"; return 0; }
-  n=0
   while IFS='|' read -r other _; do
     [ "$other" = "$lab" ] && continue
-    case "$other" in MAIN[0-9]*|BACKUP[0-9]*) [ "$(awk -F'|' -v k="$other" '$1 == k {print $2; exit}' "$STATE_DIR/drive-names" 2>/dev/null)" = "$name" ] && n=1 ;; esac
+    case "$other" in MAIN[0-9]*|BACKUP[0-9]*) [ "$(saved_drive_name "$other")" = "$name" ] && n=1 ;; esac
   done <"$file"
   if [ "$n" -eq 1 ]; then printf '%s (%s)' "$name" "$lab"; else printf '%s' "$name"; fi
+}
+
+saved_drive_name() {   # saved_drive_name LABEL -> the name "drives" saved for that drive, or nothing
+  [ -r "$STATE_DIR/drive-names" ] && awk -F'|' -v k="$1" '$1 == k {print $2; exit}' "$STATE_DIR/drive-names"
+  return 0
 }
 
 temps_line() {
@@ -1210,10 +1215,12 @@ updates_line() {
   else ok "Updates" "$text"; fi
 }
 
-status() {
-  local used size stamp result age_h now ts line n_run n_all down unhealthy cname cstate cpol crc cstart restarted="" st_ts
+pool_mounted() { command -v findmnt >/dev/null 2>&1 && findmnt -n "$1" >/dev/null 2>&1; }
+
+pool_lines() {
+  local used size
   # main pool
-  if command -v findmnt >/dev/null 2>&1 && findmnt -n "$MAIN_POOL" >/dev/null 2>&1; then
+  if pool_mounted "$MAIN_POOL"; then
     read -r used size < <(df -h --output=used,size "$MAIN_POOL" 2>/dev/null | awk 'NR==2 {print $1, $2}')
     if only_boot_section MAIN; then
       warn "Main pool" "mounted, ${used:-?} used of ${size:-?}, but only on a section of the boot drive (no separate drive: sudo drives)"
@@ -1231,7 +1238,7 @@ status() {
   fi
 
   # backup pool
-  if command -v findmnt >/dev/null 2>&1 && findmnt -n "$BACKUP_POOL" >/dev/null 2>&1; then
+  if pool_mounted "$BACKUP_POOL"; then
     if only_boot_section BACKUP; then
       warn "Backup pool" "mounted, but only on a section of the boot drive (it does not survive a boot drive failure)"
       suggest 4 "sudo drives" "connect a real backup drive: the backup is on the boot drive now"
@@ -1242,16 +1249,15 @@ status() {
     warn "Backup pool" "not connected (the backup goes to the boot drive)"
     suggest 5 "sudo drives" "connect a backup drive (or use part of the boot drive: sudo drives bootsection)"
   fi
+}
 
-  # last backup
+last_backup_line() {
+  local stamp result age_h ts line
   if [ -r "$LAST_RUN_FILE" ]; then
     IFS='|' read -r stamp result _ _ <"$LAST_RUN_FILE"
-    now=$(date +%s); ts=$(date -d "$stamp" +%s 2>/dev/null || echo "")
-    if [ -n "$ts" ]; then
-      age_h=$(( (now - ts) / 3600 ))
-    else
-      age_h=""
-    fi
+    ts=$(date -d "$stamp" +%s 2>/dev/null || echo "")
+    age_h=""
+    [ -n "$ts" ] && age_h=$(( ($(date +%s) - ts) / 3600 ))
     line="$stamp  $result"
     [ -n "$age_h" ] && line="$line  (${age_h} h ago)"
     if [ "$result" != "OK" ]; then
@@ -1270,17 +1276,15 @@ status() {
     warn "Last backup" "no backup has run yet"
     suggest 4 "sudo homelab-backup" "no backup has run yet: run the first one now"
   fi
+}
 
-  backup_size_line
-  temps_line
-  updates_line
-
-  # containers (a stopped container whose restart policy is "no" was stopped on purpose, so it is ignored)
+# containers (a stopped container whose restart policy is "no" was stopped on purpose, so it is ignored)
+containers_line() {
+  local n_run=0 n_all=0 down="" unhealthy cname cstate cpol crc cstart restarted="" st_ts now
   if [ "$JUST_BOOTED" -eq 1 ]; then
     # first minutes after a boot: Docker is busy starting the apps, so the login screen leaves it alone
     warn "Containers" "the server just started and the apps are still starting (live check in a few minutes: homelab status)"
   elif command -v docker >/dev/null 2>&1 && timeout 5 docker info >/dev/null 2>&1; then
-    n_run=0; n_all=0; down=""
     now=$(date +%s)
     while read -r cname cstate cpol crc cstart; do
       [ -n "$cname" ] || continue
@@ -1313,10 +1317,11 @@ status() {
       *) warn "Containers" "cannot read Docker (is Docker running, and are you in the docker group?)" ;;
     esac
   fi
+}
 
-  # boot drive space
+boot_drive_line() {
+  local line sec_dir="${HOMELAB_BOOT_SECTION_DIR:-/var/lib/homelab-boot-sections}" sec_gb="" f free_b
   line=$(df -h --output=pcent,avail / 2>/dev/null | awk 'NR==2 {print $1 " used, " $2 " free"}')
-  local sec_dir="${HOMELAB_BOOT_SECTION_DIR:-/var/lib/homelab-boot-sections}" sec_gb="" f free_b
   for f in "$sec_dir"/*.img; do [ -f "$f" ] && sec_gb="$sec_gb $(( $(stat -c %s "$f") / 1000000000 ))"; done
   if [ -n "$sec_gb" ]; then
     line="$line; sections for pools:$(printf '%s' "$sec_gb" | sed 's/ \([0-9]*\)/ \1 GB,/g; s/,$//')"
@@ -1328,6 +1333,17 @@ status() {
     fi
   fi
   [ -n "$line" ] && ok "Boot drive" "$line"
+  return 0
+}
+
+status() {
+  pool_lines
+  last_backup_line
+  backup_size_line
+  temps_line
+  updates_line
+  containers_line
+  boot_drive_line
 }
 
 # ---------- secrets ----------
@@ -1339,6 +1355,15 @@ real_home() {   # home folder of the person who runs it (also under sudo)
 }
 
 dk() { timeout 10 docker "$@" 2>/dev/null; }
+container_running() { dk ps --format '{{.Names}}' | grep -qx "$1"; }
+
+dump_age_line() {   # dump_age_line LABEL DIR PATTERN MISSING-TEXT: how old the newest database dump is
+  local label=$1 days
+  days=$(age_days "$2" "$3") || days=""
+  if [ -z "$days" ]; then bad "$label" "$4"
+  elif [ "$days" -ge 2 ]; then warn "$label" "the newest dump is $days days old"
+  else ok "$label" "newest dump is $days day(s) old"; fi
+}
 
 env_info() {   # env_info CONTAINER VAR -> "LENGTH STARTS_WITH_base64 LOOKS_LIKE_PLACEHOLDER", or nothing
   dk inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" | awk -F= -v v="$2" '
@@ -1381,7 +1406,7 @@ LIST
     warn "Containers" "cannot read Docker, so the keys inside the containers were not checked"
   else
     # Nextcloud database password
-    if dk ps --format '{{.Names}}' | grep -qx nextcloud; then
+    if container_running nextcloud; then
       n_key=$(dk exec nextcloud grep -c "'dbpassword'" /var/www/html/config/config.php || true)
       if [ "${n_key:-0}" -ge 1 ] 2>/dev/null; then ok "Nextcloud DB" "password is set in config.php (a rebuild must reuse this same password)"
       else bad "Nextcloud DB" "no dbpassword found in config.php"; fi
@@ -1389,7 +1414,7 @@ LIST
       warn "Nextcloud DB" "the nextcloud container is not running, not checked"
     fi
     # Immich database password
-    if dk ps --format '{{.Names}}' | grep -qx immich_postgres; then
+    if container_running immich_postgres; then
       line=$(env_info immich_postgres POSTGRES_PASSWORD) || line=""
       read -r len _ ph <<<"$line"
       if [ -z "$line" ] || [ "${len:-0}" -eq 0 ]; then bad "Immich DB" "no database password is set in the container"
@@ -1399,7 +1424,7 @@ LIST
       warn "Immich DB" "the immich_postgres container is not running, not checked"
     fi
     # Speedtest Tracker key
-    if dk ps --format '{{.Names}}' | grep -qx speedtest-tracker; then
+    if container_running speedtest-tracker; then
       line=$(env_info speedtest-tracker APP_KEY) || line=""
       read -r len b64 ph <<<"$line"
       if [ -z "$line" ]; then bad "Speedtest key" "no APP_KEY is set in the container"
@@ -1451,19 +1476,13 @@ LIST
     else
       warn "Saved configs" "cannot read $dest/boot-configs (run: sudo homelab secrets)"
     fi
-    n_key=$(age_days "$dest/db-dumps" 'nextcloud-*.sql.gz') || n_key=""
-    if [ -z "$n_key" ]; then bad "Nextcloud dump" "no database dump found in $dest/db-dumps"
-    elif [ "$n_key" -ge 2 ]; then warn "Nextcloud dump" "the newest dump is $n_key days old"
-    else ok "Nextcloud dump" "newest dump is $n_key day(s) old"; fi
+    dump_age_line "Nextcloud dump" "$dest/db-dumps" 'nextcloud-*.sql.gz' "no database dump found in $dest/db-dumps"
   fi
 
   # Immich's own database dumps (in the main pool)
   d="$MAIN_POOL/immich/backups"
   if [ -d "$d" ]; then
-    n_key=$(age_days "$d" '*.sql.gz') || n_key=""
-    if [ -z "$n_key" ]; then bad "Immich dump" "no Immich database dump in $d (Immich > Administration > Job Queues > Create job > Create Database Dump)"
-    elif [ "$n_key" -ge 2 ]; then warn "Immich dump" "the newest dump is $n_key days old"
-    else ok "Immich dump" "newest dump is $n_key day(s) old"; fi
+    dump_age_line "Immich dump" "$d" '*.sql.gz' "no Immich database dump in $d (Immich > Administration > Job Queues > Create job > Create Database Dump)"
   else
     warn "Immich dump" "$d is not there (is the main pool mounted?)"
   fi

@@ -56,10 +56,8 @@ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
 esac
 
 rule() {   # rule "Title": a spaced section heading with a thin line
-  local cols w t="$1" n pad
-  cols=$(tput cols 2>/dev/null) || cols=80
-  [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
-  w=$cols; [ "$w" -gt 76 ] && w=76; [ "$w" -lt 40 ] && w=40
+  local w t="$1" n pad
+  w=$(term_cols); [ "$w" -gt 76 ] && w=76
   n=$(( w - ${#t} - 8 )); [ "$n" -lt 3 ] && n=3
   pad=$(printf '%*s' "$n" '' | sed "s/ /$S_RULE/g")
   printf '\n  %s%s%s%s %s%s%s %s%s%s\n\n' "$D" "$S_RULE" "$S_RULE" "$N" "$B" "$t" "$N" "$D" "$pad" "$N"
@@ -463,20 +461,28 @@ do_check() {   # do_check show(0/1)
 }
 
 # ---------- rollback copies, space, backup ----------
+running_id_of() {   # running_id_of IMAGE -> the id of the image the first container with that name runs, or nothing
+  local i
+  for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$1" ] && { echo "${CD[$i]}"; return; }; done
+}
+
 rollback_tag() {   # keep a named copy of the version that runs now, so a bad update can be undone
-  local ref=$1 i id="" safe
-  for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$ref" ] && { id=${CD[$i]}; break; }; done
+  local ref=$1 id safe
+  id=$(running_id_of "$ref")
   [ -n "$id" ] || return 0
   safe=$(printf '%s' "${ref##*/}" | sed 's/[^A-Za-z0-9_.-]/-/g')
   docker tag "$id" "homelab-rollback:${safe}-$(date +%Y%m%d)" >/dev/null 2>&1 || true
 }
 
-free_gb() {
-  local root
-  [ -n "${HLU_FREE_GB:-}" ] && { echo "$HLU_FREE_GB"; return; }   # test hook
-  root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null); root=${root:-/var/lib/docker}
-  df -B1G --output=avail "$root" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}'
+docker_root() { local r; r=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null); echo "${r:-/var/lib/docker}"; }
+avail_of() {   # avail_of UNIT PATH -> free space at PATH in that unit (1 = bytes, 1G = gigabytes)
+  df -B"$1" --output=avail "$2" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}'
 }
+free_gb() {
+  [ -n "${HLU_FREE_GB:-}" ] && { echo "$HLU_FREE_GB"; return; }   # test hook
+  avail_of 1G "$(docker_root)"
+}
+free_bytes() { avail_of 1 "$(docker_root)"; }
 
 run_backup() {   # runs the backup and checks the result file. Returns 0 only when a NEW run finished OK.
   local start start_min last ts res
@@ -556,7 +562,7 @@ print_stack() {   # print_stack N STACK: what is waiting in one stack, with the 
       continue
     fi
     [ "${SST["$s|$img"]}" = new ] && continue
-    oldid=""; for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$img" ] && { oldid=${CD[$i]}; break; }; done
+    oldid=$(running_id_of "$img")
     newv=$(img_version "$img"); oldv=""; [ -n "$oldid" ] && oldv=$(img_version "$oldid")
     if [ -n "$newv" ] && [ -n "$oldv" ] && [ "$newv" != "$oldv" ]; then kv version "$oldv $S_ARR $newv"; fi
   done
@@ -694,7 +700,7 @@ dump_stack_db() {   # dump_stack_db STACK: dump every PostgreSQL database in the
     user=$(docker exec "$c" printenv POSTGRES_USER 2>/dev/null); user=${user:-postgres}
     db=$(docker exec "$c" printenv POSTGRES_DB 2>/dev/null); db=${db:-$user}
     mkdir -p "$dir" 2>/dev/null || { line_bad "Cannot create $dir for the database dump."; return 1; }
-    free=$(df -B1G --output=avail "$dir" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}')
+    free=$(avail_of 1G "$dir")
     if [ -n "$free" ] && [ "$free" -lt "$MIN_FREE_GB" ]; then line_bad "Only ${free} GB free at $dir; need at least $MIN_FREE_GB for the dump."; return 1; fi
     f="$dir/$c-$stamp.sql.gz"
     if nice -n 19 docker exec "$c" pg_dump -U "$user" "$db" 2>/dev/null | gzip -c >"$f.tmp" && gzip -t "$f.tmp" 2>/dev/null \
@@ -935,8 +941,7 @@ cmd_run() {
   fi
 
   # save what we know now (so the login screen shows the new state even if something stops later)
-  load_containers; build_images; read_state
-  evaluate_state | write_outputs "$(summary_epoch || date +%s)"
+  refresh_state
 
   rule "Step 3 of 4 ${S_DOT} Is anything being uploaded?"
   local why
@@ -1003,10 +1008,8 @@ refresh_state() {   # re-read the containers and save what is still waiting
   evaluate_state | write_outputs "$(summary_epoch || date +%s)"
 }
 
-free_bytes() {
-  local root
-  root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null); root=${root:-/var/lib/docker}
-  df -B1 --output=avail "$root" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}'
+held_note() {   # held_note COUNT: says how many leftover images stay because a container uses them
+  [ "$1" -eq 0 ] || line_note "$1 leftover image(s) are kept because a container still uses them (a stopped one counts)."
 }
 
 cmd_clean() {   # cmd_clean YES OLD_ONLY
@@ -1044,7 +1047,7 @@ cmd_clean() {   # cmd_clean YES OLD_ONLY
   if [ "$old_only" -eq 1 ]; then rule "Clean up saved copies older than $ROLLBACK_KEEP_DAYS days"; else rule "Clean up old versions"; fi
   if [ "${#tags[@]}" -eq 0 ] && [ "${#dids[@]}" -eq 0 ]; then
     line_ok "Nothing to clean."
-    [ "$held" -eq 0 ] || line_note "$held leftover image(s) are kept because a container still uses them (a stopped one counts)."
+    held_note "$held"
     echo; return 0
   fi
 
@@ -1064,7 +1067,7 @@ cmd_clean() {   # cmd_clean YES OLD_ONLY
     done
     echo
   fi
-  [ "$held" -eq 0 ] || { line_note "$held leftover image(s) are kept because a container still uses them (a stopped one counts)."; echo; }
+  if [ "$held" -ne 0 ]; then held_note "$held"; echo; fi
   before=$(free_bytes)
   [ -z "$before" ] || echo "  Free space on the boot drive now: $(hb "$before")"
   echo "  A running container's image is never removed. After this you cannot go back to the old programs"

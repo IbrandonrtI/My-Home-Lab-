@@ -112,8 +112,7 @@ part_commands() {
   else
     info "homelab-update check was not run (it uses the internet). Add --online to include it."
   fi
-  local repo=""
-  for repo in "$REAL_HOME/My-Home-Lab-" "$REAL_HOME/My-Home-Lab"; do [ -d "$repo/scripts" ] && break || repo=""; done
+  local repo; repo=$(repo_dir)
   if [ -n "$repo" ] && command -v homelab-check >/dev/null 2>&1; then
     run_cmd "homelab-check (the repo copy)" 120 user "0" -- homelab-check "$repo"
   else
@@ -132,10 +131,16 @@ part_commands() {
 
 # ---------------------------------------------------------------- part 2: the state of the machine
 mode_of() { stat -c %a "$1" 2>/dev/null; }
+fstab_lines() { grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null; }   # the active lines of /etc/fstab
+repo_dir() {   # the folder with the lab's repository in the home folder (prints nothing when there is none)
+  local d
+  for d in "$REAL_HOME/My-Home-Lab-" "$REAL_HOME/My-Home-Lab"; do [ -d "$d/scripts" ] && { echo "$d"; return 0; }; done
+  return 0
+}
+BOOT_SECTIONS=/var/lib/homelab-boot-sections
 
 check_scripts_vs_repo() {
-  local repo="" f installed
-  for repo in "$REAL_HOME/My-Home-Lab-" "$REAL_HOME/My-Home-Lab"; do [ -d "$repo/scripts" ] && break || repo=""; done
+  local f installed repo; repo=$(repo_dir)
   if [ -z "$repo" ]; then info "no repository folder in $REAL_HOME, so the installed scripts were not compared with it"; return; fi
   for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample hdd-recover homelab homelab-check; do
     installed=$(command -v "$f" 2>/dev/null) || continue
@@ -165,7 +170,7 @@ part_state() {
       info "$pool is not mounted: a plain folder on the boot drive ($(du -sh "$pool" 2>/dev/null | cut -f1 | grep . || echo empty))"
     fi
   done
-  names=$(grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null | awk '$2 ~ "^/mnt/disks/(MAIN|BACKUP)([0-9]+|BOOT)$" {print $2}' | xargs -r -n1 basename | tr '\n' ' ')
+  names=$(fstab_lines | awk '$2 ~ "^/mnt/disks/(MAIN|BACKUP)([0-9]+|BOOT)$" {print $2}' | xargs -r -n1 basename | tr '\n' ' ')
   if [ -n "${names// /}" ]; then
     info "drives assigned to pools in /etc/fstab: $names"
     info "on a new install nothing should be listed here until you chose the drives with: sudo drives. To take them out: sudo drives release"
@@ -175,23 +180,23 @@ part_state() {
   while read -r b; do
     [ -n "$b" ] || continue
     if ! mountpoint -q "$b"; then fail "$b is in /etc/fstab but is not mounted (drive unplugged?)"; fi
-  done < <(grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null | awk '$2 ~ "^/mnt/disks/" {print $2}')
+  done < <(fstab_lines | awk '$2 ~ "^/mnt/disks/" {print $2}')
   for pool in /mnt/storage /mnt/backup; do
-    if ! mountpoint -q "$pool" && [ -n "$(ls -A "$pool" 2>/dev/null)" ] && grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null | awk -v p="$pool" '$2 == p' | grep -q .; then
+    if ! mountpoint -q "$pool" && [ -n "$(ls -A "$pool" 2>/dev/null)" ] && fstab_lines | awk -v p="$pool" '$2 == p' | grep -q .; then
       fail "$pool has a pool line in /etc/fstab but is not mounted, and the boot drive folder has files in it"
     fi
   done
   # boot drive sections: a file of a fixed size on the boot drive that a pool uses last
   local img
-  for img in /var/lib/homelab-boot-sections/*.img; do
+  for img in "$BOOT_SECTIONS"/*.img; do
     [ -f "$img" ] || continue
-    if grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null | awk -v f="$img" '$1 == f' | grep -q .; then
+    if fstab_lines | awk -v f="$img" '$1 == f' | grep -q .; then
       info "boot drive section in use: $(basename "$img" .img) pool, $(( $(stat -c %s "$img") / 1000000000 )) GB reserved on the boot drive"
     else
       warn "$img is not used by any pool (left over after sudo drives release or remove); it still takes $(( $(stat -c %s "$img") / 1000000000 )) GB of the boot drive"
     fi
   done
-  if ls /var/lib/homelab-boot-sections/*.img >/dev/null 2>&1; then
+  if ls "$BOOT_SECTIONS"/*.img >/dev/null 2>&1; then
     local bfree; bfree=$(df -B1 --output=avail / | tail -1 | tr -d ' ')
     if [ "${bfree:-0}" -lt 128000000000 ]; then warn "the boot drive has less than 128 GB free while boot drive sections exist"; fi
   fi

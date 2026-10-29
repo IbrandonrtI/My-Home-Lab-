@@ -56,6 +56,7 @@ DEST=""
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE"; }
 fail() { ERRORS=$((ERRORS + 1)); NOTES="$NOTES$*; "; log "ERROR: $*"; }
+rsync_ok() { [ "$1" -eq 0 ] || [ "$1" -eq 24 ]; }     # 24 = some files vanished while copying: not an error
 
 finish() {
   local result=OK secs=$(( $(date +%s) - START )) size=""
@@ -156,7 +157,7 @@ rsync -aH --numeric-ids --delete --exclude=/lost+found \
   --backup --backup-dir="$DEST/_deleted/$TODAY/main" \
   "$SRC/" "$DEST/main/" >>"$LOGFILE" 2>&1
 rc=$?
-if [ "$rc" -ne 0 ] && [ "$rc" -ne 24 ]; then fail "rsync of main storage exited with code $rc"; else log "main storage copied"; fi
+if rsync_ok "$rc"; then log "main storage copied"; else fail "rsync of main storage exited with code $rc"; fi
 
 # ---- 3. boot drive configs ----
 for p in "${CONFIG_PATHS[@]}"; do
@@ -165,7 +166,7 @@ for p in "${CONFIG_PATHS[@]}"; do
     --backup --backup-dir="$DEST/_deleted/$TODAY/boot-configs" \
     "$p" "$DEST/boot-configs/" >>"$LOGFILE" 2>&1
   rc=$?
-  if [ "$rc" -ne 0 ] && [ "$rc" -ne 24 ]; then fail "rsync of $p exited with code $rc"; fi
+  rsync_ok "$rc" || fail "rsync of $p exited with code $rc"
 done
 crontab -l >"$DEST/boot-configs/root-crontab.txt" 2>/dev/null || true
 log "configs copied"

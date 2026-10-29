@@ -50,7 +50,7 @@ else
   BOOT_SECTION_DIR="${BOOT_SECTION_DIR:-/var/lib/homelab-boot-sections}"
   BOOT_KEEP_FREE_BYTES="${HOMELAB_BOOT_KEEP_BYTES:-128000000000}"   # the boot drive always keeps 128 GB free for the system and the apps
   BOOT_SMALL_BYTES="${HOMELAB_BOOT_SMALL_BYTES:-130000000000}"      # a "128 GB" boot drive (or smaller) cannot lend any space: the system needs all of it
-  BOOT_MIN_BYTES="${HOMELAB_BOOT_MIN_BYTES:-30000000000}"          # a section smaller than 30 GB is refused (the pool keeps 20 GB free per drive)
+  BOOT_MIN_BYTES="${HOMELAB_BOOT_MIN_BYTES:-30000000000}"          # a section smaller than 30 GB is refused
 fi
 BOOT_OPTS="loop,noatime,nofail"
 BOOT_UNIT_BYTES="${BOOT_UNIT_BYTES:-1000000000}"; BOOT_UNIT_NAME="${BOOT_UNIT_NAME:-GB}"
@@ -102,7 +102,6 @@ choose() {   # choose "Prompt: " item1 item2 ... -> prints 0-based index
 }
 
 human() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1 B"; }
-gb_text() { awk -v b="$1" 'BEGIN { if (b >= 0.95e12) printf "%g TB", int(b / 1e11 + 0.5) / 10; else if (b >= 1e9) printf "%d GB", int(b / 1e9 + 0.5); else printf "%d MB", int(b / 1e6 + 0.5) }'; }   # decimal, the way drives are sold
 
 role_prefix() { if [ "$1" = main ]; then echo "$MAIN_PREFIX"; else echo "$BACKUP_PREFIX"; fi; }
 role_pool()   { if [ "$1" = main ]; then echo "$MAIN_POOL";   else echo "$BACKUP_POOL";   fi; }
@@ -189,14 +188,12 @@ branches_string() {   # branches_string main|backup -> the drives of a pool, in 
 }
 
 pool_line() {   # pool_line main|backup
-  local role=$1 mp b joined="" req="" opts
+  local role=$1 mp b joined req="" opts
   opts=${POOL_OPTS_BASE/cache.files=off/cache.files=$(cache_opt)}
   mp=$(role_pool "$role")
-  for b in $(branches_of "$role"); do
-    joined="${joined:+$joined:}$(branch_spec "$b")"
-    req="$req,x-systemd.requires-mounts-for=$b"
-  done
+  joined=$(branches_string "$role")
   [ -n "$joined" ] || return 1
+  for b in $(branches_of "$role"); do req="$req,x-systemd.requires-mounts-for=$b"; done
   printf '%s %s fuse.mergerfs %s,fsname=mergerfs-%s%s 0 0' "$joined" "$mp" "$opts" "$role" "$req"
 }
 
@@ -208,6 +205,11 @@ fstab_set_pool() {
 }
 
 # ---------- mount helpers ----------
+give_to_owner() {   # give_to_owner PATH: the user who runs the lab owns it (nothing happens when that user is unknown)
+  id -u "$OWNER" >/dev/null 2>&1 && chown "$OWNER:$OWNER" "$1"
+  return 0
+}
+
 ensure_mp() {
   mkdir -p "$1"
   if ! mountpoint -q "$1"; then chattr +i "$1" 2>/dev/null || true; fi
@@ -286,6 +288,12 @@ legacy_disks() {   # drives mounted directly at a pool path (before conversion t
     s=$(findmnt -no SOURCE "$mp")
     disk_of_part "$s"
   done | sort -u
+}
+
+refuse_unsafe_disk() {   # refuse_unsafe_disk /dev/sdX: stops the whole command for the system drive or a drive in use
+  grep -qx "$1" <<<"$(protected_disks)" && die "$1 holds the operating system. Refusing."
+  grep -qx "$1" <<<"$(busy_disks)" && die "$1 is in use (something on it is mounted). Refusing."
+  return 0
 }
 
 candidate_disks() {
@@ -396,7 +404,7 @@ branch_base_name() {   # the name of one pool drive, before numbering: chosen, e
   if is_boot_section "$mp"; then   # "100 GB boot drive section", from the size of its file
     img=$(boot_image_of "$mp")
     if [ -f "$img" ]; then
-      n="$(gb_text "$(stat -c %s "$img")") boot drive section"
+      n="$(pretty_size "$(stat -c %s "$img")") boot drive section"
       [ "$(name_store_get "$label")" = "$n" ] || name_store_put "$label" "$n"
       printf '%s' "$n"; return 0
     fi
@@ -424,9 +432,13 @@ branch_name() {   # the name shown for a pool drive; a name shared with another 
   if [ "$total" -gt 1 ] && [ "$mine" -gt 0 ]; then printf '%s %s' "$base" "$mine"; else printf '%s' "$base"; fi
 }
 
-disk_summary() {   # "1 TB Toshiba HDD  (/dev/sdb, 931.5G, TOSHIBA MQ01ABD100, sata)"
+disk_details() {   # "(/dev/sdb, 931.5G, TOSHIBA MQ01ABD100, sata)"
   local d=$1
-  printf '%s  (%s, %s, %s, %s)' "$(disk_base_name "$d")" "$d" "$(lsblk -dno SIZE "$d" | tr -d ' ')" "$(lsblk -dno MODEL "$d" | sed 's/ *$//')" "$(lsblk -dno TRAN "$d" | sed 's/ *$//')"
+  printf '(%s, %s, %s, %s)' "$d" "$(lsblk -dno SIZE "$d" | tr -d ' ')" "$(lsblk -dno MODEL "$d" | sed 's/ *$//')" "$(lsblk -dno TRAN "$d" | sed 's/ *$//')"
+}
+
+disk_summary() {   # "1 TB Toshiba HDD  (/dev/sdb, 931.5G, TOSHIBA MQ01ABD100, sata)"
+  printf '%s  %s' "$(disk_base_name "$1")" "$(disk_details "$1")"
 }
 
 smart_health() {
@@ -485,8 +497,7 @@ next_label() {
 
 format_disk() {   # format_disk /dev/sdX LABEL -> prints partition path
   local dev=$1 label=$2 p vg
-  grep -qx "$dev" <<<"$(protected_disks)" && die "$dev holds the operating system. Refusing."
-  grep -qx "$dev" <<<"$(busy_disks)" && die "$dev is in use (something on it is mounted). Refusing."
+  refuse_unsafe_disk "$dev"
   umount_disk_parts "$dev"
   if command -v pvs >/dev/null 2>&1; then
     for vg in $(pvs --noheadings -o pv_name,vg_name 2>/dev/null | awk -v d="$dev" 'index($1, d) == 1 && $2 != "" {print $2}' | sort -u); do
@@ -613,6 +624,17 @@ absorb_plain_pool() {   # absorb_plain_pool main|backup /mnt/disks/MAIN1  (the d
 }
 
 # ---------- connect ----------
+pool_can_grow() {   # pool_can_grow main|backup "this drive": a pool that is not one of ours (a plain drive, or someone else's mount) cannot get a new drive
+  local role=$1 pool; pool=$(role_pool "$1")
+  [ -z "$(branches_of "$role")" ] && mountpoint -q "$pool" || return 0
+  if [ "$role" = main ]; then
+    note "$pool is currently one plain drive. Convert it into a pool first (sudo drives > Settings and upgrades > Convert the current single data drive), then add $2."
+  else
+    note "$pool is already mounted by something else. Check: findmnt $pool"
+  fi
+  return 1
+}
+
 pick_new_disk() {
   local -a items=() devs=()
   local d
@@ -625,7 +647,7 @@ pick_new_disk() {
       if [ "${bases[$j]}" = "${bases[$i]}" ]; then same=$((same + 1)); [ "$j" -le "$i" ] && seen=$((seen + 1)); fi
     done
     d=${devs[$i]}
-    if [ "$same" -gt 1 ]; then items+=("${bases[$i]} $seen  ($d, $(lsblk -dno SIZE "$d" | tr -d ' '), $(lsblk -dno MODEL "$d" | sed 's/ *$//'), $(lsblk -dno TRAN "$d" | sed 's/ *$//'))")
+    if [ "$same" -gt 1 ]; then items+=("${bases[$i]} $seen  $(disk_details "$d")")
     else items+=("$(disk_summary "$d")"); fi
   done
   if [ ${#devs[@]} -eq 0 ]; then
@@ -642,21 +664,13 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase]
   local dev=${1:-} role=${2:-} force=${3:-0} label part mode="erase" idx uuid mp
   need_tools || return 1
   [ -n "$dev" ] || { dev=$(pick_new_disk) || return 1; }
-  grep -qx "$dev" <<<"$(protected_disks)" && die "$dev holds the operating system. Refusing."
-  grep -qx "$dev" <<<"$(busy_disks)" && die "$dev is in use (something on it is mounted). Refusing."
+  refuse_unsafe_disk "$dev"
   describe_disk "$dev"
   if [ -z "$role" ]; then
     idx=$(choose "Use this drive for: " "Main storage (photos and files used by your services)" "Backup storage (daily copy of main)") || return 1
     if [ "$idx" = 0 ]; then role=main; else role=backup; fi
   fi
-  if [ "$role" = main ] && [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL"; then
-    note "$MAIN_POOL is currently one plain drive. Convert it into a pool first (sudo drives > Settings and upgrades > Convert the current single data drive), then add this drive."
-    return 1
-  fi
-  if [ "$role" = backup ] && [ -z "$(branches_of backup)" ] && mountpoint -q "$BACKUP_POOL"; then
-    note "$BACKUP_POOL is already mounted by something else. Check: findmnt $BACKUP_POOL"
-    return 1
-  fi
+  pool_can_grow "$role" "this drive" || return 1
   label=$(next_label "$role")
   local base same=0 b
   base=$(disk_base_name "$dev")
@@ -706,7 +720,7 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase]
     die "The files in $(role_pool "$role") could not be moved to the new drive. fstab was restored."
   fi
   if [ "$mode" = erase ] && [ "$role" = main ]; then
-    id -u "$OWNER" >/dev/null 2>&1 && chown "$OWNER:$OWNER" "$mp"
+    give_to_owner "$mp"
   fi
   if ! apply_pool "$role"; then
     fstab_rollback
@@ -726,6 +740,7 @@ has_data() { [ -n "$(find "$1" -mindepth 1 -maxdepth 1 ! -name lost+found -print
 
 avail_bytes() { df -B1 --output=avail "$1" | tail -1 | tr -d ' '; }
 used_bytes()  { df -B1 --output=used  "$1" | tail -1 | tr -d ' '; }
+total_bytes() { echo $(( $(used_bytes "$1") + $(avail_bytes "$1") )); }   # as the pool or drive reports it: used + free
 
 pick_branch() {
   local -a items=() mps=()
@@ -733,7 +748,7 @@ pick_branch() {
   for mp in $(all_branches); do
     mps+=("$mp")
     if mountpoint -q "$mp"; then
-      items+=("$(branch_name "$mp")  ($(branch_role "$mp"))  used $(human "$(used_bytes "$mp")") of $(human "$(( $(used_bytes "$mp") + $(avail_bytes "$mp") ))")")
+      items+=("$(branch_name "$mp")  ($(branch_role "$mp"))  used $(human "$(used_bytes "$mp")") of $(human "$(total_bytes "$mp")")")
     else
       items+=("$(branch_name "$mp")  ($(branch_role "$mp"))  NOT CONNECTED")
     fi
@@ -941,7 +956,7 @@ status_flow() {
     if mountpoint -q "$pool"; then
       fst=$(findmnt -no FSTYPE "$pool")
       printf '%-8s %-14s mounted (%s)  %s used of %s\n' "$role" "$pool" "$fst" \
-        "$(human "$(used_bytes "$pool")")" "$(human "$(( $(used_bytes "$pool") + $(avail_bytes "$pool") ))")"
+        "$(human "$(used_bytes "$pool")")" "$(human "$(total_bytes "$pool")")"
     else
       printf '%-8s %-14s NOT MOUNTED\n' "$role" "$pool"
     fi
@@ -962,13 +977,13 @@ status_flow() {
     if is_boot_section "$mp"; then
       if mountpoint -q "$mp"; then
         printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" \
-          "$(human "$(( $(used_bytes "$mp") + $(avail_bytes "$mp") ))")" "$(human "$(used_bytes "$mp")")" "-" "connected (used last)"
+          "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "-" "connected (used last)"
       else
         printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" "-" "-" "-" "NOT MOUNTED (try: sudo hdd-recover)"
       fi
     elif [ -n "$p" ] && mountpoint -q "$mp"; then
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "$p" \
-        "$(human "$(( $(used_bytes "$mp") + $(avail_bytes "$mp") ))")" "$(human "$(used_bytes "$mp")")" \
+        "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" \
         "$(smart_health "$(disk_of_part "$p")")" "connected"
     else
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)"
@@ -977,7 +992,7 @@ status_flow() {
   [ -n "$(all_branches)" ] || say "(no drives in a pool yet)"
   say ""
   say "=== Boot drive ==="
-  say "Free now: $(gb_text "$(boot_free_bytes)"). The boot drive always keeps at least $(gb_text "$BOOT_KEEP_FREE_BYTES") free for the system and your other services; a boot drive section cannot take that away."
+  say "Free now: $(pretty_size "$(boot_free_bytes)"). The boot drive always keeps at least $(pretty_size "$BOOT_KEEP_FREE_BYTES") free for the system and your other services; a boot drive section cannot take that away."
   local bs
   for bs in $(boot_section_of main) $(boot_section_of backup); do
     say "Section in the $(branch_role "$bs") storage: $(branch_name "$bs")"
@@ -1205,8 +1220,7 @@ replace_flow() {
   fi
 
   dev=$(pick_new_disk) || return 1
-  grep -qx "$dev" <<<"$(protected_disks)" && die "$dev holds the operating system. Refusing."
-  grep -qx "$dev" <<<"$(busy_disks)" && die "$dev is in use (something on it is mounted). Refusing."
+  refuse_unsafe_disk "$dev"
   describe_disk "$dev"
   size=$(lsblk -bdno SIZE "$dev" | tr -d ' ')
   if [ "$role" = main ] && [ "${#miss[@]}" -eq 1 ] && [ "$size" -lt $((need + DRAIN_SPARE_BYTES)) ]; then
@@ -1233,7 +1247,7 @@ replace_flow() {
   fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"
   sd_reload
   if ! mount_fstab "$mp"; then fstab_rollback; die "Could not mount $part at $mp. fstab was restored."; fi
-  if [ "$role" = main ]; then id -u "$OWNER" >/dev/null 2>&1 && chown "$OWNER:$OWNER" "$mp"; fi
+  if [ "$role" = main ]; then give_to_owner "$mp"; fi
   name_store_put "$label" "$(disk_base_name "$dev")"
   log "replaced dead drive $label ($shown) with $part (UUID $uuid) in the $role pool"
 
@@ -1341,7 +1355,7 @@ release_flow() {   # take every drive out of both pools; the files on the drives
   done
   # the folders the services expect, so they keep running on the boot drive until a drive is chosen again
   mkdir -p "$MAIN_POOL/immich" "$MAIN_POOL/nextcloud"
-  if id -u "$OWNER" >/dev/null 2>&1; then chown "$OWNER:$OWNER" "$MAIN_POOL/immich"; fi
+  give_to_owner "$MAIN_POOL/immich"
   chown 33:33 "$MAIN_POOL/nextcloud" 2>/dev/null || true
   start_containers
   log "released all pool drives (${#all[@]})"
@@ -1398,7 +1412,7 @@ bootsection_flow() {
   local role idx label mp img free old=0 max min keep gb bytes reuse=0 other prompt total
   total=$(boot_total_bytes)
   if [ -n "$total" ] && [ "$total" -le "$BOOT_SMALL_BYTES" ]; then
-    note "The boot drive is only $(gb_text "$total"). The system and your apps need $(gb_text "$BOOT_KEEP_FREE_BYTES") of it, so no part of it can be used for a storage pool."
+    note "The boot drive is only $(pretty_size "$total"). The system and your apps need $(pretty_size "$BOOT_KEEP_FREE_BYTES") of it, so no part of it can be used for a storage pool."
     note "Connect a separate drive instead (sudo drives). Nothing was changed."
     return 1
   fi
@@ -1410,20 +1424,13 @@ bootsection_flow() {
     say "To change its size, remove it (sudo drives > Add or remove drives > Disconnect) and add it again."
     return 1
   fi
-  if [ "$role" = main ] && [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL"; then
-    note "$MAIN_POOL is currently one plain drive. Convert it into a pool first (sudo drives > Settings and upgrades > Convert the current single data drive), then add a section."
-    return 1
-  fi
-  if [ "$role" = backup ] && [ -z "$(branches_of backup)" ] && mountpoint -q "$BACKUP_POOL"; then
-    note "$BACKUP_POOL is already mounted by something else. Check: findmnt $BACKUP_POOL"
-    return 1
-  fi
+  pool_can_grow "$role" "a section" || return 1
   label="$(role_prefix "$role")BOOT"; mp="$DISKS_DIR/$label"; img="$BOOT_SECTION_DIR/$role.img"
   mkdir -p "$BOOT_SECTION_DIR"; chmod 700 "$BOOT_SECTION_DIR" 2>/dev/null || true
 
   if [ -f "$img" ]; then
     old=$(stat -c %s "$img")
-    say "A boot drive section of $(gb_text "$old") that was used for the $role storage before is still saved."
+    say "A boot drive section of $(pretty_size "$old") that was used for the $role storage before is still saved."
     idx=$(choose "What should I do? " "Use it again, with its files" "Delete it and make a new one") || return 1
     [ "$idx" = 0 ] && reuse=1
   fi
@@ -1443,12 +1450,11 @@ bootsection_flow() {
     keep=$BOOT_KEEP_FREE_BYTES; min=$BOOT_MIN_BYTES
     free=$(( $(boot_free_bytes) + old ))
     max=$(( free - keep ))
-    max=$(( max / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))   # whole GB (rounded DOWN), so the number shown is a number that is accepted
-    max=$(( max / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))     # whole units only: what is shown is exactly what can be typed
+    max=$(( max / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))   # whole units (rounded DOWN): the maximum shown is exactly what can be typed
     say ""
-    say "Free space on the boot drive now: $(gb_text "$free"). It always keeps at least $(gb_text "$keep") free for the system and your other services."
+    say "Free space on the boot drive now: $(pretty_size "$free"). It always keeps at least $(pretty_size "$keep") free for the system and your other services."
     if [ "$max" -lt "$min" ]; then
-      note "A section would have to be at least $(gb_text "$min"), but at most $(gb_text "$(( max > 0 ? max : 0 ))") can be used. Nothing was changed."
+      note "A section would have to be at least $(pretty_size "$min"), but at most $(pretty_size "$(( max > 0 ? max : 0 ))") can be used. Nothing was changed."
       return 1
     fi
     say "A section can be from $(( min / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME to $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME."   # in the unit you type, so the shown maximum is exactly what is accepted
@@ -1460,16 +1466,16 @@ bootsection_flow() {
       [ -n "$gb" ] || { say "Cancelled. Nothing was changed."; return 1; }
       if [[ "$gb" =~ ^[0-9]+$ ]]; then
         bytes=$(( gb * BOOT_UNIT_BYTES ))
-        [ "$bytes" -lt "$min" ] && { note "That is too small. The smallest section is $(gb_text "$min")."; continue; }
-        [ "$bytes" -gt "$max" ] && { note "That is too big. The boot drive must keep $(gb_text "$keep") free, so the most is $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME."; continue; }
+        [ "$bytes" -lt "$min" ] && { note "That is too small. The smallest section is $(pretty_size "$min")."; continue; }
+        [ "$bytes" -gt "$max" ] && { note "That is too big. The boot drive must keep $(pretty_size "$keep") free, so the most is $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME."; continue; }
         break
       fi
       note "Please type a number of $BOOT_UNIT_NAME, for example 100."
     done
-    say "The section will have $(gb_text "$bytes") ($(role_pool "$role"), last in line)."
+    say "The section will have $(pretty_size "$bytes") ($(role_pool "$role"), last in line)."
     yn "Make it now?" || { say "Cancelled. Nothing was changed."; return 1; }
     [ "$old" -gt 0 ] && rm -f "$img"
-    if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(gb_text "$bytes") on the boot drive."; fi
+    if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(pretty_size "$bytes") on the boot drive."; fi
     if ! mkfs.ext4 -F -q -L "$label" -m 0 "$img" >&2; then rm -f "$img"; die "Could not format the section."; fi
     log "made the boot drive section $img ($bytes bytes) for $role"
   fi
@@ -1489,13 +1495,13 @@ bootsection_flow() {
     fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
     die "The files in $(role_pool "$role") could not be moved into the section. fstab was restored."
   fi
-  if [ "$reuse" = 0 ] && [ "$role" = main ]; then id -u "$OWNER" >/dev/null 2>&1 && chown "$OWNER:$OWNER" "$mp"; fi
+  if [ "$reuse" = 0 ] && [ "$role" = main ]; then give_to_owner "$mp"; fi
   if ! apply_pool "$role"; then
     fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
     die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
   fi
   start_containers
-  name_store_put "$label" "$(gb_text "$(stat -c %s "$img")") boot drive section"
+  name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
   say ""
   say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
   log "connected $label ($img) to $role"
