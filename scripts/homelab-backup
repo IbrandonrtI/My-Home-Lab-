@@ -66,6 +66,10 @@ finish() {
   mkdir -p "$(dirname "$STATUS_FILE")"
   printf '%s|%s|%s|%s|%s\n' "$(date '+%F %H:%M')" "$result" "${DEST:-none}" "$secs" "$size" >"$STATUS_FILE"
   log "finished: $result in ${secs}s"
+  if [ -t 2 ]; then   # run by hand: say how it went (cron has no screen, so it stays quiet)
+    if [ "$ERRORS" -eq 0 ]; then echo "Backup finished: OK (${secs}s)." >&2
+    else echo "Backup FAILED: ${NOTES%; }" >&2; echo "Details:  sudo tail -20 $LOGFILE" >&2; fi
+  fi
   if [ -f "$LOGFILE" ] && [ "$(stat -c %s "$LOGFILE")" -gt 5242880 ]; then
     tail -n 2000 "$LOGFILE" >"$LOGFILE.tmp" && mv "$LOGFILE.tmp" "$LOGFILE"
   fi

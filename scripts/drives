@@ -72,6 +72,9 @@ BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/var/lib/homelab-backup/last-run}"
 DRAIN_SPARE_BYTES="${DRAIN_SPARE_BYTES:-2147483648}"   # free space to keep on the target drive when copying a drive off
 
 STOPPED=""
+START_FAILED=""      # containers that would not start again after a change
+ROLLED_BACK=0        # 1 once fstab was put back to what it was before the step
+PENDING_NOTE=""      # a sentence for the end when the command stops halfway (for example a drive that left its pool)
 FSTAB_SNAP=""
 HOLD_HINT=""
 
@@ -80,7 +83,7 @@ log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE" 2>/dev/null || tr
 say()  { printf '%s\n' "$*"; }
 note() { printf '%s\n' "$*" >&2; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; log "WARN $*"; }
-die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; exit 1; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; restore_services; exit 1; }
 
 ask()  { local v=""; printf '%s' "$1" >&2; IFS= read -r v || true; printf '%s' "$v"; }
 yn()   { case "$(ask "$1 [y/N]: ")" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac; }
@@ -93,7 +96,7 @@ choose() {   # choose "Prompt: " item1 item2 ... -> prints 0-based index
   printf '  0) Cancel\n' >&2
   while :; do
     a=$(ask "$prompt")
-    case "$a" in 0|"") return 1 ;; esac
+    case "$a" in 0|"") note "Cancelled."; return 1 ;; esac
     if [[ "$a" =~ ^[0-9]+$ ]] && [ "$a" -ge 1 ] && [ "$a" -le "$n" ]; then
       echo $((a - 1)); return 0
     fi
@@ -111,6 +114,7 @@ sd_reload() { [ "$TEST_MODE" = 1 ] || systemctl daemon-reload; }
 
 # ---------- fstab ----------
 fstab_active() { awk '!/^[[:space:]]*(#|$)/' "$FSTAB"; }
+pool_in_fstab() { fstab_active | awk -v m="$1" '$2 == m {f = 1} END {exit !f}'; }   # is there an active fstab line for this mount point
 
 branches_of() {   # branches_of main|backup -> mount points, sorted
   local p; p=$(role_prefix "$1")
@@ -148,6 +152,7 @@ fstab_snapshot() {
 fstab_rollback() {
   if [ -n "$FSTAB_SNAP" ] && [ -f "$FSTAB_SNAP" ]; then
     cat "$FSTAB_SNAP" >"$FSTAB" && warn "fstab restored from $FSTAB_SNAP"
+    ROLLED_BACK=1
     sd_reload
   fi
 }
@@ -549,10 +554,34 @@ stop_containers() {   # stop_containers PATH...
 
 start_containers() {
   [ -n "${STOPPED// /}" ] || return 0
+  local n failed=""
   note "Starting containers: $STOPPED"
-  # shellcheck disable=SC2086
-  docker start $STOPPED >/dev/null || warn "Some containers did not start"
+  for n in $STOPPED; do docker start "$n" >/dev/null || failed="$failed $n"; done
   STOPPED=""
+  if [ -n "${failed// /}" ]; then
+    START_FAILED="$START_FAILED$failed"
+    warn "These containers did not start:$failed"
+    note "Start them again with:  sudo docker start$failed"
+  fi
+}
+
+main_pool_ok() {   # true when the main storage is mounted the way fstab says (or it is not set up at all)
+  [ -n "$(branches_of main)" ] || pool_in_fstab "$MAIN_POOL" || return 0
+  mountpoint -q "$MAIN_POOL"
+}
+
+restore_services() {   # a step failed after the containers were stopped: when the old setup is back, mount it and start them again
+  [ -n "${STOPPED// /}" ] && [ "$ROLLED_BACK" = 1 ] || return 0
+  local role mp
+  for role in main backup; do
+    [ -n "$(branches_of "$role")" ] || continue
+    for mp in $(branches_of "$role"); do mountpoint -q "$mp" || mount_fstab "$mp" 2>/dev/null; done
+    mountpoint -q "$(role_pool "$role")" || mount_fstab "$(role_pool "$role")" 2>/dev/null
+  done
+  if main_pool_ok; then
+    note "The old setup is back in place. Starting the containers again."
+    start_containers
+  fi
 }
 
 on_exit() {
@@ -561,6 +590,7 @@ on_exit() {
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
     note "${HOLD_HINT:-Fix the problem, then run:  sudo hdd-recover}"
   fi
+  if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
 }
 trap on_exit EXIT
 
@@ -660,8 +690,16 @@ pick_new_disk() {
   echo "${devs[$idx]}"
 }
 
-connect_flow() {   # connect_flow [dev] [role] [force_erase]
-  local dev=${1:-} role=${2:-} force=${3:-0} label part mode="erase" idx uuid mp
+confirm_erase() {   # confirm_erase /dev/sdX: the two typed confirmations before a drive is erased (0 = both typed)
+  say ""
+  say "!! ERASE WARNING !!"
+  say "Everything on $1 will be permanently deleted."
+  typed "$1" "Type the drive name exactly ($1) to continue: " || { say "Cancelled. Nothing was changed."; return 1; }
+  typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+}
+
+connect_flow() {   # connect_flow [dev] [role] [force_erase] [already_confirmed]
+  local dev=${1:-} role=${2:-} force=${3:-0} confirmed=${4:-0} label part mode="erase" idx uuid mp
   need_tools || return 1
   [ -n "$dev" ] || { dev=$(pick_new_disk) || return 1; }
   refuse_unsafe_disk "$dev"
@@ -689,11 +727,7 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase]
   fi
 
   if [ "$mode" = erase ]; then
-    say ""
-    say "!! ERASE WARNING !!"
-    say "Everything on $dev will be permanently deleted."
-    typed "$dev" "Type the drive name exactly ($dev) to continue: " || { say "Cancelled. Nothing was changed."; return 1; }
-    typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+    [ "$confirmed" = 1 ] || confirm_erase "$dev" || return 1
     part=$(format_disk "$dev" "$label") || return 1
   else
     umount_disk_parts "$dev"
@@ -872,12 +906,19 @@ move_flow() {
   if is_boot_section "$mp"; then note "A boot drive section cannot be moved. Remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; fi
   part=$(branch_part "$mp"); [ -n "$part" ] || die "That drive is not connected, so it cannot be moved."
   dev=$(disk_of_part "$part")
+  # everything that can still be refused or cancelled is checked BEFORE the drive leaves its pool
+  need_tools || return 1
+  grep -qx "$dev" <<<"$(protected_disks)" && die "$dev holds the operating system. Refusing."
+  pool_can_grow "$newrole" "this drive" || return 1
   say "$(branch_name "$mp") will move from $role to $newrole storage."
   say "Its files are copied to another $role drive first, then the drive is erased and formatted for $newrole."
   yn "Continue?" || { say "Cancelled."; return 1; }
+  confirm_erase "$dev" || return 1
   DETACHED_DEV=""
   detach_branch "$mp" || return 1
-  connect_flow "$dev" "$newrole" 1
+  PENDING_NOTE="$(branch_name "$mp") already left the $role storage and was not added to the $newrole storage. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
+  connect_flow "$dev" "$newrole" 1 1 || { note ""; note "$PENDING_NOTE"; PENDING_NOTE=""; return 1; }
+  PENDING_NOTE=""
 }
 
 # ---------- adopt the current single data drive ----------
@@ -1022,6 +1063,11 @@ status_flow() {
 # ---------- recover ----------
 recover_flow() {
   local mp fail=0
+  if [ -z "$(all_branches)" ] && ! pool_in_fstab "$MAIN_POOL" && ! pool_in_fstab "$BACKUP_POOL"; then
+    note "No drive is assigned to a pool, so there is nothing to recover."
+    note "Choose the drives first:  sudo drives"
+    return 1
+  fi
   stop_containers "$MAIN_POOL" "$BACKUP_POOL" "$DISKS_DIR"
   # pools first, then the drives under them
   pool_umount "$BACKUP_POOL" 2>/dev/null
@@ -1040,11 +1086,17 @@ recover_flow() {
       fi
     fi
   done
-  if [ "$fail" = 1 ]; then exit 1; fi
-  # main storage: the pool, or the plain drive before it is converted
-  mount_fstab "$MAIN_POOL" || { echo "Drive not found. Check the cable."; exit 1; }
+  # the backup pool does not depend on the main drives: bring it back even when a main drive is missing
   if [ -n "$(branches_of backup)" ]; then
     mount_fstab "$BACKUP_POOL" || warn "The backup pool did not mount."
+  fi
+  if [ "$fail" = 1 ]; then
+    HOLD_HINT="They stay stopped on purpose: with a main drive missing they would write to an incomplete storage. Plug the drive in and run  sudo hdd-recover  again. If it is dead:  sudo drives replace"
+    return 1
+  fi
+  # main storage: the pool, or the plain drive before it is converted
+  if pool_in_fstab "$MAIN_POOL"; then
+    mount_fstab "$MAIN_POOL" || { echo "The main pool did not mount. Check the cable."; return 1; }
   fi
   power_all >/dev/null 2>&1
   start_containers
@@ -1137,6 +1189,10 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
     return 1
   fi
   typed "RESTORE" "Type RESTORE (capitals) to copy these $n files: " || { say "Cancelled. Nothing was copied."; return 1; }
+  if [ -z "${STOPPED// /}" ]; then   # the check above changes nothing: the containers are stopped only now, for the copy
+    stop_containers "$MAIN_POOL"
+    HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo hdd-recover  to start them without restoring."
+  fi
   say "Copying (the services stay stopped)..."
   local prog=--info=stats1
   [ -t 1 ] && prog=--info=progress2
@@ -1173,8 +1229,6 @@ restore_flow() {   # restore only the missing files from the backup into the mai
   local src
   src=$(find_backup_source) || { note "No backup copy of the main storage was found, so there is nothing to restore from."; return 1; }
   show_backup_source "$src" || { say "Cancelled."; return 1; }
-  stop_containers "$MAIN_POOL"
-  HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo hdd-recover  to start them without restoring."
   restore_files "$src" || return 1
   HOLD_HINT=""
   start_containers
@@ -1227,10 +1281,7 @@ replace_flow() {
     warn "This drive ($(human "$size")) is smaller than the files to restore ($(human "$need")) plus $(human "$DRAIN_SPARE_BYTES") spare."
     typed "CONTINUE" "Type CONTINUE to use it anyway, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
   fi
-  say "!! ERASE WARNING !!"
-  say "Everything on $dev will be permanently deleted."
-  typed "$dev" "Type the drive name exactly ($dev) to continue: " || { say "Cancelled. Nothing was changed."; return 1; }
-  typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+  confirm_erase "$dev" || return 1
 
   stop_containers "$pool"
   if [ "$role" = main ]; then
@@ -1316,7 +1367,7 @@ release_flow() {   # take every drive out of both pools; the files on the drives
   mapfile -t all < <(all_branches)
   if [ ${#all[@]} -eq 0 ]; then
     say "No drive is assigned to a pool, so there is nothing to release."
-    return 0
+    return 1
   fi
   say "These drives are assigned to the pools:"
   for mp in "${all[@]}"; do say "  - $(branch_name "$mp")  ($(branch_role "$mp"))"; done
@@ -1668,6 +1719,38 @@ menu() {
   done
 }
 
+usage_text() {
+  cat <<'EOF'
+Usage:  sudo drives [command]
+
+  (no command)  open the menu
+  status        pools, drives, temperatures, free space and the last backup
+  connect       connect a new drive to the Main or the Backup storage
+  disconnect    take a drive out of its pool (its files can be copied to the other drives first)
+  move          move a drive between Main and Backup (its files are copied away first)
+  bootsection   use part of the boot drive as a pool drive, with a size limit
+  adopt         turn the old single data drive into a pool
+  release       take every drive out of the pools (the files stay on the drives)
+  recover       after an unplug or a power cut: mount the drives and start the containers again
+  replace       a drive died: put a new one in its place and copy the files back from the backup
+  restore       copy only the missing files back from the backup
+  fillorder     make an older pool fill one drive at a time
+  power         apply the drive power settings
+  version       show the version
+  help          show this text
+
+Exit code: 0 = the command did what was asked. 1 = it was refused, cancelled or failed.
+EOF
+}
+
+run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser; the exit code is the flow's (1 also when containers did not start)
+  local rc=0
+  "$@" || rc=$?
+  [ -n "${STOPPED// /}" ] || sync_filebrowser
+  if [ -n "${START_FAILED// /}" ] && [ "$rc" -eq 0 ]; then rc=1; fi
+  return "$rc"
+}
+
 main() {
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
   mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
@@ -1676,21 +1759,22 @@ main() {
   case "${1:-menu}" in
     menu)         menu ;;
     status)       status_flow ;;
-    connect)      connect_flow; sync_filebrowser ;;
-    disconnect)   disconnect_flow; sync_filebrowser ;;
-    move)         move_flow; sync_filebrowser ;;
-    adopt)        adopt_flow; sync_filebrowser ;;
+    connect)      run_changing connect_flow ;;
+    disconnect)   run_changing disconnect_flow ;;
+    move)         run_changing move_flow ;;
+    adopt)        run_changing adopt_flow ;;
     power)        power_all ;;
-    recover)      recover_flow; sync_filebrowser ;;
-    replace)      replace_flow; sync_filebrowser ;;
+    recover)      run_changing recover_flow ;;
+    replace)      run_changing replace_flow ;;
     fillorder)    fillorder_flow ;;
-    release)      release_flow; sync_filebrowser ;;
-    bootsection)  bootsection_flow; sync_filebrowser ;;
-    restore)      restore_flow; sync_filebrowser ;;
+    release)      run_changing release_flow ;;
+    bootsection)  run_changing bootsection_flow ;;
+    restore)      run_changing restore_flow ;;
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;
-    *) say "Usage: sudo drives [menu|status|connect|disconnect|move|adopt|power|recover|replace|fillorder|release|bootsection|restore|version]" ;;
+    help|-h|--help) usage_text ;;
+    *) note "Unknown command: $1"; note ""; usage_text >&2; exit 1 ;;
   esac
 }
 
