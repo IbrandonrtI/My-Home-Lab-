@@ -463,6 +463,15 @@ def reset_ctl(env, answers=()):
             os.remove(os.path.join(env.flags, name))
 
 
+def hung_report(pgid):
+    """What the stuck run was doing when it timed out: its processes, and the kernel function each one waits in."""
+    r = sh(["ps", "-o", "pid,stat,wchan:22,etime,args", "-g", str(pgid)], timeout=10)
+    lines = [ln[:150] for ln in (r.stdout or "").splitlines()[:12]]
+    if not lines:
+        return ""
+    return "[drive-bench] it was still running these when it was stopped:\n" + "\n".join("  " + ln for ln in lines) + "\n"
+
+
 def run_shim(env, args, answers=(), timeout=None, fault=None, extra_env=None):
     """Run `drives ARGS` (or a function) with scripted answers. Returns (rc, output, events, seconds, timed_out)."""
     reset_ctl(env, answers)
@@ -478,12 +487,13 @@ def run_shim(env, args, answers=(), timeout=None, fault=None, extra_env=None):
         out, _ = p.communicate(timeout=timeout or env.timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
+        stuck = hung_report(p.pid)
         try:
             os.killpg(p.pid, signal.SIGKILL)
         except OSError:
             pass
         out, _ = p.communicate()
-        out = (out or "") + "\n[drive-bench] timed out\n"
+        out = (out or "") + "\n[drive-bench] timed out\n" + stuck
     secs = time.time() - t0
     return p.returncode, out or "", read_events(env), secs, timed_out
 
