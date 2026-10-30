@@ -100,7 +100,8 @@ class Layout:
             bits.append("data: " + self.fill)
         if self.kind != "pool":
             bits.append({"legacy": "old setup: ONE plain data drive mounted at the main pool path",
-                         "oldpool": "old pool that does not fill drive by drive"}[self.kind])
+                         "oldpool": "old pool that does not fill drive by drive",
+                         "uneven": "the first main drive is 2/3 full, the second one is nearly empty"}[self.kind])
         return ", ".join(bits)
 
 
@@ -119,6 +120,7 @@ def layouts_for(level, only=None):
         L.append(Layout("m%d-b%d" % (m, b), m, b, spares=spare_mix))
     L.append(Layout("legacy-single-drive", 0, 0, spares=["ext4data", "blank"], kind="legacy", note="the old single data drive"))
     L.append(Layout("oldpool-m2-b1", 2, 1, spares=["blank"], kind="oldpool"))
+    L.append(Layout("m2-b1-uneven", 2, 1, spares=["blank"], kind="uneven"))
     if level == "quick":
         L.append(Layout("m1-b1-bootsec", 1, 1, spares=["blank"], boot=("main", "backup")))
     else:
@@ -283,6 +285,28 @@ esac
 exit 0
 '''
 
+FAKE_SETFATTR = r'''#!/usr/bin/env python3
+# setfattr for drive-bench (the real one is not installed everywhere): sets an extended attribute with python.
+# BENCH_SETFATTR=fail makes it fail, as a pool that cannot change its settings while it runs would
+import os, sys
+if os.environ.get("BENCH_SETFATTR") == "fail":
+    sys.exit(1)
+a = sys.argv[1:]
+name = value = None
+while len(a) > 1:
+    if a[0] == "-n":
+        name = a[1]; a = a[2:]
+    elif a[0] == "-v":
+        value = a[1]; a = a[2:]
+    else:
+        break
+try:
+    os.setxattr(a[0], name, value.encode())
+except (OSError, AttributeError, IndexError) as e:
+    sys.stderr.write("setfattr: %s\n" % e)
+    sys.exit(1)
+'''
+
 FAKE_UDISKS = r'''#!/bin/bash
 # a made-up udisksctl: remembers which drives were powered off
 echo "udisksctl $*" >>"$BENCH_FLAGS/tools.log"
@@ -337,6 +361,10 @@ def install_fakes(env):
         with open(path, "w") as f:
             f.write(body)
         os.chmod(path, 0o755)
+    path = os.path.join(env.bin, "setfattr")
+    with open(path, "w") as f:
+        f.write(FAKE_SETFATTR)
+    os.chmod(path, 0o755)
     path = os.path.join(env.bin, "smartctl-health")
     with open(path, "w") as f:
         f.write(FAKE_SMARTCTL)
@@ -714,6 +742,14 @@ def build_layout(env, layout, log=print):
         for mp, drv in zip(res.stdout.split(), drv_list):
             idx += 1
             write_files(mp, drv.fill, drv.size_mb, idx)
+    if layout.kind == "uneven":
+        # the first main drive gets 8 files of 3 MB in folders (about 2/3 of it); the second one keeps its few files
+        first_main = os.path.join(env.disks, "TMAIN1")
+        for i in range(8):
+            d = os.path.join(first_main, "bulk", "set%d" % (i % 3))
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "big file %d.bin" % i), "wb") as f:
+                f.write(os.urandom(3 * 1024 * 1024))
     # spares
     for j, drv in enumerate(layout.spares):
         if j != skip_spare:
@@ -865,6 +901,16 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
             pass
         if set(mounts_under(env.work)) != env.base_mounts:
             bad.append("INV-mounts-touched: '%s' only acts on one drive, but the set of mounts is different now" % flow)
+    if flow == "balance" and not unplugged:
+        for pool_prefix in ("TMAIN", "TBACKUP"):
+            seen = collections.Counter()
+            for d in sorted(os.listdir(env.disks)) if os.path.isdir(env.disks) else []:
+                if re.fullmatch(pool_prefix + r"\d+", d):
+                    for rel, _size in listing(os.path.join(env.disks, d)):
+                        seen[rel] += 1
+            twice = [rel for rel, n in seen.items() if n > 1]
+            if twice:
+                bad.append("INV-balance-twice: %d file(s) are on more than one %s drive after balance (e.g. %s)" % (len(twice), pool_prefix, twice[0]))
     if changed and flow in LOOK_FLOWS:
         bad.append("INV-lookonly-changed: '%s' only looks, but the drives, mounts, files or settings are different now" % flow)
     if changed and re.search(r"Nothing was changed", out):
@@ -883,7 +929,7 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
                        % (" (it printed a warning)" if "did not start" in out else " (nothing was said)"))
     # files
     if not unplugged and flow in ("connect", "adopt", "power", "fillorder", "recover", "status", "bootsection", "restore", "replace", "move",
-                                  "rename", "sleep", "wake", "eject", "wipe"):
+                                  "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "fillorder"):
         for role, pool in (("main", env.main), ("backup", env.backup)):
             if mount_types(env.work).get(pool, "").endswith("mergerfs") and role in before_files:
                 now = set(listing(pool))
@@ -1062,7 +1108,7 @@ def candidates(ev, transcript_before, level, layout):
                 c += [("", True), ("9", True)]
             if rich >= 2:
                 c += [("x", True), ("-1", True)]
-        elif re.search(r"\[(\d+) to (\d+) ", prompt):
+        elif "New size in" not in prompt and re.search(r"\[(\d+) to (\d+) ", prompt):
             lo, hi = map(int, re.search(r"\[(\d+) to (\d+) ", prompt).groups())
             mid = str(min(hi, max(lo, (lo + hi) // 2 if hi - lo < 40 else lo + 4)))
             c.append((mid, False))
@@ -1071,6 +1117,13 @@ def candidates(ev, transcript_before, level, layout):
                 c += [(str(lo - 1), True), (str(hi + 1), True), ("abc", True)]
             if rich >= 2:
                 c += [(str(lo), True), (str(hi), True), ("0", True), ("-5", True), ("%sMB" % mid, True), ("1.5", True), ("99999999999999999999", True)]
+        elif "New free-space limit" in prompt:     # limit: a good value first, then what could be typed wrongly
+            c = [("8%", False), ("", True), ("auto", True), ("0%", True), ("99%", True), ("50GB", True), ("abc", True), ("1MB", True)]
+            if rich >= 1:
+                c += [("10 %", True), ("1.5mb", True), ("8", True)]
+        elif "New size in" in prompt:     # resize: bigger, the smallest, the same, then wrong
+            lo, hi = map(int, re.search(r"\[(\d+) to (\d+) ", prompt).groups())
+            c = [(str(lo + 8), False), (str(lo), True), (str(lo + 4), True), ("", True), (str(lo - 1), True), (str(hi + 1), True), ("abc", True)]
         elif "New name" in prompt:     # rename: a good name first, then what could be typed wrongly
             c = [("Photos drive", False), ("", True), ("auto", True), ("!!!", True), ("A" * 41, True), ("50 MB Toshiba HDD", True)]
             if rich >= 1:
@@ -1145,6 +1198,9 @@ FLOWS = [
     ("release", ["release"], "take all drives out of the pools"),
     ("bootsection", ["bootsection"], "use part of the boot drive"),
     ("restore", ["restore"], "copy back the missing files from the backup"),
+    ("balance", ["balance"], "even out the used space between drives"),
+    ("limit", ["limit"], "how much free space a drive keeps"),
+    ("resize", ["resize"], "make a boot drive section bigger or smaller"),
     ("rename", ["rename"], "give a pool drive a name of your own"),
     ("sleep", ["sleep"], "put a spinning drive to sleep"),
     ("wake", ["wake"], "wake a spinning drive up"),
@@ -1204,7 +1260,7 @@ PRE_SCENARIOS = [     # the first ones are used at the standard level
     ("a main drive is full", ["fill TMAIN1"]),
     ("a main drive is read-only", ["readonly TMAIN1"]),
 ]
-PRE_FLOWS = ["status", "list", "usage", "health", "check", "scan", "rename", "sleep", "wake", "eject", "wipe", "recover", "replace", "disconnect", "move", "release", "restore", "connect"]
+PRE_FLOWS = ["status", "list", "usage", "health", "check", "scan", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "fillorder", "recover", "replace", "disconnect", "move", "release", "restore", "connect"]
 FAULT_FLOWS = ["connect", "disconnect", "move", "replace", "recover", "release", "bootsection", "restore", "adopt", "scan"]
 
 
@@ -1297,9 +1353,9 @@ FLOWS_BY_NAME = {n: a for n, a, _ in FLOWS}
 
 
 CHANGING_FLOWS = ("connect", "disconnect", "move", "adopt", "recover", "replace", "fillorder", "release", "bootsection", "restore", "power", "scan",
-                  "rename", "sleep", "wake", "eject", "wipe")
-NO_BUSY_FLOWS = ("power", "rename", "sleep", "wake", "eject", "wipe")      # they stop no container, so they do not wait for a backup
-SAFETY_LAYOUTS = r"^(m1-b1|m2-b2|m1-b0|legacy-single-drive|oldpool-m2-b1|m1-b1-bootsec)$"
+                  "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize")
+NO_BUSY_FLOWS = ("power", "rename", "sleep", "wake", "eject", "wipe", "fillorder", "limit")      # they stop no container, so they do not wait for a backup
+SAFETY_LAYOUTS = r"^(m1-b1|m2-b2|m1-b0|legacy-single-drive|oldpool-m2-b1|m1-b1-bootsec|m2-b1-uneven)$"
 BUSY_NOW = "a backup is running right now"
 
 
@@ -1541,7 +1597,195 @@ def run_actions(env, rec, layout, log):
                                expect=want(0, "Done.", wiped_with(fmt))))
         n += bool(run_case(env, rec, layout, "eject", ["eject"], ["1"], note="get the first spare drive ready to unplug", tag="act",
                            probe=False, expect=want(0, "Done.")))
-    log("  %-12s %3d runs (rename, sleep, wake, wipe scenarios)" % ("actions", n))
+    n += run_pool_changes(env, rec, layout, want)
+    log("  %-12s %3d runs (rename, sleep, wake, wipe, balance, fill order, limit, resize scenarios)" % ("actions", n))
+
+
+def xattr(pool, name):
+    """What the RUNNING mergerfs pool says about itself (None when it cannot be read)."""
+    try:
+        return os.getxattr(os.path.join(pool, ".mergerfs"), name).decode()
+    except OSError:
+        return None
+
+
+def pool_fstab_line(env, pool):
+    try:
+        for line in open(env.fstab):
+            f = line.split()
+            if len(f) > 2 and not line.lstrip().startswith("#") and f[1] == pool:
+                return line
+    except OSError:
+        pass
+    return ""
+
+
+def tree_hashes(path):
+    """{relative path: sha1} of every file below a folder."""
+    out = {}
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d != "lost+found"]
+        for f in files:
+            fp = os.path.join(root, f)
+            try:
+                out[os.path.relpath(fp, path)] = hashlib.sha1(open(fp, "rb").read()).hexdigest()
+            except OSError:
+                pass
+    return out
+
+
+def run_pool_changes(env, rec, layout, want):
+    """balance, fillorder (policy and order), limit and resize: the cases the answer tree cannot reach, each followed by a look at what
+    the running pool, the fstab and the files say."""
+    n = 0
+    roles = [r for r, d in (("main", layout.main), ("backup", layout.backup)) if d]
+    if not roles:
+        return 0
+    role = roles[0]
+    pool = env.main if role == "main" else env.backup
+    first = "TMAIN1" if role == "main" else "TBACKUP1"
+    pick = ["1"] if len(roles) == 2 else []          # the question "Which storage?" is asked when both storages have drives
+
+    def branch_limits():
+        line = pool_fstab_line(env, pool)
+        out = {}
+        for b in (line.split() or [""])[0].split(":"):
+            if "=RW," in b:
+                path, k = b.split("=RW,")
+                out[os.path.basename(path)] = int(k.rstrip("K"))
+        return out
+
+    def limit_is(pct):
+        def more(r):
+            bad = []
+            sv = os.statvfs(os.path.join(env.disks, first))
+            expect_k = (sv.f_blocks * sv.f_frsize) * pct // 100 // 1024
+            got = branch_limits().get(first)
+            if got is None or abs(got - expect_k) > 2:
+                bad.append("INV-limit-fstab: the pool line should keep ~%dK free on %s (%d%%), it says %r" % (expect_k, first, pct, got))
+            live = xattr(pool, "user.mergerfs.branches")
+            if live is not None and ("%s=RW,%dK" % (os.path.join(env.disks, first), got or -1)) not in live:
+                bad.append("INV-limit-live: the running pool does not use the limit of the fstab line (%r)" % live)
+            return bad
+        return more
+
+    # --- limit: a size/percent, then auto -------------------------------------------------------------------------------------------
+    n += bool(run_case(env, rec, layout, "limit", ["limit"], ["1", "8%"], note="limit 8%", tag="pool", probe=False,
+                       expect=want(0, "Done.", limit_is(8))))
+    n += bool(run_case(env, rec, layout, "limit", ["limit"], ["1", "auto"], note="limit auto when nothing was set", tag="pool", probe=False,
+                       expect=want(0, "already automatic")))
+    n += bool(run_case(env, rec, layout, "limit", ["limit"], ["1", "8%", "y"], note="limit 8% when the pool cannot take it while it runs, you say yes",
+                       tag="pool-nolive", extra_env={"BENCH_SETFATTR": "fail"}, probe=False, expect=want(0, "Done.", limit_is(8))))
+    n += bool(run_case(env, rec, layout, "limit", ["limit"], ["1", "8%", "n"], note="limit 8% when the pool cannot take it while it runs, you say no",
+                       tag="pool-nolive-no", extra_env={"BENCH_SETFATTR": "fail"}, probe=False, expect=want(0, "after the next restart")))
+    n += bool(run_case(env, rec, layout, "limit", ["limit"], ["1", "8%", "y", "n"], note="limit 8% needs a remount, a backup is running, you say no",
+                       tag="pool-busy", extra_env={"BENCH_SETFATTR": "fail", "DRIVES_BUSY": BUSY_NOW}, probe=False,
+                       expect=lambda r: want(1, "Nothing was changed")(r) + (["INV-limit-undone: the limit was kept although you stopped it"]
+                                                                              if r["changed"] else [])))
+
+    # --- fill order: spread, and it survives the next rebuild of the pool ---------------------------------------------------------
+    def spread(r):
+        bad = []
+        if "category.create=mfs" not in pool_fstab_line(env, pool):
+            bad.append("INV-policy-fstab: the pool line does not say category.create=mfs")
+        live = xattr(pool, "user.mergerfs.category.create")
+        if live is not None and live != "mfs":
+            bad.append("INV-policy-live: the running pool says category.create=%s" % live)
+        run_shim(env, ["__call", "apply_pool", role], timeout=120)       # any later change rebuilds the pool line
+        if "category.create=mfs" not in pool_fstab_line(env, pool):
+            bad.append("INV-policy-lost: after the pool line was rebuilt it is back to the old policy")
+        return bad
+
+    n += bool(run_case(env, rec, layout, "fillorder", ["fillorder"], pick + ["2"], note="fill order: spread", tag="pool", probe=False,
+                       expect=want(0, "Done.", spread)))
+    if len(layout.main if role == "main" else layout.backup) >= 2:
+        def reordered(r):
+            bad = []
+            line = pool_fstab_line(env, pool)
+            firstb = (line.split() or [""])[0].split(":")[0]
+            second = "TMAIN2" if role == "main" else "TBACKUP2"
+            if os.path.basename(firstb.split("=")[0]) != second:
+                bad.append("INV-order-fstab: %s should be the first drive of the pool line, it is %s" % (second, firstb))
+            live = xattr(pool, "user.mergerfs.branches")
+            if live is not None and os.path.basename(live.split(":")[0].split("=")[0]) != second:
+                bad.append("INV-order-live: the running pool does not use the new order (%r)" % live)
+            return bad
+        n += bool(run_case(env, rec, layout, "fillorder", ["fillorder"], pick + ["3", "2"], note="fill order: the second drive first", tag="pool",
+                           probe=False, expect=want(0, "Done.", reordered)))
+
+    # --- balance: uneven drives really get even, and no file is lost or doubled -------------------------------------------------------
+    if layout.kind == "uneven":
+        box = {}
+
+        def before_balance():
+            box["files"] = tree_hashes(env.main)
+
+        def balanced(r):
+            bad = []
+            now = tree_hashes(env.main)
+            if now != box.get("files"):
+                lost = set(box.get("files", {})) - set(now)
+                bad.append("INV-balance-files: the main storage changed: %d file(s) missing, %d different" % (
+                    len(lost), sum(1 for k in now if k in box["files"] and now[k] != box["files"][k])))
+            pcts = []
+            for d in ("TMAIN1", "TMAIN2"):
+                sv = os.statvfs(os.path.join(env.disks, d))
+                pcts.append(100 - 100 * sv.f_bavail // max(1, sv.f_blocks))
+            if abs(pcts[0] - pcts[1]) > 25:
+                bad.append("INV-balance-uneven: after balance the first two main drives are still %d%% and %d%% full" % tuple(pcts))
+            return bad
+
+        n += bool(run_case(env, rec, layout, "balance", ["balance"], ["y"], note="balance the uneven drives", tag="pool", probe=False,
+                           before_run=before_balance, expect=want(0, "Done.", balanced)))
+
+    # --- resize a boot drive section: bigger, smaller, too small ---------------------------------------------------------------------
+    if layout.boot:
+        brole = layout.boot[0]
+        bmp = os.path.join(env.disks, "TMAINBOOT" if brole == "main" else "TBACKUPBOOT")
+        bpick = ["1"] if len(layout.boot) == 2 else []
+        img = os.path.join(env.state, "boot-sections", brole + ".img")
+        box = {}
+
+        def fill_section(mb):
+            def hook():
+                os.makedirs(os.path.join(bmp, "data"), exist_ok=True)
+                for i in range(mb // 3):
+                    fp = os.path.join(bmp, "data", "f%d.bin" % i)
+                    try:
+                        with open(fp, "wb") as f:
+                            f.write(os.urandom(3 * 1024 * 1024))
+                    except OSError:                # the section is full: keep what fits
+                        os.unlink(fp)
+                        break
+                sh(["sync"])
+                box["files"] = tree_hashes(bmp)
+                box["before"] = os.path.getsize(img)
+                env.base_fp = fingerprint(env)
+                env.dirty = True
+            return hook
+
+        def resized(mb):
+            def more(r):
+                bad = []
+                if not 0 <= mb * 1000000 - os.path.getsize(img) < 8192:        # resize2fs trims the file to whole blocks
+                    bad.append("INV-resize-size: the section file should be %d MB, it is %d bytes" % (mb, os.path.getsize(img)))
+                if tree_hashes(bmp) != box.get("files"):
+                    bad.append("INV-resize-files: the files in the section are not the same after the resize")
+                if sh(["e2fsck", "-fn", img]).returncode != 0:
+                    bad.append("INV-resize-fsck: the file system of the section has errors after the resize")
+                if not os.path.ismount(bmp) or not os.path.ismount(env.main if brole == "main" else env.backup):
+                    bad.append("INV-resize-mounts: the section or its pool is not mounted after the resize")
+                return bad
+            return more
+
+        n += bool(run_case(env, rec, layout, "resize", ["resize"], bpick + ["28", "y"], note="resize: bigger", tag="pool", probe=False,
+                           before_run=fill_section(6), expect=want(0, "Done.", resized(28))))
+        n += bool(run_case(env, rec, layout, "resize", ["resize", "--confirm-erase"], bpick + ["16", "y"], note="resize: smaller", tag="pool",
+                           probe=False, before_run=fill_section(6), expect=want(0, "Done.", resized(16))))
+        n += bool(run_case(env, rec, layout, "resize", ["resize", "--confirm-erase"], bpick + ["10", ""], note="resize: too small for its files",
+                           tag="pool-small", probe=False, before_run=fill_section(12),
+                           expect=lambda r: want(1, "too small")(r) + (["INV-resize-changed: a refused resize changed something"] if r["changed"] else [])))
+    return n
 
 
 def run_wishes(env, rec, layout, log):

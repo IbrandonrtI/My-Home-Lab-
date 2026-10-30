@@ -244,7 +244,7 @@ def capabilities(R, meta):
     add("Take all drives out of the pools", of(R, "release", pre=False), 0, "", "not run")
     add("Copy back only the missing files from the backup", of(R, "restore", pre=False), 0, "", "not run")
     add("Convert the old single data drive into a pool", of(R, "adopt", pre=False), 0, "", "needs the legacy layout")
-    add("Make an older pool fill drive by drive", of(R, "fillorder", pre=False), 0, "", "needs the old-pool layout", ok=("DONE", "NOTHING"))
+    add("Change the fill order (spread, or which drive first) and convert an older pool", of(R, "fillorder", pre=False), 0, "", "needs the old-pool layout", ok=("DONE", "NOTHING"))
     add("Apply the power settings (test mode only prints; hdparm is not run)", of(R, "power", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Show the status", of(R, "status", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("List the drives", of(R, "list", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
@@ -257,6 +257,9 @@ def capabilities(R, meta):
     add("Wake a spinning drive up", of(R, "wake", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Get a spare drive ready to unplug", of(R, "eject", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Erase a spare drive (empty or formatted)", of(R, "wipe", pre=False), 0, "", "not run")
+    add("Even out the files over the drives (balance)", of(R, "balance", pre=False), 0, "", "needs the uneven layout")
+    add("Change the free-space limit of a drive", of(R, "limit", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Resize a boot drive section", of(R, "resize", pre=False), 0, "", "needs a boot drive section")
     add("Walk through the menu", of(R, "menu", pre=False), 0, "", "not run", ok=("DONE", "NOTHING", "CANCELLED"))
     return caps
 
@@ -371,7 +374,7 @@ def others(R):
 
 
 # ---------------------------------------------------------------------------------------------------------------- output
-FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe"]
+FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize"]
 
 
 def stats(R):

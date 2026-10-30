@@ -51,7 +51,7 @@ To rebuild the report from an earlier run: `sudo bash tools/drive-bench/drive-be
 --level quick|standard|full   how much to try
 --layout REGEX                only layouts whose name matches (repeatable), e.g. --layout '^m2-b1$' --layout boot
 --flow NAME                   only this command (repeatable): menu status connect disconnect move adopt power recover replace
-                              fillorder release bootsection restore, and cli, faults, wish
+                              fillorder release bootsection restore, list usage health check rename sleep wake eject wipe balance limit resize, and cli, faults, wish
 --budget N                    runs per command and layout
 --timeout SECONDS             how long one run may take (default 120)
 --no-other / --other-only     skip / only run the other commands
@@ -87,6 +87,11 @@ Every layout is built with the real `connect` flow, saved, and copied back befor
   were. Rename must keep the other lines of the names file, `auto` must remove only that drive's line, and `drives list` must show the
   new name. Sleep and wake are tried with a USB adapter that ignores the command, one that cannot say, and drives that start asleep.
   A wiped spare must really be empty (or one empty ext4 drive labelled SPARE) and a pool drive must never be offered.
+* **Pool changes** (`balance`, `fillorder`, `limit`, `resize`): the files must be the same afterwards (checked with checksums), no file may sit
+  on two drives after a balance, uneven drives must end up within a few points of each other, and the fill order or limit must show in
+  the fstab line **and** in the running pool (read back from mergerfs), survive the next rebuild of the pool, and be undone when you stop
+  halfway ("a backup is running", answer no). A pool that cannot change while it runs is tried too. Resize is tried bigger, smaller and too
+  small, and the file system must pass `e2fsck` afterwards.
 * **Words people might expect** (`rename`, `smart`, `sleep`, `balance`, …): reported as supported or not.
 * **After every run that changed something:** fstab, mounts, pools, containers and files are checked, and `drives status` is run
   as a health check.
