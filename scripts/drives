@@ -15,7 +15,7 @@ set -u
 set -o pipefail
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-VERSION="1.5"
+VERSION="1.6"
 TEST_MODE="${DRIVES_TEST:-0}"
 # Owner of the top folder of a new main drive: DRIVES_OWNER, else the user who ran sudo, else the first normal user (uid 1000).
 OWNER="${DRIVES_OWNER:-${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}}"
@@ -766,12 +766,11 @@ pool_can_grow() {   # pool_can_grow main|backup "this drive": a pool that is not
   return 1
 }
 
-pick_new_disk() {
-  local -a items=() devs=()
-  local d
-  local -a bases=()
-  local i j same seen
-  for d in $(candidate_disks); do devs+=("$d"); bases+=("$(disk_base_name "$d")"); done
+pick_disk_list() {   # pick_disk_list "Prompt? " /dev/sdX ... -> prints the chosen device; drives with the same name get a number (1, 2, ...)
+  local prompt=$1; shift
+  local -a devs=("$@") items=() bases=()
+  local d i j same seen idx
+  for d in "${devs[@]}"; do bases+=("$(disk_base_name "$d")"); done
   for i in "${!devs[@]}"; do
     same=0; seen=0
     for j in "${!devs[@]}"; do
@@ -781,14 +780,19 @@ pick_new_disk() {
     if [ "$same" -gt 1 ]; then items+=("${bases[$i]} $seen  $(disk_details "$d")")
     else items+=("$(disk_summary "$d")"); fi
   done
+  idx=$(choose "$prompt" "${items[@]}") || return 1
+  echo "${devs[$idx]}"
+}
+
+pick_new_disk() {
+  local -a devs=()
+  mapfile -t devs < <(candidate_disks)
   if [ ${#devs[@]} -eq 0 ]; then
     note "No new drive found. Plug it in, wait 10 seconds and try again."
     return 1
   fi
   note "New or unassigned drives (the boot drive and your pool drives are never listed):"
-  local idx
-  idx=$(choose "Which drive do you want to connect? " "${items[@]}") || return 1
-  echo "${devs[$idx]}"
+  pick_disk_list "Which drive do you want to connect? " "${devs[@]}"
 }
 
 confirm_erase() {   # confirm_erase /dev/sdX: the two typed confirmations before a drive is erased (0 = both typed)
@@ -1718,6 +1722,285 @@ bootsection_flow() {
   return 0
 }
 
+# ---------- actions on one drive: rename, sleep, wake, eject, wipe ----------
+need_cmds() {   # need_cmds tool... -> 0 when every tool is installed, else says what to install
+  local t missing=""
+  for t in "$@"; do command -v "$t" >/dev/null 2>&1 || missing="$missing $t"; done
+  [ -z "$missing" ] && return 0
+  note "Missing tools:$missing"
+  note "Install them with:  sudo apt install -y hdparm parted e2fsprogs util-linux"
+  return 1
+}
+
+chosen_name_put() {   # chosen_name_put LABEL "name": keeps every other line (and comments) of DRIVE_NAMES_FILE
+  local tmp
+  mkdir -p "$(dirname "$DRIVE_NAMES_FILE")" 2>/dev/null || die "Could not write $DRIVE_NAMES_FILE"
+  tmp=$(mktemp) || die "Could not make a temporary file"
+  {
+    if [ -r "$DRIVE_NAMES_FILE" ]; then
+      awk -v k="$1" '{ key = $0; sub(/=.*/, "", key); gsub(/^[ \t]+|[ \t]+$/, "", key) } !(key == k && $0 !~ /^[ \t]*#/)' "$DRIVE_NAMES_FILE"
+    else
+      echo "# Names you chose for your drives: LABEL=Name (change them with: sudo drives rename)"
+    fi
+    printf '%s=%s\n' "$1" "$2"
+  } >"$tmp"
+  cat "$tmp" >"$DRIVE_NAMES_FILE" || { rm -f "$tmp"; die "Could not write $DRIVE_NAMES_FILE"; }
+  chmod 644 "$DRIVE_NAMES_FILE" 2>/dev/null || true
+  rm -f "$tmp"
+}
+
+chosen_name_del() {   # chosen_name_del LABEL
+  [ -r "$DRIVE_NAMES_FILE" ] || return 0
+  local tmp; tmp=$(mktemp) || return 0
+  awk -v k="$1" '{ key = $0; sub(/=.*/, "", key); gsub(/^[ \t]+|[ \t]+$/, "", key) } !(key == k && $0 !~ /^[ \t]*#/)' "$DRIVE_NAMES_FILE" >"$tmp"
+  cat "$tmp" >"$DRIVE_NAMES_FILE" || true
+  rm -f "$tmp"
+}
+
+rename_flow() {   # give a pool drive a name of your own (kept by the drive's label, so it stays when the drive is plugged in again)
+  local mp label cur new b lower
+  mp=$(pick_branch "Which drive do you want to rename? ") || return 1
+  label=$(basename "$mp"); cur=$(branch_name "$mp")
+  say ""
+  say "This drive is called: $cur"
+  if [ -n "$(chosen_name "$label")" ]; then say "You chose this name. Type  auto  to go back to the automatic name (size, make and type)."
+  else say "The name is made from the size, make and type of the drive."; fi
+  new=$(ask "New name (letters, numbers and spaces, up to 40 characters; Enter cancels): ")
+  [ -n "$new" ] || { say "Cancelled. Nothing was changed."; return 1; }
+  if [ "$new" = auto ]; then
+    if [ -z "$(chosen_name "$label")" ]; then say "$cur already has its automatic name. Nothing was changed."; return 0; fi
+    dry_gate "Remove your name for $cur from $DRIVE_NAMES_FILE." "Update the FileBrowser folders and the dashboard." && return 0
+    chosen_name_del "$label"
+    say ""; say "Done. The drive is called $(branch_name "$mp") again."
+    log "rename $label -> automatic"
+    return 0
+  fi
+  new=$(clean_name "$new")
+  if [ -z "$new" ]; then note "That name has no letters or numbers. Nothing was changed."; return 1; fi
+  if [ "${#new}" -gt 40 ]; then note "That name is longer than 40 characters. Nothing was changed."; return 1; fi
+  lower=${new,,}
+  for b in $(all_branches); do
+    [ "$b" = "$mp" ] && continue
+    if [ "$(branch_base_name "$b" | tr '[:upper:]' '[:lower:]')" = "$lower" ]; then
+      note "Another drive is already called '$(branch_base_name "$b")'. Choose a different name. Nothing was changed."; return 1
+    fi
+  done
+  if [ "$new" = "$cur" ]; then say "The drive is already called $cur. Nothing was changed."; return 0; fi
+  dry_gate "Save the name '$new' for $cur in $DRIVE_NAMES_FILE." \
+           "Update the FileBrowser folders and the dashboard so they show the new name." && return 0
+  chosen_name_put "$label" "$new"
+  say ""
+  say "Done. $cur is now called $(branch_name "$mp")."
+  log "rename $label ($cur) -> $new"
+  return 0
+}
+
+disk_role_of() {   # disk_role_of /dev/sdX -> main, backup, plain-data or spare (a pool drive's role is read from the pools)
+  local mp p
+  for mp in $(all_branches); do
+    p=$(branch_part "$mp")
+    [ -n "$p" ] && [ "$(disk_of_part "$p")" = "$1" ] && { branch_role "$mp"; return 0; }
+  done
+  if grep -qx "$1" <<<"$(legacy_disks)"; then echo plain-data; else echo spare; fi
+}
+
+spinning_disks() {   # hard drives with moving parts (the boot drive, SSDs and drives that do not say what they are are left out)
+  local d prot model
+  prot=$(protected_disks)
+  for d in $(all_disks | sort -u); do
+    grep -qx "$d" <<<"$prot" && continue
+    model=$(lsblk -dno MODEL "$d" 2>/dev/null | sed 's/ *$//')
+    [ "$(drive_kind "$d" "$model")" = HDD ] && echo "$d"
+  done
+}
+
+power_state() {   # power_state /dev/sdX -> asleep, awake or unknown (hdparm -C asks the drive without waking it)
+  local o
+  command -v hdparm >/dev/null 2>&1 || { echo unknown; return 0; }
+  o=$(hdparm -C "$1" 2>/dev/null)
+  case "$o" in *standby*|*sleeping*) echo asleep ;; *active*|*idle*) echo awake ;; *) echo unknown ;; esac
+}
+
+power_action() {   # power_action sleep|wake: pick a spinning hard drive and put it to sleep or wake it
+  local verb=$1 dev name role state after i
+  local -a devs=() items=()
+  need_cmds hdparm || return 1
+  mapfile -t devs < <(spinning_disks)
+  if [ ${#devs[@]} -eq 0 ]; then
+    note "No spinning hard drive found. SSDs, the boot drive and drives that do not say what they are have nothing to put to sleep."
+    return 1
+  fi
+  for dev in "${devs[@]}"; do items+=("$(disk_base_name "$dev")  ($(disk_role_of "$dev"))  $(power_state "$dev")"); done
+  i=$(choose "Which drive do you want to $([ "$verb" = sleep ] && echo "put to sleep" || echo "wake up")? " "${items[@]}") || return 1
+  dev=${devs[$i]}
+  refuse_unsafe_disk_power "$dev" || return 1
+  name=$(disk_base_name "$dev"); role=$(disk_role_of "$dev"); state=$(power_state "$dev")
+  if [ "$verb" = sleep ]; then
+    if [ "$state" = asleep ]; then say "$name is already asleep. Nothing was changed."; return 0; fi
+    case "$role" in main|backup) say "Note: $name is in the $role storage. Anything that reads it wakes it up again at once$([ "$role" = main ] && echo " (main drives are set to never sleep)")." ;; esac
+    dry_gate "Tell $dev ($name) to go to sleep (spin down)." && return 0
+    hdparm -y "$dev" >/dev/null 2>&1 || true
+    log "sleep $dev ($name)"
+    after=$(power_state "$dev")
+    case "$after" in
+      asleep)  say "Done. $name is asleep. It wakes up by itself when something reads it." ;;
+      unknown) say "The sleep command was sent to $name. This drive (or its USB adapter) cannot say if it is asleep now. Nothing else was changed." ;;
+      *)       warn "$name did not go to sleep. Many USB adapters ignore this command; nothing is wrong with the drive."; return 1 ;;
+    esac
+  else
+    if [ "$state" = awake ]; then say "$name is already awake. Nothing was changed."; return 0; fi
+    dry_gate "Read one sector from $dev ($name) so that it spins up." && return 0
+    hdparm --read-sector 0 "$dev" >/dev/null 2>&1 || dd if="$dev" of=/dev/null bs=4096 count=1 iflag=direct status=none 2>/dev/null || true
+    log "wake $dev ($name)"
+    after=$(power_state "$dev")
+    case "$after" in
+      awake)   say "Done. $name is awake." ;;
+      unknown) say "$name was asked to wake up. This drive (or its USB adapter) cannot say if it is awake now. Nothing else was changed." ;;
+      *)       warn "$name is still asleep. Many USB adapters hide the drive's state; try reading a file from it."; return 1 ;;
+    esac
+  fi
+  return 0
+}
+
+refuse_unsafe_disk_power() {   # the boot/system drive is never offered, but check again before the command is sent
+  grep -qx "$1" <<<"$(protected_disks)" && { note "$1 holds the operating system. Refusing."; return 1; }
+  return 0
+}
+
+sleep_flow() { power_action sleep; }
+wake_flow()  { power_action wake; }
+
+eject_flow() {   # get a spare drive ready to unplug: unmount it, write out its data and power it off
+  local dev name tran
+  local -a devs=()
+  mapfile -t devs < <(candidate_disks)
+  if [ ${#devs[@]} -eq 0 ]; then
+    note "No spare drive found. A drive that is in a pool is never listed here: take it out first with  sudo drives disconnect"
+    note "(it copies the files off safely and unmounts the drive), then it is a spare drive."
+    return 1
+  fi
+  note "Spare drives (a drive in a pool and the boot drive are never listed; for a pool drive use  sudo drives disconnect  first):"
+  dev=$(pick_disk_list "Which drive do you want to unplug? " "${devs[@]}") || return 1
+  refuse_unsafe_disk "$dev"
+  name=$(disk_base_name "$dev"); tran=$(lsblk -dno TRAN "$dev" 2>/dev/null | head -1 | tr -d ' ')
+  say ""
+  say "$name  $(disk_details "$dev")"
+  dry_gate "Unmount everything that is mounted from $dev." \
+           "Write out the data of $dev." \
+           "$([ "$tran" = usb ] && echo "Power the drive off, so it is safe to unplug." || echo "Tell the drive to stop spinning (it is not a USB drive, so it cannot be powered off).")" && return 0
+  umount_disk_parts "$dev"
+  command -v blockdev >/dev/null 2>&1 && blockdev --flushbufs "$dev" 2>/dev/null
+  log "eject $dev ($name)"
+  if [ "$tran" = usb ] && command -v udisksctl >/dev/null 2>&1; then
+    if udisksctl power-off -b "$dev" >/dev/null 2>&1; then
+      say ""; say "Done. $name is unmounted and powered off. You can unplug it now."
+    else
+      warn "$name is unmounted and its data is written out, but it could not be powered off."
+      say "It is still safe to unplug it when its light has stopped blinking."
+    fi
+  else
+    command -v hdparm >/dev/null 2>&1 && hdparm -y "$dev" >/dev/null 2>&1
+    say ""
+    say "Done. $name is unmounted and its data is written out. It was not powered off because it is not a USB drive."
+    say "Only unplug it if your computer supports unplugging a drive while it runs."
+  fi
+  return 0
+}
+
+wipe_disk() {   # wipe_disk /dev/sdX: removes the file systems and the partition table (both ends of the drive)
+  local dev=$1 p vg sectors
+  refuse_unsafe_disk "$dev"
+  umount_disk_parts "$dev"
+  if command -v pvs >/dev/null 2>&1; then
+    for vg in $(pvs --noheadings -o pv_name,vg_name 2>/dev/null | awk -v d="$dev" 'index($1, d) == 1 && $2 != "" {print $2}' | sort -u); do
+      note "Deactivating old LVM group $vg on this drive..."
+      vgchange -an "$vg" >/dev/null 2>&1 || warn "Could not deactivate $vg"
+    done
+  fi
+  for p in $(parts_of "$dev"); do wipefs -a "$p" >/dev/null 2>&1 || true; done
+  wipefs -a "$dev" >/dev/null 2>&1 || die "wipefs failed on $dev"
+  # a GPT partition table keeps a copy at the end of the drive: clear the first and the last 1 MiB too
+  dd if=/dev/zero of="$dev" bs=1M count=1 conv=fsync status=none 2>/dev/null || die "Could not clear the start of $dev"
+  sectors=$(blockdev --getsz "$dev" 2>/dev/null)
+  if [[ "$sectors" =~ ^[0-9]+$ ]] && [ "$sectors" -gt 8192 ]; then
+    dd if=/dev/zero of="$dev" bs=512 seek=$((sectors - 2048)) count=2048 conv=fsync status=none 2>/dev/null || die "Could not clear the end of $dev"
+  fi
+  partprobe "$dev" >/dev/null 2>&1 || true
+  udevadm settle 2>/dev/null || true
+  log "wiped $dev"
+}
+
+wipe_flow() {   # erase a spare drive (never a pool drive, the boot drive or a drive in use), and optionally format it
+  local dev name idx part
+  local -a devs=()
+  need_cmds wipefs parted mkfs.ext4 blkid partprobe || return 1
+  mapfile -t devs < <(candidate_disks)
+  if [ ${#devs[@]} -eq 0 ]; then
+    note "No spare drive found. A drive that is in a pool is never erased here. To erase one, first take it out with"
+    note "  sudo drives disconnect   (its files can be copied to the other drives first)"
+    return 1
+  fi
+  note "Spare drives (a drive in a pool and the boot drive are never listed):"
+  dev=$(pick_disk_list "Which drive do you want to erase? " "${devs[@]}") || return 1
+  refuse_unsafe_disk "$dev"
+  describe_disk "$dev"
+  name=$(disk_base_name "$dev")
+  idx=$(choose "What should I do with the drive? " \
+        "Erase it and leave it empty (no file system)" \
+        "Erase it and format it as a new empty drive (ext4), ready to connect") || return 1
+  confirm_erase "$dev" || return 1
+  dry_gate "Unmount $dev and erase everything on $name (file systems and partition table)." \
+           "$([ "$idx" = 1 ] && echo "Format it as a new empty ext4 drive (label SPARE)." || echo "Leave it empty, without a file system.")" && return 0
+  if [ "$idx" = 1 ]; then
+    part=$(format_disk "$dev" SPARE) || return 1
+    say ""; say "Done. $name was erased and formatted as an empty ext4 drive ($part). Add it to a pool with:  sudo drives connect"
+  else
+    wipe_disk "$dev"
+    say ""; say "Done. $name was erased and is empty. Format it or add it to a pool with:  sudo drives connect"
+  fi
+  log "erased $dev ($name)"
+  return 0
+}
+
+actions_menu() {
+  local c
+  while :; do
+    say ""
+    say "Actions on one drive"
+    say "  1) Rename a drive"
+    say "  2) Put a drive to sleep"
+    say "  3) Wake a drive up"
+    say "  4) Get a spare drive ready to unplug"
+    say "  5) Erase a spare drive"
+    say "  0) Back"
+    c=$(ask_choice)
+    case "$c" in
+      1) intro "Rename a drive" \
+           "Next you pick a drive of the pools and type a name of your own." \
+           "The name also shows in FileBrowser and on the dashboard. Nothing is erased or moved." &&
+         { rename_flow && sync_filebrowser; } ;;
+      2) intro "Put a drive to sleep" \
+           "Next you pick a spinning hard drive. It spins down now and wakes up by itself when something reads it." \
+           "No files are touched." &&
+         sleep_flow ;;
+      3) intro "Wake a drive up" \
+           "Next you pick a spinning hard drive. One sector is read from it so that it spins up." \
+           "No files are touched." &&
+         wake_flow ;;
+      4) intro "Get a spare drive ready to unplug" \
+           "Next I list the spare drives (not the ones in a pool). The one you pick is unmounted, its data is written out" \
+           "and a USB drive is powered off. Nothing is erased." &&
+         eject_flow ;;
+      5) intro "Erase a spare drive" \
+           "Next I list the spare drives (not the ones in a pool). You pick one and say if it should stay empty or be formatted." \
+           "You must type the drive name and ERASE before anything is erased." &&
+         wipe_flow ;;
+      0|"") return 0 ;;
+      *) say "Please type a number from the list." ;;
+    esac
+  done
+}
+
 # ---------- FileBrowser ----------
 # FileBrowser shows one folder for every connected drive. After a drive was connected, removed or moved, the installed
 # helper updates those folders (FileBrowser restarts for a few seconds). Without homelab-setup (a hand-built server) nothing happens.
@@ -1866,6 +2149,7 @@ menu() {
     say "  2) Add or remove drives"
     say "  3) Fix a problem"
     say "  4) Settings and upgrades"
+    say "  5) Actions on one drive (rename, sleep, wake, unplug, erase a spare)"
     say "  0) Quit"
     c=$(ask_choice)
     case "$c" in
@@ -1873,6 +2157,7 @@ menu() {
       2) drives_menu ;;
       3) problem_menu ;;
       4) settings_menu ;;
+      5) actions_menu ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -2259,6 +2544,13 @@ Change the drives:
   fillorder     make an older pool fill one drive at a time
   power         apply the drive power settings
 
+Actions on one drive:
+  rename        give a pool drive a name of your own (shown in the menus, FileBrowser and the dashboard)
+  sleep         put a spinning hard drive to sleep now (it wakes up by itself when something reads it)
+  wake          wake a spinning hard drive up now
+  eject         get a spare drive ready to unplug: unmount it, write out its data, power a USB drive off
+  wipe          erase a spare drive (never a pool drive or the boot drive), leave it empty or format it
+
 Other:
   (no command)  open the menu
   version       show the version
@@ -2384,6 +2676,39 @@ sudo drives power [--dry-run]
   Applies the drive power settings: main drives never sleep, backup drives sleep after 10 minutes without use.
 EOF
     ;;
+    rename) cat <<'EOF'
+sudo drives rename [--dry-run]
+  Gives a pool drive a name of your own, for example "Photos drive". The name is kept in /etc/homelab-drive-names under the
+  drive's internal label (MAIN1, BACKUP1, ...), so it stays when the drive is plugged in again. FileBrowser's folder and
+  the dashboard follow the new name. Type  auto  as the new name to go back to the automatic one. Nothing is erased or moved.
+EOF
+    ;;
+    sleep) cat <<'EOF'
+sudo drives sleep [--dry-run]
+  Lists the spinning hard drives (not SSDs and not the boot drive) with their state and sends the one you pick to sleep now.
+  It wakes by itself when something reads it; main drives are set to never sleep on their own. Many USB adapters ignore the
+  command: then it says so and exits with 1. No files are touched.
+EOF
+    ;;
+    wake) cat <<'EOF'
+sudo drives wake [--dry-run]
+  Wakes a spinning hard drive up now by reading one sector from it. No files are touched.
+EOF
+    ;;
+    eject) cat <<'EOF'
+sudo drives eject [--dry-run]
+  Lists the spare drives (a drive in a pool, the boot drive and a drive in use are never listed), unmounts the one you pick,
+  writes out its data and powers a USB drive off. Afterwards it is safe to unplug. To unplug a pool drive use
+  sudo drives disconnect first. Nothing is erased.
+EOF
+    ;;
+    wipe) cat <<'EOF'
+sudo drives wipe [--dry-run] [--yes] [--confirm-erase]
+  ERASES a spare drive (a drive in a pool, the boot drive and a drive in use are never listed). You choose to leave it empty
+  or to format it as a new empty ext4 drive. You must type the drive name and ERASE (or use --confirm-erase).
+  A quick erase: the file systems and the partition table are removed; the old data is not overwritten.
+EOF
+    ;;
     version) echo "sudo drives version: shows the version of this command." ;;
     help|"") usage_text ;;
     *) note "There is no command called '$1'. These exist:"; note ""; usage_text >&2; return 1 ;;
@@ -2452,6 +2777,11 @@ main() {
     release)      run_changing release_flow ;;
     bootsection)  run_changing bootsection_flow ;;
     restore)      run_changing restore_flow ;;
+    rename)       run_changing rename_flow ;;
+    sleep)        sleep_flow ;;
+    wake)         wake_flow ;;
+    eject)        eject_flow ;;
+    wipe)         wipe_flow ;;
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;
