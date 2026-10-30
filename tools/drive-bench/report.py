@@ -247,6 +247,11 @@ def capabilities(R, meta):
     add("Make an older pool fill drive by drive", of(R, "fillorder", pre=False), 0, "", "needs the old-pool layout", ok=("DONE", "NOTHING"))
     add("Apply the power settings (test mode only prints; hdparm is not run)", of(R, "power", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Show the status", of(R, "status", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("List the drives", of(R, "list", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Show space used and free", of(R, "usage", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Show the health of every drive (SMART)", of(R, "health", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Quick check for file system errors", of(R, "check", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Full read-only scan of one drive", of(R, "scan", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Walk through the menu", of(R, "menu", pre=False), 0, "", "not run", ok=("DONE", "NOTHING", "CANCELLED"))
     return caps
 
@@ -361,7 +366,7 @@ def others(R):
 
 
 # ---------------------------------------------------------------------------------------------------------------- output
-FLOW_ORDER = ["menu", "status", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore"]
+FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore"]
 
 
 def stats(R):

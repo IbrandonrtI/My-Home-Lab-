@@ -79,6 +79,10 @@ Every layout is built with the real `connect` flow, saved, and copied back befor
 * **The safety options**, on the normal path of every command that changes something: `--dry-run` (nothing may change, no container may
   stop, a plan must be printed), `--yes --confirm-erase` (must give the same result as typing the answers), and a backup that is
   running (the answer no stops with nothing changed, `--now` goes on, waiting ends when the backup ends, waiting too long gives up).
+* **The look-only commands** (`list`, `usage`, `health`, `check`, `check --full`, `--json`, `--folders`, `help`): they must never change
+  anything (the whole state is compared before and after), `--json` output must be valid JSON, they must work on every healthy
+  layout, and a sick drive (SMART failing, pending sectors, remapped sectors, hot, asleep, file system errors, read-only, unplugged)
+  must be reported with a non-zero exit code for problems.
 * **Words people might expect** (`rename`, `smart`, `sleep`, `balance`, …): reported as supported or not.
 * **After every run that changed something:** fstab, mounts, pools, containers and files are checked, and `drives status` is run
   as a health check.

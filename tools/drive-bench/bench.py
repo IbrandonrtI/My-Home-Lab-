@@ -27,7 +27,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -176,6 +175,7 @@ class Env:
             "BACKUP_POOL": self.backup, "FSTAB": self.fstab, "LOGFILE": self.log,
             "HOMELAB_EXTRA_PATH": self.bin, "BENCH_ANSWERS": self.answers, "BENCH_EVENTS": self.events,
             "BENCH_COUNTER": self.counter, "BENCH_SLEEPERS": os.path.join(self.ctl, "sleepers"), "BENCH_FLAGS": self.flags, "BENCH_PROPS": self.props,
+            "DRIVES_SMARTCTL": os.path.join(self.bin, "smartctl-health"),
             "DRIVES_MINFREE": "2M", "DRIVES_OWNER": "root", "LC_ALL": "C",
             "DRAIN_SPARE_BYTES": "1048576",      # the real tool keeps 2 GB free when it copies a drive off; the fake drives are tiny
             # `drives` offers to run the backup and looks for the newest backup: both must use the fake pools, never the real backup
@@ -238,6 +238,25 @@ case "$*" in "-dnpo NAME,TYPE") exit 0 ;; esac
 exec "$REAL" "$@"
 '''
 
+FAKE_SMARTCTL = r'''#!/bin/bash
+# a made-up smartctl for drive-bench. BENCH_SMART changes what it says: fail, pending (bad sectors waiting), realloc, hot, asleep
+dev="${*: -1}"
+if [ "${BENCH_SMART:-}" = asleep ]; then
+  case " $* " in *" -n standby "*) echo "Device is in STANDBY mode, exit(2)"; exit 2 ;; esac
+fi
+n=${dev//[^0-9]/}; n=${n:-0}
+temp=$((30 + n % 10)); res=PASSED; pend=0; re=0
+case "${BENCH_SMART:-}" in fail) res="FAILED!" ;; pending) pend=8 ;; realloc) re=3 ;; hot) temp=58 ;; esac
+echo "smartctl 7.4 (drive-bench)"
+echo "=== START OF READ SMART DATA SECTION ==="
+echo "SMART overall-health self-assessment test result: $res"
+echo "ID# ATTRIBUTE_NAME          FLAG     VALUE WORST THRESH TYPE      UPDATED  WHEN_FAILED RAW_VALUE"
+printf '  5 Reallocated_Sector_Ct   0x0033   100   100   010    Pre-fail  Always       -       %s\n' "$re"
+printf '  9 Power_On_Hours          0x0032   097   097   000    Old_age   Always       -       %s\n' "$((1000 + n))"
+printf '194 Temperature_Celsius     0x0022   036   040   000    Old_age   Always       -       %s (Min/Max 20/45)\n' "$temp"
+printf '197 Current_Pending_Sector  0x0032   100   100   000    Old_age   Always       -       %s\n' "$pend"
+'''
+
 FAKE_MOUNT = r'''#!/bin/bash
 # mount that can be told to fail for the fstab (mount -T ...), and is the real mount otherwise
 if [ -e "$BENCH_FLAGS/mount-fails" ]; then case " $* " in *" -T "*) echo "mount: bench: cannot mount (made to fail)" >&2; exit 32 ;; esac; fi
@@ -292,6 +311,10 @@ def install_fakes(env):
         with open(path, "w") as f:
             f.write(body)
         os.chmod(path, 0o755)
+    path = os.path.join(env.bin, "smartctl-health")
+    with open(path, "w") as f:
+        f.write(FAKE_SMARTCTL)
+    os.chmod(path, 0o755)
     install_fake_backup(env)
     with open(os.path.join(env.flags, "containers"), "w") as f:
         f.write("immich_server|%s %s\nnextcloud|%s\nfilebrowser|%s %s %s\n" % (
@@ -741,7 +764,7 @@ def classify(rc, out, timed_out, events, changed, flow=""):
             outcome = "DONE"
         elif re.search(r"Cancelled", out) or ended_at_question:
             outcome = "CANCELLED"
-        elif flow not in ("status", "menu", "cli", "wish", "power") and "DRY RUN" not in out and re.search(
+        elif flow not in ("status", "menu", "cli", "wish", "power", "list", "usage", "health", "check", "scan") and "DRY RUN" not in out and re.search(
                 r"is the only|[Cc]annot |[Cc]ould not|No new drive|No drives|nothing to |is not mounted|Not removing|enough free space|not enough|too small|too big", out):
             outcome = "REFUSED"
             flags.append("exit 0 although the command refused")
@@ -749,6 +772,8 @@ def classify(rc, out, timed_out, events, changed, flow=""):
             outcome = "NOTHING"
     elif rc == 1 and (re.search(r"Cancelled", out) or (events and events[-1].get("answer") == "<EOF>" and not msg)):
         outcome = "CANCELLED"
+    elif rc == 1 and flow in ("health", "check") and re.search(r"PROBLEM|FAILED|failing|\"ok\":false", out):
+        outcome = "NOTHING"     # it found a problem and said so: that is what these two commands are for
     elif rc == 1 and (msg or has_message(out, events)):
         outcome = "REFUSED"
     elif rc == 1:
@@ -788,6 +813,8 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
     for a in act:
         if len(a) > 1 and a[0].startswith("UUID=") and not os.path.ismount(a[1]) and os.path.isdir(a[1]):
             pass
+    if changed and flow in LOOK_FLOWS:
+        bad.append("INV-lookonly-changed: '%s' only looks, but the drives, mounts, files or settings are different now" % flow)
     if changed and re.search(r"Nothing was changed", out):
         bad.append("INV-false-claim: it says 'Nothing was changed' but the drives, mounts or files are different now")
     # containers
@@ -811,6 +838,9 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
                 if lost:
                     bad.append("INV-files: %d file(s) in the %s pool are gone after '%s' (e.g. %s)" % (len(lost), role, flow, sorted(lost)[0][0]))
     return bad
+
+
+LOOK_FLOWS = ("status", "list", "usage", "health", "check", "scan")
 
 
 class Recorder:
@@ -906,6 +936,13 @@ def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_e
         "prompts": [{"n": e["n"], "kind": e["kind"], "prompt": e["prompt"], "items": e["items"], "answer": e["answer"]} for e in asked],
         "output": trim(out), "docker": docker.strip().splitlines()[:12], "probe": probe_rec,
     }
+    if "--json" in args and not to and (rc == 0 or flow in ("health", "check")):
+        try:
+            json.loads(out)
+        except ValueError as e:
+            r["flags"].append("INV-json-invalid: the output is not valid JSON (%s)" % str(e)[:60])
+    if flow in ("list", "usage", "health", "check", "status") and not pre and not extra_env and not to and rc != 0 and "--dry-run" not in args:
+        r["flags"].append("INV-look-failed: '%s' exited with %s on a healthy layout" % (flow, rc))
     if expect and not to:
         r["flags"] += expect(r)
     rec.add(r)
@@ -1034,6 +1071,11 @@ FLOWS = [
     # name,        args,           what it is
     ("menu", [], "the menu (no argument)"),
     ("status", ["status"], "status"),
+    ("list", ["list"], "list the drives"),
+    ("usage", ["usage"], "space used and free"),
+    ("health", ["health"], "SMART health"),
+    ("check", ["check"], "quick check for file system errors"),
+    ("scan", ["check", "--full"], "full read-only scan of one drive"),
     ("connect", ["connect"], "connect a new drive"),
     ("disconnect", ["disconnect"], "disconnect a drive"),
     ("move", ["move"], "move a drive between main and backup"),
@@ -1099,8 +1141,8 @@ PRE_SCENARIOS = [     # the first ones are used at the standard level
     ("a main drive is full", ["fill TMAIN1"]),
     ("a main drive is read-only", ["readonly TMAIN1"]),
 ]
-PRE_FLOWS = ["status", "recover", "replace", "disconnect", "move", "release", "restore", "connect"]
-FAULT_FLOWS = ["connect", "disconnect", "move", "replace", "recover", "release", "bootsection", "restore", "adopt"]
+PRE_FLOWS = ["status", "list", "usage", "health", "check", "scan", "recover", "replace", "disconnect", "move", "release", "restore", "connect"]
+FAULT_FLOWS = ["connect", "disconnect", "move", "replace", "recover", "release", "bootsection", "restore", "adopt", "scan"]
 
 
 def last_label(layout, role):
@@ -1138,6 +1180,8 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
             run_safety(env, rec, layout, name, results, happy, log)
         bad = sum(1 for r in results if r["outcome"] in ("CRASH", "SILENT-FAIL") or any(f.startswith("INV-") for f in r["flags"]))
         log("  %-12s %3d runs  %4.0fs%s" % (name, len(results), time.time() - t0, ("   !! %d problem(s)" % bad) if bad else ""))
+    if re.search(st.get("safety") or ".", layout.key) and (not only_flows or set(only_flows) & {"cli", "list", "usage", "health", "check", "scan"}):
+        run_look(env, rec, layout, log)
     deep = st["faults"] and (st["deep"] is None or any(re.search(p, layout.name) for p in st["deep"]))
     if st["variants"] and (not only_flows or "connect" in only_flows) and len(layout.spares) >= 2 and layout.spares[1].fs == "ext4data":
         # the second spare drive already holds files: connect it and choose "Erase everything" (too deep in the answer tree to be reached by chance)
@@ -1187,7 +1231,7 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
 FLOWS_BY_NAME = {n: a for n, a, _ in FLOWS}
 
 
-CHANGING_FLOWS = ("connect", "disconnect", "move", "adopt", "recover", "replace", "fillorder", "release", "bootsection", "restore", "power")
+CHANGING_FLOWS = ("connect", "disconnect", "move", "adopt", "recover", "replace", "fillorder", "release", "bootsection", "restore", "power", "scan")
 SAFETY_LAYOUTS = r"^(m1-b1|m2-b2|m1-b0|legacy-single-drive|oldpool-m2-b1|m1-b1-bootsec)$"
 BUSY_NOW = "a backup is running right now"
 
@@ -1230,7 +1274,7 @@ def run_safety(env, rec, layout, name, results, happy, log):
     n += bool(run_case(env, rec, layout, name, args + ["--dry-run"], keep(("typed",)), note="--dry-run", tag="dry", expect=dry))
     n += bool(run_case(env, rec, layout, name, args + ["--yes", "--confirm-erase"], keep(("yn", "typed")), note="--yes --confirm-erase",
                        tag="yes", expect=same_result("yes-differs")))
-    if name != "power" and hp["outcome"] == "DONE":
+    if name != "power" and (hp["outcome"] == "DONE" or name == "scan"):
         busy = {"DRIVES_BUSY": BUSY_NOW}
 
         def declined(r):
@@ -1264,17 +1308,75 @@ def run_safety(env, rec, layout, name, results, happy, log):
                            extra_env=busy, expect=same_result("busy-now-differs")))
         n += bool(run_case(env, rec, layout, name, args, with_busy(["y"]), note="a backup is running, wait for too long", tag="busy-long",
                            extra_env=dict(busy, BUSY_POLL_SECS="1", BUSY_MAX_WAIT_SECS="2"), expect=timed_out))
-        flag_file = os.path.join(env.work, "busy-now.txt")
+        count_file = os.path.join(env.work, "busy-count.txt")
 
-        def start_wait():
-            with open(flag_file, "w") as f:
-                f.write(BUSY_NOW + "\n")
-            threading.Timer(2.5, lambda: os.path.exists(flag_file) and os.remove(flag_file)).start()
+        def start_wait():   # busy for the next 3 checks, then free: no clock involved, so a slow machine cannot make this flaky
+            with open(count_file, "w") as f:
+                f.write("3\n")
 
         n += bool(run_case(env, rec, layout, name, args, with_busy(["y"]), note="a backup is running, wait until it ends", tag="busy-wait",
-                           extra_env={"DRIVES_BUSY_FILE": flag_file, "BUSY_POLL_SECS": "1", "BUSY_MAX_WAIT_SECS": "60"},
+                           extra_env={"DRIVES_BUSY_COUNT_FILE": count_file, "BUSY_POLL_SECS": "1", "BUSY_MAX_WAIT_SECS": "60"},
                            before_run=start_wait, expect=waited))
     log("  %-12s %3d safety runs (--dry-run, --yes, backup running)" % (name + " +safety", n))
+
+
+# the look-only commands in words and forms a person or a script may use: (what it is, arguments, expected exit code, text that must appear)
+LOOK_CLI = [
+    ("list --json", ["list", "--json"], 0, '"drives"'), ("usage --json", ["usage", "--json"], 0, '"pools"'),
+    ("usage --folders", ["usage", "--folders"], 0, "Biggest folders"), ("usage --folders --json", ["usage", "--folders", "--json"], 0, '"folders"'),
+    ("health --json", ["health", "--json"], 0, '"ok":true'), ("check --json", ["check", "--json"], 0, '"ok":true'),
+    ("status --json", ["status", "--json"], 0, '"last_backup"'),
+    ("help", ["help"], 0, "Usage:"), ("help release", ["help", "release"], 0, "release"), ("release --help", ["release", "--help"], 0, "release"),
+    ("connect -h", ["connect", "-h"], 0, "connect"), ("help with an unknown command", ["help", "bogus"], 1, "no command called"),
+    ("--json with a changing command", ["release", "--json"], 1, "--json works with"), ("--full with another command", ["list", "--full"], 1, "--full works with"),
+    ("--folders with another command", ["status", "--folders"], 1, "--folders works with"),
+    ("a stray word after a command", ["release", "dry-run"], 1, "Unexpected word"), ("an unknown option", ["list", "--bogus"], 1, "Unknown option"),
+    ("check --dry-run", ["check", "--dry-run"], 0, "Checked"),
+]
+# things that go wrong with a drive, and what the look-only commands must then say: (name, environment, before the command, [(flow, args, exit code, text)])
+LOOK_SCENARIOS = [
+    ("a drive reports it is failing", {"BENCH_SMART": "fail"}, [],
+     [("health", ["health"], 1, "FAILED"), ("health", ["health", "--json"], 1, '"ok":false'),
+      ("check", ["check"], 1, "SMART says the drive is failing"), ("check", ["check", "--json"], 1, '"result":"problem"')]),
+    ("a drive has sectors waiting to be remapped", {"BENCH_SMART": "pending"}, [],
+     [("health", ["health"], 1, "waiting to be remapped"), ("check", ["check"], 1, "waiting to be remapped")]),
+    ("a drive has remapped sectors", {"BENCH_SMART": "realloc"}, [], [("health", ["health"], 0, "remapped"), ("check", ["check"], 0, "remapped")]),
+    ("a drive is hot", {"BENCH_SMART": "hot"}, [], [("health", ["health"], 0, "hot")]),
+    ("a drive is asleep", {"BENCH_SMART": "asleep"}, [], [("health", ["health"], 0, "asleep"), ("check", ["check"], 0, "Nothing was changed")]),
+    ("a main drive is unplugged", None, ["unplug TMAIN1"],
+     [("check", ["check"], 1, "not connected"), ("list", ["list"], 0, "MISSING"), ("usage", ["usage"], 0, ""), ("health", ["health"], 0, "")]),
+    ("a main drive turns read-only", None, ["readonly TMAIN1"], [("check", ["check"], 1, "read-only")]),
+]
+
+
+def run_look(env, rec, layout, log):
+    """The look-only commands: every form a person or a script may type, and every sick drive they must notice."""
+    def want(rc, text):
+        def chk(r):
+            bad = []
+            if r["rc"] != rc:
+                bad.append("INV-look-rc: expected exit code %s but it was %s" % (rc, r["rc"]))
+            if text not in r["output"]:
+                bad.append("INV-look-text: the output should contain '%s'" % text)
+            return bad
+        return chk
+
+    n = 0
+    pooled = bool(layout.main or layout.backup)    # `check` only looks at pool drives; with none it says so (health still sees every drive)
+    for label, args, rc, text in LOOK_CLI:
+        if not pooled and text == "Checked":
+            text = "nothing to check"
+        n += bool(run_case(env, rec, layout, "cli", args, [], note=label, probe=False, tag="look", expect=want(rc, text)))
+    for sname, envx, specs, checks in LOOK_SCENARIOS:
+        real = [resolve_fault(layout, x) for x in specs]
+        if not all(real):
+            continue
+        for flow, args, rc, text in checks:
+            if flow == "check" and not pooled:
+                continue
+            n += bool(run_case(env, rec, layout, flow, args, [], pre=tuple(real), extra_env=envx, note="before the command: " + sname,
+                               probe=False, tag="look", expect=want(rc, text)))
+    log("  %-12s %3d runs (every form of the look-only commands, sick drives)" % ("look-only", n))
 
 
 def run_wishes(env, rec, layout, log):
