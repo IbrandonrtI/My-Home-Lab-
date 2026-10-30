@@ -129,5 +129,26 @@ with tempfile.TemporaryDirectory() as td:
     tool("udisksctl", "power-off", "-b", "/dev/loop6")
     check("udisksctl fake: remembers the power-off", os.path.exists(os.path.join(td, "poweroff-loop6")), True)
 
+# pool changes: the answers for the limit and resize questions, and the fake setfattr
+lim = {"kind": "ask", "prompt": "New free-space limit (for example 50GB or 8%; Enter cancels): ", "items": [], "answer": "<EOF>"}
+c = [a for a, _ in bench.candidates(lim, "", "quick", None)]
+check("limit: a percentage comes first", c[0], "8%")
+check("limit: Enter is tried", "" in c, True)
+rs = {"kind": "ask", "prompt": "New size in MB [16 to 300 MB, Enter to cancel]: ", "items": [], "answer": "<EOF>"}
+c = [a for a, _ in bench.candidates(rs, "", "quick", None)]
+check("resize: sizes inside the range come first", c[0], "24")
+check("resize: a size below the smallest and text are tried", "15" in c and "abc" in c, True)
+with tempfile.TemporaryDirectory() as td:
+    fp = os.path.join(td, "setfattr")
+    with open(fp, "w") as f:
+        f.write(bench.FAKE_SETFATTR)
+    os.chmod(fp, 0o755)
+    target = os.path.join(td, "file")
+    open(target, "w").close()
+    r = subprocess.run([fp, "-n", "user.test", "-v", "abc", target], capture_output=True, text=True)
+    check("setfattr fake: sets a value", (r.returncode, os.getxattr(target, "user.test") if r.returncode == 0 else None), (0, b"abc"))
+    r = subprocess.run([fp, "-n", "user.test", "-v", "abc", target], capture_output=True, text=True, env=dict(os.environ, BENCH_SETFATTR="fail"))
+    check("setfattr fake: can be told to fail", r.returncode != 0, True)
+
 print("OK" if bad == 0 else "FAIL")
 sys.exit(0 if bad == 0 else 1)
