@@ -162,6 +162,7 @@ class Env:
         self.current = None           # the layout whose state is on disk now
         self.dirty = True
         self.base_fp = None
+        self.base_mounts = set()
         self.base_files = None
         self.layout = None
         self.shim = os.path.join(HERE, "shim.sh")
@@ -264,6 +265,31 @@ for c in /usr/bin/mount /bin/mount /usr/sbin/mount; do [ -x "$c" ] && exec "$c" 
 exit 127
 '''
 
+FAKE_HDPARM = r'''#!/bin/bash
+# a made-up hdparm for drive-bench: remembers which drives are asleep. BENCH_HDPARM changes it:
+#   asleep = every drive starts asleep; ignore = the sleep command does nothing (many USB adapters); silent = -C says nothing
+echo "hdparm $*" >>"$BENCH_FLAGS/tools.log"
+dev="${*: -1}"; key=$(basename "$dev"); F="$BENCH_FLAGS"; mode="${BENCH_HDPARM:-}"
+case "$1" in
+  -C)
+    [ "$mode" = silent ] && exit 0
+    if [ -e "$F/asleep-$key" ] || { [ "$mode" = asleep ] && [ ! -e "$F/awake-$key" ]; }; then s=standby; else s="active/idle"; fi
+    printf '\n%s:\n drive state is:  %s\n' "$dev" "$s" ;;
+  -y|-Y)
+    [ "$mode" = ignore ] || { rm -f "$F/awake-$key"; : >"$F/asleep-$key"; } ;;
+  --read-sector)
+    rm -f "$F/asleep-$key"; : >"$F/awake-$key" ;;
+esac
+exit 0
+'''
+
+FAKE_UDISKS = r'''#!/bin/bash
+# a made-up udisksctl: remembers which drives were powered off
+echo "udisksctl $*" >>"$BENCH_FLAGS/tools.log"
+if [ "$1" = power-off ]; then : >"$BENCH_FLAGS/poweroff-$(basename "${*: -1}")"; fi
+exit 0
+'''
+
 FAKE_LOGGER = r'''#!/bin/bash
 echo "$(basename "$0") $*" >>"$BENCH_FLAGS/tools.log"
 case "$(basename "$0")" in
@@ -305,8 +331,8 @@ def install_fake_backup(env):
 def install_fakes(env):
     for d in (env.bin, env.ctl, env.flags):
         os.makedirs(d, exist_ok=True)
-    for name, body in (("docker", FAKE_DOCKER), ("lsblk", FAKE_LSBLK), ("mount", FAKE_MOUNT), ("hdparm", FAKE_LOGGER),
-                       ("smartctl", FAKE_LOGGER), ("udisksctl", FAKE_LOGGER)):
+    for name, body in (("docker", FAKE_DOCKER), ("lsblk", FAKE_LSBLK), ("mount", FAKE_MOUNT), ("hdparm", FAKE_HDPARM),
+                       ("smartctl", FAKE_LOGGER), ("udisksctl", FAKE_UDISKS)):
         path = os.path.join(env.bin, name)
         with open(path, "w") as f:
             f.write(body)
@@ -579,6 +605,22 @@ def fingerprint(env):
                 h.update(("%s/%s %d" % (f, rel, size)).encode())
     r = sh("losetup -ln -O NAME,BACK-FILE")
     h.update("".join(sorted(l for l in r.stdout.splitlines() if env.work in l)).encode())
+    # a spare drive can be erased: its partition table sits in the first MiB (a mount only changes the file system behind it)
+    lay = env.layout
+    if lay is not None:
+        first = len(lay.main) + len(lay.backup)
+        for j in range(len(lay.spares)):
+            if lay.kind == "legacy" and j == 0:
+                continue      # that one is mounted as the main storage
+            try:
+                with open(os.path.join(env.state, "disk%d.img" % (first + j + 1)), "rb") as f:
+                    h.update(hashlib.sha1(f.read(1024 * 1024)).digest())
+            except OSError:
+                h.update(b"noimage%d" % j)
+    try:
+        h.update(" ".join(sorted(n for n in os.listdir(env.flags) if n.startswith(("asleep-", "awake-", "poweroff-")))).encode())
+    except OSError:
+        pass
     return h.hexdigest()
 
 
@@ -715,6 +757,7 @@ def restore_layout(env):
     attach_images(env)
     run_shim(env, ["__call", "__remount"], timeout=120)
     env.base_fp = fingerprint(env)
+    env.base_mounts = set(mounts_under(env.work))
     env.base_files = {r: set(listing(p)) for r, p in (("main", env.main), ("backup", env.backup))}
     env.dirty = False
 
@@ -813,6 +856,15 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
     for a in act:
         if len(a) > 1 and a[0].startswith("UUID=") and not os.path.ismount(a[1]) and os.path.isdir(a[1]):
             pass
+    if flow in ("rename", "sleep", "wake", "eject", "wipe") and not unplugged:
+        # these act on one drive: the fstab and the mounts of the pools must be exactly as they were
+        try:
+            if open(env.fstab).read() != open(os.path.join(env.tpl, "fstab")).read():
+                bad.append("INV-fstab-touched: '%s' only acts on one drive, but /etc/fstab (the test copy) is different now" % flow)
+        except OSError:
+            pass
+        if set(mounts_under(env.work)) != env.base_mounts:
+            bad.append("INV-mounts-touched: '%s' only acts on one drive, but the set of mounts is different now" % flow)
     if changed and flow in LOOK_FLOWS:
         bad.append("INV-lookonly-changed: '%s' only looks, but the drives, mounts, files or settings are different now" % flow)
     if changed and re.search(r"Nothing was changed", out):
@@ -830,7 +882,8 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
             bad.append("INV-containers: containers were left stopped but the command ended as if all was well%s"
                        % (" (it printed a warning)" if "did not start" in out else " (nothing was said)"))
     # files
-    if not unplugged and flow in ("connect", "adopt", "power", "fillorder", "recover", "status", "bootsection", "restore", "replace", "move"):
+    if not unplugged and flow in ("connect", "adopt", "power", "fillorder", "recover", "status", "bootsection", "restore", "replace", "move",
+                                  "rename", "sleep", "wake", "eject", "wipe"):
         for role, pool in (("main", env.main), ("backup", env.backup)):
             if mount_types(env.work).get(pool, "").endswith("mergerfs") and role in before_files:
                 now = set(listing(pool))
@@ -902,6 +955,7 @@ def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_e
             else:
                 run_shim(env, ["__call", "__bench_fault"] + spec.split(), timeout=60)
         env.base_fp = fingerprint(env)
+        env.base_mounts = set(mounts_under(env.work))
         env.base_files = {r: set(listing(p)) for r, p in (("main", env.main), ("backup", env.backup))}
         env.dirty = True
     before_files = env.base_files
@@ -1017,6 +1071,10 @@ def candidates(ev, transcript_before, level, layout):
                 c += [(str(lo - 1), True), (str(hi + 1), True), ("abc", True)]
             if rich >= 2:
                 c += [(str(lo), True), (str(hi), True), ("0", True), ("-5", True), ("%sMB" % mid, True), ("1.5", True), ("99999999999999999999", True)]
+        elif "New name" in prompt:     # rename: a good name first, then what could be typed wrongly
+            c = [("Photos drive", False), ("", True), ("auto", True), ("!!!", True), ("A" * 41, True), ("50 MB Toshiba HDD", True)]
+            if rich >= 1:
+                c += [("a/b", True), ("  Two   spaces  ", True), ("MAIN1=x", True)]
         else:
             c = [("", True), ("x", True)]
             if rich >= 1:
@@ -1087,6 +1145,11 @@ FLOWS = [
     ("release", ["release"], "take all drives out of the pools"),
     ("bootsection", ["bootsection"], "use part of the boot drive"),
     ("restore", ["restore"], "copy back the missing files from the backup"),
+    ("rename", ["rename"], "give a pool drive a name of your own"),
+    ("sleep", ["sleep"], "put a spinning drive to sleep"),
+    ("wake", ["wake"], "wake a spinning drive up"),
+    ("eject", ["eject"], "get a spare drive ready to unplug"),
+    ("wipe", ["wipe"], "erase a spare drive"),
 ]
 
 # commands typed on the command line that are not one of the flows above
@@ -1141,7 +1204,7 @@ PRE_SCENARIOS = [     # the first ones are used at the standard level
     ("a main drive is full", ["fill TMAIN1"]),
     ("a main drive is read-only", ["readonly TMAIN1"]),
 ]
-PRE_FLOWS = ["status", "list", "usage", "health", "check", "scan", "recover", "replace", "disconnect", "move", "release", "restore", "connect"]
+PRE_FLOWS = ["status", "list", "usage", "health", "check", "scan", "rename", "sleep", "wake", "eject", "wipe", "recover", "replace", "disconnect", "move", "release", "restore", "connect"]
 FAULT_FLOWS = ["connect", "disconnect", "move", "replace", "recover", "release", "bootsection", "restore", "adopt", "scan"]
 
 
@@ -1182,6 +1245,8 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
         log("  %-12s %3d runs  %4.0fs%s" % (name, len(results), time.time() - t0, ("   !! %d problem(s)" % bad) if bad else ""))
     if re.search(st.get("safety") or ".", layout.key) and (not only_flows or set(only_flows) & {"cli", "list", "usage", "health", "check", "scan"}):
         run_look(env, rec, layout, log)
+    if re.search(st.get("safety") or ".", layout.key) and (not only_flows or set(only_flows) & {"rename", "sleep", "wake", "eject", "wipe", "actions"}):
+        run_actions(env, rec, layout, log)
     deep = st["faults"] and (st["deep"] is None or any(re.search(p, layout.name) for p in st["deep"]))
     if st["variants"] and (not only_flows or "connect" in only_flows) and len(layout.spares) >= 2 and layout.spares[1].fs == "ext4data":
         # the second spare drive already holds files: connect it and choose "Erase everything" (too deep in the answer tree to be reached by chance)
@@ -1231,7 +1296,9 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
 FLOWS_BY_NAME = {n: a for n, a, _ in FLOWS}
 
 
-CHANGING_FLOWS = ("connect", "disconnect", "move", "adopt", "recover", "replace", "fillorder", "release", "bootsection", "restore", "power", "scan")
+CHANGING_FLOWS = ("connect", "disconnect", "move", "adopt", "recover", "replace", "fillorder", "release", "bootsection", "restore", "power", "scan",
+                  "rename", "sleep", "wake", "eject", "wipe")
+NO_BUSY_FLOWS = ("power", "rename", "sleep", "wake", "eject", "wipe")      # they stop no container, so they do not wait for a backup
 SAFETY_LAYOUTS = r"^(m1-b1|m2-b2|m1-b0|legacy-single-drive|oldpool-m2-b1|m1-b1-bootsec)$"
 BUSY_NOW = "a backup is running right now"
 
@@ -1274,7 +1341,7 @@ def run_safety(env, rec, layout, name, results, happy, log):
     n += bool(run_case(env, rec, layout, name, args + ["--dry-run"], keep(("typed",)), note="--dry-run", tag="dry", expect=dry))
     n += bool(run_case(env, rec, layout, name, args + ["--yes", "--confirm-erase"], keep(("yn", "typed")), note="--yes --confirm-erase",
                        tag="yes", expect=same_result("yes-differs")))
-    if name != "power" and (hp["outcome"] == "DONE" or name == "scan"):
+    if name not in NO_BUSY_FLOWS and (hp["outcome"] == "DONE" or name == "scan"):
         busy = {"DRIVES_BUSY": BUSY_NOW}
 
         def declined(r):
@@ -1377,6 +1444,104 @@ def run_look(env, rec, layout, log):
             n += bool(run_case(env, rec, layout, flow, args, [], pre=tuple(real), extra_env=envx, note="before the command: " + sname,
                                probe=False, tag="look", expect=want(rc, text)))
     log("  %-12s %3d runs (every form of the look-only commands, sick drives)" % ("look-only", n))
+
+
+def run_actions(env, rec, layout, log):
+    """rename, sleep, wake, eject and wipe: the cases the answer tree cannot reach by itself (a names file that already has lines,
+    a USB adapter that ignores the sleep command, a drive that starts asleep) and a look at the result afterwards."""
+    n = 0
+    spin = any(d.model[1] == 1 for d in layout.all_drives())
+    pooled = layout.main or layout.backup
+    label = "TMAIN1" if layout.main else ("TBACKUP1" if layout.backup else None)
+    names_file = os.path.join(env.state, "drive-names-chosen")
+
+    def want(rc, text, more=None):
+        def chk(r):
+            bad = []
+            if r["rc"] != rc:
+                bad.append("INV-action-rc: expected exit code %s but it was %s" % (rc, r["rc"]))
+            if text not in r["output"]:
+                bad.append("INV-action-text: the output should contain '%s'" % text)
+            if more:
+                bad += more(r)
+            return bad
+        return chk
+
+    def seed_names():
+        with open(names_file, "w") as f:
+            f.write("# my names\nOTHER9=Keep me\n%s=Old name\n" % label)
+        env.base_fp = fingerprint(env)
+
+    def renamed(r):
+        bad = []
+        txt = open(names_file).read() if os.path.exists(names_file) else ""
+        lines = [l for l in txt.splitlines() if l.startswith(label + "=")]
+        if lines != [label + "=Photos drive"]:
+            bad.append("INV-rename-file: the names file should have exactly the line '%s=Photos drive' for this drive, it has %r" % (label, lines))
+        if "# my names" not in txt or "OTHER9=Keep me" not in txt:
+            bad.append("INV-rename-file: rename removed lines that belong to other drives or comments")
+        out = run_shim(env, ["list"], timeout=60)[1]
+        if "Photos drive" not in out or "Old name" in out:
+            bad.append("INV-rename-list: 'drives list' does not show the new name after rename")
+        return bad
+
+    def back_to_auto(r):
+        bad = []
+        txt = open(names_file).read() if os.path.exists(names_file) else ""
+        if (label + "=") in txt or "# my names" not in txt or "OTHER9=Keep me" not in txt:
+            bad.append("INV-rename-auto: 'auto' should remove only this drive's line, the file is now %r" % txt)
+        if "Old name" in run_shim(env, ["list"], timeout=60)[1]:
+            bad.append("INV-rename-list: 'drives list' still shows the old name after 'auto'")
+        return bad
+
+    if pooled:
+        n += bool(run_case(env, rec, layout, "rename", ["rename"], ["1", "Photos drive"], note="the names file already has lines: rename keeps them",
+                           tag="act", before_run=seed_names, expect=want(0, "Done.", renamed), probe=False))
+        n += bool(run_case(env, rec, layout, "rename", ["rename"], ["1", "auto"], note="'auto' removes only this drive's name",
+                           tag="act", before_run=seed_names, expect=want(0, "Done.", back_to_auto), probe=False))
+    cases = [
+        ("sleep", {}, ["1"], 0, "is asleep"), ("sleep", {"BENCH_HDPARM": "ignore"}, ["1"], 1, "did not go to sleep"),
+        ("sleep", {"BENCH_HDPARM": "silent"}, ["1"], 0, "cannot say"), ("sleep", {"BENCH_HDPARM": "asleep"}, ["1"], 0, "already asleep"),
+        ("wake", {"BENCH_HDPARM": "asleep"}, ["1"], 0, "is awake"), ("wake", {}, ["1"], 0, "already awake"),
+        ("wake", {"BENCH_HDPARM": "silent"}, ["1"], 0, "cannot say"),
+    ]
+    for flow, envx, answers, rc, text in cases:
+        if not spin:
+            rc, text, answers = 1, "No spinning hard drive", []
+        n += bool(run_case(env, rec, layout, flow, [flow], answers, extra_env=envx, note="%s%s" % (flow, (" (" + envx["BENCH_HDPARM"] + ")") if envx else ""),
+                           tag="act", expect=want(rc, text), probe=False))
+        if not spin:
+            break
+
+    def wiped_with(fmt):
+        def more(r):
+            items = r["prompts"][0]["items"] if r["prompts"] else []
+            m = re.search(r"\((/dev/[^,)]+)", items[0]) if items else None
+            if not m:
+                return ["INV-wipe-dev: could not tell which drive was wiped"]
+            dev = m.group(1)
+            bad = []
+            # blkid -p reads the drive itself (lsblk would use the udev database, which does not exist in every container)
+            part = sh(["blkid", "-p", "-s", "TYPE", "-s", "LABEL", "-o", "export", dev + "p1"]).stdout
+            whole = sh(["blkid", "-p", "-o", "export", dev]).stdout.strip()
+            if fmt:
+                if "TYPE=ext4" not in part or "LABEL=SPARE" not in part:
+                    bad.append("INV-wipe-format: %sp1 should be an empty ext4 drive labelled SPARE, blkid says %r" % (dev, part.split()))
+            elif part.strip() or whole or os.path.exists(dev + "p1"):
+                bad.append("INV-wipe-empty: %s still has a partition or a file system after the wipe (blkid: %r %r)" % (dev, whole, part.split()))
+            return bad
+        return more
+
+    spares = len(layout.spares) - (1 if layout.kind == "legacy" else 0)      # the plain data drive of the old setup is in use, never offered
+    if spares > 0:
+        # --confirm-erase types the drive name and ERASE; the first drive of the list is the one that is wiped
+        for fmt in (False, True):
+            n += bool(run_case(env, rec, layout, "wipe", ["wipe", "--confirm-erase"], ["1", "2" if fmt else "1"],
+                               note="wipe and %s" % ("format it" if fmt else "leave it empty"), tag="act", probe=False,
+                               expect=want(0, "Done.", wiped_with(fmt))))
+        n += bool(run_case(env, rec, layout, "eject", ["eject"], ["1"], note="get the first spare drive ready to unplug", tag="act",
+                           probe=False, expect=want(0, "Done.")))
+    log("  %-12s %3d runs (rename, sleep, wake, wipe scenarios)" % ("actions", n))
 
 
 def run_wishes(env, rec, layout, log):

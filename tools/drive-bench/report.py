@@ -252,6 +252,11 @@ def capabilities(R, meta):
     add("Show the health of every drive (SMART)", of(R, "health", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Quick check for file system errors", of(R, "check", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Full read-only scan of one drive", of(R, "scan", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Give a pool drive a name of your own", of(R, "rename", pre=False), 0, "", "not run")
+    add("Put a spinning drive to sleep", of(R, "sleep", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Wake a spinning drive up", of(R, "wake", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Get a spare drive ready to unplug", of(R, "eject", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Erase a spare drive (empty or formatted)", of(R, "wipe", pre=False), 0, "", "not run")
     add("Walk through the menu", of(R, "menu", pre=False), 0, "", "not run", ok=("DONE", "NOTHING", "CANCELLED"))
     return caps
 
@@ -366,7 +371,7 @@ def others(R):
 
 
 # ---------------------------------------------------------------------------------------------------------------- output
-FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore"]
+FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe"]
 
 
 def stats(R):

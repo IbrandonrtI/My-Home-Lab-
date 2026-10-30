@@ -83,6 +83,10 @@ Every layout is built with the real `connect` flow, saved, and copied back befor
   anything (the whole state is compared before and after), `--json` output must be valid JSON, they must work on every healthy
   layout, and a sick drive (SMART failing, pending sectors, remapped sectors, hot, asleep, file system errors, read-only, unplugged)
   must be reported with a non-zero exit code for problems.
+* **The single-drive actions** (`rename`, `sleep`, `wake`, `eject`, `wipe`): they must leave the fstab and the pool mounts exactly as they
+  were. Rename must keep the other lines of the names file, `auto` must remove only that drive's line, and `drives list` must show the
+  new name. Sleep and wake are tried with a USB adapter that ignores the command, one that cannot say, and drives that start asleep.
+  A wiped spare must really be empty (or one empty ext4 drive labelled SPARE) and a pool drive must never be offered.
 * **Words people might expect** (`rename`, `smart`, `sleep`, `balance`, …): reported as supported or not.
 * **After every run that changed something:** fstab, mounts, pools, containers and files are checked, and `drives status` is run
   as a health check.
