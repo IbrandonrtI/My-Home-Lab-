@@ -15,7 +15,7 @@ set -u
 set -o pipefail
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-VERSION="1.6"
+VERSION="1.7"
 TEST_MODE="${DRIVES_TEST:-0}"
 # Owner of the top folder of a new main drive: DRIVES_OWNER, else the user who ran sudo, else the first normal user (uid 1000).
 OWNER="${DRIVES_OWNER:-${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}}"
@@ -67,6 +67,10 @@ POOL_OPTS_BASE="allow_other,cache.files=off,category.create=ff,moveonenospc=true
 DRIVE_NAMES_FILE="${DRIVE_NAMES_FILE:-/etc/homelab-drive-names}"
 [ "$TEST_MODE" = 1 ] && DRIVE_NAMES_FILE="${DRIVE_NAMES_FILE_TEST:-$STATE_DIR/drive-names-chosen}"
 NAME_STORE="${NAME_STORE:-$STATE_DIR/drive-names}"
+# What you changed with `drives fillorder` and `drives limit`: how a pool picks a drive for a new file (policy), which drive goes
+# first (order) and how much free space a drive keeps (limit). One line per setting: KIND|KEY|VALUE.
+SETTINGS_FILE="${SETTINGS_FILE:-$STATE_DIR/pool-settings}"
+BALANCE_TOLERANCE="${BALANCE_TOLERANCE:-5}"   # balance does nothing when the fullest and the emptiest drive are this many percentage points apart or less
 BRANCH_OPTS="defaults,noatime,nofail,x-systemd.device-timeout=10"
 BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/var/lib/homelab-backup/last-run}"
 DRAIN_SPARE_BYTES="${DRAIN_SPARE_BYTES:-2147483648}"   # free space to keep on the target drive when copying a drive off
@@ -132,11 +136,57 @@ sd_reload() { [ "$TEST_MODE" = 1 ] || systemctl daemon-reload; }
 fstab_active() { awk '!/^[[:space:]]*(#|$)/' "$FSTAB"; }
 pool_in_fstab() { fstab_active | awk -v m="$1" '$2 == m {f = 1} END {exit !f}'; }   # is there an active fstab line for this mount point
 
-branches_of() {   # branches_of main|backup -> mount points, sorted
-  local p; p=$(role_prefix "$1")
-  # real drives first (MAIN1, MAIN2, ...), the boot drive section (MAINBOOT) always last: the pool uses the drives in this order
-  local all; all=$(fstab_active | awk -v d="$DISKS_DIR/$p" '$2 ~ "^" d "([0-9]+|BOOT)$" {print $2}' | sort -V)
-  { printf '%s\n' "$all" | grep -v 'BOOT$'; printf '%s\n' "$all" | grep 'BOOT$'; } | grep .
+setting_get() {   # setting_get KIND KEY -> the value, or nothing
+  [ -r "$SETTINGS_FILE" ] || return 0
+  awk -F'|' -v k="$1" -v n="$2" '$1 == k && $2 == n { sub(/^[^|]*\|[^|]*\|/, ""); print; exit }' "$SETTINGS_FILE"
+}
+
+setting_put() {   # setting_put KIND KEY VALUE
+  local tmp
+  mkdir -p "$(dirname "$SETTINGS_FILE")" 2>/dev/null || die "Could not write $SETTINGS_FILE"
+  tmp=$(mktemp) || die "Could not make a temporary file"
+  { [ -r "$SETTINGS_FILE" ] && awk -F'|' -v k="$1" -v n="$2" '!($1 == k && $2 == n)' "$SETTINGS_FILE"; printf '%s|%s|%s\n' "$1" "$2" "$3"; } >"$tmp"
+  cat "$tmp" >"$SETTINGS_FILE" || { rm -f "$tmp"; die "Could not write $SETTINGS_FILE"; }
+  rm -f "$tmp"
+}
+
+setting_del() {   # setting_del KIND KEY
+  [ -r "$SETTINGS_FILE" ] || return 0
+  local tmp; tmp=$(mktemp) || return 0
+  awk -F'|' -v k="$1" -v n="$2" '!($1 == k && $2 == n)' "$SETTINGS_FILE" >"$tmp"
+  cat "$tmp" >"$SETTINGS_FILE" || true
+  rm -f "$tmp"
+}
+
+SETTINGS_SNAP=""
+settings_snapshot() { SETTINGS_SNAP=$(mktemp); SETTINGS_WAS_MISSING=0; if [ -r "$SETTINGS_FILE" ]; then cat "$SETTINGS_FILE" >"$SETTINGS_SNAP"; else : >"$SETTINGS_SNAP"; SETTINGS_WAS_MISSING=1; fi; }
+settings_rollback() {   # puts the settings back as they were; a file that did not exist before is removed again
+  if [ -n "$SETTINGS_SNAP" ] && [ -f "$SETTINGS_SNAP" ]; then
+    if [ "$SETTINGS_WAS_MISSING" = 1 ]; then rm -f "$SETTINGS_FILE"; else cat "$SETTINGS_SNAP" >"$SETTINGS_FILE"; fi
+  fi
+  rm -f "$SETTINGS_SNAP"; SETTINGS_SNAP=""; return 0
+}
+settings_discard() { rm -f "$SETTINGS_SNAP"; SETTINGS_SNAP=""; }
+
+settings_prune() {   # forget the limits of drives that are not in any pool any more (a new drive with the same label must not inherit them)
+  [ -r "$SETTINGS_FILE" ] || return 0
+  local labels tmp mp
+  labels=""; for mp in $(all_branches); do labels="$labels$(basename "$mp")"$'\n'; done
+  tmp=$(mktemp) || return 0
+  awk -F'|' -v L="$labels" 'BEGIN { n = split(L, a, "\n"); for (i = 1; i <= n; i++) have[a[i]] = 1 } $1 == "limit" && !($2 in have) { next } { print }' "$SETTINGS_FILE" >"$tmp"
+  cat "$tmp" >"$SETTINGS_FILE" || true
+  rm -f "$tmp"
+}
+
+branches_of() {   # branches_of main|backup -> mount points, in the order the pool uses them
+  local p all ord l ordered
+  p=$(role_prefix "$1")
+  all=$(fstab_active | awk -v d="$DISKS_DIR/$p" '$2 ~ "^" d "([0-9]+|BOOT)$" {print $2}' | sort -V)
+  [ -n "$all" ] || return 0
+  # the order you chose with `drives fillorder` (drives not in it follow, sorted), else MAIN1, MAIN2, ...; the boot drive section (MAINBOOT) is always last
+  ord=$(setting_get order "$1")
+  ordered=$({ for l in $ord; do printf '%s\n' "$DISKS_DIR/$l"; done; printf '%s\n' "$all"; } | awk 'NF && !seen[$0]++' | grep -Fx -f <(printf '%s\n' "$all"))
+  { printf '%s\n' "$ordered" | grep -v 'BOOT$'; printf '%s\n' "$ordered" | grep 'BOOT$'; } | grep .
   return 0
 }
 
@@ -181,6 +231,7 @@ fstab_remove_mp() {   # comment out active lines whose mount point is $1
     !/^[[:space:]]*#/ && $2 == m { print "# removed by drives " d ": " $0; next }
     { print }' "$FSTAB" >"$tmp" && cat "$tmp" >"$FSTAB"
   rm -f "$tmp"
+  settings_prune
   log "fstab remove mount point: $1"
 }
 
@@ -189,11 +240,16 @@ cache_opt() {   # mergerfs docs: kernel 6.6 or newer uses cache.files=off, older
   if [ "$(printf '%s\n6.6\n' "$k" | sort -V | head -1)" = "6.6" ]; then echo off; else echo auto-full; fi
 }
 
-branch_minfree() {   # branch_minfree MOUNTPOINT -> the space to keep free on that drive (5% of its size), e.g. 48828125K; nothing if unknown
-  local sz
+branch_minfree() {   # branch_minfree MOUNTPOINT -> the space to keep free on that drive (the limit you set, else 5% of its size), e.g. 48828125K; nothing if unknown
+  local sz lim kind num
   mountpoint -q "$1" 2>/dev/null || return 0
   sz=$(df -B1 --output=size "$1" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}')
   [[ "$sz" =~ ^[0-9]+$ ]] && [ "$sz" -gt 0 ] || return 0
+  lim=$(setting_get limit "$(basename "$1")"); kind=${lim%% *}; num=${lim#* }
+  case "$kind" in   # a limit that does not fit the drive (for example after a smaller drive took its place) is ignored
+    pct)   if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1 ] && [ "$num" -le 50 ]; then echo "$(( sz * num / 100 / 1024 ))K"; return 0; fi ;;
+    bytes) if [[ "$num" =~ ^[0-9]+$ ]] && [ "$num" -ge 1048576 ] && [ $(( num * 2 )) -le "$sz" ]; then echo "$(( num / 1024 ))K"; return 0; fi ;;
+  esac
   echo "$(( sz * POOL_FREE_PERCENT / 100 / 1024 ))K"
 }
 
@@ -208,9 +264,14 @@ branches_string() {   # branches_string main|backup -> the drives of a pool, in 
   printf '%s' "$joined"
 }
 
+pool_policy() {   # pool_policy main|backup -> ff (one drive at a time, the default) or mfs (the drive with the most free space)
+  case "$(setting_get policy "$1")" in mfs) echo mfs ;; *) echo ff ;; esac
+}
+
 pool_line() {   # pool_line main|backup
   local role=$1 mp b joined req="" opts
   opts=${POOL_OPTS_BASE/cache.files=off/cache.files=$(cache_opt)}
+  opts=${opts/category.create=ff/category.create=$(pool_policy "$role")}
   mp=$(role_pool "$role")
   joined=$(branches_string "$role")
   [ -n "$joined" ] || return 1
@@ -691,6 +752,8 @@ on_exit() {
     note "${HOLD_HINT:-Fix the problem, then run:  sudo hdd-recover}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
+  [ -n "${BALANCE_TMP:-}" ] && rm -rf "$BALANCE_TMP"
+  [ -n "${SETTINGS_SNAP:-}" ] && rm -f "$SETTINGS_SNAP"
 }
 trap on_exit EXIT
 
@@ -1133,13 +1196,17 @@ status_flow() {
     fi
   done
   for role in main backup; do
-    if [ -n "$(branches_of "$role")" ] && ! pool_fills_in_order "$(role_pool "$role")"; then
-      say "Note: the $role pool uses an older setting. Run  sudo drives fillorder  (menu: Settings and upgrades) to make it fill one drive at a time and keep ${POOL_FREE_PERCENT}% of each drive free."
+    if [ -n "$(branches_of "$role")" ] && ! pool_has_limits "$(role_pool "$role")"; then
+      say "Note: the $role pool uses an older setting. Run  sudo drives fillorder  (menu: Settings and upgrades) to update it: it then keeps ${POOL_FREE_PERCENT}% of each drive free."
     fi
   done
   if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$TEST_MODE" != 1 ]; then
     say "Note: main storage is still one plain drive. Run  sudo drives  and choose Settings and upgrades > Convert to turn it into a pool."
   fi
+  for role in main backup; do
+    [ -n "$(branches_of "$role")" ] || continue
+    say "$([ "$role" = main ] && echo Main || echo Backup) storage: new files go to $(policy_text "$(pool_policy_now "$(role_pool "$role")")"). Drive order: $(order_text "$role")"
+  done
   say ""
   say "=== Pool drives ==="
   printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' DRIVE ROLE DEVICE SIZE USED SMART STATE
@@ -1562,46 +1629,194 @@ release_flow() {   # take every drive out of both pools; the files on the drives
   say "Choose the drives you want with:  sudo drives"
 }
 
-# ---------- fill order ----------
-pool_fills_in_order() {   # pool_fills_in_order /mnt/storage -> true when its fstab line already fills in order with a limit per drive
-  fstab_active | awk -v m="$1" '$2 == m && /category\.create=ff/ && /=RW,[0-9]+K/ {f = 1} END {exit !f}'
+# ---------- fill order, policy and free-space limits ----------
+pool_has_limits() {   # pool_has_limits /mnt/storage -> true when its fstab line has a free-space limit per drive (pools of the current setup have)
+  fstab_active | awk -v m="$1" '$2 == m && /=RW,[0-9]+K/ {f = 1} END {exit !f}'
 }
 
-fillorder_flow() {   # make the pools of an older setup fill one drive at a time (a new pool already does)
-  local role pool did=0 todo=""
-  for role in main backup; do
-    [ -n "$(branches_of "$role")" ] || continue
-    pool_fills_in_order "$(role_pool "$role")" || todo="$todo $role"
-  done
-  if [ -n "$todo" ]; then
-    todo=${todo# }; todo=${todo// / and }
-    pre_change "Change the saved setup of the $todo storage so it fills one drive at a time." \
-               "Apply it now if possible. If the pool has to be mounted again, its containers stop for a minute." && return 0
+pool_policy_now() {   # pool_policy_now /mnt/storage -> the policy in its fstab line (ff, mfs, ...)
+  fstab_active | awk -v m="$1" '$2 == m { if (match($0, /category\.create=[a-z]+/)) print substr($0, RSTART + 16, RLENGTH - 16); exit }'
+}
+
+policy_text() {   # policy_text ff|mfs -> words for people
+  case "$1" in
+    ff)  printf '%s' "one drive at a time (a new file goes to the first drive that has room)" ;;
+    mfs) printf '%s' "spread (a new file goes to the drive with the most free space)" ;;
+    *)   printf '%s' "spread over the drives (older setting)" ;;
+  esac
+}
+
+pool_live_apply() {   # pool_live_apply main|backup -> 0 when the RUNNING pool now uses the saved policy, order and limits (no remount, nothing stops)
+  local role=$1 pool
+  pool=$(role_pool "$role")
+  mountpoint -q "$pool" && command -v setfattr >/dev/null 2>&1 || return 1
+  setfattr -n user.mergerfs.category.create -v "$(pool_policy "$role")" "$pool/.mergerfs" 2>/dev/null \
+    && setfattr -n user.mergerfs.minfreespace -v "$POOL_MINFREE" "$pool/.mergerfs" 2>/dev/null \
+    && setfattr -n user.mergerfs.branches -v "$(branches_string "$role")" "$pool/.mergerfs" 2>/dev/null
+}
+
+pool_reconfigure() {   # pool_reconfigure main|backup: the saved policy, order or limits just changed: use them now and write them to fstab
+  local role=$1 pool
+  pool=$(role_pool "$role")
+  fstab_snapshot
+  if pool_live_apply "$role"; then
+    fstab_set_pool "$role"; sd_reload
+    say "It is in use right now; nothing had to stop."
+    return 0
   fi
-  for role in main backup; do
-    [ -n "$(branches_of "$role")" ] || continue
-    pool=$(role_pool "$role")
-    pool_fills_in_order "$pool" && continue
-    [ "$did" = 1 ] || fstab_snapshot
-    did=1
-    fstab_set_pool "$role"
-    sd_reload
-    if mountpoint -q "$pool" && command -v setfattr >/dev/null 2>&1 \
-       && setfattr -n user.mergerfs.category.create -v ff "$pool/.mergerfs" 2>/dev/null \
-       && setfattr -n user.mergerfs.minfreespace -v "$POOL_MINFREE" "$pool/.mergerfs" 2>/dev/null \
-       && setfattr -n user.mergerfs.branches -v "$(branches_string "$role")" "$pool/.mergerfs" 2>/dev/null; then
-      say "The $role storage now fills one drive at a time."
-    elif mountpoint -q "$pool" && yn "The $role storage is set to fill one drive at a time. Apply it now? Its services stop for a minute while the pool mounts again."; then
-      stop_containers "$pool"
-      if apply_pool "$role"; then say "The $role storage now fills one drive at a time."
-      else fstab_rollback; mount_fstab "$pool" 2>/dev/null; warn "The $role pool did not mount. fstab was restored."; fi
+  if mountpoint -q "$pool" && yn "The $role storage cannot take the change while it runs. Apply it now? Its containers stop for a minute while the pool mounts again."; then
+    if ! ( busy_gate ); then settings_rollback; return 1; fi   # a subshell: when you answer no it stops here and the change is undone
+    stop_containers "$pool"
+    if apply_pool "$role"; then
       start_containers
-    else
-      say "The $role storage is set to fill one drive at a time. It takes effect after the next restart (or: sudo hdd-recover)."
+      return 0
     fi
-    log "pool $role set to fill one drive at a time (ff, each drive keeps ${POOL_FREE_PERCENT}% free)"
+    fstab_rollback; mount_fstab "$pool" 2>/dev/null; start_containers
+    warn "The $role pool did not mount with the new setting. fstab was restored."
+    return 1
+  fi
+  fstab_set_pool "$role"; sd_reload
+  say "The change is saved. It takes effect after the next restart (or: sudo hdd-recover)."
+  return 0
+}
+
+pick_pool_role() {   # pick_pool_role [MIN_REAL_DRIVES] -> main or backup (asks when both fit); fails when no pool fits
+  local min=${1:-1} role mp n
+  local -a roles=() items=()
+  for role in main backup; do
+    n=0; for mp in $(branches_of "$role"); do is_boot_section "$mp" || n=$((n + 1)); done
+    if [ "$min" -le 1 ]; then [ -n "$(branches_of "$role")" ] || continue; else [ "$n" -ge "$min" ] || continue; fi
+    roles+=("$role")
+    items+=("$([ "$role" = main ] && echo Main || echo Backup) storage ($(role_pool "$role"))")
   done
-  [ "$did" = 1 ] || say "Your pools already fill one drive at a time."
+  if [ ${#roles[@]} -eq 0 ]; then
+    if [ "$min" -le 1 ]; then note "No drives are connected to a pool yet."; else note "This needs a storage with at least $min drives (the boot drive section does not count). Nothing was changed."; fi
+    return 1
+  fi
+  if [ ${#roles[@]} -eq 1 ]; then echo "${roles[0]}"; return 0; fi
+  local idx; idx=$(choose "Which storage? " "${items[@]}") || return 1
+  echo "${roles[$idx]}"
+}
+
+order_text() {   # order_text main|backup -> "Toshiba, Samsung, boot drive section" (the order the pool uses its drives)
+  local mp out="" n
+  for mp in $(branches_of "$1"); do n=$(branch_name "$mp"); out="${out:+$out, }$n"; done
+  printf '%s' "$out"
+}
+
+fillorder_flow() {   # how a pool picks a drive for a new file, and which drive goes first
+  local role pool now act idx mp first cur
+  local -a real=() items=() mps=()
+  role=$(pick_pool_role 1) || return 1
+  pool=$(role_pool "$role")
+  now=$(pool_policy_now "$pool")
+  for mp in $(branches_of "$role"); do is_boot_section "$mp" || real+=("$mp"); done
+  say ""
+  say "$([ "$role" = main ] && echo Main || echo Backup) storage: new files go to $(policy_text "$now")."
+  say "Order of the drives: $(order_text "$role")"
+  pool_has_limits "$pool" || say "(This pool still has an older setting without a free-space limit per drive. Choosing the first or second option updates it.)"
+  act=$(choose "What do you want to do? " \
+        "Fill one drive at a time, the first drive first$([ "$now" = ff ] && pool_has_limits "$pool" && echo "   [now]")" \
+        "Spread: put a new file on the drive with the most free space$([ "$now" = mfs ] && pool_has_limits "$pool" && echo "   [now]")" \
+        "Choose which drive is used first") || return 1
+  settings_snapshot
+  case "$act" in
+    0|1)
+      local want=ff; [ "$act" = 1 ] && want=mfs
+      if [ "$now" = "$want" ] && pool_has_limits "$pool"; then
+        settings_discard; say "The $role storage already works like that. Nothing was changed."; return 0
+      fi
+      dry_gate "Save the setting '$(policy_text "$want")' for the $role storage." \
+               "Use it in the running pool if possible (nothing stops). Otherwise you are asked before the pool is mounted again." && { settings_discard; return 0; }
+      if [ "$want" = ff ]; then setting_del policy "$role"; else setting_put policy "$role" mfs; fi
+      pool_reconfigure "$role" || { settings_rollback; return 1; }
+      settings_discard
+      say ""; say "Done. The $role storage now puts a new file on $(policy_text "$want" | sed 's/^[^(]*(a new file goes to //; s/)$//')."
+      log "pool $role policy $want"
+      ;;
+    2)
+      if [ ${#real[@]} -lt 2 ]; then settings_discard; note "The $role storage has only one drive, so there is no order to change. Nothing was changed."; return 1; fi
+      for mp in "${real[@]}"; do
+        mps+=("$mp")
+        items+=("$(branch_name "$mp")   [position $(( ${#mps[@]} ))]")
+      done
+      idx=$(choose "Which drive should be used first? " "${items[@]}") || { settings_discard; return 1; }
+      first=${mps[$idx]}
+      if [ "$idx" = 0 ]; then settings_discard; say "$(branch_name "$first") is already the first drive. Nothing was changed."; return 0; fi
+      [ "$now" = mfs ] && say "Note: this pool spreads files by free space, so the order matters little. It is still saved."
+      dry_gate "Save the order: $(branch_name "$first") first, then the others in their current order." \
+               "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
+      cur="$(basename "$first")"
+      for mp in "${real[@]}"; do [ "$mp" = "$first" ] || cur="$cur $(basename "$mp")"; done
+      setting_put order "$role" "$cur"
+      pool_reconfigure "$role" || { settings_rollback; return 1; }
+      settings_discard
+      say ""; say "Done. Order of the drives in the $role storage: $(order_text "$role")"
+      log "pool $role order $cur"
+      ;;
+  esac
+  return 0
+}
+
+parse_limit() {   # parse_limit "8%" or "50 GB" DRIVE_SIZE_BYTES -> prints "pct 8" or "bytes 50000000000"; fails with a message
+  local t=${1// /} size=$2 n bytes
+  t=${t,,}
+  if [[ "$t" =~ ^([0-9]+)%$ ]]; then
+    n=${BASH_REMATCH[1]}
+    if [ "$n" -lt 1 ] || [ "$n" -gt 50 ]; then note "A percentage must be from 1% to 50%."; return 1; fi
+    echo "pct $n"; return 0
+  fi
+  if [[ "$t" =~ ^([0-9]+(\.[0-9]+)?)(kb|mb|gb|tb|k|m|g|t)$ ]]; then
+    n=${BASH_REMATCH[1]}
+    case "${BASH_REMATCH[3]}" in k|kb) bytes=1000 ;; m|mb) bytes=1000000 ;; g|gb) bytes=1000000000 ;; *) bytes=1000000000000 ;; esac
+    bytes=$(awk -v n="$n" -v u="$bytes" 'BEGIN { printf "%.0f", n * u }')
+    if [ "$bytes" -lt $(( size / 100 )) ] || [ $(( bytes * 2 )) -gt "$size" ]; then
+      note "The limit must be from 1% to 50% of the drive ($(human $(( size / 100 ))) to $(human $(( size / 2 ))))."; return 1
+    fi
+    echo "bytes $bytes"; return 0
+  fi
+  note "Type the free space to keep as a size such as 50GB or as a percentage such as 8%."
+  return 1
+}
+
+limit_text() {   # limit_text MOUNTPOINT -> "5% = 45GB (automatic)" or "50GB (your setting)"
+  local k lim
+  k=$(branch_minfree "$1"); lim=$(setting_get limit "$(basename "$1")")
+  [ -n "$k" ] || { printf '%s' "unknown (the drive is not mounted)"; return 0; }
+  if [ -n "$lim" ] && [ "$k" != "$(( $(df -B1 --output=size "$1" | awk 'NR==2 {print $1}') * POOL_FREE_PERCENT / 100 / 1024 ))K" ]; then
+    printf '%s (your setting)' "$(human $(( ${k%K} * 1024 )))"
+  else
+    printf '%s%% = %s (automatic)' "$POOL_FREE_PERCENT" "$(human $(( ${k%K} * 1024 )))"
+  fi
+}
+
+limit_flow() {   # how much free space a pool drive keeps before the pool uses the next drive
+  local mp role label size cur new parsed
+  mp=$(pick_branch "Which drive do you want to set the free-space limit for? ") || return 1
+  role=$(branch_role "$mp"); label=$(basename "$mp")
+  if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo hdd-recover). Nothing was changed."; return 1; fi
+  size=$(total_bytes "$mp")
+  say ""
+  say "$(branch_name "$mp") is $(human "$size"). It keeps this much free before the $role storage uses the next drive: $(limit_text "$mp")"
+  say "(A drive that is nearly full works badly; a limit from 1% to 50% of the drive is accepted. Type  auto  for the automatic ${POOL_FREE_PERCENT}%.)"
+  new=$(ask "New free-space limit (for example 50GB or 8%; Enter cancels): ")
+  [ -n "$new" ] || { say "Cancelled. Nothing was changed."; return 1; }
+  settings_snapshot
+  if [ "$new" = auto ]; then
+    if [ -z "$(setting_get limit "$label")" ]; then settings_discard; say "The limit is already automatic. Nothing was changed."; return 0; fi
+    dry_gate "Go back to the automatic limit (${POOL_FREE_PERCENT}%) for $(branch_name "$mp")." "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
+    setting_del limit "$label"
+  else
+    parsed=$(parse_limit "$new" "$size") || { settings_discard; note "Nothing was changed."; return 1; }
+    if [ "$(setting_get limit "$label")" = "$parsed" ]; then settings_discard; say "That is already the limit. Nothing was changed."; return 0; fi
+    dry_gate "Keep $new free on $(branch_name "$mp") before the $role storage uses the next drive." "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
+    setting_put limit "$label" "$parsed"
+  fi
+  pool_reconfigure "$role" || { settings_rollback; return 1; }
+  settings_discard
+  say ""; say "Done. $(branch_name "$mp") keeps this much free: $(limit_text "$mp")"
+  log "limit $label: ${parsed:-auto}"
+  return 0
 }
 
 # ---------- a section of the boot drive as a pool member ----------
@@ -1719,6 +1934,251 @@ bootsection_flow() {
   say ""
   say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
   log "connected $label ($img) to $role"
+  return 0
+}
+
+# ---------- balance: even out the used space between the drives of one storage ----------
+BALANCE_TMP=""
+
+PICK_COUNT=0; PICK_BYTES=0
+balance_pick_files() {   # balance_pick_files GIVER RECEIVER BYTES LISTFILE -> sets PICK_COUNT and PICK_BYTES: the files chosen (largest first, as many as fit)
+  local giver=$1 recv=$2 want=$3 list=$4 sz rel remaining=$3 count=0 got=0 stop
+  stop=$(( want / 50 )); [ "$stop" -ge 1 ] || stop=1
+  : >"$list"
+  while IFS=$'\t' read -r -d '' sz rel; do
+    [ "$sz" -le "$remaining" ] || continue
+    [ -e "$recv/$rel" ] && continue                 # the same path is already on the other drive: never touch it
+    [ -n "${BALANCE_TAKEN[$giver/$rel]:-}" ] && continue
+    BALANCE_TAKEN[$giver/$rel]=1
+    printf '%s\0' "$rel" >>"$list"
+    count=$((count + 1)); got=$((got + sz)); remaining=$((remaining - sz))
+    [ "$remaining" -ge "$stop" ] || break
+  done < <(find "$giver" -xdev -type f ! -path "$giver/lost+found/*" -printf '%s\t%P\0' 2>/dev/null | sort -z -t$'\t' -k1,1nr)
+  PICK_COUNT=$count; PICK_BYTES=$got
+}
+
+balance_undo() {   # balance_undo RECEIVER LISTFILE: take back the copies this run made (they did not exist before)
+  local recv=$1 list=$2 rel
+  while IFS= read -r -d '' rel; do rm -f -- "${recv:?}/$rel"; done <"$list"
+}
+
+balance_table() {   # balance_table MP... -> name, used, size, percent
+  local mp
+  for mp in "$@"; do
+    printf '  %-28s %9s of %-9s %s\n' "$(branch_name "$mp")" "$(human "$(used_bytes "$mp")")" "$(human "$(total_bytes "$mp")")" "$(pct "$(used_bytes "$mp")" "$(total_bytes "$mp")")"
+  done
+}
+
+balance_main() {
+  local role pool mp i n it pg lo hi g r b lim
+  local -a mps=() rows=() steps=() lists=() gs=() rs=() cnt=() nbytes=()
+  declare -gA BALANCE_TAKEN=()
+  role=$(pick_pool_role 2) || return 1
+  pool=$(role_pool "$role")
+  for mp in $(branches_of "$role"); do
+    is_boot_section "$mp" && continue
+    if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo hdd-recover). Nothing was changed."; return 1; fi
+    mps+=("$mp")
+  done
+  say ""
+  say "Used space in the $role storage now (the boot drive section is left out: it is only used when the others are full):"
+  balance_table "${mps[@]}"
+  lo=100; hi=0
+  for mp in "${mps[@]}"; do
+    pg=$(( $(used_bytes "$mp") * 100 / $(total_bytes "$mp") ))
+    [ "$pg" -lt "$lo" ] && lo=$pg
+    [ "$pg" -gt "$hi" ] && hi=$pg
+  done
+  if [ $(( hi - lo )) -le "$BALANCE_TOLERANCE" ]; then
+    say ""; say "The drives are already within $BALANCE_TOLERANCE percentage points of each other. Nothing to move."; return 0
+  fi
+  # the plan: from the fullest drive to the emptiest, until they are about equally full (in percent of their size)
+  for mp in "${mps[@]}"; do
+    lim=$(branch_minfree "$mp" | tr -d K); lim=${lim:-0}
+    rows+=("$(total_bytes "$mp") $(used_bytes "$mp") $(avail_bytes "$mp") $(( lim * 1024 ))")
+  done
+  mapfile -t steps < <(printf '%s\n' "${rows[@]}" | awk -v tol="$BALANCE_TOLERANCE" '
+    { size[NR] = $1; used[NR] = $2; free[NR] = $3; lim[NR] = $4; n = NR; tu += $2; ts += $1 }
+    END {
+      for (it = 0; it < 20; it++) {
+        g = 0; r = 0; sg = -1e30; sr = 1e30
+        for (i = 1; i <= n; i++) {
+          s = used[i] - tu * size[i] / ts
+          if (s > sg) { sg = s; g = i }
+          if (free[i] - lim[i] > 0 && s < sr) { sr = s; r = i }
+        }
+        if (g == 0 || r == 0 || g == r) break
+        if (used[g] * 100 / size[g] - used[r] * 100 / size[r] <= tol) break
+        amt = sg; if (-sr < amt) amt = -sr; h = free[r] - lim[r]; if (h < amt) amt = h
+        if (amt < size[g] / 100) break
+        printf "%d %d %.0f\n", g - 1, r - 1, amt
+        used[g] -= amt; used[r] += amt; free[g] += amt; free[r] -= amt
+      }
+    }')
+  if [ ${#steps[@]} -eq 0 ]; then say ""; say "No move would help (the emptier drives have no room above their free-space limit). Nothing was changed."; return 0; fi
+  BALANCE_TMP=$(mktemp -d)
+  local total=0 files=0
+  for i in "${!steps[@]}"; do
+    read -r g r b <<<"${steps[$i]}"
+    lists+=("$BALANCE_TMP/list$i"); gs+=("$g"); rs+=("$r")
+    balance_pick_files "${mps[$g]}" "${mps[$r]}" "$b" "$BALANCE_TMP/list$i"
+    cnt+=("$PICK_COUNT"); nbytes+=("$PICK_BYTES"); total=$((total + PICK_BYTES)); files=$((files + PICK_COUNT))
+  done
+  if [ "$files" -eq 0 ]; then say ""; say "No suitable files were found to move. Nothing was changed."; return 0; fi
+  say ""
+  say "The plan: move $(human "$total") ($files files) so the drives end up about equally full:"
+  for i in "${!steps[@]}"; do
+    [ "${cnt[$i]}" -gt 0 ] && say "  - $(human "${nbytes[$i]}") (${cnt[$i]} files) from $(branch_name "${mps[${gs[$i]}]}") to $(branch_name "${mps[${rs[$i]}]}")"
+  done
+  say "Each file is copied and checked first, then removed from the old drive. The files keep their place in the pool."
+  say "Your services keep running while the files are copied; they stop for a short time at the end to catch the last changes."
+  say "A big move can take hours. New files still go where the fill order says (see: sudo drives fillorder)."
+  yn "Move the files now?" || { say "Cancelled. Nothing was changed."; return 1; }
+  pre_change "Copy the chosen files ($(human "$total")) between the drives of the $role storage, while the services run." \
+             "Stop the containers that use the $role storage for a short time and copy the last changes." \
+             "Check every copied file, then remove the old copies, and start the containers again." && return 0
+  for i in "${!steps[@]}"; do
+    [ "${cnt[$i]}" -gt 0 ] || continue
+    say "Copying $(human "${nbytes[$i]}") from $(branch_name "${mps[${gs[$i]}]}") to $(branch_name "${mps[${rs[$i]}]}") (pass 1, services keep running)..."
+    rsync -aH --numeric-ids --from0 --files-from="${lists[$i]}" --ignore-missing-args "${mps[${gs[$i]}]}/" "${mps[${rs[$i]}]}/"
+    n=$?
+    if [ "$n" -ne 0 ] && [ "$n" -ne 24 ]; then
+      warn "Copy failed (code $n). The old copies were not removed."
+      for it in "${!steps[@]}"; do balance_undo "${mps[${rs[$it]}]}" "${lists[$it]}"; done
+      return 1
+    fi
+  done
+  stop_containers "$pool"
+  say "Pass 2 (catching changes made during the first pass)..."
+  local rel bad=0
+  for i in "${!steps[@]}"; do
+    [ "${cnt[$i]}" -gt 0 ] || continue
+    while IFS= read -r -d '' rel; do   # a file deleted meanwhile must not come back from the copy
+      [ -e "${mps[${gs[$i]}]}/$rel" ] || rm -f -- "${mps[${rs[$i]}]:?}/$rel"
+    done <"${lists[$i]}"
+    rsync -aH --numeric-ids --from0 --files-from="${lists[$i]}" --ignore-missing-args "${mps[${gs[$i]}]}/" "${mps[${rs[$i]}]}/"
+    n=$?
+    if [ "$n" -ne 0 ] && [ "$n" -ne 24 ]; then bad=1; break; fi
+    if rsync -aHn --numeric-ids --itemize-changes --from0 --files-from="${lists[$i]}" --ignore-missing-args "${mps[${gs[$i]}]}/" "${mps[${rs[$i]}]}/" | grep -q '^>f'; then bad=1; break; fi
+  done
+  if [ "$bad" = 1 ]; then
+    warn "The check found files that are not copied correctly. Nothing was removed from the old drives."
+    for it in "${!steps[@]}"; do balance_undo "${mps[${rs[$it]}]}" "${lists[$it]}"; done
+    start_containers
+    return 1
+  fi
+  say "Verified: every moved file is on its new drive. Removing the old copies..."
+  for i in "${!steps[@]}"; do
+    [ "${cnt[$i]}" -gt 0 ] || continue
+    while IFS= read -r -d '' rel; do rm -f -- "${mps[${gs[$i]}]:?}/$rel"; done <"${lists[$i]}"
+  done
+  sync_fs "${mps[@]}"
+  start_containers
+  log "balanced $role: moved $total bytes ($files files)"
+  say ""
+  say "Done. Used space in the $role storage now:"
+  balance_table "${mps[@]}"
+  return 0
+}
+
+balance_flow() {
+  local rc=0
+  balance_main || rc=$?
+  [ -n "$BALANCE_TMP" ] && rm -rf "$BALANCE_TMP"
+  BALANCE_TMP=""
+  return "$rc"
+}
+
+# ---------- resize: make a boot drive section bigger or smaller ----------
+resize_flow() {
+  need_cmds fallocate resize2fs e2fsck truncate || return 1
+  local role idx mp img pool cur used free max lower min keep gb bytes new_gb prompt shrink=0 fs_min before_files after_files before_used
+  local -a roles=() items=()
+  for role in main backup; do
+    [ -n "$(boot_section_of "$role")" ] || continue
+    roles+=("$role"); items+=("$([ "$role" = main ] && echo Main || echo Backup) storage: $(branch_name "$(boot_section_of "$role")")")
+  done
+  if [ ${#roles[@]} -eq 0 ]; then
+    note "There is no boot drive section to resize. Make one with:  sudo drives bootsection"
+    return 1
+  fi
+  if [ ${#roles[@]} -eq 1 ]; then role=${roles[0]}; else idx=$(choose "Which boot drive section? " "${items[@]}") || return 1; role=${roles[$idx]}; fi
+  mp=$(boot_section_of "$role"); img=$(boot_image_of "$mp"); pool=$(role_pool "$role")
+  if [ ! -f "$img" ] || ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not mounted. Run  sudo hdd-recover  first. Nothing was changed."; return 1; fi
+  cur=$(stat -c %s "$img"); used=$(used_bytes "$mp")
+  keep=$BOOT_KEEP_FREE_BYTES; min=$BOOT_MIN_BYTES
+  free=$(( $(boot_free_bytes) + cur ))
+  max=$(( (free - keep) / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))
+  lower=$(( (used * 100 / 90 + BOOT_UNIT_BYTES - 1) / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))   # the files may fill at most 90% of the new size
+  [ "$lower" -ge "$min" ] || lower=$min
+  say ""
+  say "$(branch_name "$mp") is $(pretty_size "$cur") now and holds $(human "$used") ($(pct "$used" "$cur"))."
+  say "Free space on the boot drive: $(pretty_size "$(( free - cur ))"). It always keeps at least $(pretty_size "$keep") free."
+  if [ "$max" -lt "$lower" ]; then
+    note "It cannot change: it would have to be at least $(pretty_size "$lower") but at most $(pretty_size "$(( max > 0 ? max : 0 ))") fits. Nothing was changed."
+    return 1
+  fi
+  say "The new size can be from $(( lower / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME to $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME (the files may fill at most 90% of it)."
+  while :; do
+    prompt="New size in $BOOT_UNIT_NAME [$(( lower / BOOT_UNIT_BYTES )) to $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME, Enter to cancel]: "
+    gb=$(ask "$prompt"); gb=${gb//[GgMm][Bb]/}; gb=${gb//[GgMm]/}; gb=${gb// /}
+    [ -n "$gb" ] || { say "Cancelled. Nothing was changed."; return 1; }
+    if [[ "$gb" =~ ^[0-9]+$ ]]; then
+      bytes=$(( gb * BOOT_UNIT_BYTES ))
+      [ "$bytes" -lt "$lower" ] && { note "That is too small. The files in it would fill more than 90% of it: the smallest is $(pretty_size "$lower")."; continue; }
+      [ "$bytes" -gt "$max" ] && { note "That is too big. The boot drive must keep $(pretty_size "$keep") free: the most is $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME."; continue; }
+      break
+    fi
+    note "Please type a number of $BOOT_UNIT_NAME, for example 100."
+  done
+  new_gb=$bytes
+  if [ "$bytes" -eq "$cur" ]; then say "It already has that size. Nothing was changed."; return 0; fi
+  [ "$bytes" -lt "$cur" ] && shrink=1
+  if [ "$shrink" = 1 ]; then
+    say ""
+    say "Making the section smaller rewrites its file system. It is safe when nothing goes wrong, but if the power fails halfway the section can be damaged."
+    say "The files in it are in the backup only if the main storage is backed up (a section of the backup storage has no second copy)."
+    typed "CONTINUE" "Type CONTINUE to go on, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
+  fi
+  yn "Change the section from $(pretty_size "$cur") to $(pretty_size "$new_gb") now? The $role containers stop for a minute or more." || { say "Cancelled. Nothing was changed."; return 1; }
+  pre_change "Stop the containers that use the $role storage." \
+             "Unmount the $role storage and $(branch_name "$mp"), check its file system." \
+             "$([ "$shrink" = 1 ] && echo "Shrink the file system, then the file, to $(pretty_size "$new_gb")." || echo "Make the file $(pretty_size "$new_gb") big and grow the file system into it.")" \
+             "Mount everything again, compare the files, and start the containers." && return 0
+  before_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l); before_used=$used
+  stop_containers "$pool"
+  ROLLED_BACK=1    # nothing in fstab changes, so if a step fails the old mounts can simply be restored
+  pool_umount "$pool" || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
+  if ! umount "$mp" 2>/dev/null; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not take $(branch_name "$mp") offline (something is using it). Nothing was changed."; fi
+  back() { mount_fstab "$mp" 2>/dev/null; mount_fstab "$pool" 2>/dev/null; start_containers; }
+  if ! e2fsck -fn "$img" >/dev/null 2>&1; then back; die "The file system of the section has errors, so it was not resized. Nothing was changed. Check it with: sudo drives check"; fi
+  e2fsck -fp "$img" >/dev/null 2>&1 || true    # resize2fs refuses a file system that was not checked since it was last mounted
+  if [ "$shrink" = 1 ]; then
+    fs_min=$(resize2fs -P "$img" 2>/dev/null | awk -F: '/minimum size/ {gsub(/ /, "", $2); print $2}')
+    if [[ "$fs_min" =~ ^[0-9]+$ ]] && [ $(( fs_min * $(dumpe2fs -h "$img" 2>/dev/null | awk -F: '/^Block size/ {gsub(/ /, "", $2); print $2}') )) -gt "$new_gb" ]; then
+      back; die "The files do not fit into $(pretty_size "$new_gb"). Nothing was changed."
+    fi
+    if ! resize2fs "$img" "$(( new_gb / 1024 ))K" >/dev/null 2>&1; then
+      back; die "Shrinking the file system failed. Check it with: sudo drives check --full"
+    fi
+    truncate -s "$new_gb" "$img"
+  else
+    if ! fallocate -l "$new_gb" "$img" 2>/dev/null; then back; die "Could not reserve $(pretty_size "$new_gb") on the boot drive. Nothing was changed."; fi
+    if ! resize2fs "$img" >/dev/null 2>&1; then truncate -s "$cur" "$img"; back; die "Growing the file system failed. The section has its old size again."; fi
+  fi
+  e2fsck -fn "$img" >/dev/null 2>&1 || warn "The check after the change reports problems. Run: sudo drives check --full"
+  if ! mount_fstab "$mp"; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not mount the section again. Run  sudo hdd-recover"; fi
+  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role storage again. Run  sudo hdd-recover"; fi
+  after_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l)
+  start_containers
+  name_store_put "$(basename "$mp")" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
+  log "resized $img: $cur -> $new_gb bytes (files $before_files -> $after_files)"
+  say ""
+  if [ "$before_files" != "$after_files" ]; then
+    warn "The number of files changed ($before_files before, $after_files after). Check the section: sudo drives check --full"
+    return 1
+  fi
+  say "Done. $(branch_name "$mp") is now $(pretty_size "$(stat -c %s "$img")") and holds $(human "$(used_bytes "$mp")") ($after_files files, all there; before: $(human "$before_used"))."
   return 0
 }
 
@@ -2116,8 +2576,11 @@ settings_menu() {
     say ""
     say "Settings and upgrades"
     say "  1) Apply the drive power settings"
-    say "  2) Fill drives one at a time (update an older pool)"
+    say "  2) Fill order: one drive at a time or spread, and which drive goes first"
     say "  3) Convert the current single data drive into the main pool (one time, older setups)"
+    say "  4) Even out the used space between the drives of a storage (balance)"
+    say "  5) Set how much free space a drive keeps"
+    say "  6) Make a boot drive section bigger or smaller"
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
@@ -2125,14 +2588,26 @@ settings_menu() {
            "Main drives never go to sleep. Backup drives sleep after 10 minutes without use." \
            "No files are touched." &&
          power_all ;;
-      2) intro_ask "Fill drives one at a time" \
-           "A pool uses its first drive until only ${POOL_FREE_PERCENT}% of it is free, then the next one." \
-           "Newer pools already work like this. This updates an older pool. No files are moved." &&
+      2) intro "Fill order" \
+           "Next you pick a storage and see how it picks a drive for a new file. A pool uses its first drive until only" \
+           "${POOL_FREE_PERCENT}% of it is free, then the next one, or it can spread by free space. No files are moved." &&
          fillorder_flow ;;
       3) intro "Convert the current single data drive into the main pool" \
            "Only for older setups where one drive is mounted directly as the main storage." \
            "Next you see what changes and are asked before anything is done." &&
          { adopt_flow && sync_filebrowser; } ;;
+      4) intro "Even out the used space (balance)" \
+           "Next you pick a storage and see a plan: which files move from the fullest drive to the emptiest." \
+           "Files are copied and checked before they are removed. You are asked before anything moves." &&
+         { balance_flow && sync_filebrowser; } ;;
+      5) intro "Free space a drive keeps" \
+           "Next you pick a drive and type how much free space it keeps (for example 50GB or 8%)." \
+           "No files are moved." &&
+         limit_flow ;;
+      6) intro "Make a boot drive section bigger or smaller" \
+           "Next you pick a section and its new size. The containers of that storage stop for a while." \
+           "You are asked again before anything changes." &&
+         { resize_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -2289,7 +2764,7 @@ usage_flow() {
     printf '%-26s %-10s %-9s %-9s %-9s %s\n' "$name" "$role" "$(hs "$size")" "$(hs "$used")" "$(hs "$free")" "$(pct "$used" "$size")"
   done < <(drive_rows)
   say ""
-  say "The pool stops putting files on a drive when only ${POOL_FREE_PERCENT}% of it is left, so a drive shows as full a little before 100%."
+  say "The pool stops putting files on a drive when only its free-space limit is left (${POOL_FREE_PERCENT}% unless you set another with: sudo drives limit), so a drive shows as full a little before 100%."
   if [ "$FOLDERS" = 1 ]; then
     while IFS=$US read -r role pool mounted fst size used free; do
       [ "$mounted" = 1 ] || continue
@@ -2541,7 +3016,10 @@ Change the drives:
   recover       after an unplug or a power cut: mount the drives and start the containers again
   replace       a drive died: put a new one in its place and copy the files back from the backup
   restore       copy only the missing files back from the backup
-  fillorder     make an older pool fill one drive at a time
+  fillorder     how a pool picks a drive for a new file (one at a time or spread) and which drive goes first
+  balance       move files so the drives of one storage are about equally full
+  limit         how much free space one drive keeps before the pool uses the next drive
+  resize        make a boot drive section bigger or smaller
   power         apply the drive power settings
 
 Actions on one drive:
@@ -2668,7 +3146,32 @@ EOF
     ;;
     fillorder) cat <<'EOF'
 sudo drives fillorder [--dry-run] [--yes] [--now]
-  Makes a pool of an older setup fill one drive at a time and keep a share of each drive free. A new pool already does.
+  Shows how a storage picks a drive for a new file and in which order, and lets you change it: fill one drive at a time (the
+  first drive first, the default), spread (the drive with the most free space), or choose which drive is used first. The
+  change is used right away by the running pool when possible; otherwise you are asked before the pool is mounted again.
+  A pool of an older version is updated too. No files are moved (for that see: sudo drives balance).
+EOF
+    ;;
+    balance) cat <<'EOF'
+sudo drives balance [--dry-run] [--yes] [--now]
+  Moves files between the drives of one storage until they are about equally full (in percent). It shows the plan first.
+  Every file is copied and checked, then removed from the old drive; the files keep their place in the pool. The services keep
+  running during the long copy and stop for a short time at the end. The boot drive section is left out. If the drives are
+  within 5 percentage points of each other nothing is moved. New files still follow the fill order (sudo drives fillorder).
+EOF
+    ;;
+    limit) cat <<'EOF'
+sudo drives limit [--dry-run] [--yes] [--now]
+  Sets how much free space one drive keeps before the pool uses the next drive (the automatic value is 5% of the drive).
+  Type it as a size (50GB) or a percentage (8%), from 1% to 50% of the drive, or  auto  to go back to the automatic value.
+  It is used right away by the running pool when possible. No files are moved.
+EOF
+    ;;
+    resize) cat <<'EOF'
+sudo drives resize [--dry-run] [--yes] [--confirm-erase] [--now]
+  Makes a boot drive section bigger or smaller. The containers of that storage stop, the file system is checked, resized
+  and checked again, and the files are counted before and after. Shrinking is refused when the files would fill more than 90%
+  of the new size, and you must type CONTINUE. Growing needs free space on the boot drive (it always keeps its reserve).
 EOF
     ;;
     power) cat <<'EOF'
@@ -2773,7 +3276,10 @@ main() {
     power)        power_all ;;
     recover)      run_changing recover_flow ;;
     replace)      run_changing replace_flow ;;
-    fillorder)    fillorder_flow ;;
+    fillorder|reorder|priority) fillorder_flow ;;
+    balance|rebalance) run_changing balance_flow ;;
+    limit)        limit_flow ;;
+    resize)       run_changing resize_flow ;;
     release)      run_changing release_flow ;;
     bootsection)  run_changing bootsection_flow ;;
     restore)      run_changing restore_flow ;;
