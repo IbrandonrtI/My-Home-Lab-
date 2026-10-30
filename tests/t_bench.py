@@ -102,5 +102,32 @@ check("report: an idea comes from a missing word", any(i["id"] == "rename" for i
 
 # the safety guard: the real drives are hidden from `drives`
 check("lsblk fake hides the real drives", "-dnpo NAME,TYPE" in bench.FAKE_LSBLK, True)
+
+# the single-drive actions: the answer for the rename question, and the fake hdparm / udisksctl
+nm = {"kind": "ask", "prompt": "New name (letters, numbers and spaces, up to 40 characters; Enter cancels): ", "items": [], "answer": "<EOF>"}
+c = [a for a, _ in bench.candidates(nm, "", "quick", None)]
+check("rename: a good name comes first", c[0], "Photos drive")
+check("rename: a name with no letters, a too long name and Enter are tried", "!!!" in c and ("A" * 41) in c and "" in c, True)
+with tempfile.TemporaryDirectory() as td:
+    for name, body in (("hdparm", bench.FAKE_HDPARM), ("udisksctl", bench.FAKE_UDISKS)):
+        with open(os.path.join(td, name), "w") as f:
+            f.write(body)
+        os.chmod(os.path.join(td, name), 0o755)
+
+    def tool(name, *args, **env):
+        e = dict(os.environ, BENCH_FLAGS=td, **env)
+        return subprocess.run([os.path.join(td, name)] + list(args), capture_output=True, text=True, env=e).stdout
+    check("hdparm fake: a drive is awake at first", "active/idle" in tool("hdparm", "-C", "/dev/loop9"), True)
+    tool("hdparm", "-y", "/dev/loop9")
+    check("hdparm fake: -y puts it to sleep", "standby" in tool("hdparm", "-C", "/dev/loop9"), True)
+    tool("hdparm", "--read-sector", "0", "/dev/loop9")
+    check("hdparm fake: reading a sector wakes it", "active/idle" in tool("hdparm", "-C", "/dev/loop9"), True)
+    tool("hdparm", "-y", "/dev/loop8", BENCH_HDPARM="ignore")
+    check("hdparm fake: an adapter that ignores -y", "active/idle" in tool("hdparm", "-C", "/dev/loop8"), True)
+    check("hdparm fake: starts asleep when told to", "standby" in tool("hdparm", "-C", "/dev/loop7", BENCH_HDPARM="asleep"), True)
+    check("hdparm fake: can say nothing", tool("hdparm", "-C", "/dev/loop7", BENCH_HDPARM="silent"), "")
+    tool("udisksctl", "power-off", "-b", "/dev/loop6")
+    check("udisksctl fake: remembers the power-off", os.path.exists(os.path.join(td, "poweroff-loop6")), True)
+
 print("OK" if bad == 0 else "FAIL")
 sys.exit(0 if bad == 0 else 1)
