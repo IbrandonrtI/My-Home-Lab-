@@ -71,6 +71,15 @@ BRANCH_OPTS="defaults,noatime,nofail,x-systemd.device-timeout=10"
 BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-/var/lib/homelab-backup/last-run}"
 DRAIN_SPARE_BYTES="${DRAIN_SPARE_BYTES:-2147483648}"   # free space to keep on the target drive when copying a drive off
 
+DRY_RUN=0            # --dry-run: show what would happen, change nothing
+ASSUME_YES=0         # --yes: answer the yes/no questions with yes
+CONFIRM_ERASE=0      # --confirm-erase: also type the confirmations for erasing or removing a drive (ERASE, REMOVE, CONTINUE, the drive name)
+NOW=0                # --now: do not wait for a running backup or upload
+BACKUP_LOCK="${BACKUP_LOCK:-/var/lock/homelab-backup.lock}"
+[ "$TEST_MODE" = 1 ] && BACKUP_LOCK="${BACKUP_LOCK_TEST:-$STATE_DIR/backup.lock}"
+BUSY_POLL_SECS="${BUSY_POLL_SECS:-30}"
+BUSY_MAX_WAIT_SECS="${BUSY_MAX_WAIT_SECS:-21600}"   # wait at most 6 hours for a backup or upload to end
+
 STOPPED=""
 START_FAILED=""      # containers that would not start again after a change
 ROLLED_BACK=0        # 1 once fstab was put back to what it was before the step
@@ -86,8 +95,15 @@ warn() { printf 'WARNING: %s\n' "$*" >&2; log "WARN $*"; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; restore_services; exit 1; }
 
 ask()  { local v=""; printf '%s' "$1" >&2; IFS= read -r v || true; printf '%s' "$v"; }
-yn()   { case "$(ask "$1 [y/N]: ")" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac; }
-typed() { [ "$(ask "$2")" = "$1" ]; }
+yn()   {
+  if [ "$ASSUME_YES" = 1 ]; then note "$1 [y/N]: y   (--yes)"; return 0; fi
+  case "$(ask "$1 [y/N]: ")" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
+}
+typed() {   # typed WORD "Prompt: ": the person must type WORD. --confirm-erase types it for a script; a dry run changes nothing, so it needs no typing
+  if [ "$CONFIRM_ERASE" = 1 ]; then note "${2}$1   (--confirm-erase)"; return 0; fi
+  if [ "$DRY_RUN" = 1 ]; then note "${2}(not needed for a dry run)"; return 0; fi
+  [ "$(ask "$2")" = "$1" ]
+}
 
 choose() {   # choose "Prompt: " item1 item2 ... -> prints 0-based index
   local prompt=$1; shift
@@ -556,6 +572,82 @@ sync_fs() {   # write out the data of just these drives (sync -f); a plain `sync
   sync -f "$@" 2>/dev/null || sync
 }
 
+# ---------- before anything is changed: is a backup or an upload running? is this only a dry run? ----------
+pool_devices() {   # the whole drives behind the pools (not the boot drive), one name per line
+  local src dsk
+  while read -r src; do
+    [[ "$src" == /dev/* ]] || continue
+    dsk=$(lsblk -no pkname "$src" 2>/dev/null | head -n 1)
+    printf '%s\n' "${dsk:-${src#/dev/}}"
+  done < <(findmnt -rn -o SOURCE,TARGET 2>/dev/null | awk -v d="$DISKS_DIR" 'index($2, d "/") == 1 {print $1}') | sort -u
+}
+
+sectors_written() {   # sectors written to the pool drives so far (field 7 of /sys/block/DEV/stat)
+  local d t=0 w
+  while read -r d; do
+    [ -n "$d" ] || continue
+    w=$(awk '{print $7}' "/sys/block/$d/stat" 2>/dev/null)
+    [[ "$w" =~ ^[0-9]+$ ]] && t=$((t + w))
+  done < <(pool_devices)
+  echo "$t"
+}
+
+busy_reason() {   # prints why it is a bad moment to stop the containers, or nothing
+  if [ "$TEST_MODE" = 1 ]; then   # test hooks: a fixed reason, or a file whose text is the reason while it exists
+    if [ -n "${DRIVES_BUSY:-}" ]; then [ "$DRIVES_BUSY" = none ] || echo "$DRIVES_BUSY"; return 0; fi
+    if [ -n "${DRIVES_BUSY_FILE:-}" ] && [ -s "$DRIVES_BUSY_FILE" ]; then cat "$DRIVES_BUSY_FILE"; return 0; fi
+  fi
+  if [ -e "$BACKUP_LOCK" ] && ! ( exec 7<"$BACKUP_LOCK" && flock -n 7 ) 2>/dev/null; then
+    echo "a backup is running right now"; return 0
+  fi
+  [ "$TEST_MODE" = 1 ] && return 0
+  local a b secs=5
+  a=$(sectors_written); sleep "$secs"; b=$(sectors_written)
+  # more than about 300 KB per second written to the pool drives: files are coming in
+  if [ $(( (b - a) * 512 / secs )) -gt 300000 ]; then echo "files are being written to a storage pool (an upload?)"; fi
+  return 0
+}
+
+wait_text() {   # 21600 -> "6 hours", 90 -> "90 seconds"
+  if [ "$1" -ge 3600 ]; then echo "$(( $1 / 3600 )) hours"; else echo "$1 seconds"; fi
+}
+
+busy_gate() {   # called before the first change: when a backup or an upload runs, say so and wait for it (or stop)
+  local why waited=0
+  [ "$NOW" = 1 ] && return 0
+  why=$(busy_reason)
+  [ -n "$why" ] || return 0
+  if [ "$DRY_RUN" = 1 ]; then
+    note "Note: $why. A real run would wait for it to finish first (add --now to go on anyway)."
+    return 0
+  fi
+  warn "Not a good moment: $why. Stopping the containers now could cut it short."
+  yn "Wait until it finishes, then go on?" || die "Stopped because $why. Nothing was changed. (To go on anyway, add --now.)"
+  note "Waiting, checking every ${BUSY_POLL_SECS}s for up to $(wait_text "$BUSY_MAX_WAIT_SECS"). Nothing has been changed yet; Ctrl+C cancels."
+  while [ -n "$why" ]; do
+    [ "$waited" -lt "$BUSY_MAX_WAIT_SECS" ] || die "Still busy after $(wait_text "$BUSY_MAX_WAIT_SECS") ($why). Nothing was changed."
+    sleep "$BUSY_POLL_SECS"; waited=$((waited + BUSY_POLL_SECS))
+    why=$(busy_reason)
+    if [ -n "$why" ] && [ $((waited % 300)) -lt "$BUSY_POLL_SECS" ]; then note "  still waiting: $why"; fi
+  done
+  note "It finished. Going on."
+}
+
+dry_gate() {   # dry_gate STEP...: with --dry-run, list the steps, change nothing and return 0 (the caller then returns)
+  [ "$DRY_RUN" = 1 ] || return 1
+  local st i=1
+  say ""
+  say "DRY RUN: this is what would happen now."
+  for st in "$@"; do say "  $i. $st"; i=$((i + 1)); done
+  say "Nothing was changed. Run the same command without --dry-run to do it."
+  return 0
+}
+
+pre_change() {   # pre_change STEP...: the last stop before the first change. 0 = this was a dry run, so the caller returns
+  busy_gate
+  dry_gate "$@"
+}
+
 start_containers() {
   [ -n "${STOPPED// /}" ] || return 0
   local n failed=""
@@ -616,6 +708,7 @@ power_apply() {   # power_apply mountpoint role
 
 power_all() {
   local mp
+  dry_gate "Apply the drive power settings to every pool drive (main drives never sleep, backup drives sleep after 10 minutes idle)." && return 0
   for mp in $(branches_of main); do mountpoint -q "$mp" && power_apply "$mp" main; done
   for mp in $(branches_of backup); do mountpoint -q "$mp" && power_apply "$mp" backup; done
   if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL"; then power_apply "$MAIN_POOL" main; fi
@@ -704,6 +797,7 @@ confirm_erase() {   # confirm_erase /dev/sdX: the two typed confirmations before
 
 connect_flow() {   # connect_flow [dev] [role] [force_erase] [already_confirmed]
   local dev=${1:-} role=${2:-} force=${3:-0} confirmed=${4:-0} label part mode="erase" idx uuid mp
+  local gate=pre_change; [ "$confirmed" = 1 ] && gate=dry_gate   # called from move: the check for a running backup was done before the drive left its pool
   need_tools || return 1
   [ -n "$dev" ] || { dev=$(pick_new_disk) || return 1; }
   refuse_unsafe_disk "$dev"
@@ -732,8 +826,16 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase] [already_confirmed]
 
   if [ "$mode" = erase ]; then
     [ "$confirmed" = 1 ] || confirm_erase "$dev" || return 1
+    $gate "Erase $dev and format it as a new drive ($base)." \
+               "Stop the containers that use the $role storage for a minute." \
+               "Add the drive to the $role storage and mount the pool again." \
+               "Start the containers again." && return 0
     part=$(format_disk "$dev" "$label") || return 1
   else
+    $gate "Keep the files on $dev and add the drive as it is ($base)." \
+               "Stop the containers that use the $role storage for a minute." \
+               "Add the drive to the $role storage and mount the pool again." \
+               "Start the containers again." && return 0
     umount_disk_parts "$dev"
     if [ "$(fs_label "$part")" != "$label" ]; then
       e2label "$part" "$label" || die "Could not set the label on $part"
@@ -826,12 +928,14 @@ drain_branch() {   # copy everything from branch $1 to the emptiest other branch
   return 0
 }
 
-detach_branch() {   # detach_branch mountpoint  (leaves the data on the drive untouched)
+detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on the drive untouched; the STEPs are extra lines for the dry-run plan)
   local mp=$1 role label pool others dev part img
+  shift
   role=$(branch_role "$mp"); label=$(branch_name "$mp"); pool=$(role_pool "$role")
   img=$(boot_image_of "$mp")
   mapfile -t others < <(branches_of "$role" | grep -vx "$mp")
   part=$(branch_part "$mp"); dev=""; [ -n "$part" ] && ! is_boot_section "$mp" && dev=$(disk_of_part "$part")
+  local drain=0
 
   if is_boot_section "$mp" && mountpoint -q "$mp" && has_data "$mp"; then
     if [ ${#others[@]} -eq 0 ]; then
@@ -839,7 +943,7 @@ detach_branch() {   # detach_branch mountpoint  (leaves the data on the drive un
       return 1
     fi
     say "$label holds files. Removing the section deletes it, so they are copied to another $role drive first."
-    drain_branch "$mp" || { note "Not removing $label."; return 1; }
+    drain=1
   fi
 
   if [ ${#others[@]} -eq 0 ]; then
@@ -853,12 +957,21 @@ detach_branch() {   # detach_branch mountpoint  (leaves the data on the drive un
   elif ! is_boot_section "$mp" && mountpoint -q "$mp" && has_data "$mp"; then
     say "$label holds files. They will disappear from the $role storage unless they are copied to another $role drive."
     if yn "Copy them to another $role drive first (recommended)?"; then
-      drain_branch "$mp" || { note "Not removing $label."; return 1; }
+      drain=1
     else
       warn "Continuing without copying. The files stay on the drive but will not show in the pool."
       typed "CONTINUE" "Type CONTINUE to confirm: " || { say "Cancelled."; return 1; }
     fi
   fi
+
+  local -a plan=()
+  [ "$drain" = 1 ] && plan+=("Copy the files of $label to another $role drive and check every file.")
+  plan+=("Stop the containers that use the $role storage for a minute.")
+  if is_boot_section "$mp"; then plan+=("Take $label out of the $role storage and delete the section file (its space goes back to the boot drive).")
+  else plan+=("Take $label out of the $role storage (the data on the drive is not touched)."); fi
+  plan+=("Start the containers again." "$@")
+  pre_change "${plan[@]}" && return 0
+  if [ "$drain" = 1 ]; then drain_branch "$mp" || { note "Not removing $label."; return 1; }; fi
 
   if [ -z "${STOPPED// /}" ]; then stop_containers "$pool"; fi
   sync_fs "$mp"
@@ -892,6 +1005,7 @@ disconnect_flow() {
   mp=$(pick_branch "Which drive do you want to disconnect? ") || return 1
   DETACHED_DEV=""
   detach_branch "$mp" || return 1
+  [ "$DRY_RUN" = 1 ] && return 0
   dev=$DETACHED_DEV
   is_boot_section "$mp" && return 0
   if [ "$TEST_MODE" != 1 ] && [ -n "$dev" ] && command -v udisksctl >/dev/null 2>&1; then
@@ -919,7 +1033,8 @@ move_flow() {
   yn "Continue?" || { say "Cancelled."; return 1; }
   confirm_erase "$dev" || return 1
   DETACHED_DEV=""
-  detach_branch "$mp" || return 1
+  detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole storage." || return 1
+  [ "$DRY_RUN" = 1 ] && return 0
   PENDING_NOTE="$(branch_name "$mp") already left the $role storage and was not added to the $newrole storage. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
   connect_flow "$dev" "$newrole" 1 1 || { note ""; note "$PENDING_NOTE"; PENDING_NOTE=""; return 1; }
   PENDING_NOTE=""
@@ -944,6 +1059,9 @@ adopt_flow() {
   say "  After:        mounted as a pool drive, and $pool becomes the pool"
   say "  Your files are not moved or copied. Containers using $pool will be stopped for a minute."
   yn "Continue?" || { say "Cancelled."; return 1; }
+  pre_change "Stop the containers that use $pool for a minute." \
+             "Mount the drive as a pool drive and make $pool the pool. Your files are not moved or copied." \
+             "Check the pool shows the same files, then start the containers again." && return 0
 
   before=$(ls -A "$pool" | wc -l)
   stop_containers "$pool"
@@ -1072,6 +1190,9 @@ recover_flow() {
     note "Choose the drives first:  sudo drives"
     return 1
   fi
+  pre_change "Stop the containers that use the storage." \
+             "Unmount the pools and the drives, then mount every drive and pool again from the saved setup." \
+             "Apply the drive power settings and start the containers again." && return 0
   stop_containers "$MAIN_POOL" "$BACKUP_POOL" "$DISKS_DIR"
   # pools first, then the drives under them
   pool_umount "$BACKUP_POOL" 2>/dev/null
@@ -1194,6 +1315,9 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
   fi
   typed "RESTORE" "Type RESTORE (capitals) to copy these $n files: " || { say "Cancelled. Nothing was copied."; return 1; }
   if [ -z "${STOPPED// /}" ]; then   # the check above changes nothing: the containers are stopped only now, for the copy
+    pre_change "Stop the containers that use the main storage." \
+               "Copy the $n missing files ($(human "$bytes")) from the backup into the main storage. Files already there are never overwritten." \
+               "Check that every file is there, then start the containers again." && return 0
     stop_containers "$MAIN_POOL"
     HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo hdd-recover  to start them without restoring."
   fi
@@ -1236,6 +1360,7 @@ restore_flow() {   # restore only the missing files from the backup into the mai
   src=$(find_backup_source) || { note "No backup copy of the main storage was found, so there is nothing to restore from."; return 1; }
   show_backup_source "$src" || { say "Cancelled."; return 1; }
   restore_files "$src" || return 1
+  [ "$DRY_RUN" = 1 ] && return 0
   HOLD_HINT=""
   start_containers
   after_restore_hints
@@ -1288,6 +1413,10 @@ replace_flow() {
     typed "CONTINUE" "Type CONTINUE to use it anyway, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
   fi
   confirm_erase "$dev" || return 1
+  pre_change "Stop the containers that use the $role storage." \
+             "Erase $dev and format it as the new drive for $shown." \
+             "Add it to the $role storage and mount the pool again." \
+             "$([ "$role" = main ] && echo "Copy the missing files back from the backup, then start the containers." || echo "Start the containers. The next backup run fills the new drive.")" && return 0
 
   stop_containers "$pool"
   if [ "$role" = main ]; then
@@ -1383,6 +1512,9 @@ release_flow() {   # take every drive out of both pools; the files on the drives
   say "  sudo drives     (Connect a new drive; for a drive with files, choose 'Keep the data')"
   say "Immich, Nextcloud and the other services that use the storage are stopped for a minute."
   yn "Release all drives?" || { say "Cancelled. Nothing was changed."; return 1; }
+  pre_change "Stop the containers that use the storage." \
+             "Take all ${#all[@]} drives out of both pools. The files on the drives are not touched." \
+             "Make $MAIN_POOL and $BACKUP_POOL plain folders on the boot drive, then start the containers." && return 0
 
   stop_containers "$MAIN_POOL" "$BACKUP_POOL" "$DISKS_DIR"
   sync_fs "${all[@]}"
@@ -1428,7 +1560,16 @@ pool_fills_in_order() {   # pool_fills_in_order /mnt/storage -> true when its fs
 }
 
 fillorder_flow() {   # make the pools of an older setup fill one drive at a time (a new pool already does)
-  local role pool did=0
+  local role pool did=0 todo=""
+  for role in main backup; do
+    [ -n "$(branches_of "$role")" ] || continue
+    pool_fills_in_order "$(role_pool "$role")" || todo="$todo $role"
+  done
+  if [ -n "$todo" ]; then
+    todo=${todo# }; todo=${todo// / and }
+    pre_change "Change the saved setup of the $todo storage so it fills one drive at a time." \
+               "Apply it now if possible. If the pool has to be mounted again, its containers stop for a minute." && return 0
+  fi
   for role in main backup; do
     [ -n "$(branches_of "$role")" ] || continue
     pool=$(role_pool "$role")
@@ -1531,12 +1672,20 @@ bootsection_flow() {
     done
     say "The section will have $(pretty_size "$bytes") ($(role_pool "$role"), last in line)."
     yn "Make it now?" || { say "Cancelled. Nothing was changed."; return 1; }
+    pre_change "Reserve $(pretty_size "$bytes") on the boot drive and format it as a new drive section." \
+               "Stop the containers that use the $role storage for a minute." \
+               "Add the section to the $role storage as its last drive, then start the containers again." && return 0
     [ "$old" -gt 0 ] && rm -f "$img"
     if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(pretty_size "$bytes") on the boot drive."; fi
     if ! mkfs.ext4 -F -q -L "$label" -m 0 "$img" >&2; then rm -f "$img"; die "Could not format the section."; fi
     log "made the boot drive section $img ($bytes bytes) for $role"
   fi
 
+  if [ "$reuse" = 1 ]; then
+    pre_change "Use the saved boot drive section again, with its files." \
+               "Stop the containers that use the $role storage for a minute." \
+               "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+  fi
   stop_containers "$(role_pool "$role")"
   fstab_snapshot
   ensure_mp "$mp"
@@ -1570,6 +1719,7 @@ bootsection_flow() {
 # helper updates those folders (FileBrowser restarts for a few seconds). Without homelab-setup (a hand-built server) nothing happens.
 sync_filebrowser() {
   [ "$TEST_MODE" = 1 ] && return 0
+  [ "$DRY_RUN" = 1 ] && return 0
   # the Homepage drive pills ("Main pool" / "Connect Backup Drive" ...) follow the pools
   command -v homelab-sample >/dev/null 2>&1 && { homelab-sample widgets 9>&- >/dev/null 2>&1 || true; }
   command -v homelab-setup >/dev/null 2>&1 || return 0
@@ -1745,6 +1895,16 @@ Usage:  sudo drives [command]
   version       show the version
   help          show this text
 
+Options (before or after the command):
+  --dry-run, -n    show what would happen and change nothing (the questions are still asked)
+  --yes, -y        answer the yes/no questions with yes (which drive to use is still asked)
+  --confirm-erase  also type the confirmations for erasing or removing a drive (ERASE, REMOVE, CONTINUE, the drive name)
+  --now            do not wait for a running backup or upload
+  --help, -h       show this text
+
+Before a change that stops the containers, drives looks at the backup and at what is being written to the drives.
+If a backup or an upload is running it says so and waits for it to finish (up to 6 hours), unless you use --now.
+
 Exit code: 0 = the command did what was asked. 1 = it was refused, cancelled or failed.
 EOF
 }
@@ -1758,6 +1918,23 @@ run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser
 }
 
 main() {
+  # options can stand before or after the command; test-setup keeps its own arguments
+  local -a args=()
+  local a
+  while [ $# -gt 0 ]; do
+    a=$1; shift
+    case "$a" in
+      --dry-run|-n)  DRY_RUN=1 ;;
+      --yes|-y)      ASSUME_YES=1 ;;
+      --confirm-erase) CONFIRM_ERASE=1 ;;
+      --now)         NOW=1 ;;
+      -h|--help)     args+=(help) ;;
+      -*)            note "Unknown option: $a"; note ""; usage_text >&2; exit 1 ;;
+      test-setup|test-cleanup) args+=("$a" "$@"); break ;;
+      *)             args+=("$a") ;;
+    esac
+  done
+  set -- ${args[@]+"${args[@]}"}
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
   mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
   { exec 9>"/var/lock/homelab-drives.lock"; } 2>/dev/null || exec 9>"/tmp/homelab-drives.lock"
@@ -1779,7 +1956,7 @@ main() {
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;
-    help|-h|--help) usage_text ;;
+    help)         usage_text ;;
     *) note "Unknown command: $1"; note ""; usage_text >&2; exit 1 ;;
   esac
 }
