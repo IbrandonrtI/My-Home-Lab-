@@ -63,6 +63,8 @@ check("exit 1 with nothing = silent fail", bench.classify(1, "", False, [], Fals
 check("unbound variable = crash", bench.classify(0, "drives: line 3: x: unbound variable\n", False, [], False, "x")[0], "CRASH")
 check("the words 'syntax error' in normal text are not a crash", bench.classify(0, "ok  every script passes the syntax error check\n", False, [], False, "x")[0], "NOTHING")
 check("a cancel with exit 1 is a cancel", bench.classify(1, "Cancelled. Nothing was changed.\n", False, [], False, "x")[0], "CANCELLED")
+check("a dry run that mentions 'only backup drive' is not a refusal", bench.classify(0, "WARNING: X is the only backup drive.\nDRY RUN: this is what would happen now.\n", False, [], False, "disconnect")[0], "NOTHING")
+check("the same command with another option is another case", bench.case_id("l", ["x"], ["1"], None, (), "dry") != bench.case_id("l", ["x"], ["1"], None, (), "yes"), True)
 check("timeout = crash", bench.classify(124, "", True, [], False, "x")[0], "CRASH")
 
 # the report
