@@ -27,6 +27,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -740,7 +741,7 @@ def classify(rc, out, timed_out, events, changed, flow=""):
             outcome = "DONE"
         elif re.search(r"Cancelled", out) or ended_at_question:
             outcome = "CANCELLED"
-        elif flow not in ("status", "menu", "cli", "wish", "power") and re.search(
+        elif flow not in ("status", "menu", "cli", "wish", "power") and "DRY RUN" not in out and re.search(
                 r"is the only|[Cc]annot |[Cc]ould not|No new drive|No drives|nothing to |is not mounted|Not removing|enough free space|not enough|too small|too big", out):
             outcome = "REFUSED"
             flags.append("exit 0 although the command refused")
@@ -838,8 +839,8 @@ def trim(text, head=3500, tail=1500):
     return text[:head] + "\n...[%d characters left out]...\n" % (len(text) - head - tail) + text[-tail:]
 
 
-def case_id(layout, args, answers, fault, pre=()):
-    return "|".join([layout, " ".join(args), "\x1e".join(answers), "%s:%s" % fault if fault else "", ",".join(pre)])
+def case_id(layout, args, answers, fault, pre=(), tag=""):
+    return "|".join([layout, " ".join(args), "\x1e".join(answers), "%s:%s" % fault if fault else "", ",".join(pre), tag])
 
 
 def lose_files(env, n=3):
@@ -855,10 +856,10 @@ def lose_files(env, n=3):
                     pass
 
 
-def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_env=None, timeout=None, probe=True, pre=()):
+def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_env=None, timeout=None, probe=True, pre=(), tag="", expect=None, before_run=None):
     """One scripted run of `drives` on the saved layout. `pre` = things that went wrong BEFORE the command starts
     (for example a drive that was unplugged). Returns the record, or None when it was already done."""
-    cid = case_id(layout.key, args, answers, fault, pre)
+    cid = case_id(layout.key, args, answers, fault, pre, tag)
     if cid in rec.done:
         return None
     if env.current != layout.key or env.dirty:
@@ -874,6 +875,8 @@ def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_e
         env.base_files = {r: set(listing(p)) for r, p in (("main", env.main), ("backup", env.backup))}
         env.dirty = True
     before_files = env.base_files
+    if before_run:
+        before_run()
     rc, out, events, secs, to = run_shim(env, args, answers, fault=fault, extra_env=extra_env, timeout=timeout)
     kill_sleepers(env)
     docker = ""
@@ -903,6 +906,8 @@ def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_e
         "prompts": [{"n": e["n"], "kind": e["kind"], "prompt": e["prompt"], "items": e["items"], "answer": e["answer"]} for e in asked],
         "output": trim(out), "docker": docker.strip().splitlines()[:12], "probe": probe_rec,
     }
+    if expect and not to:
+        r["flags"] += expect(r)
     rec.add(r)
     return r
 
@@ -1071,7 +1076,8 @@ WISHES = [
 def level_settings(level):
     """budget = runs per command and layout; deep = the layouts that also get the unplug / full / busy scenarios and the failure runs."""
     if level == "quick":
-        return {"budget": 14, "max_dev": 1, "depth": 6, "faults": False, "variants": False, "wishes": False, "deep": None, "pre": 0}
+        return {"budget": 14, "max_dev": 1, "depth": 6, "faults": False, "variants": False, "wishes": False, "deep": None, "pre": 0,
+                "safety": SAFETY_LAYOUTS}
     if level == "standard":
         return {"budget": 20, "max_dev": 2, "depth": 8, "faults": True, "variants": True, "wishes": True, "pre": 3,
                     "deep": [r"^m[123]-b[12]$", r"boot", r"^legacy", r"^oldpool", r"nearlyfull", r"mixedsizes", r"^m0-b1$", r"^m1-b0$"]}
@@ -1128,6 +1134,8 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
         t0 = time.time()
         results, happy = explore(env, rec, layout, name, args, level, st["budget"], st["max_dev"], st["depth"])
         happy_paths[name] = happy
+        if re.search(st.get("safety") or ".", layout.key):
+            run_safety(env, rec, layout, name, results, happy, log)
         bad = sum(1 for r in results if r["outcome"] in ("CRASH", "SILENT-FAIL") or any(f.startswith("INV-") for f in r["flags"]))
         log("  %-12s %3d runs  %4.0fs%s" % (name, len(results), time.time() - t0, ("   !! %d problem(s)" % bad) if bad else ""))
     deep = st["faults"] and (st["deep"] is None or any(re.search(p, layout.name) for p in st["deep"]))
@@ -1177,6 +1185,96 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
 
 
 FLOWS_BY_NAME = {n: a for n, a, _ in FLOWS}
+
+
+CHANGING_FLOWS = ("connect", "disconnect", "move", "adopt", "recover", "replace", "fillorder", "release", "bootsection", "restore", "power")
+SAFETY_LAYOUTS = r"^(m1-b1|m2-b2|m1-b0|legacy-single-drive|oldpool-m2-b1|m1-b1-bootsec)$"
+BUSY_NOW = "a backup is running right now"
+
+
+def run_safety(env, rec, layout, name, results, happy, log):
+    """--dry-run, --yes and the 'a backup is running' check, on the happy path of one command."""
+    if name not in CHANGING_FLOWS or not happy:
+        return
+    hp = next((r for r in results if r["answers"] == happy and r["outcome"] in ("DONE", "NOTHING")), None)
+    if hp is None:
+        return
+    args = FLOWS_BY_NAME[name]
+    kinds = {p["n"]: p["kind"] for p in hp["prompts"]}
+
+    def keep(drop):
+        return [a for i, a in enumerate(happy) if kinds.get(i + 1) not in drop]
+
+    def same_result(label):
+        def chk(r):
+            bad = []
+            if r["outcome"] != hp["outcome"] or r["changed"] != hp["changed"]:
+                bad.append("INV-%s: the result was %s (changed=%s) but the same answers typed by hand gave %s (changed=%s)"
+                           % (label, r["outcome"], r["changed"], hp["outcome"], hp["changed"]))
+            return bad
+        return chk
+
+    def dry(r):
+        bad = []
+        if r["changed"]:
+            bad.append("INV-dryrun-changed: --dry-run changed the drives, mounts, files or settings")
+        if any(l.startswith("docker stop") or l.startswith("docker start") for l in r["docker"]):
+            bad.append("INV-dryrun-docker: --dry-run stopped or started containers")
+        if r["rc"] != 0:
+            bad.append("INV-dryrun-failed: --dry-run exited with %s" % r["rc"])
+        elif "DRY RUN" not in r["output"] and "already" not in r["output"]:
+            bad.append("INV-dryrun-silent: --dry-run printed no plan")
+        return bad
+
+    n = 0
+    n += bool(run_case(env, rec, layout, name, args + ["--dry-run"], keep(("typed",)), note="--dry-run", tag="dry", expect=dry))
+    n += bool(run_case(env, rec, layout, name, args + ["--yes", "--confirm-erase"], keep(("yn", "typed")), note="--yes --confirm-erase",
+                       tag="yes", expect=same_result("yes-differs")))
+    if name != "power" and hp["outcome"] == "DONE":
+        busy = {"DRIVES_BUSY": BUSY_NOW}
+
+        def declined(r):
+            bad = []
+            if r["changed"]:
+                bad.append("INV-busy-changed: a backup was running, the answer was no, but things changed")
+            if r["rc"] != 1 or "Nothing was changed" not in r["output"]:
+                bad.append("INV-busy-message: a backup was running and the answer was no: expected a refusal saying nothing was changed (rc=%s)" % r["rc"])
+            return bad
+
+        def timed_out(r):
+            bad = []
+            if r["changed"]:
+                bad.append("INV-busy-changed: it gave up waiting for the backup but things changed")
+            if r["rc"] != 1 or "Still busy" not in r["output"]:
+                bad.append("INV-busy-message: waiting ran out: expected 'Still busy' and exit 1 (rc=%s)" % r["rc"])
+            return bad
+
+        def waited(r):
+            bad = same_result("busy-wait")(r)
+            if "It finished" not in r["output"]:
+                bad.append("INV-busy-wait: after the backup ended it did not say it went on")
+            return bad
+
+        def with_busy(ans):   # the busy question comes after the person's own answers, except in fillorder: its own question is asked after its first change
+            return ans + happy if name == "fillorder" else happy + ans
+
+        n += bool(run_case(env, rec, layout, name, args, with_busy([""]), note="a backup is running, answer no", tag="busy-no",
+                           extra_env=busy, expect=declined))
+        n += bool(run_case(env, rec, layout, name, args + ["--now"], happy, note="a backup is running, but --now", tag="busy-now",
+                           extra_env=busy, expect=same_result("busy-now-differs")))
+        n += bool(run_case(env, rec, layout, name, args, with_busy(["y"]), note="a backup is running, wait for too long", tag="busy-long",
+                           extra_env=dict(busy, BUSY_POLL_SECS="1", BUSY_MAX_WAIT_SECS="2"), expect=timed_out))
+        flag_file = os.path.join(env.work, "busy-now.txt")
+
+        def start_wait():
+            with open(flag_file, "w") as f:
+                f.write(BUSY_NOW + "\n")
+            threading.Timer(2.5, lambda: os.path.exists(flag_file) and os.remove(flag_file)).start()
+
+        n += bool(run_case(env, rec, layout, name, args, with_busy(["y"]), note="a backup is running, wait until it ends", tag="busy-wait",
+                           extra_env={"DRIVES_BUSY_FILE": flag_file, "BUSY_POLL_SECS": "1", "BUSY_MAX_WAIT_SECS": "60"},
+                           before_run=start_wait, expect=waited))
+    log("  %-12s %3d safety runs (--dry-run, --yes, backup running)" % (name + " +safety", n))
 
 
 def run_wishes(env, rec, layout, log):

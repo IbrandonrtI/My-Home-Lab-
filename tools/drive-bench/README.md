@@ -76,6 +76,9 @@ Every layout is built with the real `connect` flow, saved, and copied back befor
   something holds the pool busy.
 * **In the middle of a command** (after the 1st, middle and last answer): a drive disappears, a drive fills up, a drive turns
   read-only, a program holds a drive or the pool, containers refuse to stop or to start, mounting fails.
+* **The safety options**, on the normal path of every command that changes something: `--dry-run` (nothing may change, no container may
+  stop, a plan must be printed), `--yes --confirm-erase` (must give the same result as typing the answers), and a backup that is
+  running (the answer no stops with nothing changed, `--now` goes on, waiting ends when the backup ends, waiting too long gives up).
 * **Words people might expect** (`rename`, `smart`, `sleep`, `balance`, …): reported as supported or not.
 * **After every run that changed something:** fstab, mounts, pools, containers and files are checked, and `drives status` is run
   as a health check.
