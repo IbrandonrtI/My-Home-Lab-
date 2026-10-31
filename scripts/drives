@@ -3241,12 +3241,26 @@ main() {
       --full)        FULL=1 ;;
       --folders)     FOLDERS=1 ;;
       -h|--help)     WANT_HELP=1 ;;
+      --version)     args+=("version") ;;
       -*)            note "Unknown option: $a"; note ""; usage_text >&2; exit 1 ;;
       test-setup|test-cleanup) args+=("$a" "$@"); break ;;
       *)             args+=("$a") ;;
     esac
   done
   set -- ${args[@]+"${args[@]}"}
+  # other words people type for a command that exists: they mean the same thing
+  case "${1:-}" in
+    name) set -- rename "${@:2}" ;;                    smart) set -- health "${@:2}" ;;
+    spindown|standby) set -- sleep "${@:2}" ;;         fsck|verify) set -- check "${@:2}" ;;
+    add) set -- connect "${@:2}" ;;                    remove) set -- disconnect "${@:2}" ;;
+    df) set -- usage "${@:2}" ;;                       erase|format) set -- wipe "${@:2}" ;;
+    help) case "${2:-}" in
+            name) set -- help rename "${@:3}" ;;       smart) set -- help health "${@:3}" ;;
+            spindown|standby) set -- help sleep "${@:3}" ;;   fsck|verify) set -- help check "${@:3}" ;;
+            add) set -- help connect "${@:3}" ;;       remove) set -- help disconnect "${@:3}" ;;
+            df) set -- help usage "${@:3}" ;;          erase|format) set -- help wipe "${@:3}" ;;
+          esac ;;
+  esac
   if [ "$WANT_HELP" = 1 ]; then set -- help "$@"; fi
   [ "${1:-}" = help ] && { [ "$#" -le 2 ] || { note "help takes one command name, for example:  sudo drives help release"; exit 1; }; help_for "${2:-}"; exit $?; }
   # an option that does not belong to the command is refused instead of ignored

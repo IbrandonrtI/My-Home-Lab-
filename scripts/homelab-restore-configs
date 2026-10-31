@@ -267,5 +267,5 @@ case "${1:-}" in
   version|--version) echo "homelab-restore-configs $VERSION" ;;
   help|--help|-h) usage ;;
   /*)         restore_configs "$1" ;;
-  *) usage >&2; exit 1 ;;
+  *) echo "Unknown option: $1" >&2; echo >&2; usage >&2; exit 1 ;;
 esac
