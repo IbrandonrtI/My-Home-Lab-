@@ -150,5 +150,20 @@ with tempfile.TemporaryDirectory() as td:
     r = subprocess.run([fp, "-n", "user.test", "-v", "abc", target], capture_output=True, text=True, env=dict(os.environ, BENCH_SETFATTR="fail"))
     check("setfattr fake: can be told to fail", r.returncode != 0, True)
 
+# the truth checks: the helpers that compare the screens of the homelab commands with the real situation
+import truth  # noqa: E402
+check("truth: sizes are written like numfmt does", [truth.iec(27013182), truth.iec(1024), truth.iec(5), truth.iec(3 * 1024 ** 3)], ["26MB", "1.0KB", "5B", "3.0GB"])
+check("truth: a size one unit away is accepted, a far one is not", (truth.close("26M", 27013182), truth.close("40M", 27013182)), (True, False))
+rows = truth.status_rows("   x  1 problem needs you.  Details in Status below.\n\n  -- Status ---\n\n   +  Main pool        mounted, 26M used of 81M\n"
+                         "   !  Last backup      no result found\n\n  -- Suggested Commands ---\n   sudo drives\n")
+check("truth: the status lines are read, the summary line is not", sorted(rows), ["Last backup", "Main pool"])
+good = "   !  2 things to look at.  Details in Status below.\n\n  -- Status ---\n   !  Updates   3 system update(s)\n   !  Last backup   old\n   +  Boot drive   1% used\n"
+check("truth: the login count agrees with the lines", truth.login_count(None, 0, good), [])
+check("truth: a wrong count is found", len(truth.login_count(None, 0, good.replace("2 things", "5 things"))), 1)
+check("truth: a failure must be the one reported", len(truth.login_count(None, 0, good.replace("   !  Updates", "   x  Updates"))), 1)
+check("truth: shell errors on the screen are found", len(truth.bad_text("line 3: IMG: unbound variable\nTraceback (most recent call last):")), 2)
+check("truth: the version of a script is read", truth.script_version(os.path.join(os.path.dirname(bench.__file__), "..", "..", "scripts", "drives")) is not None, True)
+check("truth: the words a script accepts are found", "version" in truth.dispatch_words(os.path.join(os.path.dirname(bench.__file__), "..", "..", "scripts", "homelab-update")), True)
+
 print("OK" if bad == 0 else "FAIL")
 sys.exit(0 if bad == 0 else 1)
