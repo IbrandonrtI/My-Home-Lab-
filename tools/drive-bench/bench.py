@@ -632,7 +632,8 @@ def fingerprint(env):
             for rel, size in listing(fp):
                 h.update(("%s/%s %d" % (f, rel, size)).encode())
     r = sh("losetup -ln -O NAME,BACK-FILE")
-    h.update("".join(sorted(l for l in r.stdout.splitlines() if env.work in l)).encode())
+    # the files that are attached, not the number of the loop device they got (mounting a drive again may give it another number)
+    h.update("".join(sorted(l.split(None, 1)[1] for l in r.stdout.splitlines() if env.work in l and len(l.split(None, 1)) == 2)).encode())
     # a spare drive can be erased: its partition table sits in the first MiB (a mount only changes the file system behind it)
     lay = env.layout
     if lay is not None:
@@ -864,7 +865,7 @@ def classify(rc, out, timed_out, events, changed, flow=""):
     return outcome, flags, msg
 
 
-def check_invariants(env, flow, out, before_files, changed=False, unplugged=False, rc=0, mountfail=False):
+def check_invariants(env, flow, out, before_files, changed=False, unplugged=False, rc=0, mountfail=False, fault_run=False):
     """Look at the machine after a run. Returns a list of problems (strings)."""
     bad = []
     try:
@@ -911,9 +912,9 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
             twice = [rel for rel, n in seen.items() if n > 1]
             if twice:
                 bad.append("INV-balance-twice: %d file(s) are on more than one %s drive after balance (e.g. %s)" % (len(twice), pool_prefix, twice[0]))
-    if changed and flow in LOOK_FLOWS:
+    if changed and flow in LOOK_FLOWS and not fault_run:       # a fault that was put in on purpose (a drive pulled) is itself a change
         bad.append("INV-lookonly-changed: '%s' only looks, but the drives, mounts, files or settings are different now" % flow)
-    if changed and re.search(r"Nothing was changed", out):
+    if changed and not fault_run and re.search(r"Nothing was changed", out):
         bad.append("INV-false-claim: it says 'Nothing was changed' but the drives, mounts or files are different now")
     # containers
     stopped = os.path.join(env.flags, "stopped")
@@ -955,7 +956,35 @@ class Recorder:
                     pass
         self.count = 0
 
+    def transcript(self, rec, full):
+        """The whole screen of every run, nothing cut out, one file per layout (transcripts/LAYOUT.txt). results.jsonl keeps the short form."""
+        folder = os.path.join(os.path.dirname(self.path), "transcripts")
+        try:
+            os.makedirs(folder, exist_ok=True)
+            name = re.sub(r"[^A-Za-z0-9._-]+", "-", rec["layout"]) + ".txt"
+            cmd = "sudo " + " ".join([rec["flow"].split(":", 1)[-1] if rec["flow"].startswith(("other:", "real:")) else "drives"] + list(rec["args"]))
+            if rec["flow"].startswith(("other:", "real:")):
+                cmd = rec["flow"].split(":", 1)[1]
+            head = ["#" * 100, "layout: %s    command: %s" % (rec["layout"], cmd.strip())]
+            if rec.get("answers"):
+                head.append("answers typed, in order: %s" % " | ".join(repr(x) for x in rec["answers"]))
+            if rec.get("pre"):
+                head.append("before the command: %s" % ", ".join(rec["pre"]))
+            if rec.get("fault"):
+                head.append("during the command: %s" % ":".join(str(x) for x in rec["fault"]))
+            if rec.get("note"):
+                head.append("what it tries: %s" % rec["note"])
+            head.append("exit code: %s    result: %s%s" % (rec["rc"], rec["outcome"], ("    flags: " + "; ".join(rec["flags"])) if rec["flags"] else ""))
+            head.append("-" * 100)
+            with open(os.path.join(folder, name), "a") as f:
+                f.write("\n".join(head) + "\n" + full.rstrip("\n") + "\n\n")
+        except OSError:
+            pass
+
     def add(self, rec):
+        full = rec.pop("full", None)
+        if full is not None:
+            self.transcript(rec, full)
         self.f.write(json.dumps(rec) + "\n")
         self.f.flush()
         self.done.add(rec["id"])
@@ -1019,7 +1048,7 @@ def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_e
     outcome, flags, msg = classify(rc, out, to, events, changed, flow)
     invariants = check_invariants(env, flow, out, before_files, changed,
                                     any("unplug" in x for x in list(pre) + [fault[1] if fault else ""]), rc,
-                                    bool(fault) and "mount-fails" in fault[1]) if not to else []
+                                    bool(fault) and "mount-fails" in fault[1], fault_run=bool(fault)) if not to else []
     probe_rec = None
     if probe and changed:
         pdoc = run_shim(env, ["status"], timeout=60)
@@ -1034,7 +1063,7 @@ def run_case(env, rec, layout, flow, args, answers, fault=None, note="", extra_e
         "id": cid, "layout": layout.key, "flow": flow, "args": args, "answers": answers, "fault": fault, "pre": list(pre), "note": note,
         "rc": rc, "secs": round(secs, 2), "outcome": outcome, "flags": flags + invariants, "msg": msg, "changed": changed,
         "prompts": [{"n": e["n"], "kind": e["kind"], "prompt": e["prompt"], "items": e["items"], "answer": e["answer"]} for e in asked],
-        "output": trim(out), "docker": docker.strip().splitlines()[:12], "probe": probe_rec,
+        "output": trim(out), "docker": docker.strip().splitlines()[:12], "probe": probe_rec, "full": out,
     }
     if "--json" in args and not to and (rc == 0 or flow in ("health", "check")):
         try:
@@ -1395,8 +1424,12 @@ def run_safety(env, rec, layout, name, results, happy, log):
 
     n = 0
     n += bool(run_case(env, rec, layout, name, args + ["--dry-run"], keep(("typed",)), note="--dry-run", tag="dry", expect=dry))
+    yes_only = all(str(a).strip().lower().startswith("y") for i, a in enumerate(happy) if kinds.get(i + 1) == "yn")
+
+    def yes_check(r):    # --yes answers yes to every question; the typed path said "no" somewhere, so the two may differ on purpose
+        return same_result("yes-differs")(r) if yes_only else []
     n += bool(run_case(env, rec, layout, name, args + ["--yes", "--confirm-erase"], keep(("yn", "typed")), note="--yes --confirm-erase",
-                       tag="yes", expect=same_result("yes-differs")))
+                       tag="yes", expect=yes_check))
     if name not in NO_BUSY_FLOWS and (hp["outcome"] == "DONE" or name == "scan"):
         busy = {"DRIVES_BUSY": BUSY_NOW}
 
@@ -1489,6 +1522,8 @@ def run_look(env, rec, layout, log):
     for label, args, rc, text in LOOK_CLI:
         if not pooled and text == "Checked":
             text = "nothing to check"
+        if not pooled and text in ("Biggest folders", '"folders"'):
+            text = "NOT MOUNTED" if text == "Biggest folders" else '"mounted":false'      # with no pool there is no folder to measure
         n += bool(run_case(env, rec, layout, "cli", args, [], note=label, probe=False, tag="look", expect=want(rc, text)))
     for sname, envx, specs, checks in LOOK_SCENARIOS:
         real = [resolve_fault(layout, x) for x in specs]
@@ -1807,6 +1842,7 @@ def main():
     ap.add_argument("--resume", action="store_true", help="continue a stopped run: cases already in results.jsonl are skipped")
     ap.add_argument("--no-other", action="store_true", help="skip the other commands (homelab, homelab-update, ...)")
     ap.add_argument("--other-only", action="store_true", help="only run the other commands")
+    ap.add_argument("--no-truth", action="store_true", help="skip the checks that compare the screens of the other commands with the real situation")
     ap.add_argument("--real", choices=["off", "safe", "full"], default="full",
                     help="the other commands on this real server: off, safe (read-only ones) or full (all of them, after you confirm)")
     ap.add_argument("--yes-real", action="store_true", help="do not ask for the typed confirmation before the real commands")
@@ -1886,7 +1922,7 @@ def main():
                     log("probing words people might expect (rename, smart, sleep ...)")
                     if build_layout(env, lay0[0]) == []:
                         run_wishes(env, rec, lay0[0], log)
-        if not a.no_other and a.real != "off" or a.other_only:
+        if not a.no_other or a.other_only:
             import others
             others.run(env, rec, a, log)
     finally:

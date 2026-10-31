@@ -124,7 +124,8 @@ def judge(rc, out, timed_out, expect_fail=False):
 def record(rec, cid, layout, flow, args, stdin, rc, out, secs, outcome, flags, msg, note, hide=False):
     rec.add({"id": cid, "layout": layout, "flow": flow, "args": args, "answers": [x for x in stdin.split("\n") if x], "fault": None,
              "note": note, "rc": rc, "secs": round(secs, 2), "outcome": outcome, "flags": flags, "msg": msg, "changed": False,
-             "prompts": [], "output": "[output hidden: it may hold secrets]" if hide else bench.trim(out), "docker": [], "probe": None})
+             "prompts": [], "output": "[output hidden: it may hold secrets]" if hide else bench.trim(out), "docker": [], "probe": None,
+             "full": "[output hidden: it may hold secrets]" if hide else out})
 
 
 def layout_pass(env, rec, layouts, log):
@@ -165,6 +166,9 @@ def layout_pass(env, rec, layouts, log):
                 except OSError:
                     pass
             outcome, flags, msg = judge(rc, out, to)
+            if cmd == "homelab-backup" and rc != 0 and "No space left on device" in out and "|FAILED" in out:
+                flags = [f for f in flags if not f.startswith("bash-error")]         # a full backup drive: it failed, said so, and recorded it
+                outcome = "REFUSED"
             fp = bench.fingerprint(env)
             if fp != env.base_fp:
                 env.dirty = True
@@ -201,6 +205,15 @@ def run(env, rec, a, log):
         pick = lay if a.level == "full" else lay[::3] + lay[-1:]
         log("other commands on %d fake layouts" % len(pick))
         layout_pass(env, rec, pick, log)
+        if not getattr(a, "no_truth", False):
+            import truth
+            log("do the screens tell the truth? (known situations, on %d layouts)" % len(lay))
+            truth.run_contract(env, rec, log)
+            for layout in lay:
+                if env.current != layout.key or env.dirty:
+                    if bench.build_layout(env, layout):
+                        continue
+                truth.layout_truth(env, rec, layout, log)
     # 2. the real runs
     if a.real == "off":
         return

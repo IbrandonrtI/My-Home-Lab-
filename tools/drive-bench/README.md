@@ -92,6 +92,14 @@ Every layout is built with the real `connect` flow, saved, and copied back befor
   the fstab line **and** in the running pool (read back from mergerfs), survive the next rebuild of the pool, and be undone when you stop
   halfway ("a backup is running", answer no). A pool that cannot change while it runs is tried too. Resize is tried bigger, smaller and too
   small, and the file system must pass `e2fsck` afterwards.
+* **Do the screens tell the truth?** (`--no-truth` skips it) The other commands are run in situations that are set up on purpose, and what
+  they print is compared with what is really there: a pool that is mounted or not (with the real sizes), the last backup fresh, old or
+  failed, a backup size, the backup schedule, drive temperatures (fine, warm, hot, asleep, old), waiting updates, containers (all up, one
+  down, one unhealthy, Docker unreadable, right after a boot), the boot drive line, and the sentence at the top of the login screen against
+  the lines under it. `homelab-backup` is checked file by file (every file copied with the same content, deleted and changed files kept,
+  a second run changes nothing, a missing pool or an empty main storage or too little room is refused without touching the backup).
+  Every command's version, help and unknown-word answer is checked against the script, every word a script accepts must be in its help,
+  and every command named in `homelab commands` must exist. Output with shell errors (`unbound variable`, `command not found` ...) is a problem.
 * **Words people might expect** (`rename`, `smart`, `sleep`, `balance`, …): reported as supported or not.
 * **After every run that changed something:** fstab, mounts, pools, containers and files are checked, and `drives status` is run
   as a health check.
