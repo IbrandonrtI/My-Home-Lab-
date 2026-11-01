@@ -17,6 +17,7 @@
 :root {
   /* Top pills on a desktop (1500px wide and up) */
   --d-pill-height: 80px;    /* height of the pills; the name under the numbers (Main pool ...) has to fit inside */
+  --d-pool-width: 200px;    /* width of the two drive pills (Main pool and Backup pool); change only this number */
   --d-search-top: 100px;    /* the search bar: pill height + 10px margin above the pills + a gap of 10px */
   --d-search-space: 110px;  /* free space kept under the search bar for the cards below */
 
@@ -205,6 +206,16 @@ div[id$="-card"] > div {
   .widget-container > div:last-child {
     text-align: center !important;
     margin-left: 0 !important;
+  }
+
+  /* Main pool and Backup pool: both this wide (--d-pool-width in section 1).
+     They are the stats pills that have another stats pill before them (Server) and after them (Network). */
+  .widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource):has(~ .widget-container .information-widget-resource) {
+    box-sizing: border-box !important;
+    width: var(--d-pool-width) !important;
+    min-width: var(--d-pool-width) !important;
+    max-width: var(--d-pool-width) !important;
+    flex: 0 0 var(--d-pool-width) !important;
   }
 
   .widget-container:has(.information-widget-resource) {
