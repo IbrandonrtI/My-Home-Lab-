@@ -118,6 +118,11 @@ def layouts_for(level, only=None):
         spare_mix = ["blank", "ext4data", "vfat"]
     for m, b in pairs:
         L.append(Layout("m%d-b%d" % (m, b), m, b, spares=spare_mix))
+    # ready-made setups need several empty drives of different sizes (the drive sizes decide who keeps the data and who protects it)
+    L.append(Layout("m0-b0-blank5", 0, 0, spares=[Drive(s, i, "blank", "empty") for i, s in enumerate([48, 96, 64, 48, 160])],
+                    note="five empty drives of different sizes (for the ready-made setups)"))
+    L.append(Layout("m1-b0-blank3", 1, 0, spares=[Drive(s, i, "blank", "empty") for i, s in enumerate([48, 64, 96])],
+                    note="a pool already exists and three empty drives are plugged in"))
     L.append(Layout("legacy-single-drive", 0, 0, spares=["ext4data", "blank"], kind="legacy", note="the old single data drive"))
     L.append(Layout("oldpool-m2-b1", 2, 1, spares=["blank"], kind="oldpool"))
     L.append(Layout("m2-b1-uneven", 2, 1, spares=["blank"], kind="uneven"))
@@ -356,7 +361,7 @@ def install_fakes(env):
     for d in (env.bin, env.ctl, env.flags):
         os.makedirs(d, exist_ok=True)
     for name, body in (("docker", FAKE_DOCKER), ("lsblk", FAKE_LSBLK), ("mount", FAKE_MOUNT), ("hdparm", FAKE_HDPARM),
-                       ("smartctl", FAKE_LOGGER), ("udisksctl", FAKE_UDISKS)):
+                       ("smartctl", FAKE_LOGGER), ("udisksctl", FAKE_UDISKS), ("snapraid", FAKE_LOGGER)):
         path = os.path.join(env.bin, name)
         with open(path, "w") as f:
             f.write(body)
@@ -1118,6 +1123,8 @@ def candidates(ev, transcript_before, level, layout):
             exp = "ERASE"
         elif "CONTINUE" in prompt:
             exp = "CONTINUE"
+        elif re.search(r"name of the setup \(([a-z0-9]+)\)", prompt):
+            exp = re.search(r"name of the setup \(([a-z0-9]+)\)", prompt).group(1)
         elif m:
             exp = m.group(1)
         if exp and exp.startswith("/dev/") and exp not in SAFE_DEVS:
@@ -1313,6 +1320,170 @@ def resolve_fault(layout, spec):
     return "%s %s" % (what, label)
 
 
+# ---------------------------------------------------------------------------------------------------------------- ready-made setups
+PRESET_PLANS = [
+    # name, setup, picks (answers that choose drives), how many drives, parity drive sizes (MB), data drive sizes (MB), what the person is told they can use
+    ("pool, 2 of 5 drives", "pool", ["1", "y", "1", "n"], 2, 0),
+    ("pool, all 5 drives", "pool", ["1", "y", "1", "y", "1", "y", "1", "y", "1"], 5, 0),
+    ("mirror", "mirror", ["1", "1"], 2, 0),
+    ("snapraid1, the minimum (3 drives)", "snapraid1", ["1", "1", "1", "n"], 3, 1),
+    ("snapraid1, all 5 drives", "snapraid1", ["1", "1", "1", "y", "1", "y", "1"], 5, 1),
+    ("snapraid2, the minimum (4 drives)", "snapraid2", ["1", "1", "1", "1", "n"], 4, 2),
+    ("snapraid2, all 5 drives", "snapraid2", ["1", "1", "1", "1", "y", "1"], 5, 2),
+]
+
+
+def fstab_lines(env):
+    try:
+        return [l.split() for l in open(env.fstab).read().splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    except OSError:
+        return []
+
+
+def read_text(path):
+    try:
+        return open(path, errors="replace").read()
+    except OSError:
+        return None
+
+
+def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
+    """Checks for one run of `drives preset SETUP`: what must be on the machine when it is done (or nothing, for --dry-run / a refusal)."""
+    def chk(r):
+        bad = []
+        if r["outcome"] != "DONE" and not dry:
+            bad.append("INV-preset-not-done: expected the setup to be built, the result was %s (rc=%s)" % (r["outcome"], r["rc"]))
+            return bad
+        act = fstab_lines(env)
+        mps = [a[1] for a in act if len(a) > 1]
+        main_n = len([m for m in mps if re.search(r"/TMAIN\d+$", m)])
+        back_n = len([m for m in mps if re.search(r"/TBACKUP\d+$", m)])
+        par_n = len([m for m in mps if re.search(r"/TPARITY\d+$", m)])
+        rec_txt = read_text(os.path.join(env.state, "preset"))
+        conf = read_text(os.path.join(env.state, "snapraid.conf"))
+        cron = read_text(os.path.join(env.state, "snapraid-cron"))
+        if dry:
+            if r["changed"]:
+                bad.append("INV-preset-dry-changed: --dry-run changed the drives, mounts, files or settings")
+            if "DRY RUN" not in r["output"]:
+                bad.append("INV-preset-dry-silent: --dry-run printed no plan")
+            return bad
+        want_main = {"pool": ndrives, "mirror": 1}.get(setup, ndrives - nparity)
+        want_back = 1 if setup == "mirror" else 0
+        if (main_n, back_n, par_n) != (want_main, want_back, nparity):
+            bad.append("INV-preset-drives: the fstab has %d main, %d backup, %d protection drives; expected %d, %d, %d"
+                       % (main_n, back_n, par_n, want_main, want_back, nparity))
+        if rec_txt is None or not rec_txt.startswith(setup + "|"):
+            bad.append("INV-preset-record: the record of the setup says %r, expected it to start with %r" % (rec_txt, setup + "|"))
+        for m in [m for m in mps if re.search(r"/T(MAIN|BACKUP|PARITY)\d+$", m)]:
+            if not os.path.ismount(m):
+                bad.append("INV-preset-mount: %s is in the fstab but not mounted" % os.path.basename(m))
+        main_pool_ok = mount_types(env.work).get(env.main, "").endswith("mergerfs")
+        if not main_pool_ok:
+            bad.append("INV-preset-pool: the Main pool is not mounted after the setup was built")
+        if setup == "mirror" and not mount_types(env.work).get(env.backup, "").endswith("mergerfs"):
+            bad.append("INV-preset-pool: the Backup pool is not mounted after the mirror was built")
+        if setup.startswith("snapraid"):
+            if conf is None:
+                bad.append("INV-preset-conf: no SnapRAID settings file was written")
+            else:
+                parity_lines = [l for l in conf.splitlines() if re.match(r"(\d+-)?parity ", l)]
+                data_lines = [l for l in conf.splitlines() if l.startswith("data ")]
+                content = [l for l in conf.splitlines() if l.startswith("content ")]
+                if len(parity_lines) != nparity:
+                    bad.append("INV-preset-conf: %d parity lines in the SnapRAID settings, expected %d" % (len(parity_lines), nparity))
+                if len(data_lines) != ndrives - nparity:
+                    bad.append("INV-preset-conf: %d data lines, expected %d" % (len(data_lines), ndrives - nparity))
+                if not (2 <= len(content) <= 3):
+                    bad.append("INV-preset-conf: %d content lines, expected 2 or 3" % len(content))
+                for l in parity_lines:
+                    if "TPARITY" not in l:
+                        bad.append("INV-preset-conf: a parity file is not on a protection drive: " + l)
+                for l in data_lines:
+                    if "TPARITY" in l or "TBACKUP" in l:
+                        bad.append("INV-preset-conf: a data line points at a protection or backup drive: " + l)
+            if cron is None or not re.search(r"^0 4 \* \* \* root snapraid .* sync", cron, re.M):
+                bad.append("INV-preset-cron: the nightly 04:00 update is missing")
+            tools = read_text(os.path.join(env.flags, "tools.log")) or ""
+            if not re.search(r"^snapraid -c \S+ sync$", tools, re.M):
+                bad.append("INV-preset-first-sync: the first SnapRAID update was not run")
+        else:
+            if conf is not None or cron is not None:
+                bad.append("INV-preset-leftover: a SnapRAID settings or schedule file exists for the setup '%s'" % setup)
+        # the protection drives are part of the list, never offered as new drives, and the status shows them
+        rc, out, _ev, _s, to = run_shim(env, ["list"], timeout=60)
+        if rc != 0 or to:
+            bad.append("INV-preset-list: 'drives list' failed after the setup (rc=%s)" % rc)
+        elif nparity and len(re.findall(r"\bprotection\b|\bparity\b", out, re.I)) < nparity:
+            bad.append("INV-preset-list: 'drives list' does not show the %d protection drive(s)" % nparity)
+        rc, out, _ev, _s, to = run_shim(env, ["status"], timeout=60)
+        if rc != 0 or to or "Setup built with" not in out:
+            bad.append("INV-preset-status: 'drives status' does not mention the setup (rc=%s)" % rc)
+        rc, out, _ev, _s, to = run_shim(env, ["preset", setup, "--dry-run"], timeout=60)
+        if "DRY RUN" in out or rc == 0:
+            bad.append("INV-preset-twice: building a second setup on top of the first was not refused")
+        # take it apart again: every drive goes back to blank and every setting file is gone
+        rc, out, _ev, _s, to = run_shim(env, ["release", "--yes", "--confirm-erase"], timeout=300)
+        act2 = fstab_lines(env)
+        left = [a[1] for a in act2 if len(a) > 1 and re.search(r"/T(MAIN|BACKUP|PARITY)\d+$", a[1])]
+        if left:
+            bad.append("INV-preset-release: after 'release' these drives are still in the fstab: " + ", ".join(os.path.basename(x) for x in left))
+        for f in ("preset", "snapraid.conf", "snapraid-cron"):
+            if os.path.exists(os.path.join(env.state, f)):
+                bad.append("INV-preset-release: after 'release' the file %s is still there" % f)
+        return bad
+    return chk
+
+
+def run_presets(env, rec, layout, log):
+    """Every ready-made setup, on a layout with empty drives; plus the refusals and the answers that must change nothing."""
+    t0 = time.time()
+    n = 0
+    if layout.main or layout.backup:
+        # a pool already exists: every setup must be refused without changing anything
+        for setup in ("pool", "mirror", "snapraid1", "snapraid2"):
+            def refused(r):
+                bad = []
+                if r["changed"]:
+                    bad.append("INV-preset-refusal-changed: a setup was refused but things changed")
+                if r["outcome"] not in ("REFUSED", "NOTHING") or r["rc"] == 0:
+                    bad.append("INV-preset-refusal: with a pool in place expected a refusal, got %s (rc=%s)" % (r["outcome"], r["rc"]))
+                return bad
+            n += bool(run_case(env, rec, layout, "preset", ["preset", setup], [], note="a pool already exists: refused", tag="refuse-" + setup,
+                               expect=refused))
+    else:
+        for name, setup, picks, ndrives, nparity in PRESET_PLANS:
+            if ndrives > len(layout.spares):
+                continue
+            ans = picks + [setup, "ERASE"]
+            n += bool(run_case(env, rec, layout, "preset", ["preset", setup], ans, note=name, tag="build-" + name,
+                               expect=preset_expect(env, layout, setup, ndrives, nparity), probe=False))
+            n += bool(run_case(env, rec, layout, "preset", ["preset", setup, "--dry-run"], picks, note=name + ": --dry-run", tag="dry-" + name,
+                               expect=preset_expect(env, layout, setup, ndrives, nparity, dry=True), probe=False))
+            if ndrives == len(layout.spares) or setup == "mirror":      # --yes answers "use another drive?" with yes: it takes every empty drive
+                n += bool(run_case(env, rec, layout, "preset", ["preset", setup, "--yes", "--confirm-erase"], [a for a in picks if a not in ("y", "n")],
+                                   note=name + ": --yes --confirm-erase", tag="yes-" + name,
+                                   expect=preset_expect(env, layout, setup, ndrives, nparity), probe=False))
+        # answers that must change nothing
+        def nothing(r):
+            bad = []
+            if r["changed"]:
+                bad.append("INV-preset-cancel-changed: the setup was cancelled (or the answers were wrong) but things changed")
+            return bad
+        for note, setup, ans in [("wrong name typed", "snapraid1", ["1", "1", "1", "n", "snapraid2"]),
+                                 ("ERASE not typed", "snapraid1", ["1", "1", "1", "n", "snapraid1", "erase"]),
+                                 ("cancel at the drive list", "pool", ["0"]),
+                                 ("cancel after two drives", "snapraid2", ["1", "1", "0"]),
+                                 ("empty answers", "mirror", ["", "", "", ""]),
+                                 ("a menu number out of range", "pool", ["99", "99"])]:
+            n += bool(run_case(env, rec, layout, "preset", ["preset", setup], ans, note=note, tag="nochange-" + note, expect=nothing))
+        for note, args in [("no name: the list", ["preset"]), ("the other word", ["presets"]), ("an unknown name", ["preset", "raid7"]),
+                           ("a name with an extra word", ["preset", "pool", "now"]), ("snapraid status with nothing built", ["snapraid", "status"]),
+                           ("snapraid with a wrong action", ["snapraid", "explode"])]:
+            n += bool(run_case(env, rec, layout, "preset", args, [], note=note, tag="cli-" + note, expect=nothing))
+    log("  %-12s %3d runs  %4.0fs" % ("presets", n, time.time() - t0))
+
+
 def run_layout(env, rec, layout, level, st, only_flows, log):
     problems = build_layout(env, layout, log)
     if problems:
@@ -1322,6 +1493,11 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
         log("  could not build %s: %s" % (layout.key, problems[0]))
         return
     happy_paths = {}
+    if re.search(r"blank\d$", layout.key):
+        if not only_flows or "presets" in only_flows:
+            run_presets(env, rec, layout, log)
+        if only_flows and "presets" in only_flows and len(only_flows) == 1:
+            return
     for name, args, _what in FLOWS:
         if only_flows and name not in only_flows:
             continue
@@ -1842,7 +2018,7 @@ def main():
     ap.add_argument("--drives", default=os.path.join(REPO, "scripts", "drives"), help="the drives script to test")
     ap.add_argument("--scripts", default=os.path.join(REPO, "scripts"), help="folder with the other commands")
     ap.add_argument("--layout", action="append", help="only layouts whose name matches this regular expression (repeatable)")
-    ap.add_argument("--flow", action="append", help="only this flow (repeatable): " + ", ".join(n for n, _, _ in FLOWS) + ", cli, faults")
+    ap.add_argument("--flow", action="append", help="only this flow (repeatable): " + ", ".join(n for n, _, _ in FLOWS) + ", cli, faults, presets")
     ap.add_argument("--budget", type=int, help="runs per flow and layout (overrides the level)")
     ap.add_argument("--timeout", type=int, default=120, help="seconds before one run is stopped")
     ap.add_argument("--resume", action="store_true", help="continue a stopped run: cases already in results.jsonl are skipped")

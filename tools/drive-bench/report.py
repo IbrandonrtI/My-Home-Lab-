@@ -260,6 +260,13 @@ def capabilities(R, meta):
     add("Even out the files over the drives (balance)", of(R, "balance", pre=False), 0, "", "needs the uneven layout")
     add("Change the free-space limit of a drive", of(R, "limit", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Resize a boot drive section", of(R, "resize", pre=False), 0, "", "needs a boot drive section")
+    pr = of(R, "preset", pre=False)
+    for title, key in (("Ready-made setup: plain pool", "pool"), ("Ready-made setup: mirror (nightly copy)", "mirror"),
+                       ("Ready-made setup: SnapRAID with one protection drive", "snapraid1"),
+                       ("Ready-made setup: SnapRAID with two protection drives", "snapraid2")):
+        add(title, [r for r in pr if r["args"][:2] == ["preset", key] and "--dry-run" not in r["args"]], 0, "", "needs the layout with five empty drives")
+    add("Ready-made setups are refused when a pool already exists", [r for r in pr if str(r.get("note", "")).startswith("a pool already exists")], 0, "",
+        "needs the layout with a pool and empty drives", ok=("REFUSED",))
     add("Walk through the menu", of(R, "menu", pre=False), 0, "", "not run", ok=("DONE", "NOTHING", "CANCELLED"))
     return caps
 
@@ -374,7 +381,7 @@ def others(R):
 
 
 # ---------------------------------------------------------------------------------------------------------------- output
-FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize"]
+FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "preset"]
 
 
 def stats(R):
