@@ -49,6 +49,20 @@ OK, WARN, BAD = "ok", "warn", "bad"
 MARK = {"+": OK, "✓": OK, "!": WARN, "x": BAD, "✗": BAD}
 
 
+def clock_change_near():
+    """True when the local clock changes (summer/winter time) within 3 hours of now. A time written as local text near that moment can be
+    read back one hour off, so 'N hours ago' may then show N or N+1 (or N-1): not a bug of the screens."""
+    now = time.time()
+    return any(time.localtime(now + d).tm_isdst != time.localtime(now).tm_isdst for d in (-10800, -7200, -3600, 3600, 7200, 10800))
+
+
+def hours_ago(n):
+    """The pattern for '(N h ago)', which also accepts the hour either side while the clock is changing."""
+    if clock_change_near():
+        return r"\((%s) h ago\)" % "|".join(str(x) for x in range(max(0, n - 1), n + 2))
+    return r"\(%d h ago\)" % n
+
+
 def iec(n):
     """numfmt --to=iec --suffix=B (rounds up), as homelab prints sizes."""
     n = float(n)
@@ -312,9 +326,9 @@ def scenarios():
     add("main pool unmounted, 'no data drive' marker", seq(setup_umount_pools(lambda c: [c.env.main]), lambda c: c.write_state("no-data-drive", "")),
         lambda c, rc, o: with_rows(("Main pool", WARN, r"no data drive set up yet", None))(c, rc, o))
     # last backup
-    add("last backup: fresh and OK", setup_lastrun(0), with_rows(("Last backup", OK, r"\(0 h ago\)", None)))
-    add("last backup: 5 hours old", setup_lastrun(5), with_rows(("Last backup", OK, r"\(5 h ago\)", None)))
-    add("last backup: 40 hours old", setup_lastrun(40), with_rows(("Last backup", WARN, r"\(40 h ago\).*older than 36 h", None)))
+    add("last backup: fresh and OK", setup_lastrun(0), with_rows(("Last backup", OK, hours_ago(0), None)))
+    add("last backup: 5 hours old", setup_lastrun(5), with_rows(("Last backup", OK, hours_ago(5), None)))
+    add("last backup: 40 hours old", setup_lastrun(40), with_rows(("Last backup", WARN, hours_ago(40) + ".*older than 36 h", None)))
     add("last backup: failed", setup_lastrun(1, "FAILED"), with_rows(("Last backup", BAD, r"FAILED.*homelab-backup\.log", None)))
     add("last backup: no result yet (folder exists)", lambda c: None, with_rows(("Last backup", WARN, r"no result found", None)))
     add("last backup: never ran", lambda c: None, with_rows(("Last backup", WARN, r"no backup has run yet", None)),
@@ -507,6 +521,8 @@ def backup_scenarios(env, rec, layout, log):
     def keep_old(ctx):
         ctx.run("homelab-backup", [])
         files = sorted(tree_hashes(ctx.env.main))
+        if not files:                 # nothing to delete or change: say so instead of crashing the whole run
+            return {"empty": True}
         gone, changed = files[0], files[-1]
         os.unlink(os.path.join(ctx.env.main, gone))
         old_hash = tree_hashes(os.path.join(ctx.env.backup, "main")).get(changed)
@@ -518,6 +534,8 @@ def backup_scenarios(env, rec, layout, log):
 
     def kept(ctx, rc, out, log_text, pre):
         bad = []
+        if "empty" in pre:
+            return ["unclear: the main storage had no files, so deleting and changing files could not be tested here"]
         if "na" in pre:
             return bad
         today = time.strftime("%F")

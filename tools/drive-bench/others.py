@@ -213,7 +213,20 @@ def run(env, rec, a, log):
                 if env.current != layout.key or env.dirty:
                     if bench.build_layout(env, layout):
                         continue
-                truth.layout_truth(env, rec, layout, log)
+                try:
+                    truth.layout_truth(env, rec, layout, log)
+                except Exception as e:      # one scenario must never throw away a run of many hours: note it, clean up and go on
+                    import traceback
+                    log("  truth %s: the test itself stopped: %r" % (layout.key, e))
+                    log(traceback.format_exc().rstrip())
+                    env.dirty = True
+                    cid = "truth|%s|test stopped" % layout.key
+                    record(rec, cid, layout.key, "other:truth: the test stopped", [], "", 0, traceback.format_exc(), 0.0, "BUG",
+                                  ["unclear: the truth test stopped before it finished this layout (%s: %s)" % (type(e).__name__, e)], "", "")
+                    try:
+                        bench.teardown(env)
+                    except Exception:
+                        pass
     # 2. the real runs
     if a.real == "off":
         return
