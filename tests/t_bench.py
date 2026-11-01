@@ -3,6 +3,7 @@
 Last line: OK or FAIL."""
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -164,6 +165,13 @@ check("truth: a failure must be the one reported", len(truth.login_count(None, 0
 check("truth: shell errors on the screen are found", len(truth.bad_text("line 3: IMG: unbound variable\nTraceback (most recent call last):")), 2)
 check("truth: the version of a script is read", truth.script_version(os.path.join(os.path.dirname(bench.__file__), "..", "..", "scripts", "drives")) is not None, True)
 check("truth: the words a script accepts are found", "version" in truth.dispatch_words(os.path.join(os.path.dirname(bench.__file__), "..", "..", "scripts", "homelab-update")), True)
+
+_orig_cc = truth.clock_change_near
+truth.clock_change_near = lambda: False
+check("truth: 'N h ago' is exact when the clock is not changing", (bool(re.search(truth.hours_ago(5), "(5 h ago)")), bool(re.search(truth.hours_ago(5), "(6 h ago)"))), (True, False))
+truth.clock_change_near = lambda: True
+check("truth: 'N h ago' allows the hour either side while the clock changes", [bool(re.search(truth.hours_ago(0), "(%d h ago)" % h)) for h in (0, 1, 2)], [True, True, False])
+truth.clock_change_near = _orig_cc
 
 print("OK" if bad == 0 else "FAIL")
 sys.exit(0 if bad == 0 else 1)
