@@ -561,8 +561,12 @@ def run_shim(env, args, answers=(), timeout=None, fault=None, extra_env=None):
     timed_out = False
     p = subprocess.Popen(["bash", env.shim, env.drives] + list(args), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, env=e, cwd="/", start_new_session=True, text=True, errors="replace")
+    limit = timeout or env.timeout
+    lay = getattr(env, "layout", None)
+    if lay is not None and len(lay.all_drives()) >= 10:
+        limit *= 4      # with 16 or more drives every screen lists them again and again (about 30 s per step here); that is slow, not stuck
     try:
-        out, _ = p.communicate(timeout=timeout or env.timeout)
+        out, _ = p.communicate(timeout=limit)
     except subprocess.TimeoutExpired:
         timed_out = True
         stuck = hung_report(p.pid)
@@ -622,8 +626,8 @@ def fingerprint(env):
         h.update(repr(listing(os.path.join(env.disks, d))).encode())
     for f in sorted(os.listdir(env.state)) if os.path.isdir(env.state) else []:
         fp = os.path.join(env.state, f)
-        if f.startswith("fstab.bak") or f == "drives.log":
-            continue
+        if f.startswith("fstab.bak") or f == "drives.log" or f.startswith("restore-"):
+            continue        # logs, and the restore preview reports (restore-DATE.out/.txt: the list of missing files, written even for --dry-run)
         if os.path.isfile(fp):
             h.update(f.encode())
             if not f.endswith(".img"):
@@ -1529,6 +1533,8 @@ def run_look(env, rec, layout, log):
         real = [resolve_fault(layout, x) for x in specs]
         if not all(real):
             continue
+        if envx and "BENCH_SMART" in envx and not list(layout.all_drives()):
+            continue        # a drive cannot be sick when the layout has no drive at all
         for flow, args, rc, text in checks:
             if flow == "check" and not pooled:
                 continue

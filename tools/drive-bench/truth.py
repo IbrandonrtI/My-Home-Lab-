@@ -454,6 +454,21 @@ def backup_scenarios(env, rec, layout, log):
             env.current = layout.key
         ctx = Ctx(env, layout, "%s-backup-%s" % (layout.key, name))
         ctx.write_conf(min_free, fallback)
+        if getattr(layout, "fill", "") == "empty" and name in ("the database container is not running: files are still copied", "not enough free space",
+                                                          "deleted and changed files are kept for 30 days"):
+            return          # with no file to copy these cannot be told apart from the refusal to back up an empty storage
+        if getattr(layout, "fill", "") == "empty" and name in ("a normal backup copies every file", "a second backup changes nothing"):
+            # a layout whose drives hold no files: the backup must refuse (it never empties the backup copy), so that is what is checked
+            setup = None
+
+            def check(ctx, rc, out, log_text, pre):
+                f = last_run_fields(ctx)
+                bad = []
+                if rc == 0:
+                    bad.append("INV-truth-rc: the backup exited with 0 although the main storage is empty")
+                if not f or not f[1].startswith("FAILED") or "looks empty" not in f[1]:
+                    bad.append("INV-truth-backup: the main storage is empty: the last-run file should say FAILED ... 'looks empty', it says %r" % (f and f[1]))
+                return bad
         pre = setup(ctx) if setup else None
         rc, out, secs, to = ctx.run("homelab-backup", [])
         log_text = open(ctx.log_file).read() if os.path.exists(ctx.log_file) else ""
