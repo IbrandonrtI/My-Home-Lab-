@@ -38,6 +38,11 @@ if [ "$TEST_MODE" = 1 ]; then
   BOOT_MIN_BYTES="${DRIVES_BOOT_MIN:-16000000}"
   BOOT_SMALL_BYTES="${DRIVES_BOOT_SMALL:-0}"                # a boot drive this small (or smaller) cannot lend a section (0 = never, for the tests)
   BOOT_UNIT_BYTES=1000000; BOOT_UNIT_NAME=MB               # sizes are typed in MB in test mode
+  PARITY_PREFIX="${PARITY_PREFIX:-TPARITY}"
+  SNAPRAID_CONF="${SNAPRAID_CONF:-$STATE_DIR/snapraid.conf}"
+  SNAPRAID_CRON="${SNAPRAID_CRON:-$STATE_DIR/snapraid-cron}"
+  SNAPRAID_CONTENT_DIR="${SNAPRAID_CONTENT_DIR:-$STATE_DIR/snapraid-content}"
+  SNAPRAID_LOG="${SNAPRAID_LOG:-$STATE_DIR/snapraid.log}"
 else
   STATE_DIR="${DRIVES_STATE_DIR:-/var/lib/homelab-drives}"
   FSTAB="${FSTAB:-/etc/fstab}"
@@ -51,7 +56,13 @@ else
   BOOT_KEEP_FREE_BYTES="${HOMELAB_BOOT_KEEP_BYTES:-128000000000}"   # the boot drive always keeps 128 GB free for the system and the apps
   BOOT_SMALL_BYTES="${HOMELAB_BOOT_SMALL_BYTES:-130000000000}"      # a "128 GB" boot drive (or smaller) cannot lend any space: the system needs all of it
   BOOT_MIN_BYTES="${HOMELAB_BOOT_MIN_BYTES:-30000000000}"          # a section smaller than 30 GB is refused
+  PARITY_PREFIX="${PARITY_PREFIX:-PARITY}"                          # the SnapRAID protection drives: PARITY1, PARITY2
+  SNAPRAID_CONF="${SNAPRAID_CONF:-/etc/snapraid.conf}"
+  SNAPRAID_CRON="${SNAPRAID_CRON:-/etc/cron.d/homelab-snapraid}"
+  SNAPRAID_CONTENT_DIR="${SNAPRAID_CONTENT_DIR:-/var/lib/snapraid}"
+  SNAPRAID_LOG="${SNAPRAID_LOG:-/var/log/homelab-snapraid.log}"
 fi
+PRESET_FILE="${PRESET_FILE:-$STATE_DIR/preset}"                     # what `drives preset` built: ID|date|labels
 BOOT_OPTS="loop,noatime,nofail"
 BOOT_UNIT_BYTES="${BOOT_UNIT_BYTES:-1000000000}"; BOOT_UNIT_NAME="${BOOT_UNIT_NAME:-GB}"
 
@@ -319,6 +330,7 @@ apply_pool() {   # rebuild the pool line for a role and (re)mount the pool
   sd_reload
   pool_umount "$mp"
   if [ -n "$(branches_of "$role")" ]; then mount_fstab "$mp" || return 1; fi
+  [ "$role" = main ] && snapraid_active && snapraid_conf_write   # the drives of the Main storage changed: SnapRAID has to know
   return 0
 }
 
@@ -349,7 +361,7 @@ busy_disks() {   # drives with something mounted outside the desktop's /media au
 
 managed_disks() {
   local mp p
-  for mp in $(all_branches); do
+  for mp in $(all_branches) $(parity_mounts); do
     p=$(branch_part "$mp")
     [ -n "$p" ] && disk_of_part "$p"
   done | sort -u
@@ -1227,7 +1239,17 @@ status_flow() {
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)"
     fi
   done
+  for mp in $(parity_mounts); do
+    p=$(branch_part "$mp")
+    if [ -n "$p" ] && mountpoint -q "$mp"; then
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "$p" \
+        "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "$(smart_health "$(disk_of_part "$p")")" "connected (SnapRAID protection)"
+    else
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover)"
+    fi
+  done
   [ -n "$(all_branches)" ] || say "(no drives in a pool yet)"
+  [ -z "$(preset_current)" ] || say "Setup built with  sudo drives preset:  $(preset_title "$(preset_current)")"
   say ""
   say "=== Boot drive ==="
   say "Free now: $(pretty_size "$(boot_free_bytes)"). The boot drive always keeps at least $(pretty_size "$BOOT_KEEP_FREE_BYTES") free for the system and your other services; a boot drive section cannot take that away."
@@ -1574,13 +1596,15 @@ test_cleanup() {
 release_flow() {   # take every drive out of both pools; the files on the drives are not touched
   local mp p dir
   local -a all=()
-  mapfile -t all < <(all_branches)
+  mapfile -t all < <(all_branches; parity_mounts)
   if [ ${#all[@]} -eq 0 ]; then
     say "No drive is assigned to a pool, so there is nothing to release."
     return 1
   fi
   say "These drives are assigned to the pools:"
-  for mp in "${all[@]}"; do say "  - $(branch_name "$mp")  ($(branch_role "$mp"))"; done
+  for mp in "${all[@]}"; do
+    case "$(basename "$mp")" in "$PARITY_PREFIX"[0-9]*) say "  - $(branch_base_name "$mp")  (SnapRAID protection)" ;; *) say "  - $(branch_name "$mp")  ($(branch_role "$mp"))" ;; esac
+  done
   say ""
   say "Releasing takes every drive out of both pools. The files on the drives are NOT touched and nothing is erased."
   say "Afterwards $MAIN_POOL and $BACKUP_POOL are plain folders on the boot drive, and you choose the drives again with:"
@@ -1606,6 +1630,7 @@ release_flow() {   # take every drive out of both pools; the files on the drives
   done
   [ -n "$(branches_of main)" ] || fstab_remove_mp "$MAIN_POOL"
   [ -n "$(branches_of backup)" ] || fstab_remove_mp "$BACKUP_POOL"
+  [ -n "$(preset_current)" ] && { snapraid_forget; say "The record of the ready-made setup was removed (and, for SnapRAID, its settings and schedule)."; }
   sd_reload
   for mp in "${all[@]}"; do
     is_boot_section "$mp" || name_store_del "$(basename "$mp")"
@@ -2261,6 +2286,10 @@ disk_role_of() {   # disk_role_of /dev/sdX -> main, backup, plain-data or spare 
     p=$(branch_part "$mp")
     [ -n "$p" ] && [ "$(disk_of_part "$p")" = "$1" ] && { branch_role "$mp"; return 0; }
   done
+  for mp in $(parity_mounts); do
+    p=$(branch_part "$mp")
+    [ -n "$p" ] && [ "$(disk_of_part "$p")" = "$1" ] && { echo parity; return 0; }
+  done
   if grep -qx "$1" <<<"$(legacy_disks)"; then echo plain-data; else echo spare; fi
 }
 
@@ -2509,6 +2538,7 @@ drives_menu() {
     say "  3) Move a drive between main and backup"
     say "  4) Use part of the boot drive for a pool (with a size limit)"
     say "  5) Take all drives out of the pools (the files stay on the drives)"
+    say "  6) Build a ready-made setup on empty drives (pool, mirror, SnapRAID)"
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
@@ -2534,6 +2564,10 @@ drives_menu() {
            "Next I list the drives and ask before anything is released." \
            "The files on the drives are not erased." &&
          { release_flow && sync_filebrowser; } ;;
+      6) intro "Build a ready-made setup" \
+           "Next you see the setups (a plain pool, a mirror with a nightly copy, SnapRAID protection) and what your empty drives would give." \
+           "You pick a setup and the empty drives. The drives are formatted: you are asked twice before anything is erased." &&
+         { preset_menu && sync_filebrowser; } ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac
@@ -2639,6 +2673,302 @@ menu() {
   done
 }
 
+# ---------- ready-made setups (drives preset): a whole drive setup built from empty drives in one go ----------
+# What was built is kept in PRESET_FILE (one line: ID|date|labels). A setup uses EMPTY drives only: they are formatted.
+PRESET_IDS="pool mirror snapraid1 snapraid2"
+
+preset_known() { case " $PRESET_IDS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+preset_title() {
+  case "$1" in
+    pool)      echo "Plain pool" ;;
+    mirror)    echo "Mirror (nightly copy)" ;;
+    snapraid1) echo "SnapRAID, 1 protection drive" ;;
+    snapraid2) echo "SnapRAID, 2 protection drives" ;;
+  esac
+}
+preset_blurb() {
+  case "$1" in
+    pool)      echo "All the drives in one big pool. New files fill one drive after the other. No protection: a dead drive loses its files." ;;
+    mirror)    echo "One Main drive and one Backup drive. Every night the Backup gets a copy of the Main (not instant)." ;;
+    snapraid1) echo "The biggest drive only holds protection data, so one dead drive can be rebuilt. Updated every night at 04:00, not instant." ;;
+    snapraid2) echo "The two biggest drives hold protection data, so two dead drives can be rebuilt. Updated every night at 04:00, not instant." ;;
+  esac
+}
+preset_min()  { case "$1" in pool) echo 1 ;; mirror) echo 2 ;; snapraid1) echo 3 ;; snapraid2) echo 4 ;; esac; }
+preset_max()  { case "$1" in mirror) echo 2 ;; *) echo 0 ;; esac; }                     # 0 = as many as you like
+preset_parity_count() { case "$1" in snapraid1) echo 1 ;; snapraid2) echo 2 ;; *) echo 0 ;; esac; }
+preset_drives_text() {
+  local min max; min=$(preset_min "$1"); max=$(preset_max "$1")
+  if [ "$max" -eq "$min" ]; then echo "exactly $min"; elif [ "$min" -eq 1 ]; then echo "1 or more"; else echo "$min or more"; fi
+}
+
+preset_capacity() {   # preset_capacity ID SIZE... -> the space you can use, in bytes (nothing when the number of drives does not fit)
+  local id=$1; shift
+  [ $# -gt 0 ] || return 0
+  local -a s=(); local n sum=0 x i par max
+  mapfile -t s < <(printf '%s\n' "$@" | sort -rn)
+  n=${#s[@]}; max=$(preset_max "$id")
+  [ "$n" -ge "$(preset_min "$id")" ] || return 0
+  [ "$max" -eq 0 ] || [ "$n" -le "$max" ] || return 0
+  for x in "${s[@]}"; do sum=$((sum + x)); done
+  case "$id" in
+    pool)   echo "$sum" ;;
+    mirror) echo "${s[1]}" ;;                      # the smaller of the two
+    snapraid1|snapraid2)                           # the biggest drives only hold protection data
+      par=$(preset_parity_count "$id")
+      for ((i = 0; i < par; i++)); do sum=$((sum - s[i])); done
+      echo "$sum" ;;
+  esac
+}
+
+disk_is_blank() { [ -z "$(parts_of "$1")" ] && [ -z "$(blkid -p -s TYPE -o value "$1" 2>/dev/null)" ]; }   # no partition and no file system: empty or new
+blank_disks() { local d; for d in $(candidate_disks); do disk_is_blank "$d" && echo "$d"; done; }
+disk_size_bytes() { lsblk -dnbo SIZE "$1" 2>/dev/null | head -1 | tr -d ' '; }
+
+parity_mounts() { fstab_active | awk -v d="$DISKS_DIR/$PARITY_PREFIX" '$2 ~ "^" d "[0-9]+$" {print $2}' | sort -V; }   # the SnapRAID protection drives
+preset_current() { [ -r "$PRESET_FILE" ] && awk -F'|' 'NR == 1 {print $1}' "$PRESET_FILE"; return 0; }
+preset_record() { printf '%s|%s|%s\n' "$1" "$(date +%F)" "$2" >"$PRESET_FILE"; }
+snapraid_active() { case "$(preset_current)" in snapraid1|snapraid2) return 0 ;; *) return 1 ;; esac; }
+
+snapraid_conf_write() {   # the SnapRAID settings: the protection drives, a list of the files that say what is where, the data drives
+  local mp i=0 n=0
+  mkdir -p "$(dirname "$SNAPRAID_CONF")" "$SNAPRAID_CONTENT_DIR" 2>/dev/null || true
+  {
+    echo "# Written by 'sudo drives preset'. It is written again whenever the drives of the Main storage change."
+    for mp in $(parity_mounts); do
+      i=$((i + 1))
+      if [ "$i" -eq 1 ]; then echo "parity $mp/snapraid.parity"; else echo "$i-parity $mp/snapraid.$i-parity"; fi
+    done
+    echo "content $SNAPRAID_CONTENT_DIR/snapraid.content"
+    for mp in $(branches_of main); do
+      is_boot_section "$mp" && continue
+      n=$((n + 1)); [ "$n" -le 2 ] && echo "content $mp/snapraid.content"
+    done
+    for mp in $(branches_of main); do
+      is_boot_section "$mp" && continue
+      echo "data $(basename "$mp" | tr 'A-Z' 'a-z') $mp"
+    done
+    echo "exclude /lost+found/"
+    echo "exclude /tmp/"
+    echo "exclude *.unrecoverable"
+    echo "exclude .Trash-*/"
+  } >"$SNAPRAID_CONF"
+}
+
+snapraid_cron_write() {
+  mkdir -p "$(dirname "$SNAPRAID_CRON")" 2>/dev/null || true
+  cat >"$SNAPRAID_CRON" <<EOF
+# SnapRAID (written by 'sudo drives preset'): update the protection data every night at 04:00,
+# and check a part of the files on the 1st of every month. The results are in $SNAPRAID_LOG
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+0 4 * * * root snapraid -c $SNAPRAID_CONF sync -q >>$SNAPRAID_LOG 2>&1
+0 5 1 * * root snapraid -c $SNAPRAID_CONF scrub -p 5 -o 30 -q >>$SNAPRAID_LOG 2>&1
+EOF
+  chmod 644 "$SNAPRAID_CRON" 2>/dev/null || true
+}
+
+snapraid_forget() {   # the SnapRAID setup is taken apart: its settings, its schedule and the record of it go away (the drives are handled by the caller)
+  rm -f "$SNAPRAID_CONF" "$SNAPRAID_CRON" "$PRESET_FILE"
+}
+
+snapraid_flow() {   # snapraid status|diff|sync|scrub: SnapRAID by hand, with this setup's settings
+  local what=${1:-status}
+  case "$what" in
+    status|diff|sync|scrub) ;;
+    *) note "Unknown SnapRAID action: $what"; note "Use one of: status (is the protection up to date?), diff (what changed since the last update), sync (update it now), scrub (check part of the files)."; return 1 ;;
+  esac
+  snapraid_active || { note "There is no SnapRAID setup. Build one with:  sudo drives preset snapraid1"; return 1; }
+  command -v snapraid >/dev/null 2>&1 || { note "SnapRAID is not installed. Install it with:  sudo apt install -y snapraid"; return 1; }
+  dry_gate "Run:  snapraid -c $SNAPRAID_CONF $what" && return 0
+  snapraid -c "$SNAPRAID_CONF" "$what"
+}
+
+# ---- the list ----
+preset_list_flow() {   # preset: what can be built, and what the empty drives that are plugged in now would give
+  local id d s sizes_text="" total=0 n=0
+  local -a bsizes=() disks=() use=()
+  mapfile -t disks < <(blank_disks)
+  for d in "${disks[@]}"; do s=$(disk_size_bytes "$d"); [ -n "$s" ] || continue; bsizes+=("$s"); total=$((total + s)); n=$((n + 1)); done
+  say ""
+  say "Ready-made setups. Each one is built on EMPTY drives (they are formatted), in one go."
+  if [ "$n" -eq 0 ]; then
+    say "Empty drives plugged in now: none. (A drive with files on it is not used: erase it first with  sudo drives wipe)"
+  else
+    for s in "${bsizes[@]}"; do sizes_text="$sizes_text, $(pretty_size "$s")"; done
+    say "Empty drives plugged in now: $n (${sizes_text#, })"
+  fi
+  say ""
+  for id in $PRESET_IDS; do
+    printf '  %-10s %s   needs %s drives\n' "$id" "$(preset_title "$id")" "$(preset_drives_text "$id")"
+    printf '             %s\n' "$(preset_blurb "$id")"
+    if [ "$n" -lt "$(preset_min "$id")" ]; then
+      printf '             With your drives: need %s more empty drive(s)\n' "$(( $(preset_min "$id") - n ))"
+    else
+      use=("${bsizes[@]}")
+      if [ "$id" = mirror ]; then mapfile -t use < <(printf '%s\n' "${bsizes[@]}" | sort -rn | head -2); fi
+      printf '             With your drives: %s usable (of %s in the %d drives used)\n' "$(pretty_size "$(preset_capacity "$id" "${use[@]}")")" \
+        "$(pretty_size "$(printf '%s\n' "${use[@]}" | awk '{t += $1} END {print t}')")" "${#use[@]}"
+    fi
+    say ""
+  done
+  say "Build one with:  sudo drives preset NAME      (for example  sudo drives preset snapraid1;  add --dry-run to see the plan first)"
+  if [ -n "$(preset_current)" ]; then say "Built here: $(preset_title "$(preset_current)")"; fi
+}
+
+# ---- picking the drives ----
+preset_pick_drives() {   # preset_pick_drives ID -> prints the chosen devices, one per line (empty drives only)
+  local id=$1 min max d n=0 left
+  local -a pool=() chosen=()
+  mapfile -t pool < <(blank_disks)
+  min=$(preset_min "$id"); max=$(preset_max "$id")
+  if [ ${#pool[@]} -lt "$min" ]; then
+    note "$(preset_title "$id") needs $(preset_drives_text "$id") empty drives; I found ${#pool[@]}."
+    note "Only empty or new drives are used. A drive with files on it has to be erased first:  sudo drives wipe"
+    return 1
+  fi
+  note "Empty drives that can be used (the boot drive and your pool drives are never listed):"
+  while :; do
+    d=$(pick_disk_list "Which drive do you want to use? " "${pool[@]}") || return 1
+    chosen+=("$d"); n=$((n + 1))
+    mapfile -t pool < <(printf '%s\n' "${pool[@]}" | grep -vx "$d" | grep .)
+    [ "$max" -gt 0 ] && [ "$n" -ge "$max" ] && break
+    [ ${#pool[@]} -eq 0 ] && break
+    if [ "$n" -ge "$min" ]; then
+      yn "Use another drive?" || break
+    else
+      left=$((min - n)); note "(this setup needs at least $min drives: $left more)"
+    fi
+  done
+  printf '%s\n' "${chosen[@]}"
+}
+
+preset_parity_drive() {   # preset_parity_drive /dev/sdX N: format it and mount it as a SnapRAID protection drive
+  local dev=$1 n=$2 label part uuid mp base
+  label="$PARITY_PREFIX$n"; mp="$DISKS_DIR/$label"
+  refuse_unsafe_disk "$dev"
+  base=$(disk_base_name "$dev")
+  part=$(format_disk "$dev" "$label") || return 1
+  uuid=$(blkid -s UUID -o value "$part") || true
+  [ -n "$uuid" ] || die "Could not read the UUID of $part"
+  name_store_put "$label" "$base"
+  fstab_snapshot
+  ensure_mp "$mp"
+  fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"
+  sd_reload
+  if ! mount_fstab "$mp"; then fstab_rollback; die "Could not mount $part at $mp. fstab was restored."; fi
+  power_apply "$mp" backup
+  say "Done. $base is a protection drive now ($mp)."
+  log "preset: $label ($part, $base) is a SnapRAID protection drive"
+}
+
+# ---- the build ----
+preset_flow() {   # preset_flow ID
+  local id=${1:-} d i n=0 usable total=0 mp label par s
+  local -a devs=() sizes=() order=() main_devs=() par_devs=()
+  if ! preset_known "$id"; then
+    note "There is no setup called '$id'. The setups are: $PRESET_IDS"
+    note "See what each one needs and gives:  sudo drives preset"
+    return 1
+  fi
+  need_tools || return 1
+  case "$id" in snapraid*) command -v snapraid >/dev/null 2>&1 || { note "SnapRAID is not installed. Install it with:  sudo apt install -y snapraid"; return 1; } ;; esac
+  if [ -n "$(branches_of main)" ] || { [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; } || [ -n "$(parity_mounts)" ]; then
+    note "A ready-made setup builds a NEW setup, but some drives are already in a storage."
+    note "Look at them with  sudo drives list.  To add one more drive to what you have, use  sudo drives connect."
+    note "To start over with every drive, take them out of the pools first:  sudo drives release   (the files stay on the drives)."
+    return 1
+  fi
+  pool_can_grow main "these drives" || return 1
+  [ "$id" = mirror ] && { pool_can_grow backup "these drives" || return 1; }
+
+  mapfile -t devs < <(preset_pick_drives "$id") || return 1
+  [ ${#devs[@]} -gt 0 ] || return 1
+  for d in "${devs[@]}"; do
+    refuse_unsafe_disk "$d"
+    disk_is_blank "$d" || die "$d is not empty. Refusing."
+    sizes+=("$(disk_size_bytes "$d")")
+  done
+  mapfile -t order < <(for i in "${!devs[@]}"; do printf '%s %s\n' "${sizes[$i]}" "${devs[$i]}"; done | sort -rn -s -k1,1 | awk '{print $2}')   # the biggest first
+  case "$id" in
+    pool) main_devs=("${devs[@]}") ;;
+    mirror) main_devs=("${order[1]}"); par_devs=() ;;     # the smaller drive is the Main drive; the bigger one holds its copy
+    snapraid1|snapraid2)
+      par=$(preset_parity_count "$id")
+      par_devs=("${order[@]:0:par}"); main_devs=("${order[@]:par}") ;;
+  esac
+  usable=$(preset_capacity "$id" "${sizes[@]}")
+  for s in "${sizes[@]}"; do total=$((total + s)); done
+
+  say ""
+  say "Setup: $(preset_title "$id")"
+  say "$(preset_blurb "$id")"
+  say ""
+  printf '  %-28s %-12s %-9s %s\n' DRIVE DEVICE SIZE "WILL BE"
+  i=0
+  for d in "${main_devs[@]}"; do i=$((i + 1)); printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$d")" "$d" "$(pretty_size "$(disk_size_bytes "$d")")" "Main storage, drive $i"; done
+  if [ "$id" = mirror ]; then
+    printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "${order[0]}")" "${order[0]}" "$(pretty_size "$(disk_size_bytes "${order[0]}")")" "Backup storage (the nightly copy)"
+  fi
+  i=0
+  for d in ${par_devs[@]+"${par_devs[@]}"}; do i=$((i + 1)); printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$d")" "$d" "$(pretty_size "$(disk_size_bytes "$d")")" "SnapRAID protection drive $i"; done
+  say ""
+  say "You can use $(pretty_size "$usable") of the $(pretty_size "$total") on these ${#devs[@]} drives."
+  case "$id" in
+    mirror) say "The Backup drive gets a copy of the Main drive every day (your backup schedule: sudo homelab status shows when). A file added today is on the Backup tomorrow." ;;
+    snapraid*) say "The protection data is updated every night at 04:00, not at once: files added today are protected from tonight." ;;
+  esac
+  say ""
+  say "!! ERASE WARNING !!"
+  say "Everything on these ${#devs[@]} drives will be permanently deleted:"
+  for d in "${devs[@]}"; do say "  - $d  ($(disk_base_name "$d"))"; done
+  typed "$id" "Type the name of the setup ($id) to continue: " || { say "Cancelled. Nothing was changed."; return 1; }
+  typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+  pre_change "Format the ${#devs[@]} drives." \
+             "Stop the containers that use the storage while each drive is added (once per drive), then start them again." \
+             "Make the Main storage from the data drives$([ "$id" = mirror ] && echo ", and the Backup storage from the other drive")." \
+             "$([ -n "${par_devs[*]:-}" ] && echo "Make the protection drives, write the SnapRAID settings and the 04:00 schedule." || echo "Write down what was built.")" && return 0
+
+  for d in "${main_devs[@]}"; do
+    connect_flow "$d" main 1 1 || { warn "Stopped at $d. The drives before it are already in the Main storage; the rest were not touched. See: sudo drives list"; return 1; }
+    n=$((n + 1))
+  done
+  if [ "$id" = mirror ]; then
+    connect_flow "${order[0]}" backup 1 1 || { warn "Stopped at ${order[0]}. The Main drive is ready; the Backup drive was not added. See: sudo drives list"; return 1; }
+  fi
+  i=0
+  for d in ${par_devs[@]+"${par_devs[@]}"}; do
+    i=$((i + 1))
+    preset_parity_drive "$d" "$i" || { warn "Stopped at $d. See: sudo drives list"; return 1; }
+  done
+  label=""
+  for mp in $(branches_of main) $(branches_of backup) $(parity_mounts); do label="$label $(basename "$mp")"; done
+  preset_record "$id" "${label# }"
+  if [ -n "${par_devs[*]:-}" ]; then
+    snapraid_conf_write
+    snapraid_cron_write
+    say "Setting up SnapRAID (the first protection run, nothing to protect yet)..."
+    snapraid -c "$SNAPRAID_CONF" sync || warn "The first SnapRAID run did not finish. Run it again later:  sudo drives snapraid sync"
+  fi
+  log "preset $id built on ${#devs[@]} drives: ${label# }"
+  say ""
+  say "Done. $(preset_title "$id") is ready: $(pretty_size "$usable") usable."
+  case "$id" in
+    snapraid*) say "Check it any time:  sudo drives snapraid status      Update it now:  sudo drives snapraid sync" ;;
+    mirror) say "Run the copy now if you like:  sudo homelab-backup" ;;
+  esac
+  return 0
+}
+
+preset_menu() {   # menu entry: look at the setups, then pick one
+  local id choice
+  local -a ids=() items=()
+  preset_list_flow
+  for id in $PRESET_IDS; do ids+=("$id"); items+=("$(preset_title "$id")  ($id)"); done
+  choice=$(choose "Which setup do you want to build? " "${items[@]}") || return 1
+  preset_flow "${ids[$choice]}"
+}
+
 # ---------- look-only commands: list, usage, health, check (they change nothing; check --full takes one drive offline for a while) ----------
 JSON=0               # --json: print machine-readable JSON (the messages go to stderr)
 FULL=0               # check --full
@@ -2670,6 +3000,14 @@ drive_rows() {   # one row per drive: name US role US device US size US used US 
       printf '%s\n' "$name$US$role$US$p$US$(total_bytes "$mp")$US$(used_bytes "$mp")$US$(avail_bytes "$mp")${US}connected$US$mp"
     else
       printf '%s\n' "$name$US$role$US-$US$US$US${US}MISSING$US$mp"
+    fi
+  done
+  for mp in $(parity_mounts); do
+    name=$(branch_base_name "$mp"); p=$(branch_part "$mp")
+    if [ -n "$p" ] && mountpoint -q "$mp"; then
+      printf '%s\n' "$name${US}parity$US$p$US$(total_bytes "$mp")$US$(used_bytes "$mp")$US$(avail_bytes "$mp")${US}connected$US$mp"
+    else
+      printf '%s\n' "$name${US}parity$US-$US$US$US${US}MISSING$US$mp"
     fi
   done
   for d in $(all_disks | sort -u); do
@@ -2815,6 +3153,11 @@ health_rows() {   # one row per physical drive: name US device US health US temp
     p=$(branch_part "$mp"); [ -n "$p" ] || continue
     d=$(disk_of_part "$p"); [ -n "$d" ] || continue
     printf '%s\n' "$(branch_name "$mp")$US$d$US$(smart_detail "$d")"
+  done
+  for mp in $(parity_mounts); do
+    p=$(branch_part "$mp"); [ -n "$p" ] || continue
+    d=$(disk_of_part "$p"); [ -n "$d" ] || continue
+    printf '%s\n' "$(branch_base_name "$mp")$US$d$US$(smart_detail "$d")"
   done
   for d in $(all_disks | sort -u); do
     grep -qx "$d" <<<"$managed" && continue
@@ -3012,6 +3355,8 @@ Change the drives:
   move          move a drive between Main and Backup (its files are copied away first)
   bootsection   use part of the boot drive as a pool drive, with a size limit
   adopt         turn the old single data drive into a pool
+  preset        build a whole setup on empty drives: a plain pool, a mirror with a nightly copy, SnapRAID protection
+  snapraid      look at or update the SnapRAID protection (status, diff, sync, scrub)
   release       take every drive out of the pools (the files stay on the drives)
   recover       after an unplug or a power cut: mount the drives and start the containers again
   replace       a drive died: put a new one in its place and copy the files back from the backup
@@ -3205,6 +3550,27 @@ sudo drives eject [--dry-run]
   sudo drives disconnect first. Nothing is erased.
 EOF
     ;;
+    preset) cat <<'EOF'
+sudo drives preset [NAME] [--dry-run] [--yes] [--confirm-erase]
+  Without a name: lists the ready-made setups and shows what the empty drives that are plugged in now would give.
+  With a name (pool, mirror, snapraid1, snapraid2): builds it. You pick the drives, see the plan and what you can use, and
+  type the setup name and ERASE before anything is erased. Only EMPTY or new drives are used (a drive with files must be
+  erased first: sudo drives wipe). The Main storage must not have drives yet (to add to it use connect).
+    pool       all the drives in one pool (no protection)
+    mirror     exactly 2 drives: the smaller one is Main, the bigger one is Backup; the backup copies Main to it every day
+    snapraid1  3 or more drives: the biggest holds protection data (updated every night at 04:00, not at once)
+    snapraid2  4 or more drives: the two biggest hold protection data
+  The setup is kept in the state folder; sudo drives status shows it. sudo drives release takes everything apart again.
+EOF
+    ;;
+    snapraid) cat <<'EOF'
+sudo drives snapraid [status|diff|sync|scrub] [--dry-run]
+  SnapRAID by hand, for a setup built with  sudo drives preset snapraid1  (or snapraid2).
+    status  is the protection up to date?     diff   what changed since the last update
+    sync    update the protection now         scrub  check part of the files against it
+  The same sync runs by itself every night at 04:00 (and a scrub on the 1st of the month). Without a word it shows the status.
+EOF
+    ;;
     wipe) cat <<'EOF'
 sudo drives wipe [--dry-run] [--yes] [--confirm-erase]
   ERASES a spare drive (a drive in a pool, the boot drive and a drive in use are never listed). You choose to leave it empty
@@ -3254,11 +3620,13 @@ main() {
     spindown|standby) set -- sleep "${@:2}" ;;         fsck|verify) set -- check "${@:2}" ;;
     add) set -- connect "${@:2}" ;;                    remove) set -- disconnect "${@:2}" ;;
     df) set -- usage "${@:2}" ;;                       erase|format) set -- wipe "${@:2}" ;;
+    presets|setups) set -- preset "${@:2}" ;;
     help) case "${2:-}" in
             name) set -- help rename "${@:3}" ;;       smart) set -- help health "${@:3}" ;;
             spindown|standby) set -- help sleep "${@:3}" ;;   fsck|verify) set -- help check "${@:3}" ;;
             add) set -- help connect "${@:3}" ;;       remove) set -- help disconnect "${@:3}" ;;
             df) set -- help usage "${@:3}" ;;          erase|format) set -- help wipe "${@:3}" ;;
+            presets|setups) set -- help preset "${@:3}" ;;
           esac ;;
   esac
   if [ "$WANT_HELP" = 1 ]; then set -- help "$@"; fi
@@ -3270,6 +3638,7 @@ main() {
   if [ "$FOLDERS" = 1 ] && [ "$cmd" != usage ]; then note "--folders works with: usage (not with '$cmd')."; exit 1; fi
   case "${1:-}" in   # a typo such as `release dry-run` must never be read as `release`
     test-setup|test-cleanup) ;;
+    preset|snapraid) if [ $# -gt 2 ]; then note "Unexpected word: ${*:3}"; note "Nothing was done."; note ""; usage_text >&2; exit 1; fi ;;
     *) if [ $# -gt 1 ]; then note "Unexpected word: ${*:2}"; note "Nothing was done."; note ""; usage_text >&2; exit 1; fi ;;
   esac
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
@@ -3294,6 +3663,8 @@ main() {
     balance|rebalance) run_changing balance_flow ;;
     limit)        limit_flow ;;
     resize)       run_changing resize_flow ;;
+    preset)       if [ -n "${2:-}" ]; then run_changing preset_flow "$2"; else preset_list_flow; fi ;;
+    snapraid)     snapraid_flow "${2:-status}" ;;
     release)      run_changing release_flow ;;
     bootsection)  run_changing bootsection_flow ;;
     restore)      run_changing restore_flow ;;
