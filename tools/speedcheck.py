@@ -23,6 +23,7 @@ import tempfile
 import time
 
 BACKUP_LOCK = "/var/lock/homelab-backup.lock"
+FAST_ENOUGH = 1.5   # seconds: a command faster than this is not reported for starting many programs
 SLOW_SECONDS = 5.0           # a look-only command slower than this is worth a look
 MANY_PROGRAMS = 300          # more programs than this started by one command
 REPEATED = 40                # one program started this often by one command: a scan that is repeated
@@ -67,6 +68,8 @@ def hints(label, seconds, procs, programs):
     out = []
     if seconds > SLOW_SECONDS:
         out.append("%s takes %.1f s; a look-only command should answer in a few seconds" % (label, seconds))
+    if seconds < FAST_ENOUGH:   # an answer in about a second is fine: starting many small programs is not worth changing then
+        return out
     if procs > MANY_PROGRAMS:
         out.append("%s starts %d programs; most of the time is probably spent starting them" % (label, procs))
     for prog, n in programs.most_common(5):
