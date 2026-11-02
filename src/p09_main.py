@@ -158,8 +158,28 @@ def final_report(res):
             State.save()
             res = evaluate()
             write_progress(res)
+    offer_drive_wizard()
     show_checklist(res, "Setup")
     next_step_section(res)
+
+
+def offer_drive_wizard():
+    """End of the first install: when no storage exists yet, let `sudo drives wizard` look at the drives and offer a setup (once).
+    The wizard itself stays silent when storage is already set up, and it formats nothing before the person has read the plan and typed ERASE."""
+    if FAKE or Opt.yes or Opt.dry or not interactive() or State.data.get("wizard_offered"):
+        return
+    drives = P("/usr/local/sbin/drives")
+    if not os.path.exists(drives) or os.path.ismount(P("/mnt/storage")):
+        return
+    State.data["wizard_offered"] = time.strftime("%F %T")
+    State.save()
+    rule("Your drives")
+    say("Next the drive wizard looks at the drives that are plugged in and can suggest a ready-made setup. "
+        "Nothing is changed unless you pick one, read its plan and type ERASE. Run it again any time:\n$ sudo drives wizard")
+    try:
+        subprocess.call([drives, "wizard", "--first-run"])
+    except OSError as e:
+        warn("Could not start the drive wizard (%s). Run it later:  sudo drives wizard" % e)
 
 
 SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguard", "AdGuard Home"), ("beszel", "Beszel"),
