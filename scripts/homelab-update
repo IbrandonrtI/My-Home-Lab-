@@ -822,13 +822,26 @@ update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop he
     echo "      Going back: the old version of each image is saved as homelab-rollback:<name>-<date> (docs/updating.md)."
     return 1
   fi
-  # did the containers really change?
-  load_containers
-  for c in $old_ids; do
-    for i in "${!CN[@]}"; do
-      [ "${CN[$i]}" = "${c%%=*}" ] && [ "${CD[$i]}" = "${c#*=}" ] && { line_warn "${CN[$i]} still runs the old image (Docker found nothing to change)."; }
+  # did the containers really change? Portainer can answer before Docker has recreated them, so give it a little time.
+  # Only a container whose image tag now points to a NEWER image is expected to change (a database that did not get a new version stays as it is).
+  local settle_end waiting name oldid cur
+  settle_end=$(( $(date +%s) + ${HLU_SETTLE:-90} ))
+  while :; do
+    load_containers
+    waiting=""
+    for c in $old_ids; do
+      name=${c%%=*}; oldid=${c#*=}
+      for i in "${!CN[@]}"; do
+        [ "${CN[$i]}" = "$name" ] && [ "${CD[$i]}" = "$oldid" ] || continue
+        cur=$(docker image inspect -f '{{.Id}}' "${CI[$i]}" 2>/dev/null)
+        if [ -n "$cur" ] && [ "$cur" != "$oldid" ]; then waiting="$waiting$name "; fi
+      done
     done
+    [ -z "$waiting" ] && break
+    [ "$(date +%s)" -ge "$settle_end" ] && break
+    sleep "${HLU_WAIT_EVERY:-5}"
   done
+  for name in $waiting; do line_warn "$name still runs the old image (Docker found nothing to change)."; done
   line_ok "$s is updated and running."
   return 0
 }
