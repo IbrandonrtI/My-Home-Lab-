@@ -1748,31 +1748,45 @@ def safe_probe(s):
 
 
 def evaluate():
-    """Check every step and return {step id: Result}, in dependency order."""
+    """Check every step and return {step id: Result}, in dependency order.
+    With HLS_TIMING=1 in the environment the slowest checks are listed afterwards (to see where the time goes)."""
     res = {}
+    spent = {}
     for s in topo():
-        if not s.applies():
-            res[s.id] = Result("na")
-            continue
-        if State.data["skip"].get(s.id):
-            res[s.id] = Result("skip", "skipped")
-            continue
-        if State.data["ack"].get(s.id):
-            res[s.id] = Result("done", "confirmed")
-            continue
-        waits = [BY_ID[n].title for n in s.needs if res[n].state not in ("done", "na", "skip")]
-        if waits:
-            res[s.id] = Result("blocked", "waits for: " + "; ".join(waits[:2]))
-            continue
-        st = safe_probe(s)
-        if st == "done":
-            res[s.id] = Result("done", s.detail())
-        elif st == "na":
-            res[s.id] = Result("na", "")
-        else:
-            err = State.note("err:" + s.id)
-            res[s.id] = Result("failed" if err else "todo", err)
+        t0 = time.monotonic()
+        _check_one(s, res)
+        spent[s.id] = time.monotonic() - t0
+    if os.environ.get("HLS_TIMING") == "1":
+        top = sorted(spent.items(), key=lambda kv: -kv[1])[:10]
+        sys.stderr.write("slowest checks (seconds): total %.1f\n" % sum(spent.values()))
+        for k, v in top:
+            sys.stderr.write("  %5.2f  %s\n" % (v, k))
     return res
+
+
+def _check_one(s, res):
+    """Check one step and put its result into res."""
+    if not s.applies():
+        res[s.id] = Result("na")
+        return
+    if State.data["skip"].get(s.id):
+        res[s.id] = Result("skip", "skipped")
+        return
+    if State.data["ack"].get(s.id):
+        res[s.id] = Result("done", "confirmed")
+        return
+    waits = [BY_ID[n].title for n in s.needs if res[n].state not in ("done", "na", "skip")]
+    if waits:
+        res[s.id] = Result("blocked", "waits for: " + "; ".join(waits[:2]))
+        return
+    st = safe_probe(s)
+    if st == "done":
+        res[s.id] = Result("done", s.detail())
+    elif st == "na":
+        res[s.id] = Result("na", "")
+    else:
+        err = State.note("err:" + s.id)
+        res[s.id] = Result("failed" if err else "todo", err)
 
 
 def counts(res):
