@@ -312,6 +312,19 @@ def occ(*args):
     return docker("exec", "-u", "www-data", "nextcloud", "php", "occ", *args, timeout=300)
 
 
+def nc_system_config():
+    """Nextcloud's whole system config as a dict, from one call (secret values are hidden by occ itself), or None when it cannot be read."""
+    rc, txt = occ("config:list", "system")
+    if rc != 0:
+        return None
+    try:
+        data = json.loads(txt[txt.index("{"):])
+        cfg = data.get("system")
+        return cfg if isinstance(cfg, dict) else None
+    except ValueError:
+        return None
+
+
 @step
 class NextcloudReady(Step):
     id, group, title = "nextcloud-ready", "Logins and keys", "Nextcloud finished its first install"
@@ -333,6 +346,12 @@ class NextcloudConfig(Step):
     needs = ("nextcloud-ready",)
 
     def probe(self):
+        cfg = nc_system_config()
+        if cfg is not None:   # one call to Nextcloud answers all of it (each call into the container takes about 0.4 s)
+            allow = str(cfg.get("allow_local_remote_servers", "")).lower()
+            doms = "\n".join(str(d) for d in (cfg.get("trusted_domains") or []))
+            forced = [k for k in FORCED_NC_KEYS if k in cfg]
+            return "done" if "true" in allow and Ctx.fqdn in doms and Ctx.lan in doms and not forced else "todo"
         rc, txt = occ("config:system:get", "allow_local_remote_servers")
         rc2, doms = occ("config:system:get", "trusted_domains")
         forced = [k for k in FORCED_NC_KEYS if occ("config:system:get", k)[0] == 0]
