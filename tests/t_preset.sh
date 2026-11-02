@@ -84,6 +84,28 @@ check "no record, no array" "$(array_active && echo yes || echo no)" no
 check "the guard allows commands without an array" "$(array_guard && echo allowed || echo refused)" allowed
 check "a snapraid record is not an array" "$(echo 'snapraid1|2026-11-01|TMAIN1' >"$PRESET_FILE"; array_active && echo yes || echo no; rm -f "$PRESET_FILE")" no
 
+# --- the extras: which setups can have a hot spare / an SSD cache, and what the record keeps
+check "hot spare: only setups that survive a dead drive" "$(for id in $PRESET_IDS; do array_can_spare "$id" && printf '%s ' "$id"; done)" "zfs-mirror zfs-raidz1 zfs-raidz2 zfs-raidz3 md-raid1 md-raid5 md-raid6 md-raid10 "
+check "SSD cache: ZFS only" "$(for id in $PRESET_IDS; do array_can_cache "$id" && printf '%s ' "$id"; done)" "zfs-stripe zfs-mirror zfs-raidz1 zfs-raidz2 zfs-raidz3 "
+echo "zfs-raidz1|2026-11-01|/dev/null /dev/zero spare=/dev/full cache=/dev/tty encrypted" >"$PRESET_FILE"
+check "the record keeps every token" "$(array_tokens | wc -l)" 5
+check "members include spare and cache drives" "$(array_members | tr '\n' ' ')" "/dev/null /dev/zero /dev/full /dev/tty "
+check "encrypted is read from the record" "$(array_encrypted && echo yes || echo no)" yes
+check "a record without encrypted is not encrypted" "$(echo 'zfs-raidz1|2026-11-01|/dev/null' >"$PRESET_FILE"; array_encrypted && echo yes || echo no)" no
+echo "zfs-raidz1|2026-11-01|/dev/null /dev/zero" >"$PRESET_FILE"
+preset_record_add spare=/dev/full
+check "a spare is added to the record" "$(array_tokens | tr '\n' ' ')" "/dev/null /dev/zero spare=/dev/full "
+check "the record keeps its first fields" "$(cut -d'|' -f1,2 "$PRESET_FILE")" "zfs-raidz1|2026-11-01"
+check "the state words tell spare from cache" "$(array_kind_text spare) / $(array_kind_text cache)" "connected (hot spare) / connected (SSD read cache)"
+rm -f "$PRESET_FILE"
+check "--spare alone is a yes" "$(extra_wanted 1 "q" </dev/null && echo yes || echo no)" yes
+check "--yes alone does not add an extra" "$(ASSUME_YES=1 extra_wanted 0 "q" </dev/null && echo yes || echo no)" no
+KEY_DIR="$ST/keys"
+key=$(key_make tank 32); check "a key file has the right size" "$(wc -c <"$key" | tr -d ' ')" 32
+check "only root can read the key file" "$(stat -c %a "$key")" 400
+check "a key is never overwritten" "$(key_make tank 32 >/dev/null 2>&1 && echo overwritten || echo refused)" refused
+rm -rf "$KEY_DIR"
+
 # --- the command line: words, refusals and help
 out=$(bash "$DRIVES" preset nonsense 2>&1); rc=$?
 check "an unknown setup is refused with exit 1" "$rc" 1
@@ -96,8 +118,15 @@ out=$(bash "$DRIVES" help preset 2>&1); want=$(for id in $PRESET_IDS; do printf 
 check "help preset names every setup" "$(for id in $PRESET_IDS; do case "$out" in *"$id"*) printf y ;; esac; done)" "$want"
 check "there are fourteen setups" "$(echo $PRESET_IDS | wc -w)" 14
 check "help raid words work through the short names" "$(bash "$DRIVES" help preset 2>&1 | grep -c 'raidz1')" 2
-check "help presets (the other word) shows the same text" "$(bash "$DRIVES" help presets 2>&1 | head -1)" "sudo drives preset [NAME] [--dry-run] [--yes] [--confirm-erase]"
+check "help presets (the other word) shows the same text" "$(bash "$DRIVES" help presets 2>&1 | head -1)" "sudo drives preset [NAME] [--dry-run] [--yes] [--confirm-erase] [--spare] [--cache] [--encrypt]"
 check "help snapraid exists" "$(bash "$DRIVES" help snapraid 2>&1 | head -1)" "sudo drives snapraid [status|diff|sync|scrub] [--dry-run]"
+check "help spare exists" "$(bash "$DRIVES" help spare 2>&1 | head -1)" "sudo drives spare [--dry-run]"
+check "help cache exists" "$(bash "$DRIVES" help cache 2>&1 | head -1)" "sudo drives cache [--dry-run]"
+hp=$(bash "$DRIVES" help preset 2>&1)
+check "help preset explains every option" "$(for o in --spare --cache --encrypt; do case "$hp" in *"    $o "*) printf y ;; esac; done)" yyy
+check "--spare outside preset is refused" "$(bash "$DRIVES" status --spare >/dev/null 2>&1; echo $?)" 1
+check "--encrypt outside preset is refused" "$(bash "$DRIVES" list --encrypt 2>&1 | grep -c 'work with: preset')" 1
+check "spare without an array says so" "$(bash "$DRIVES" spare 2>&1 | grep -c -i 'array')" 1
 usage=$(bash "$DRIVES" help 2>&1)
 case "$usage" in *"preset        build a whole setup"*) check "the command list shows preset" yes yes ;; *) check "the command list shows preset" no yes ;; esac
 
