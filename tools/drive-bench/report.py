@@ -263,7 +263,12 @@ def capabilities(R, meta):
     pr = of(R, "preset", pre=False)
     for title, key in (("Ready-made setup: plain pool", "pool"), ("Ready-made setup: mirror (nightly copy)", "mirror"),
                        ("Ready-made setup: SnapRAID with one protection drive", "snapraid1"),
-                       ("Ready-made setup: SnapRAID with two protection drives", "snapraid2")):
+                       ("Ready-made setup: SnapRAID with two protection drives", "snapraid2"),
+                       ("Ready-made setup: ZFS striped (no protection)", "zfs-stripe"), ("Ready-made setup: ZFS mirror", "zfs-mirror"),
+                       ("Ready-made setup: ZFS RAIDZ1", "zfs-raidz1"), ("Ready-made setup: ZFS RAIDZ2", "zfs-raidz2"),
+                       ("Ready-made setup: ZFS RAIDZ3", "zfs-raidz3"), ("Ready-made setup: RAID 0 (mdadm)", "md-raid0"),
+                       ("Ready-made setup: RAID 1 (mdadm)", "md-raid1"), ("Ready-made setup: RAID 5 (mdadm)", "md-raid5"),
+                       ("Ready-made setup: RAID 6 (mdadm)", "md-raid6"), ("Ready-made setup: RAID 10 (mdadm)", "md-raid10")):
         add(title, [r for r in pr if r["args"][:2] == ["preset", key] and "--dry-run" not in r["args"]], 0, "", "needs the layout with five empty drives")
     add("Ready-made setups are refused when a pool already exists", [r for r in pr if str(r.get("note", "")).startswith("a pool already exists")], 0, "",
         "needs the layout with a pool and empty drives", ok=("REFUSED",))

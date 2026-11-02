@@ -183,7 +183,7 @@ class Env:
             "BACKUP_POOL": self.backup, "FSTAB": self.fstab, "LOGFILE": self.log,
             "HOMELAB_EXTRA_PATH": self.bin, "BENCH_ANSWERS": self.answers, "BENCH_EVENTS": self.events,
             "BENCH_COUNTER": self.counter, "BENCH_SLEEPERS": os.path.join(self.ctl, "sleepers"), "BENCH_FLAGS": self.flags, "BENCH_PROPS": self.props,
-            "DRIVES_SMARTCTL": os.path.join(self.bin, "smartctl-health"),
+            "DRIVES_SMARTCTL": os.path.join(self.bin, "smartctl-health"), "DRIVES_MD_DEVICE": os.path.join(self.state, "md-device"),
             "DRIVES_MINFREE": "2M", "DRIVES_OWNER": "root", "LC_ALL": "C",
             "DRAIN_SPARE_BYTES": "1048576",      # the real tool keeps 2 GB free when it copies a drive off; the fake drives are tiny
             # `drives` offers to run the backup and looks for the newest backup: both must use the fake pools, never the real backup
@@ -328,6 +328,149 @@ exit 0
 '''
 
 
+FAKE_ARRAYTOOLS = r'''#!/usr/bin/env python3
+# a stand-in for zpool, zfs and mdadm: it keeps what was made in $DRIVES_STATE_DIR/fake-zfs and fake-md and mounts a small file system at the pool path
+import json, os, subprocess, sys
+name = os.path.basename(sys.argv[0])
+args = sys.argv[1:]
+state = os.environ["DRIVES_STATE_DIR"]
+with open(os.path.join(os.environ["BENCH_FLAGS"], "tools.log"), "a") as f:
+    f.write("%s %s\n" % (name, " ".join(args)))
+
+
+def run(cmd):
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+
+def is_mounted(path):
+    return run(["mountpoint", "-q", path]).returncode == 0
+
+
+def die(msg, rc=1):
+    sys.stderr.write(msg + "\n")
+    sys.exit(rc)
+
+
+def size_of(dev):
+    r = run(["blockdev", "--getsize64", dev])
+    try:
+        return int(r.stdout.strip())
+    except ValueError:
+        return 0
+
+
+if name == "zfs":
+    sys.exit(0)
+
+if name == "zpool":
+    d = os.path.join(state, "fake-zfs")
+    os.makedirs(d, exist_ok=True)
+    cmd = args[0] if args else ""
+    if cmd == "create":
+        rest, opts, i = [], {}, 1
+        while i < len(args):
+            a = args[i]
+            if a == "-f":
+                i += 1
+            elif a in ("-o", "-O"):
+                k, _, v = args[i + 1].partition("=")
+                opts[a + k] = v
+                i += 2
+            else:
+                rest.append(a)
+                i += 1
+        pool, rest = rest[0], rest[1:]
+        vdev = rest[0] if rest and not rest[0].startswith("/") else ""
+        disks = [x for x in rest if x.startswith("/")]
+        need = {"": 1, "mirror": 2, "raidz1": 2, "raidz2": 3, "raidz3": 4}.get(vdev, 1)
+        if os.path.exists(os.path.join(d, pool + ".json")):
+            die("cannot create '%s': pool already exists" % pool)
+        if len(disks) < need:
+            die("invalid vdev specification: %s needs at least %d devices" % (vdev or "stripe", need))
+        for x in disks:
+            if not os.path.exists(x):
+                die("cannot open '%s': no such device" % x)
+        mp = opts.get("-Omountpoint", "")
+        if not mp or is_mounted(mp):
+            die("cannot mount '%s': the mount point is busy" % mp)
+        os.makedirs(mp, exist_ok=True)
+        if run(["mount", "-t", "tmpfs", "-o", "size=64m", pool, mp]).returncode != 0:
+            die("cannot mount '%s'" % pool)
+        json.dump({"vdev": vdev, "disks": disks, "mountpoint": mp, "opts": opts}, open(os.path.join(d, pool + ".json"), "w"))
+        sys.exit(0)
+    if cmd == "list":
+        pools = sorted(f[:-5] for f in os.listdir(d) if f.endswith(".json"))
+        if "name" in args:
+            print("\n".join(pools))
+        elif "health" in args:
+            print("ONLINE" if (args[-1] in pools) else "")
+        sys.exit(0)
+    if cmd == "destroy":
+        pool = args[-1]
+        meta = os.path.join(d, pool + ".json")
+        if not os.path.exists(meta):
+            die("cannot open '%s': no such pool" % pool)
+        mp = json.load(open(meta))["mountpoint"]
+        if is_mounted(mp) and run(["umount", mp]).returncode != 0:
+            die("cannot unmount '%s': pool or dataset is busy" % mp)
+        os.remove(meta)
+        sys.exit(0)
+    sys.exit(0)       # status, scrub, labelclear, import ...
+
+if name == "mdadm":
+    d = os.path.join(state, "fake-md")
+    os.makedirs(d, exist_ok=True)
+    meta = os.path.join(d, "array.json")
+    if "--create" in args:
+        dev = args[args.index("--create") + 1]
+        level = next(a.split("=")[1] for a in args if a.startswith("--level="))
+        count = int(next(a.split("=")[1] for a in args if a.startswith("--raid-devices=")))
+        members = [a for a in args if a.startswith("/dev/") and a != dev]
+        need = {"0": 2, "1": 2, "5": 3, "6": 4, "10": 2}[level]
+        if len(members) != count or count < need:
+            die("mdadm: not enough devices for level %s" % level)
+        if os.path.exists(meta):
+            die("mdadm: an array already exists")
+        sizes = [size_of(m) for m in members]
+        if not all(sizes):
+            die("mdadm: cannot open %s" % members[sizes.index(0)])
+        small = min(sizes)
+        usable = {"0": sum(sizes), "1": small, "5": (count - 1) * small, "6": (count - 2) * small, "10": count * small // 2}[level]
+        img = os.path.join(d, "array.img")
+        with open(img, "wb") as f:
+            f.truncate(min(usable, 96 * 1024 * 1024))
+        r = run(["losetup", "-f", "--show", img])
+        loop = r.stdout.strip().splitlines()[-1]
+        os.makedirs(os.path.dirname(dev), exist_ok=True)
+        if os.path.lexists(dev):
+            os.remove(dev)
+        os.symlink(loop, dev)
+        json.dump({"dev": dev, "loop": loop, "level": level, "members": members, "img": img}, open(meta, "w"))
+        sys.exit(0)
+    if not os.path.exists(meta):
+        if "--zero-superblock" in args:
+            sys.exit(0)
+        die("mdadm: cannot open %s: No such file or directory" % (args[-1] if args else ""))
+    info = json.load(open(meta))
+    if "--detail" in args and "--scan" in args:
+        print("ARRAY %s metadata=1.2 name=pc:homelab UUID=fake:0000:0000:0000" % info["dev"])
+        sys.exit(0)
+    if "--detail" in args:
+        print("%s:\n     Raid Level : raid%s\n          State : clean" % (info["dev"], info["level"]))
+        sys.exit(0)
+    if "--stop" in args:
+        busy = run(["findmnt", "-rn", "-S", info["loop"]]).stdout.strip()
+        if busy:
+            die("mdadm: Cannot get exclusive access to %s: Perhaps a running process, mounted filesystem or active volume group?" % info["dev"])
+        run(["losetup", "-d", info["loop"]])
+        if os.path.lexists(info["dev"]):
+            os.remove(info["dev"])
+        os.remove(meta)
+        sys.exit(0)
+    sys.exit(0)
+'''
+
+
 def real_backup_stamp():
     """When the real backup log and status were last written: the fake-drive tests must never change them."""
     out = []
@@ -361,10 +504,15 @@ def install_fakes(env):
     for d in (env.bin, env.ctl, env.flags):
         os.makedirs(d, exist_ok=True)
     for name, body in (("docker", FAKE_DOCKER), ("lsblk", FAKE_LSBLK), ("mount", FAKE_MOUNT), ("hdparm", FAKE_HDPARM),
-                       ("smartctl", FAKE_LOGGER), ("udisksctl", FAKE_UDISKS), ("snapraid", FAKE_LOGGER)):
+                       ("smartctl", FAKE_LOGGER), ("udisksctl", FAKE_UDISKS), ("snapraid", FAKE_LOGGER), ("update-initramfs", FAKE_LOGGER)):
         path = os.path.join(env.bin, name)
         with open(path, "w") as f:
             f.write(body)
+        os.chmod(path, 0o755)
+    for tool in ("zpool", "zfs", "mdadm"):
+        path = os.path.join(env.bin, tool)
+        with open(path, "w") as f:
+            f.write(FAKE_ARRAYTOOLS)
         os.chmod(path, 0o755)
     path = os.path.join(env.bin, "setfattr")
     with open(path, "w") as f:
@@ -1123,8 +1271,8 @@ def candidates(ev, transcript_before, level, layout):
             exp = "ERASE"
         elif "CONTINUE" in prompt:
             exp = "CONTINUE"
-        elif re.search(r"name of the setup \(([a-z0-9]+)\)", prompt):
-            exp = re.search(r"name of the setup \(([a-z0-9]+)\)", prompt).group(1)
+        elif re.search(r"name of the setup \(([a-z0-9-]+)\)", prompt):
+            exp = re.search(r"name of the setup \(([a-z0-9-]+)\)", prompt).group(1)
         elif m:
             exp = m.group(1)
         if exp and exp.startswith("/dev/") and exp not in SAFE_DEVS:
@@ -1321,16 +1469,28 @@ def resolve_fault(layout, spec):
 
 
 # ---------------------------------------------------------------------------------------------------------------- ready-made setups
-PRESET_PLANS = [
-    # name, setup, picks (answers that choose drives), how many drives, parity drive sizes (MB), data drive sizes (MB), what the person is told they can use
-    ("pool, 2 of 5 drives", "pool", ["1", "y", "1", "n"], 2, 0),
-    ("pool, all 5 drives", "pool", ["1", "y", "1", "y", "1", "y", "1", "y", "1"], 5, 0),
-    ("mirror", "mirror", ["1", "1"], 2, 0),
-    ("snapraid1, the minimum (3 drives)", "snapraid1", ["1", "1", "1", "n"], 3, 1),
-    ("snapraid1, all 5 drives", "snapraid1", ["1", "1", "1", "y", "1", "y", "1"], 5, 1),
-    ("snapraid2, the minimum (4 drives)", "snapraid2", ["1", "1", "1", "1", "n"], 4, 2),
-    ("snapraid2, all 5 drives", "snapraid2", ["1", "1", "1", "1", "y", "1"], 5, 2),
-]
+PRESET_MIN = {"pool": 1, "mirror": 2, "snapraid1": 3, "snapraid2": 4, "zfs-stripe": 2, "zfs-mirror": 2, "zfs-raidz1": 3, "zfs-raidz2": 4,
+              "zfs-raidz3": 5, "md-raid0": 2, "md-raid1": 2, "md-raid5": 3, "md-raid6": 4, "md-raid10": 4}
+PRESET_PARITY = {"snapraid1": 1, "snapraid2": 2}
+
+
+def picks_for(setup, n, total=5):
+    """The answers that choose the first n drives of the list (and say 'no more' when the setup could take more)."""
+    out = []
+    for i in range(1, n + 1):
+        out.append("1")
+        if setup == "mirror" and i >= 2:
+            break
+        if i >= PRESET_MIN[setup] and i < total:
+            out.append("y" if i < n else "n")
+    return out
+
+
+# name, setup, picks (the answers that choose drives), how many drives, how many of them hold only protection data
+PRESET_PLANS = []
+for _setup in PRESET_MIN:
+    for _n in sorted({PRESET_MIN[_setup], 5} if _setup != "mirror" else {2}):
+        PRESET_PLANS.append(("%s, %d drives" % (_setup, _n), _setup, picks_for(_setup, _n), _n, PRESET_PARITY.get(_setup, 0)))
 
 
 def fstab_lines(env):
@@ -1349,6 +1509,8 @@ def read_text(path):
 
 def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
     """Checks for one run of `drives preset SETUP`: what must be on the machine when it is done (or nothing, for --dry-run / a refusal)."""
+    arr = setup.startswith(("zfs-", "md-"))
+
     def chk(r):
         bad = []
         if r["outcome"] != "DONE" and not dry:
@@ -1368,69 +1530,158 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
             if "DRY RUN" not in r["output"]:
                 bad.append("INV-preset-dry-silent: --dry-run printed no plan")
             return bad
-        want_main = {"pool": ndrives, "mirror": 1}.get(setup, ndrives - nparity)
-        want_back = 1 if setup == "mirror" else 0
-        if (main_n, back_n, par_n) != (want_main, want_back, nparity):
-            bad.append("INV-preset-drives: the fstab has %d main, %d backup, %d protection drives; expected %d, %d, %d"
-                       % (main_n, back_n, par_n, want_main, want_back, nparity))
+        tools = read_text(os.path.join(env.flags, "tools.log")) or ""
+        types = mount_types(env.work)
         if rec_txt is None or not rec_txt.startswith(setup + "|"):
             bad.append("INV-preset-record: the record of the setup says %r, expected it to start with %r" % (rec_txt, setup + "|"))
-        for m in [m for m in mps if re.search(r"/T(MAIN|BACKUP|PARITY)\d+$", m)]:
-            if not os.path.ismount(m):
-                bad.append("INV-preset-mount: %s is in the fstab but not mounted" % os.path.basename(m))
-        main_pool_ok = mount_types(env.work).get(env.main, "").endswith("mergerfs")
-        if not main_pool_ok:
-            bad.append("INV-preset-pool: the Main pool is not mounted after the setup was built")
-        if setup == "mirror" and not mount_types(env.work).get(env.backup, "").endswith("mergerfs"):
-            bad.append("INV-preset-pool: the Backup pool is not mounted after the mirror was built")
-        if setup.startswith("snapraid"):
-            if conf is None:
-                bad.append("INV-preset-conf: no SnapRAID settings file was written")
+        if arr:
+            members = (rec_txt or "||").split("|")[2].split()
+            if len(members) != ndrives:
+                bad.append("INV-array-record: the record lists %d drives, expected %d" % (len(members), ndrives))
+            if (main_n, back_n, par_n) != (0, 0, 0):
+                bad.append("INV-array-fstab: an array setup left %d main, %d backup, %d protection drives in the fstab" % (main_n, back_n, par_n))
+            if env.main not in types:
+                bad.append("INV-array-mount: the Main storage path is not mounted after the array was built")
+            elif types[env.main].endswith("mergerfs"):
+                bad.append("INV-array-mount: the Main storage path holds a mergerfs pool, not the array")
+            for f in ("immich", "nextcloud"):
+                if not os.path.isdir(os.path.join(env.main, f)):
+                    bad.append("INV-array-folders: the folder %s is missing on the new storage" % f)
+            if setup.startswith("zfs-"):
+                meta = read_text(os.path.join(env.state, "fake-zfs", "tank.json"))
+                if meta is None:
+                    bad.append("INV-zfs-pool: no ZFS pool was created")
+                else:
+                    info = json.loads(meta)
+                    want = {"zfs-stripe": "", "zfs-mirror": "mirror", "zfs-raidz1": "raidz1", "zfs-raidz2": "raidz2", "zfs-raidz3": "raidz3"}[setup]
+                    if info["vdev"] != want or len(info["disks"]) != ndrives:
+                        bad.append("INV-zfs-pool: the pool is %r over %d drives, expected %r over %d" % (info["vdev"], len(info["disks"]), want, ndrives))
+                    if info["mountpoint"] != env.main:
+                        bad.append("INV-zfs-pool: the pool is mounted at %s, not at the Main storage path" % info["mountpoint"])
+                    if info["opts"].get("-ocompression", info["opts"].get("-Ocompression")) != "lz4":
+                        bad.append("INV-zfs-pool: compression is not lz4")
+                    if info["opts"].get("-oashift") != "12":
+                        bad.append("INV-zfs-pool: ashift is not 12")
+                if not os.path.exists(os.path.join(env.state, "zfs-scrub-cron")):
+                    bad.append("INV-zfs-scrub: the monthly check of the data was not scheduled")
+                if os.path.exists(os.path.join(env.state, "mdadm.conf")):
+                    bad.append("INV-array-leftover: an mdadm settings file exists for a ZFS setup")
             else:
-                parity_lines = [l for l in conf.splitlines() if re.match(r"(\d+-)?parity ", l)]
-                data_lines = [l for l in conf.splitlines() if l.startswith("data ")]
-                content = [l for l in conf.splitlines() if l.startswith("content ")]
-                if len(parity_lines) != nparity:
-                    bad.append("INV-preset-conf: %d parity lines in the SnapRAID settings, expected %d" % (len(parity_lines), nparity))
-                if len(data_lines) != ndrives - nparity:
-                    bad.append("INV-preset-conf: %d data lines, expected %d" % (len(data_lines), ndrives - nparity))
-                if not (2 <= len(content) <= 3):
-                    bad.append("INV-preset-conf: %d content lines, expected 2 or 3" % len(content))
-                for l in parity_lines:
-                    if "TPARITY" not in l:
-                        bad.append("INV-preset-conf: a parity file is not on a protection drive: " + l)
-                for l in data_lines:
-                    if "TPARITY" in l or "TBACKUP" in l:
-                        bad.append("INV-preset-conf: a data line points at a protection or backup drive: " + l)
-            if cron is None or not re.search(r"^0 4 \* \* \* root snapraid .* sync", cron, re.M):
-                bad.append("INV-preset-cron: the nightly 04:00 update is missing")
-            tools = read_text(os.path.join(env.flags, "tools.log")) or ""
-            if not re.search(r"^snapraid -c \S+ sync$", tools, re.M):
-                bad.append("INV-preset-first-sync: the first SnapRAID update was not run")
+                meta = read_text(os.path.join(env.state, "fake-md", "array.json"))
+                if meta is None:
+                    bad.append("INV-md-array: no RAID array was created")
+                else:
+                    info = json.loads(meta)
+                    if info["level"] != setup.split("raid")[1] or len(info["members"]) != ndrives:
+                        bad.append("INV-md-array: the array is level %s over %d drives, expected %s over %d" % (info["level"], len(info["members"]), setup.split("raid")[1], ndrives))
+                line = [a for a in act if len(a) > 1 and a[1] == env.main]
+                if len(line) != 1 or line[0][2] != "ext4":
+                    bad.append("INV-md-fstab: expected one ext4 line for the Main storage path, found %r" % line)
+                conf_txt = read_text(os.path.join(env.state, "mdadm.conf")) or ""
+                if not re.search(r"^ARRAY .*homelab", conf_txt, re.M):
+                    bad.append("INV-md-conf: the array is not in mdadm.conf (it would not start after a reboot)")
+                if "update-initramfs" not in tools:
+                    bad.append("INV-md-initramfs: the boot image was not updated")
+                if os.path.exists(os.path.join(env.state, "zfs-scrub-cron")):
+                    bad.append("INV-array-leftover: a ZFS check was scheduled for a RAID setup")
+            if os.path.exists(os.path.join(env.state, "snapraid.conf")) or os.path.exists(os.path.join(env.state, "snapraid-cron")):
+                bad.append("INV-array-leftover: SnapRAID files exist for an array setup")
         else:
-            if conf is not None or cron is not None:
+            want_main = {"pool": ndrives, "mirror": 1}.get(setup, ndrives - nparity)
+            want_back = 1 if setup == "mirror" else 0
+            if (main_n, back_n, par_n) != (want_main, want_back, nparity):
+                bad.append("INV-preset-drives: the fstab has %d main, %d backup, %d protection drives; expected %d, %d, %d"
+                           % (main_n, back_n, par_n, want_main, want_back, nparity))
+            for m in [m for m in mps if re.search(r"/T(MAIN|BACKUP|PARITY)\d+$", m)]:
+                if not os.path.ismount(m):
+                    bad.append("INV-preset-mount: %s is in the fstab but not mounted" % os.path.basename(m))
+            if not types.get(env.main, "").endswith("mergerfs"):
+                bad.append("INV-preset-pool: the Main pool is not mounted after the setup was built")
+            if setup == "mirror" and not types.get(env.backup, "").endswith("mergerfs"):
+                bad.append("INV-preset-pool: the Backup pool is not mounted after the mirror was built")
+            if setup.startswith("snapraid"):
+                if conf is None:
+                    bad.append("INV-preset-conf: no SnapRAID settings file was written")
+                else:
+                    parity_lines = [l for l in conf.splitlines() if re.match(r"(\d+-)?parity ", l)]
+                    data_lines = [l for l in conf.splitlines() if l.startswith("data ")]
+                    content = [l for l in conf.splitlines() if l.startswith("content ")]
+                    if len(parity_lines) != nparity:
+                        bad.append("INV-preset-conf: %d parity lines in the SnapRAID settings, expected %d" % (len(parity_lines), nparity))
+                    if len(data_lines) != ndrives - nparity:
+                        bad.append("INV-preset-conf: %d data lines, expected %d" % (len(data_lines), ndrives - nparity))
+                    if not (2 <= len(content) <= 3):
+                        bad.append("INV-preset-conf: %d content lines, expected 2 or 3" % len(content))
+                    for l in parity_lines:
+                        if "TPARITY" not in l:
+                            bad.append("INV-preset-conf: a parity file is not on a protection drive: " + l)
+                    for l in data_lines:
+                        if "TPARITY" in l or "TBACKUP" in l:
+                            bad.append("INV-preset-conf: a data line points at a protection or backup drive: " + l)
+                if cron is None or not re.search(r"^0 4 \* \* \* root snapraid .* sync", cron, re.M):
+                    bad.append("INV-preset-cron: the nightly 04:00 update is missing")
+                if not re.search(r"^snapraid -c \S+ sync$", tools, re.M):
+                    bad.append("INV-preset-first-sync: the first SnapRAID update was not run")
+            elif conf is not None or cron is not None:
                 bad.append("INV-preset-leftover: a SnapRAID settings or schedule file exists for the setup '%s'" % setup)
-        # the protection drives are part of the list, never offered as new drives, and the status shows them
+        # the drives are part of the list, never offered as new drives, and the status shows them
         rc, out, _ev, _s, to = run_shim(env, ["list"], timeout=60)
         if rc != 0 or to:
             bad.append("INV-preset-list: 'drives list' failed after the setup (rc=%s)" % rc)
+        elif arr:
+            n_rows = len(re.findall(r"^\S.*\barray\b.*/dev/", out, re.M))
+            if n_rows != ndrives:
+                bad.append("INV-array-list: 'drives list' shows %d array drives, expected %d" % (n_rows, ndrives))
+            n_spare = len(re.findall(r"^\S.*\bspare\b.*/dev/", out, re.M))
+            if n_spare != len(layout.spares) - ndrives:
+                bad.append("INV-array-list: %d spare drives are listed, expected %d (a drive of the array shown as a spare could be erased by mistake): %s"
+                           % (n_spare, len(layout.spares) - ndrives, " | ".join(l for l in out.splitlines() if "spare" in l and "/dev/" in l)[:200]))
         elif nparity and len(re.findall(r"\bprotection\b|\bparity\b", out, re.I)) < nparity:
             bad.append("INV-preset-list: 'drives list' does not show the %d protection drive(s)" % nparity)
         rc, out, _ev, _s, to = run_shim(env, ["status"], timeout=60)
         if rc != 0 or to or "Setup built with" not in out:
             bad.append("INV-preset-status: 'drives status' does not mention the setup (rc=%s)" % rc)
+        if arr and "Array health" not in out:
+            bad.append("INV-array-status: 'drives status' does not show the health of the array")
+        if arr and "plain drive" in out:
+            bad.append("INV-array-status: 'drives status' calls the array a plain drive that should be converted")
+        rc, out, _ev, _s, to = run_shim(env, ["health"], timeout=60)
+        if arr and (rc != 0 or to or len(re.findall(r"loop\d+", out)) < ndrives):
+            bad.append("INV-array-health: 'drives health' does not list the %d drives of the array (rc=%s)" % (ndrives, rc))
         rc, out, _ev, _s, to = run_shim(env, ["preset", setup, "--dry-run"], timeout=60)
         if "DRY RUN" in out or rc == 0:
             bad.append("INV-preset-twice: building a second setup on top of the first was not refused")
+        if arr:
+            for cmd in ("connect", "disconnect", "move", "adopt", "bootsection", "replace", "recover", "fillorder", "balance", "limit", "resize"):
+                rc, out, _ev, _s, to = run_shim(env, [cmd], timeout=60)
+                if rc == 0 or "does not apply to an array" not in out:
+                    bad.append("INV-array-guard: 'drives %s' was not refused on an array (rc=%s)" % (cmd, rc))
+            rc, out, _ev, _s, to = run_shim(env, ["release", "--dry-run", "--yes", "--confirm-erase"], timeout=60)
+            if "DRY RUN" not in out:
+                bad.append("INV-array-release-dry: 'release --dry-run' showed no plan for the array")
+            if not os.path.exists(os.path.join(env.state, "preset")):
+                bad.append("INV-array-release-dry: 'release --dry-run' deleted the record of the array")
         # take it apart again: every drive goes back to blank and every setting file is gone
         rc, out, _ev, _s, to = run_shim(env, ["release", "--yes", "--confirm-erase"], timeout=300)
         act2 = fstab_lines(env)
-        left = [a[1] for a in act2 if len(a) > 1 and re.search(r"/T(MAIN|BACKUP|PARITY)\d+$", a[1])]
+        left = [a[1] for a in act2 if len(a) > 1 and (re.search(r"/T(MAIN|BACKUP|PARITY)\d+$", a[1]) or a[1] == env.main)]
         if left:
-            bad.append("INV-preset-release: after 'release' these drives are still in the fstab: " + ", ".join(os.path.basename(x) for x in left))
-        for f in ("preset", "snapraid.conf", "snapraid-cron"):
+            bad.append("INV-preset-release: after 'release' these are still in the fstab: " + ", ".join(os.path.basename(x) for x in left))
+        for f in ("preset", "snapraid.conf", "snapraid-cron", "zfs-scrub-cron"):
             if os.path.exists(os.path.join(env.state, f)):
                 bad.append("INV-preset-release: after 'release' the file %s is still there" % f)
+        if arr:
+            if rc != 0:
+                bad.append("INV-array-release: 'release' of the array failed (rc=%s): %s" % (rc, out.strip().splitlines()[-1:] ))
+            if os.path.ismount(env.main):
+                bad.append("INV-array-release: the Main storage is still mounted after 'release'")
+            if os.path.exists(os.path.join(env.state, "fake-zfs", "tank.json")) or os.path.exists(os.path.join(env.state, "fake-md", "array.json")):
+                bad.append("INV-array-release: the array still exists after 'release'")
+            if re.search(r"^ARRAY ", read_text(os.path.join(env.state, "mdadm.conf")) or "", re.M):
+                bad.append("INV-array-release: the array is still in mdadm.conf")
+            rc, out, _ev, _s, to = run_shim(env, ["preset"], timeout=60)
+            if "Empty drives plugged in now: %d" % len(layout.spares) not in out:
+                bad.append("INV-array-release: after 'release' the drives are not empty and usable again")
         return bad
     return chk
 
@@ -1453,7 +1704,7 @@ def run_presets(env, rec, layout, log):
                                expect=refused))
     else:
         for name, setup, picks, ndrives, nparity in PRESET_PLANS:
-            if ndrives > len(layout.spares):
+            if ndrives > len(layout.spares) or not re.search(os.environ.get("BENCH_PRESETS", "."), setup):
                 continue
             ans = picks + [setup, "ERASE"]
             n += bool(run_case(env, rec, layout, "preset", ["preset", setup], ans, note=name, tag="build-" + name,
@@ -1475,9 +1726,30 @@ def run_presets(env, rec, layout, log):
                                  ("cancel at the drive list", "pool", ["0"]),
                                  ("cancel after two drives", "snapraid2", ["1", "1", "0"]),
                                  ("empty answers", "mirror", ["", "", "", ""]),
+                                 ("wrong name typed (ZFS)", "zfs-raidz1", ["1", "1", "1", "n", "zfs-raidz2"]),
+                                 ("ERASE not typed (RAID)", "md-raid5", ["1", "1", "1", "n", "md-raid5", "no"]),
+                                 ("cancel after one drive (RAID)", "md-raid10", ["1", "0"]),
                                  ("a menu number out of range", "pool", ["99", "99"])]:
             n += bool(run_case(env, rec, layout, "preset", ["preset", setup], ans, note=note, tag="nochange-" + note, expect=nothing))
-        for note, args in [("no name: the list", ["preset"]), ("the other word", ["presets"]), ("an unknown name", ["preset", "raid7"]),
+        def refused_with(text):
+            def chk(r):
+                bad = []
+                if r["changed"]:
+                    bad.append("INV-array-refusal-changed: the setup was refused but things changed")
+                if r["rc"] == 0 or text not in r["output"]:
+                    bad.append("INV-array-refusal: expected a refusal that says %r (rc=%s)" % (text, r["rc"]))
+                return bad
+            return chk
+
+        def put_file():
+            os.makedirs(env.main, exist_ok=True)
+            sh(["chattr", "-i", env.main])      # an unmounted pool folder is locked on purpose, so that nothing writes into it by mistake
+            with open(os.path.join(env.main, "somefile.txt"), "w") as fh:
+                fh.write("a file on the boot drive")
+        for setup in ("zfs-raidz1", "md-raid5"):
+            n += bool(run_case(env, rec, layout, "preset", ["preset", setup], picks_for(setup, 3), note="files in the Main storage folder: refused",
+                               tag="files-" + setup, before_run=put_file, expect=refused_with("has files in it")))
+        for note, args in [("no name: the list", ["preset"]), ("the short name", ["preset", "raidz9"]), ("the short name of a real setup, no drives", ["preset", "raid6", "--dry-run"]), ("the other word", ["presets"]), ("an unknown name", ["preset", "raid7"]),
                            ("a name with an extra word", ["preset", "pool", "now"]), ("snapraid status with nothing built", ["snapraid", "status"]),
                            ("snapraid with a wrong action", ["snapraid", "explode"])]:
             n += bool(run_case(env, rec, layout, "preset", args, [], note=note, tag="cli-" + note, expect=nothing))
