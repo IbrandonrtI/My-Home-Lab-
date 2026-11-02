@@ -43,6 +43,9 @@ if [ "$TEST_MODE" = 1 ]; then
   SNAPRAID_CRON="${SNAPRAID_CRON:-$STATE_DIR/snapraid-cron}"
   SNAPRAID_CONTENT_DIR="${SNAPRAID_CONTENT_DIR:-$STATE_DIR/snapraid-content}"
   SNAPRAID_LOG="${SNAPRAID_LOG:-$STATE_DIR/snapraid.log}"
+  MDADM_CONF="${MDADM_CONF:-$STATE_DIR/mdadm.conf}"
+  ZFS_SCRUB_CRON="${ZFS_SCRUB_CRON:-$STATE_DIR/zfs-scrub-cron}"
+  ZFS_SYSTEM_SCRUB="${ZFS_SYSTEM_SCRUB:-$STATE_DIR/zfsutils-linux-cron}"
 else
   STATE_DIR="${DRIVES_STATE_DIR:-/var/lib/homelab-drives}"
   FSTAB="${FSTAB:-/etc/fstab}"
@@ -61,7 +64,13 @@ else
   SNAPRAID_CRON="${SNAPRAID_CRON:-/etc/cron.d/homelab-snapraid}"
   SNAPRAID_CONTENT_DIR="${SNAPRAID_CONTENT_DIR:-/var/lib/snapraid}"
   SNAPRAID_LOG="${SNAPRAID_LOG:-/var/log/homelab-snapraid.log}"
+  MDADM_CONF="${MDADM_CONF:-/etc/mdadm/mdadm.conf}"
+  ZFS_SCRUB_CRON="${ZFS_SCRUB_CRON:-/etc/cron.d/homelab-zfs-scrub}"
+  ZFS_SYSTEM_SCRUB="${ZFS_SYSTEM_SCRUB:-/etc/cron.d/zfsutils-linux}"      # Ubuntu / Mint already check ZFS pools once a month with this file
 fi
+ZFS_POOL_NAME="${ZFS_POOL_NAME:-tank}"                              # the name of the ZFS pool a ready-made ZFS setup creates
+MD_NAME="${MD_NAME:-homelab}"                                       # the name of the mdadm array a ready-made RAID setup creates
+MD_DEVICE="${DRIVES_MD_DEVICE:-/dev/md/$MD_NAME}"
 PRESET_FILE="${PRESET_FILE:-$STATE_DIR/preset}"                     # what `drives preset` built: ID|date|labels
 BOOT_OPTS="loop,noatime,nofail"
 BOOT_UNIT_BYTES="${BOOT_UNIT_BYTES:-1000000000}"; BOOT_UNIT_NAME="${BOOT_UNIT_NAME:-GB}"
@@ -95,6 +104,7 @@ BACKUP_LOCK="${BACKUP_LOCK:-/var/lock/homelab-backup.lock}"
 BUSY_POLL_SECS="${BUSY_POLL_SECS:-30}"
 BUSY_MAX_WAIT_SECS="${BUSY_MAX_WAIT_SECS:-21600}"   # wait at most 6 hours for a backup or upload to end
 
+PRESET_TOUCHED=0     # 1 once a ready-made setup has changed anything (a refused one leaves Homepage alone)
 STOPPED=""
 START_FAILED=""      # containers that would not start again after a change
 ROLLED_BACK=0        # 1 once fstab was put back to what it was before the step
@@ -365,6 +375,7 @@ managed_disks() {
     p=$(branch_part "$mp")
     [ -n "$p" ] && disk_of_part "$p"
   done | sort -u
+  array_disks
 }
 
 all_disks() {
@@ -376,6 +387,7 @@ all_disks() {
 
 legacy_disks() {   # drives mounted directly at a pool path (before conversion to a pool)
   local mp s
+  array_active && return 0      # a RAID array is mounted at the Main pool path: its drives are not "the old single data drive"
   for mp in "$MAIN_POOL" "$BACKUP_POOL"; do
     mountpoint -q "$mp" || continue
     [ "$(findmnt -no FSTYPE "$mp")" = ext4 ] || continue
@@ -879,6 +891,7 @@ confirm_erase() {   # confirm_erase /dev/sdX: the two typed confirmations before
 }
 
 connect_flow() {   # connect_flow [dev] [role] [force_erase] [already_confirmed]
+  array_guard || return 1
   local dev=${1:-} role=${2:-} force=${3:-0} confirmed=${4:-0} label part mode="erase" idx uuid mp
   local gate=pre_change; [ "$confirmed" = 1 ] && gate=dry_gate   # called from move: the check for a running backup was done before the drive left its pool
   need_tools || return 1
@@ -1084,6 +1097,7 @@ detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on th
 }
 
 disconnect_flow() {
+  array_guard || return 1
   local mp dev
   mp=$(pick_branch "Which drive do you want to disconnect? ") || return 1
   DETACHED_DEV=""
@@ -1101,6 +1115,7 @@ disconnect_flow() {
 }
 
 move_flow() {
+  array_guard || return 1
   local mp role newrole part dev
   mp=$(pick_branch "Which drive do you want to move? ") || return 1
   role=$(branch_role "$mp"); newrole=$(other_role "$role")
@@ -1125,6 +1140,7 @@ move_flow() {
 
 # ---------- adopt the current single data drive ----------
 adopt_flow() {
+  array_guard || return 1
   need_tools || return 1
   [ -z "$(branches_of main)" ] || { note "A main pool already exists. Nothing to convert."; return 1; }
   mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Plug the drive in, run sudo hdd-recover, then try again."; return 1; }
@@ -1212,7 +1228,7 @@ status_flow() {
       say "Note: the $role pool uses an older setting. Run  sudo drives fillorder  (menu: Settings and upgrades) to update it: it then keeps ${POOL_FREE_PERCENT}% of each drive free."
     fi
   done
-  if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$TEST_MODE" != 1 ]; then
+  if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$TEST_MODE" != 1 ] && ! array_active; then
     say "Note: main storage is still one plain drive. Run  sudo drives  and choose Settings and upgrades > Convert to turn it into a pool."
   fi
   for role in main backup; do
@@ -1248,8 +1264,18 @@ status_flow() {
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover)"
     fi
   done
-  [ -n "$(all_branches)" ] || say "(no drives in a pool yet)"
+  if array_active; then
+    local ad
+    for ad in $(array_disks); do
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(disk_base_name "$ad")" "array" "$ad" "$(pretty_size "$(disk_size_bytes "$ad")")" "-" "$(smart_health "$ad")" "connected"
+    done
+    for ad in $(array_members); do
+      [ -b "$(readlink -f "$ad" 2>/dev/null)" ] || printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(basename "$ad")" "array" "-" "-" "-" "-" "MISSING (cable? or dead: see  zpool status / mdadm --detail)"
+    done
+  fi
+  [ -n "$(all_branches)" ] || array_active || say "(no drives in a pool yet)"
   [ -z "$(preset_current)" ] || say "Setup built with  sudo drives preset:  $(preset_title "$(preset_current)")"
+  ! array_active || say "Array health: $(array_health_text)"
   say ""
   say "=== Boot drive ==="
   say "Free now: $(pretty_size "$(boot_free_bytes)"). The boot drive always keeps at least $(pretty_size "$BOOT_KEEP_FREE_BYTES") free for the system and your other services; a boot drive section cannot take that away."
@@ -1281,6 +1307,7 @@ status_flow() {
 
 # ---------- recover ----------
 recover_flow() {
+  array_guard || return 1
   local mp fail=0
   if [ -z "$(all_branches)" ] && ! pool_in_fstab "$MAIN_POOL" && ! pool_in_fstab "$BACKUP_POOL"; then
     note "No drive is assigned to a pool, so there is nothing to recover."
@@ -1465,6 +1492,7 @@ restore_flow() {   # restore only the missing files from the backup into the mai
 }
 
 replace_flow() {
+  array_guard || return 1
   need_tools || return 1
   local -a miss=() items=()
   local role m mp idx label pool src dev part uuid size need have o left
@@ -1595,6 +1623,7 @@ test_cleanup() {
 # ---------- release all drives ----------
 release_flow() {   # take every drive out of both pools; the files on the drives are not touched
   local mp p dir
+  if array_active; then array_release_flow; return $?; fi
   local -a all=()
   mapfile -t all < <(all_branches; parity_mounts)
   if [ ${#all[@]} -eq 0 ]; then
@@ -1730,6 +1759,7 @@ order_text() {   # order_text main|backup -> "Toshiba, Samsung, boot drive secti
 }
 
 fillorder_flow() {   # how a pool picks a drive for a new file, and which drive goes first
+  array_guard || return 1
   local role pool now act idx mp first cur
   local -a real=() items=() mps=()
   role=$(pick_pool_role 1) || return 1
@@ -1816,6 +1846,7 @@ limit_text() {   # limit_text MOUNTPOINT -> "5% = 45GB (automatic)" or "50GB (yo
 }
 
 limit_flow() {   # how much free space a pool drive keeps before the pool uses the next drive
+  array_guard || return 1
   local mp role label size cur new parsed
   mp=$(pick_branch "Which drive do you want to set the free-space limit for? ") || return 1
   role=$(branch_role "$mp"); label=$(basename "$mp")
@@ -1853,6 +1884,7 @@ boot_free_bytes() { mkdir -p "$BOOT_SECTION_DIR" 2>/dev/null; avail_bytes "$BOOT
 boot_total_bytes() { mkdir -p "$BOOT_SECTION_DIR" 2>/dev/null; df -B1 --output=size "$BOOT_SECTION_DIR" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}'; }
 
 bootsection_flow() {
+  array_guard || return 1
   need_tools || return 1
   command -v fallocate >/dev/null 2>&1 || { note "The tool 'fallocate' is missing (package util-linux)."; return 1; }
   local role idx label mp img free old=0 max min keep gb bytes reuse=0 other prompt total
@@ -2107,6 +2139,7 @@ balance_main() {
 }
 
 balance_flow() {
+  array_guard || return 1
   local rc=0
   balance_main || rc=$?
   [ -n "$BALANCE_TMP" ] && rm -rf "$BALANCE_TMP"
@@ -2116,6 +2149,7 @@ balance_flow() {
 
 # ---------- resize: make a boot drive section bigger or smaller ----------
 resize_flow() {
+  array_guard || return 1
   need_cmds fallocate resize2fs e2fsck truncate || return 1
   local role idx mp img pool cur used free max lower min keep gb bytes new_gb prompt shrink=0 fs_min before_files after_files before_used
   local -a roles=() items=()
@@ -2290,6 +2324,7 @@ disk_role_of() {   # disk_role_of /dev/sdX -> main, backup, plain-data or spare 
     p=$(branch_part "$mp")
     [ -n "$p" ] && [ "$(disk_of_part "$p")" = "$1" ] && { echo parity; return 0; }
   done
+  if grep -qx "$1" <<<"$(array_disks)"; then echo array; return 0; fi
   if grep -qx "$1" <<<"$(legacy_disks)"; then echo plain-data; else echo spare; fi
 }
 
@@ -2675,45 +2710,87 @@ menu() {
 
 # ---------- ready-made setups (drives preset): a whole drive setup built from empty drives in one go ----------
 # What was built is kept in PRESET_FILE (one line: ID|date|labels). A setup uses EMPTY drives only: they are formatted.
-PRESET_IDS="pool mirror snapraid1 snapraid2"
+PRESET_IDS="pool mirror snapraid1 snapraid2 zfs-stripe zfs-mirror zfs-raidz1 zfs-raidz2 zfs-raidz3 md-raid0 md-raid1 md-raid5 md-raid6 md-raid10"
 
+preset_alias() {   # the short names people type -> the full name of the setup
+  case "$1" in
+    raidz1|raidz2|raidz3) echo "zfs-$1" ;;
+    raid0|raid1|raid5|raid6|raid10) echo "md-$1" ;;
+    *) echo "$1" ;;
+  esac
+}
 preset_known() { case " $PRESET_IDS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+preset_kind() { case "$1" in zfs-*) echo zfs ;; md-*) echo md ;; *) echo pool ;; esac; }   # pool = separate drives joined by mergerfs; zfs / md = a real RAID array
+preset_is_array() { case "$1" in zfs-*|md-*) return 0 ;; *) return 1 ;; esac; }
 preset_title() {
   case "$1" in
-    pool)      echo "Plain pool" ;;
-    mirror)    echo "Mirror (nightly copy)" ;;
-    snapraid1) echo "SnapRAID, 1 protection drive" ;;
-    snapraid2) echo "SnapRAID, 2 protection drives" ;;
+    pool)       echo "Plain pool" ;;
+    mirror)     echo "Mirror (nightly copy)" ;;
+    snapraid1)  echo "SnapRAID, 1 protection drive" ;;
+    snapraid2)  echo "SnapRAID, 2 protection drives" ;;
+    zfs-stripe) echo "ZFS, striped (fast, NO protection)" ;;
+    zfs-mirror) echo "ZFS, mirror" ;;
+    zfs-raidz1) echo "ZFS, RAIDZ1 (1 drive can die)" ;;
+    zfs-raidz2) echo "ZFS, RAIDZ2 (2 drives can die)" ;;
+    zfs-raidz3) echo "ZFS, RAIDZ3 (3 drives can die)" ;;
+    md-raid0)   echo "RAID 0, striped (fast, NO protection)" ;;
+    md-raid1)   echo "RAID 1, mirror" ;;
+    md-raid5)   echo "RAID 5 (1 drive can die)" ;;
+    md-raid6)   echo "RAID 6 (2 drives can die)" ;;
+    md-raid10)  echo "RAID 10, mirrored stripes" ;;
   esac
 }
 preset_blurb() {
   case "$1" in
-    pool)      echo "All the drives in one big pool. New files fill one drive after the other. No protection: a dead drive loses its files." ;;
-    mirror)    echo "One Main drive and one Backup drive. Every night the Backup gets a copy of the Main (not instant)." ;;
-    snapraid1) echo "The biggest drive only holds protection data, so one dead drive can be rebuilt. Updated every night at 04:00, not instant." ;;
-    snapraid2) echo "The two biggest drives hold protection data, so two dead drives can be rebuilt. Updated every night at 04:00, not instant." ;;
+    pool)       echo "All the drives in one big pool. New files fill one drive after the other. No protection: a dead drive loses its files." ;;
+    mirror)     echo "One Main drive and one Backup drive. Every night the Backup gets a copy of the Main (not instant)." ;;
+    snapraid1)  echo "The biggest drive only holds protection data, so one dead drive can be rebuilt. Updated every night at 04:00, not instant." ;;
+    snapraid2)  echo "The two biggest drives hold protection data, so two dead drives can be rebuilt. Updated every night at 04:00, not instant." ;;
+    zfs-stripe) echo "ZFS spreads every file over all the drives: fast and all the space, but ONE dead drive loses EVERYTHING. Only for files you can get back." ;;
+    zfs-mirror) echo "ZFS keeps the same data on every drive. You only get the space of one drive; the data survives while one drive is alive." ;;
+    zfs-raidz1) echo "ZFS with the space of one drive used for protection: one dead drive can be replaced without losing anything." ;;
+    zfs-raidz2) echo "ZFS with the space of two drives used for protection: two drives can die at the same time." ;;
+    zfs-raidz3) echo "ZFS with the space of three drives used for protection: three drives can die at the same time." ;;
+    md-raid0)   echo "Linux RAID that spreads every file over all the drives: fast and all the space, but ONE dead drive loses EVERYTHING." ;;
+    md-raid1)   echo "Linux RAID that keeps the same data on every drive. You only get the space of one drive; the data survives while one drive is alive." ;;
+    md-raid5)   echo "Linux RAID with the space of one drive used for protection: one dead drive can be replaced without losing anything." ;;
+    md-raid6)   echo "Linux RAID with the space of two drives used for protection: two drives can die at the same time." ;;
+    md-raid10)  echo "Linux RAID that mirrors pairs of drives and spreads files over the pairs: fast, half the space, and a dead drive is covered by its twin." ;;
   esac
 }
-preset_min()  { case "$1" in pool) echo 1 ;; mirror) echo 2 ;; snapraid1) echo 3 ;; snapraid2) echo 4 ;; esac; }
+preset_min()  { case "$1" in pool) echo 1 ;; mirror|zfs-stripe|zfs-mirror|md-raid0|md-raid1) echo 2 ;; snapraid1|zfs-raidz1|md-raid5) echo 3 ;; snapraid2|zfs-raidz2|md-raid6|md-raid10) echo 4 ;; zfs-raidz3) echo 5 ;; esac; }
 preset_max()  { case "$1" in mirror) echo 2 ;; *) echo 0 ;; esac; }                     # 0 = as many as you like
 preset_parity_count() { case "$1" in snapraid1) echo 1 ;; snapraid2) echo 2 ;; *) echo 0 ;; esac; }
 preset_drives_text() {
   local min max; min=$(preset_min "$1"); max=$(preset_max "$1")
   if [ "$max" -eq "$min" ]; then echo "exactly $min"; elif [ "$min" -eq 1 ]; then echo "1 or more"; else echo "$min or more"; fi
 }
+preset_tool_hint() {   # preset_tool_hint ID: nothing when the programs the setup needs are installed, else the command that installs them
+  case "$(preset_kind "$1")" in
+    zfs) command -v zpool >/dev/null 2>&1 && command -v zfs >/dev/null 2>&1 || echo "sudo apt install -y zfsutils-linux" ;;
+    md)  command -v mdadm >/dev/null 2>&1 || echo "sudo apt install -y mdadm" ;;
+    *)   case "$1" in snapraid*) command -v snapraid >/dev/null 2>&1 || echo "sudo apt install -y snapraid" ;; esac ;;
+  esac
+  return 0
+}
 
 preset_capacity() {   # preset_capacity ID SIZE... -> the space you can use, in bytes (nothing when the number of drives does not fit)
   local id=$1; shift
   [ $# -gt 0 ] || return 0
-  local -a s=(); local n sum=0 x i par max
+  local -a s=(); local n sum=0 x i par max small
   mapfile -t s < <(printf '%s\n' "$@" | sort -rn)
-  n=${#s[@]}; max=$(preset_max "$id")
+  n=${#s[@]}; max=$(preset_max "$id"); small=${s[$((n - 1))]}
   [ "$n" -ge "$(preset_min "$id")" ] || return 0
   [ "$max" -eq 0 ] || [ "$n" -le "$max" ] || return 0
   for x in "${s[@]}"; do sum=$((sum + x)); done
   case "$id" in
-    pool)   echo "$sum" ;;
+    pool|zfs-stripe|md-raid0) echo "$sum" ;;
     mirror) echo "${s[1]}" ;;                      # the smaller of the two
+    zfs-mirror|md-raid1) echo "$small" ;;          # every drive holds everything: the smallest drive decides
+    zfs-raidz1|md-raid5) echo $(( (n - 1) * small )) ;;     # RAID uses only as much of each drive as the smallest one has
+    zfs-raidz2|md-raid6) echo $(( (n - 2) * small )) ;;
+    zfs-raidz3) echo $(( (n - 3) * small )) ;;
+    md-raid10) echo $(( n * small / 2 )) ;;
     snapraid1|snapraid2)                           # the biggest drives only hold protection data
       par=$(preset_parity_count "$id")
       for ((i = 0; i < par; i++)); do sum=$((sum - s[i])); done
@@ -2784,9 +2861,157 @@ snapraid_flow() {   # snapraid status|diff|sync|scrub: SnapRAID by hand, with th
   snapraid -c "$SNAPRAID_CONF" "$what"
 }
 
+# ---------- ZFS and mdadm arrays (the zfs-* and md-* setups) ----------
+# An array is built from whole drives and mounted at the Main pool path. The setup record keeps the drives by a stable name
+# (/dev/disk/by-id/... when the system has one), so the array is found again after a reboot even when sdb became sdc.
+array_active() { preset_is_array "$(preset_current)"; }
+array_members() { [ -r "$PRESET_FILE" ] && awk -F'|' 'NR == 1 {print $3}' "$PRESET_FILE" | tr ' ' '\n' | grep .; return 0; }   # the recorded names
+array_disks() {   # the whole drives of the array, found again from their recorded names
+  local m r
+  array_active || return 0
+  for m in $(array_members); do
+    r=$(readlink -f "$m" 2>/dev/null); [ -b "$r" ] || continue
+    disk_of_part "$r"
+  done | sort -u
+}
+disk_stable_name() {   # disk_stable_name /dev/sdX -> /dev/disk/by-id/ata-MODEL_SERIAL (the name that stays when the letters change), else /dev/sdX
+  local l
+  for l in /dev/disk/by-id/*; do
+    [ -L "$l" ] || continue
+    case "$(basename "$l")" in *-part[0-9]*|wwn-*|nvme-eui.*|nvme-nvme.*|md-*|dm-*|lvm-*|scsi-*) continue ;; esac
+    [ "$(readlink -f "$l")" = "$1" ] && { echo "$l"; return 0; }
+  done
+  echo "$1"
+}
+array_guard() {   # array_guard: 0 when the command may go on; says why not when the Main storage is a ZFS / RAID array
+  array_active || return 0
+  note "The Main storage is a $(preset_title "$(preset_current)") array (built with  sudo drives preset)."
+  note "This command is for pools of separate drives, so it does not apply to an array."
+  note "Look at the array:  sudo drives status.   To take it apart (this DELETES its files):  sudo drives release."
+  return 1
+}
+array_health_text() {   # one line about how the array is doing
+  local h st
+  case "$(preset_kind "$(preset_current)")" in
+    zfs) h=$(zpool list -H -o health "$ZFS_POOL_NAME" 2>/dev/null)
+         echo "${h:-unknown}   (details:  zpool status $ZFS_POOL_NAME)" ;;
+    md)  st=$(mdadm --detail "$MD_DEVICE" 2>/dev/null | awk -F' : ' '/^ *State :/ {gsub(/^ +| +$/, "", $2); print $2; exit}')
+         h=$(grep -E '(resync|recovery|reshape) *=' /proc/mdstat 2>/dev/null | head -1 | sed 's/^ *//')
+         echo "${st:-unknown}${h:+   (building: $h)}   (details:  mdadm --detail $MD_DEVICE)" ;;
+  esac
+}
+
+zfs_scrub_cron_write() {   # the monthly check of the ZFS data (Ubuntu and Mint already have one: then nothing is added)
+  [ -e "$ZFS_SYSTEM_SCRUB" ] && return 0
+  mkdir -p "$(dirname "$ZFS_SCRUB_CRON")" 2>/dev/null || true
+  printf '# ZFS (written by '"'"'sudo drives preset'"'"'): check all the data of the pool on the 1st of every month at 03:00.\n0 3 1 * * root zpool scrub %s\n' "$ZFS_POOL_NAME" >"$ZFS_SCRUB_CRON"
+  chmod 644 "$ZFS_SCRUB_CRON" 2>/dev/null || true
+}
+
+array_service_folders() {   # the folders the services expect on the new storage
+  mkdir -p "$MAIN_POOL/immich" "$MAIN_POOL/nextcloud"
+  give_to_owner "$MAIN_POOL"
+  give_to_owner "$MAIN_POOL/immich"
+  chown 33:33 "$MAIN_POOL/nextcloud" 2>/dev/null || true
+}
+
+zfs_build() {   # zfs_build ID NAME...: one ZFS pool on whole drives, mounted at the Main pool path
+  local id=$1; shift
+  local -a vdev=()
+  case "$id" in zfs-mirror) vdev=(mirror) ;; zfs-raidz1) vdev=(raidz1) ;; zfs-raidz2) vdev=(raidz2) ;; zfs-raidz3) vdev=(raidz3) ;; esac
+  mkdir -p "$MAIN_POOL"
+  zpool create -f -o ashift=12 -O compression=lz4 -O atime=off -O xattr=sa -O acltype=posixacl \
+    -O mountpoint="$MAIN_POOL" "$ZFS_POOL_NAME" ${vdev[@]+"${vdev[@]}"} "$@" 9>&- >&2 || return 1
+  zfs_scrub_cron_write
+  mountpoint -q "$MAIN_POOL" || { warn "The ZFS pool was made but is not mounted at $MAIN_POOL."; return 1; }
+}
+
+md_conf_forget() {   # take this array's lines out of mdadm.conf
+  [ -w "$MDADM_CONF" ] && sed -i "/^ARRAY .*$MD_NAME/d" "$MDADM_CONF"
+  return 0
+}
+md_undo() {   # md_undo NAME...: stop the array and clear the drives (a build that failed halfway)
+  local m
+  mdadm --stop "$MD_DEVICE" >/dev/null 2>&1 || true
+  for m in "$@"; do mdadm --zero-superblock "$m" >/dev/null 2>&1 || true; wipefs -a "$m" >/dev/null 2>&1 || true; done
+}
+md_build() {   # md_build ID NAME...: one RAID array on whole drives, formatted and mounted at the Main pool path
+  local id=$1 level uuid i; shift
+  level=${id#md-raid}
+  mkdir -p "$(dirname "$MD_DEVICE")" "$MAIN_POOL"
+  mdadm --create "$MD_DEVICE" --run --level="$level" --raid-devices="$#" --metadata=1.2 --name="$MD_NAME" "$@" 9>&- </dev/null >&2 || return 1
+  udevadm settle 2>/dev/null || true
+  for i in 1 2 3 4 5 6 7 8 9 10; do [ -b "$(readlink -f "$MD_DEVICE")" ] && break; sleep 1; done
+  if ! mkfs.ext4 -F -q -L "$MD_NAME" -m 0 "$MD_DEVICE" >&2; then md_undo "$@"; return 1; fi
+  udevadm settle 2>/dev/null || true
+  uuid=$(blkid -s UUID -o value "$MD_DEVICE") || true
+  if [ -z "$uuid" ]; then md_undo "$@"; warn "Could not read the UUID of the new array."; return 1; fi
+  fstab_snapshot
+  fstab_add "UUID=$uuid  $MAIN_POOL  ext4  $BRANCH_OPTS  0  2"
+  sd_reload
+  if ! mount_fstab "$MAIN_POOL"; then fstab_rollback; md_undo "$@"; warn "Could not mount the new array at $MAIN_POOL. fstab was restored."; return 1; fi
+  mkdir -p "$(dirname "$MDADM_CONF")"; touch "$MDADM_CONF"
+  md_conf_forget
+  mdadm --detail --scan "$MD_DEVICE" >>"$MDADM_CONF" 2>/dev/null || true
+  # the array must be known when the computer starts (the name stays /dev/md/$MD_NAME)
+  command -v update-initramfs >/dev/null 2>&1 && { update-initramfs -u >/dev/null 2>&1 || warn "update-initramfs failed. Run it later:  sudo update-initramfs -u"; }
+  return 0
+}
+
+array_release_flow() {   # release when the Main storage is a ZFS / RAID array: the array and everything on it is deleted
+  local id d m
+  local -a disks=()
+  id=$(preset_current)
+  mapfile -t disks < <(array_disks)
+  say "The Main storage ($MAIN_POOL) is a $(preset_title "$id") array on these drives:"
+  for d in ${disks[@]+"${disks[@]}"}; do say "  - $(disk_base_name "$d")  ($d)"; done
+  [ ${#disks[@]} -gt 0 ] || say "  (the drives could not be found right now)"
+  say ""
+  say "!! Releasing an array DELETES THE ARRAY AND EVERYTHING STORED ON IT. This cannot be undone. !!"
+  say "The drives are emptied and can be used again (for a new ready-made setup, or sudo drives connect)."
+  say "The Backup storage ($BACKUP_POOL) is not touched: make sure it holds a recent copy of what you want to keep."
+  yn "Delete the array and all its files?" || { say "Cancelled. Nothing was changed."; return 1; }
+  typed DESTROY "Type DESTROY (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+  pre_change "Stop the containers that use the storage." \
+             "Delete the array, and erase its ${#disks[@]} drives." \
+             "Make $MAIN_POOL a plain folder on the boot drive, then start the containers." && return 0
+  PRESET_TOUCHED=1
+  stop_containers "$MAIN_POOL" "$DISKS_DIR"
+  sync_fs "$MAIN_POOL"
+  case "$(preset_kind "$id")" in
+    zfs)
+      zpool destroy -f "$ZFS_POOL_NAME" 9>&- || { start_containers; die "Could not delete the ZFS pool (is something using $MAIN_POOL?). Nothing was changed."; }
+      for d in ${disks[@]+"${disks[@]}"}; do
+        for m in $(parts_of "$d"); do zpool labelclear -f "$m" >/dev/null 2>&1 || true; done
+      done
+      rm -f "$ZFS_SCRUB_CRON" ;;
+    md)
+      if mountpoint -q "$MAIN_POOL" && ! pool_umount "$MAIN_POOL"; then start_containers; die "Could not unmount $MAIN_POOL (something is using it). Nothing was changed."; fi
+      fstab_snapshot
+      fstab_remove_mp "$MAIN_POOL"
+      sd_reload
+      mdadm --stop "$MD_DEVICE" 9>&- >&2 || warn "The array did not stop cleanly."
+      for m in $(array_members); do
+        d=$(readlink -f "$m" 2>/dev/null); [ -b "$d" ] && mdadm --zero-superblock "$d" >/dev/null 2>&1 || true
+      done
+      md_conf_forget
+      command -v update-initramfs >/dev/null 2>&1 && { update-initramfs -u >/dev/null 2>&1 || true; } ;;
+  esac
+  for d in ${disks[@]+"${disks[@]}"}; do wipefs -a "$d" >/dev/null 2>&1 || true; done
+  rm -f "$PRESET_FILE"
+  chattr -i "$MAIN_POOL" 2>/dev/null || true
+  mkdir -p "$MAIN_POOL"
+  array_service_folders
+  start_containers
+  log "released the $id array (${#disks[@]} drives erased)"
+  say ""
+  say "Done. The array was deleted and its drives are empty again."
+  say "Choose the drives you want with:  sudo drives preset     or     sudo drives"
+}
+
 # ---- the list ----
 preset_list_flow() {   # preset: what can be built, and what the empty drives that are plugged in now would give
-  local id d s sizes_text="" total=0 n=0
+  local id d s sizes_text="" total=0 n=0 kind lastkind=""
   local -a bsizes=() disks=() use=()
   mapfile -t disks < <(blank_disks)
   for d in "${disks[@]}"; do s=$(disk_size_bytes "$d"); [ -n "$s" ] || continue; bsizes+=("$s"); total=$((total + s)); n=$((n + 1)); done
@@ -2800,6 +3025,16 @@ preset_list_flow() {   # preset: what can be built, and what the empty drives th
   fi
   say ""
   for id in $PRESET_IDS; do
+    kind=$(preset_kind "$id")
+    if [ "$kind" != "$lastkind" ]; then
+      lastkind=$kind
+      case "$kind" in
+        pool) say "== Pools of separate drives (each drive keeps its own files; easy to grow later) ==" ;;
+        zfs)  say "== ZFS, a real RAID file system (needs the program:  sudo apt install -y zfsutils-linux) ==" ;;
+        md)   say "== Linux RAID with mdadm (needs the program:  sudo apt install -y mdadm) ==" ;;
+      esac
+      say ""
+    fi
     printf '  %-10s %s   needs %s drives\n' "$id" "$(preset_title "$id")" "$(preset_drives_text "$id")"
     printf '             %s\n' "$(preset_blurb "$id")"
     if [ "$n" -lt "$(preset_min "$id")" ]; then
@@ -2812,7 +3047,8 @@ preset_list_flow() {   # preset: what can be built, and what the empty drives th
     fi
     say ""
   done
-  say "Build one with:  sudo drives preset NAME      (for example  sudo drives preset snapraid1;  add --dry-run to see the plan first)"
+  say "Build one with:  sudo drives preset NAME      (for example  sudo drives preset snapraid1  or  sudo drives preset raidz1;  add --dry-run to see the plan first)"
+  say "A ZFS or RAID setup becomes the Main storage. It needs the Main storage to have no drives yet (take them out first with  sudo drives release)."
   if [ -n "$(preset_current)" ]; then say "Built here: $(preset_title "$(preset_current)")"; fi
 }
 
@@ -2864,23 +3100,46 @@ preset_parity_drive() {   # preset_parity_drive /dev/sdX N: format it and mount 
 
 # ---- the build ----
 preset_flow() {   # preset_flow ID
-  local id=${1:-} d i n=0 usable total=0 mp label par s
-  local -a devs=() sizes=() order=() main_devs=() par_devs=()
+  local id d i n=0 usable total=0 mp label par s hint smallest biggest
+  local -a devs=() sizes=() order=() main_devs=() par_devs=() ids=()
+  id=$(preset_alias "${1:-}")
   if ! preset_known "$id"; then
-    note "There is no setup called '$id'. The setups are: $PRESET_IDS"
+    note "There is no setup called '${1:-}'. The setups are: $PRESET_IDS"
     note "See what each one needs and gives:  sudo drives preset"
     return 1
   fi
-  need_tools || return 1
-  case "$id" in snapraid*) command -v snapraid >/dev/null 2>&1 || { note "SnapRAID is not installed. Install it with:  sudo apt install -y snapraid"; return 1; } ;; esac
+  if preset_is_array "$id"; then need_cmds wipefs blkid mkfs.ext4 || return 1; else need_tools || return 1; fi
+  hint=$(preset_tool_hint "$id")
+  if [ -n "$hint" ]; then note "$(preset_title "$id") needs a program that is not installed yet. Install it with:  $hint"; return 1; fi
+  if array_active; then
+    note "The Main storage is already a $(preset_title "$(preset_current)") array."
+    note "To start over, take it apart first:  sudo drives release   (this DELETES the array and its files)."
+    return 1
+  fi
   if [ -n "$(branches_of main)" ] || { [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; } || [ -n "$(parity_mounts)" ]; then
     note "A ready-made setup builds a NEW setup, but some drives are already in a storage."
     note "Look at them with  sudo drives list.  To add one more drive to what you have, use  sudo drives connect."
     note "To start over with every drive, take them out of the pools first:  sudo drives release   (the files stay on the drives)."
     return 1
   fi
-  pool_can_grow main "these drives" || return 1
-  [ "$id" = mirror ] && { pool_can_grow backup "these drives" || return 1; }
+  if preset_is_array "$id"; then
+    if mountpoint -q "$MAIN_POOL"; then
+      note "$MAIN_POOL is already used by something else (check: findmnt $MAIN_POOL). A RAID setup needs it to be an ordinary empty folder."
+      return 1
+    fi
+    if [ -n "$(find "$MAIN_POOL" ! -type d -print -quit 2>/dev/null)" ]; then
+      note "The folder $MAIN_POOL (on the boot drive) has files in it. The new storage would hide them."
+      note "Move them somewhere else first, then try again."
+      return 1
+    fi
+    if [ "$(preset_kind "$id")" = zfs ] && zpool list -H -o name 2>/dev/null | grep -qx "$ZFS_POOL_NAME"; then
+      note "A ZFS pool called '$ZFS_POOL_NAME' already exists on this computer. Look at it with:  zpool status $ZFS_POOL_NAME"
+      return 1
+    fi
+  else
+    pool_can_grow main "these drives" || return 1
+    [ "$id" = mirror ] && { pool_can_grow backup "these drives" || return 1; }
+  fi
 
   mapfile -t devs < <(preset_pick_drives "$id") || return 1
   [ ${#devs[@]} -gt 0 ] || return 1
@@ -2891,7 +3150,7 @@ preset_flow() {   # preset_flow ID
   done
   mapfile -t order < <(for i in "${!devs[@]}"; do printf '%s %s\n' "${sizes[$i]}" "${devs[$i]}"; done | sort -rn -s -k1,1 | awk '{print $2}')   # the biggest first
   case "$id" in
-    pool) main_devs=("${devs[@]}") ;;
+    pool|zfs-*|md-*) main_devs=("${devs[@]}") ;;
     mirror) main_devs=("${order[1]}"); par_devs=() ;;     # the smaller drive is the Main drive; the bigger one holds its copy
     snapraid1|snapraid2)
       par=$(preset_parity_count "$id")
@@ -2906,7 +3165,11 @@ preset_flow() {   # preset_flow ID
   say ""
   printf '  %-28s %-12s %-9s %s\n' DRIVE DEVICE SIZE "WILL BE"
   i=0
-  for d in "${main_devs[@]}"; do i=$((i + 1)); printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$d")" "$d" "$(pretty_size "$(disk_size_bytes "$d")")" "Main storage, drive $i"; done
+  for d in "${main_devs[@]}"; do
+    i=$((i + 1))
+    printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$d")" "$d" "$(pretty_size "$(disk_size_bytes "$d")")" \
+      "$(if preset_is_array "$id"; then echo "Main storage, array member $i"; else echo "Main storage, drive $i"; fi)"
+  done
   if [ "$id" = mirror ]; then
     printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "${order[0]}")" "${order[0]}" "$(pretty_size "$(disk_size_bytes "${order[0]}")")" "Backup storage (the nightly copy)"
   fi
@@ -2917,6 +3180,17 @@ preset_flow() {   # preset_flow ID
   case "$id" in
     mirror) say "The Backup drive gets a copy of the Main drive every day (your backup schedule: sudo homelab status shows when). A file added today is on the Backup tomorrow." ;;
     snapraid*) say "The protection data is updated every night at 04:00, not at once: files added today are protected from tonight." ;;
+    zfs-*|md-*)
+      say "The array becomes the Main storage ($MAIN_POOL): your containers keep using the same path. The Backup storage stays as it is."
+      smallest=$(printf '%s\n' "${sizes[@]}" | sort -n | head -1); biggest=$(printf '%s\n' "${sizes[@]}" | sort -n | tail -1)
+      case "$id" in
+        zfs-stripe|md-raid0) say "!! There is NO protection: if any one drive dies, ALL the files are lost. Keep a good backup (your Backup storage does that every night). !!" ;;
+        *) [ $((biggest - smallest)) -gt $((smallest / 10)) ] && say "Note: the drives are not the same size. A RAID setup only uses as much of each drive as the smallest one has ($(pretty_size "$smallest")), so part of the bigger drives stays unused." ;;
+      esac
+      case "$id" in
+        md-*) say "The array builds its protection in the background (hours on big drives; see  cat /proc/mdstat). You can use it right away, but it is not fully protected until that is done." ;;
+        zfs-*) say "ZFS also checks all your data for silent damage once a month, and the checks fix what they can." ;;
+      esac ;;
   esac
   say ""
   say "!! ERASE WARNING !!"
@@ -2924,6 +3198,32 @@ preset_flow() {   # preset_flow ID
   for d in "${devs[@]}"; do say "  - $d  ($(disk_base_name "$d"))"; done
   typed "$id" "Type the name of the setup ($id) to continue: " || { say "Cancelled. Nothing was changed."; return 1; }
   typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+  if preset_is_array "$id"; then
+    pre_change "Erase the ${#devs[@]} drives and build the $(preset_title "$id") array on them." \
+               "Stop the containers that use the Main storage for a minute." \
+               "$([ "$(preset_kind "$id")" = zfs ] && echo "Create the ZFS pool '$ZFS_POOL_NAME' and mount it at $MAIN_POOL." || echo "Create the RAID array, format it and mount it at $MAIN_POOL (and write it into fstab and mdadm.conf).")" \
+               "Start the containers again." && return 0
+    PRESET_TOUCHED=1
+    for d in "${devs[@]}"; do refuse_unsafe_disk "$d"; ids+=("$(disk_stable_name "$d")"); done
+    stop_containers "$MAIN_POOL"
+    if [ "$(preset_kind "$id")" = zfs ]; then
+      zfs_build "$id" "${ids[@]}" || { start_containers; warn "The ZFS pool could not be created. Look at the messages above. See: sudo drives status"; return 1; }
+    else
+      md_build "$id" "${ids[@]}" || { start_containers; warn "The RAID array could not be built. Look at the messages above. See: sudo drives status"; return 1; }
+    fi
+    preset_record "$id" "${ids[*]}"
+    array_service_folders
+    start_containers
+    log "preset $id built on ${#devs[@]} drives: ${ids[*]}"
+    say ""
+    say "Done. $(preset_title "$id") is ready at $MAIN_POOL: about $(pretty_size "$usable") usable."
+    case "$id" in
+      md-*) say "Watch the background build:  cat /proc/mdstat      Health any time:  sudo drives status" ;;
+      zfs-*) say "Health any time:  sudo drives status      Details:  zpool status $ZFS_POOL_NAME" ;;
+    esac
+    return 0
+  fi
+  PRESET_TOUCHED=1
   pre_change "Format the ${#devs[@]} drives." \
              "Stop the containers that use the storage while each drive is added (once per drive), then start them again." \
              "Make the Main storage from the data drives$([ "$id" = mirror ] && echo ", and the Backup storage from the other drive")." \
@@ -2986,7 +3286,7 @@ hs() { if [[ "${1:-}" =~ ^[0-9]+$ ]]; then human "$1"; else printf '%s' "-"; fi;
 pct() { if [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "${2:-}" =~ ^[0-9]+$ ]] && [ "$2" -gt 0 ]; then printf '%s%%' $(( $1 * 100 / $2 )); else printf '%s' "-"; fi; }
 
 drive_rows() {   # one row per drive: name US role US device US size US used US free US state US mount
-  local mp p name role d size prot legacy managed state
+  local mp p name role d m size prot legacy managed state
   prot=$(protected_disks); legacy=$(legacy_disks); managed=$(managed_disks)
   for mp in $(all_branches); do
     name=$(branch_name "$mp"); role=$(branch_role "$mp"); p=$(branch_part "$mp")
@@ -3009,6 +3309,14 @@ drive_rows() {   # one row per drive: name US role US device US size US used US 
     else
       printf '%s\n' "$name${US}parity$US-$US$US$US${US}MISSING$US$mp"
     fi
+  done
+  for d in $(array_disks); do
+    if [ -b "$d" ]; then
+      printf '%s\n' "$(disk_base_name "$d")${US}array$US$d$US$(disk_size_bytes "$d")$US$US${US}connected (in the $(preset_title "$(preset_current)") array)$US"
+    fi
+  done
+  for m in $(array_members); do
+    [ -b "$(readlink -f "$m" 2>/dev/null)" ] || printf '%s\n' "$(basename "$m")${US}array${US}-$US$US$US${US}MISSING (cable? replace it with the tools of the array)$US"
   done
   for d in $(all_disks | sort -u); do
     grep -qx "$d" <<<"$managed" && continue
@@ -3078,7 +3386,7 @@ list_flow() {
     printf '%-26s %-10s %-12s %-9s %s\n' "$name" "$role" "${dev:--}" "$(hs "$size")" "$state"
   done < <(drive_rows)
   say ""
-  say "Roles: main and backup are pool drives. spare = plugged in, not used. system = the boot drive (never touched)."
+  say "Roles: main and backup are pool drives; parity holds SnapRAID protection data; array is part of a ZFS or RAID array. spare = plugged in, not used. system = the boot drive (never touched)."
   say "More: sudo drives usage (space)   sudo drives health (SMART)   sudo drives check (file system errors)"
   say ""
 }
@@ -3159,8 +3467,12 @@ health_rows() {   # one row per physical drive: name US device US health US temp
     d=$(disk_of_part "$p"); [ -n "$d" ] || continue
     printf '%s\n' "$(branch_base_name "$mp")$US$d$US$(smart_detail "$d")"
   done
+  for d in $(array_disks); do
+    printf '%s\n' "$(disk_base_name "$d")$US$d$US$(smart_detail "$d")"
+  done
   for d in $(all_disks | sort -u); do
     grep -qx "$d" <<<"$managed" && continue
+    grep -qx "$d" <<<"$(array_disks)" && continue
     printf '%s\n' "$(disk_base_name "$d")$US$d$US$(smart_detail "$d")"
   done
 }
@@ -3266,6 +3578,7 @@ check_flow() {
     fi
   done
   if [ "$JSON" = 1 ]; then printf '],"ok":%s}\n' "$([ "$nprob" = 0 ] && echo true || echo false)"; [ "$nprob" = 0 ]; return; fi
+  if [ "$n" = 0 ] && array_active; then say "The Main storage is a $(preset_title "$(preset_current)") array. Array health: $(array_health_text)"; say "(The health of every plugged-in drive:  sudo drives health)"; say ""; return 0; fi
   if [ "$n" = 0 ]; then say "No drives are connected to a pool yet, so there is nothing to check."; say "(The health of every plugged-in drive, pooled or not:  sudo drives health)"; say ""; return 0; fi
   say ""
   say "Checked $n drive(s): $nok ok, $nwarn with a warning, $nprob with a problem. Nothing was changed."
@@ -3355,7 +3668,7 @@ Change the drives:
   move          move a drive between Main and Backup (its files are copied away first)
   bootsection   use part of the boot drive as a pool drive, with a size limit
   adopt         turn the old single data drive into a pool
-  preset        build a whole setup on empty drives: a plain pool, a mirror with a nightly copy, SnapRAID protection
+  preset        build a whole setup on empty drives: a plain pool, a mirror with a nightly copy, SnapRAID, ZFS or RAID
   snapraid      look at or update the SnapRAID protection (status, diff, sync, scrub)
   release       take every drive out of the pools (the files stay on the drives)
   recover       after an unplug or a power cut: mount the drives and start the containers again
@@ -3553,14 +3866,22 @@ EOF
     preset) cat <<'EOF'
 sudo drives preset [NAME] [--dry-run] [--yes] [--confirm-erase]
   Without a name: lists the ready-made setups and shows what the empty drives that are plugged in now would give.
-  With a name (pool, mirror, snapraid1, snapraid2): builds it. You pick the drives, see the plan and what you can use, and
-  type the setup name and ERASE before anything is erased. Only EMPTY or new drives are used (a drive with files must be
-  erased first: sudo drives wipe). The Main storage must not have drives yet (to add to it use connect).
-    pool       all the drives in one pool (no protection)
-    mirror     exactly 2 drives: the smaller one is Main, the bigger one is Backup; the backup copies Main to it every day
-    snapraid1  3 or more drives: the biggest holds protection data (updated every night at 04:00, not at once)
-    snapraid2  4 or more drives: the two biggest hold protection data
-  The setup is kept in the state folder; sudo drives status shows it. sudo drives release takes everything apart again.
+  With a name: builds it. You pick the drives, see the plan and what you can use, and type the setup name and ERASE
+  before anything is erased. Only EMPTY or new drives are used (a drive with files must be erased first: sudo drives wipe).
+  The Main storage must not have drives yet (to add to it use connect).
+    pool        all the drives in one pool (no protection)
+    mirror      exactly 2 drives: the smaller one is Main, the bigger one is Backup; the backup copies Main to it every day
+    snapraid1   3 or more drives: the biggest holds protection data (updated every night at 04:00, not at once)
+    snapraid2   4 or more drives: the two biggest hold protection data
+  Real RAID arrays (they become the Main storage at /mnt/storage; the drives must all be empty):
+    zfs-stripe  2 or more drives, ZFS, all the space, NO protection        zfs-mirror  2 or more drives, same data on each
+    zfs-raidz1  3 or more drives, ZFS, 1 drive can die                     zfs-raidz2  4 or more, 2 can die    zfs-raidz3  5 or more, 3 can die
+    md-raid0    2 or more drives, Linux RAID, NO protection                md-raid1    2 or more, same data on each
+    md-raid5    3 or more drives, 1 can die                                md-raid6    4 or more, 2 can die    md-raid10  4 or more, mirrored pairs
+  The short names raidz1, raidz2, raidz3 and raid0, raid1, raid5, raid6, raid10 work too.
+  ZFS needs  sudo apt install -y zfsutils-linux  and RAID needs  sudo apt install -y mdadm  first.
+  The setup is kept in the state folder; sudo drives status shows it. sudo drives release takes it apart again
+  (for a ZFS / RAID array that DELETES the array and its files: it asks you to type DESTROY).
 EOF
     ;;
     snapraid) cat <<'EOF'
@@ -3587,6 +3908,7 @@ EOF
 run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser; the exit code is the flow's (1 also when containers did not start)
   local rc=0
   "$@" || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$1" = preset_flow ] && [ "$PRESET_TOUCHED" != 1 ]; then return "$rc"; fi     # a setup that was refused or cancelled changed nothing
   [ -n "${STOPPED// /}" ] || sync_filebrowser
   if [ -n "${START_FAILED// /}" ] && [ "$rc" -eq 0 ]; then rc=1; fi
   return "$rc"
