@@ -31,8 +31,9 @@ check("programs are counted by name", dict(c), {"drives": 1, "lsblk": 2, "awk": 
 check("a failed start is not counted", c["lsblk"], 2)
 check("a quiet command gets no findings", m.hints("x", 1.0, 20, c), [])
 check("a slow command is named", len(m.hints("x", 9.0, 20, c)), 1)
-check("many programs are named", len(m.hints("x", 1.0, 900, c)), 1)
-check("a repeated scan is named", m.hints("drives list", 1.0, 100, m.collections.Counter({"lsblk": 80, "bash": 90})),
+check("many programs are named", len(m.hints("x", 3.0, 900, c)), 1)
+check("a fast command is not nagged about", m.hints("x", 0.9, 900, m.collections.Counter({"awk": 90})), [])
+check("a repeated scan is named", m.hints("drives list", 3.0, 100, m.collections.Counter({"lsblk": 80, "bash": 90})),
       ["drives list starts 'lsblk' 80 times; a scan that could be done once and reused"])
 check("the median is the middle value", m.median([3.0, 1.0, 2.0]), 2.0)
 check("an empty list has median 0", m.median([]), 0.0)
