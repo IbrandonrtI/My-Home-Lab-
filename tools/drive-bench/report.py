@@ -272,6 +272,11 @@ def capabilities(R, meta):
         add(title, [r for r in pr if r["args"][:2] == ["preset", key] and "--dry-run" not in r["args"]], 0, "", "needs the layout with five empty drives")
     add("Ready-made setups are refused when a pool already exists", [r for r in pr if str(r.get("note", "")).startswith("a pool already exists")], 0, "",
         "needs the layout with a pool and empty drives", ok=("REFUSED",))
+    wz = of(R, "wizard", pre=False)
+    add("Drive wizard: suggest and build a setup for the empty drives", [r for r in wz if r["args"][:1] == ["wizard"] and "--first-run" not in r["args"] and "--dry-run" not in r["args"]
+                                                                       and r["outcome"] == "DONE"], 0, "", "needs a layout with empty drives and no pool")
+    add("Drive wizard: refuses to start when storage is already set up", [r for r in wz if str(r.get("note", "")).startswith("storage exists: the wizard")], 0, "",
+        "needs the layout with a pool", ok=("NOTHING",))
     add("Walk through the menu", of(R, "menu", pre=False), 0, "", "not run", ok=("DONE", "NOTHING", "CANCELLED"))
     return caps
 
@@ -386,7 +391,7 @@ def others(R):
 
 
 # ---------------------------------------------------------------------------------------------------------------- output
-FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "preset"]
+FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "preset", "wizard"]
 
 
 def stats(R):

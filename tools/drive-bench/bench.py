@@ -121,6 +121,10 @@ def layouts_for(level, only=None):
     # ready-made setups need several empty drives of different sizes (the drive sizes decide who keeps the data and who protects it)
     L.append(Layout("m0-b0-blank5", 0, 0, spares=[Drive(s, i, "blank", "empty") for i, s in enumerate([48, 96, 64, 48, 160])],
                     note="five empty drives of different sizes (for the ready-made setups)"))
+    L.append(Layout("m0-b0-blank2", 0, 0, spares=[Drive(s, i, "blank", "empty") for i, s in enumerate([96, 64])],
+                    note="two empty drives (the wizard suggests a mirror)"))
+    L.append(Layout("m0-b0-blank3", 0, 0, spares=[Drive(s, i, "blank", "empty") for i, s in enumerate([48, 64, 96])],
+                    note="three empty drives (the wizard suggests SnapRAID)"))
     L.append(Layout("m1-b0-blank3", 1, 0, spares=[Drive(s, i, "blank", "empty") for i, s in enumerate([48, 64, 96])],
                     note="a pool already exists and three empty drives are plugged in"))
     L.append(Layout("legacy-single-drive", 0, 0, spares=["ext4data", "blank"], kind="legacy", note="the old single data drive"))
@@ -840,7 +844,7 @@ def fingerprint(env):
         h.update(repr(listing(os.path.join(env.disks, d))).encode())
     for f in sorted(os.listdir(env.state)) if os.path.isdir(env.state) else []:
         fp = os.path.join(env.state, f)
-        if f.startswith("fstab.bak") or f == "drives.log" or f.startswith("restore-"):
+        if f.startswith("fstab.bak") or f == "drives.log" or f.startswith("restore-") or f == "wizard":
             continue        # logs, and the restore preview reports (restore-DATE.out/.txt: the list of missing files, written even for --dry-run)
         if os.path.isfile(fp):
             h.update(f.encode())
@@ -1843,6 +1847,34 @@ def run_presets(env, rec, layout, log):
     """Every ready-made setup, on a layout with empty drives; plus the refusals and the answers that must change nothing."""
     t0 = time.time()
     n = 0
+    def chain(*fs):
+        """All the checks in turn; the wizard's 'asked once' note is removed afterwards so that the next run starts clean."""
+        def chk(r):
+            out = []
+            for f in fs:
+                out += f(r)
+            try:
+                os.remove(os.path.join(env.state, "wizard"))
+            except OSError:
+                pass
+            return out
+        return chk
+
+    def wiz_exists(r):
+        bad = []
+        if r["changed"]:
+            bad.append("INV-wizard-changed: the wizard changed things although storage is already set up")
+        if r["rc"] != 0 or "already set up" not in r["output"] or "Drive scan" in r["output"]:
+            bad.append("INV-wizard-exists: expected 'already set up' and no scan (rc=%s)" % r["rc"])
+        return bad
+
+    def wiz_silent(r):
+        bad = []
+        if r["changed"]:
+            bad.append("INV-wizard-changed: the first-run offer changed things although storage is already set up")
+        if r["rc"] != 0 or r["output"].strip():
+            bad.append("INV-wizard-first-silent: the first-run offer must say nothing when storage exists (rc=%s)" % r["rc"])
+        return bad
     if layout.main or layout.backup:
         # a pool already exists: every setup must be refused without changing anything
         for setup in ("pool", "mirror", "snapraid1", "snapraid2"):
@@ -1855,10 +1887,14 @@ def run_presets(env, rec, layout, log):
                 return bad
             n += bool(run_case(env, rec, layout, "preset", ["preset", setup], [], note="a pool already exists: refused", tag="refuse-" + setup,
                                expect=refused))
+
+        n += bool(run_case(env, rec, layout, "wizard", ["wizard"], [], note="storage exists: the wizard has nothing to do", tag="wizard-exists", expect=chain(wiz_exists)))
+        n += bool(run_case(env, rec, layout, "wizard", ["wizard", "--first-run"], [], note="storage exists: the first-run offer is silent", tag="wizard-first-exists",
+                           expect=chain(wiz_silent)))
     else:
         for name, setup, picks, ndrives, nparity, extras in PRESET_PLANS:
-            if ndrives + bool(extras.get("spare")) + bool(extras.get("cache")) > len(layout.spares) or not re.search(os.environ.get("BENCH_PRESETS", "."), setup):
-                continue
+            if len(layout.spares) < 5 or not re.search(os.environ.get("BENCH_PRESETS", "."), setup):
+                continue        # the answers are written for the layout with five empty drives ("use another drive?" is asked only while drives are left)
             ans = picks + [setup, "ERASE"]
             n += bool(run_case(env, rec, layout, "preset", ["preset", setup], ans, note=name, tag="build-" + name,
                                expect=preset_expect(env, layout, setup, ndrives, nparity, extras=extras), probe=False))
@@ -1869,7 +1905,7 @@ def run_presets(env, rec, layout, log):
                                    note=name + ": --yes --confirm-erase", tag="yes-" + name,
                                    expect=preset_expect(env, layout, setup, ndrives, nparity), probe=False))
         # the extras by option: --encrypt works with --yes (the other two need drives that are left over); a wrong use is refused
-        for setup, flags, ans, text, enc in [
+        for setup, flags, ans, text, enc in [] if len(layout.spares) < 5 else [
                 ("zfs-raidz1", ["--yes", "--confirm-erase", "--encrypt"], ["1"] * 5, "", True),
                 ("md-raid5", ["--yes", "--confirm-erase", "--encrypt"], ["1"] * 5, "", True),
                 ("zfs-stripe", ["--spare"], ["1", "1", "n"], "has no protection to take over", False),
@@ -1890,7 +1926,7 @@ def run_presets(env, rec, layout, log):
                 n += bool(run_case(env, rec, layout, "preset", ["preset", setup] + flags, ans, note="%s with --encrypt" % setup,
                                    tag="opt-" + setup + "-".join(flags), expect=preset_expect(env, layout, setup, 5, 0, extras={"enc": enc}), probe=False))
         # a spare or a cache added later, to an array that is already there
-        for setup, what, ans_extra, ok in [("zfs-raidz1", "spare", ["1", "ERASE"], True), ("zfs-raidz1", "cache", ["1", "ERASE"], True),
+        for setup, what, ans_extra, ok in [] if len(layout.spares) < 5 else [("zfs-raidz1", "spare", ["1", "ERASE"], True), ("zfs-raidz1", "cache", ["1", "ERASE"], True),
                                            ("md-raid5", "spare", ["1", "ERASE"], True), ("md-raid5", "cache", ["1", "ERASE"], False),
                                            ("zfs-stripe", "spare", ["1", "ERASE"], False)]:
             nbase = PRESET_MIN[setup]
@@ -1949,6 +1985,61 @@ def run_presets(env, rec, layout, log):
         for setup in ("zfs-raidz1", "md-raid5"):
             n += bool(run_case(env, rec, layout, "preset", ["preset", setup], picks_for(setup, 3), note="files in the Main storage folder: refused",
                                tag="files-" + setup, before_run=put_file, expect=refused_with("has files in it")))
+        # the wizard: it counts the empty drives and suggests a setup for that number
+        n_blank = sum(1 for d in layout.spares if d.fs == "blank")
+        suggest = {0: None, 1: "pool", 2: "mirror", 3: "snapraid1"}.get(n_blank, "snapraid2") if n_blank < 4 else "snapraid2"
+
+        def wiz_record(want):
+            def chk(r):
+                bad = []
+                rec_txt = read_text(os.path.join(env.state, "wizard"))
+                if want is None and rec_txt is not None:
+                    bad.append("INV-wizard-record: a wizard record was written but should not have been (%r)" % rec_txt)
+                if want is not None and (rec_txt is None or not rec_txt.strip().endswith("|" + want)):
+                    bad.append("INV-wizard-record: expected the record to end with |%s, found %r" % (want, rec_txt))
+                return bad
+            return chk
+
+
+        def has(*texts, rc=0):
+            def chk(r):
+                bad = []
+                if r["rc"] != rc:
+                    bad.append("INV-wizard-rc: exit code %s, expected %s" % (r["rc"], rc))
+                for t in texts:
+                    if t not in r["output"]:
+                        bad.append("INV-wizard-text: the screen should say %r" % t)
+                return bad
+            return chk
+        if suggest is None:
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard"], [], note="no empty drive", tag="wizard-none",
+                               expect=chain(nothing, has("Empty drives found: none", "Plug in"))))
+        else:
+            npar = PRESET_PARITY.get(suggest, 0)
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard"], ["1", suggest, "ERASE"], note="%d empty drive(s): take the first suggestion" % n_blank,
+                               tag="wizard-build", probe=False,
+                               expect=chain(preset_expect(env, layout, suggest, n_blank, npar), has("What I suggest for %d empty drive" % n_blank, "Using the %d empty drives" % n_blank),
+                                            wiz_record(suggest))))
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard", "--yes", "--confirm-erase"], [], note="--yes --confirm-erase", tag="wizard-yes", probe=False,
+                               expect=chain(preset_expect(env, layout, suggest, n_blank, npar), wiz_record(suggest))))
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard", "--dry-run"], ["1"], note="--dry-run", tag="wizard-dry",
+                               expect=chain(nothing, has("DRY RUN"), wiz_record(None))))
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard"], ["0"], note="not now", tag="wizard-notnow",
+                               expect=chain(nothing, has("nothing was changed"), wiz_record("not-now"))))
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard"], ["1", suggest, "no"], note="ERASE not typed", tag="wizard-noerase",
+                               expect=chain(nothing)))
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard"], ["9", "9"], note="a number out of range", tag="wizard-range", expect=chain(nothing)))
+
+            def asked_before():
+                os.makedirs(env.state, exist_ok=True)
+                with open(os.path.join(env.state, "wizard"), "w") as fh:
+                    fh.write("2026-11-01|not-now\n")
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard", "--first-run"], [], note="first run, asked before: silent", tag="wizard-first-asked",
+                               before_run=asked_before, expect=chain(wiz_silent)))
+            n += bool(run_case(env, rec, layout, "wizard", ["wizard", "--first-run"], ["0"], note="first run: not now", tag="wizard-first",
+                               expect=chain(nothing, has("Drive scan"), wiz_record("not-now"))))
+        n += bool(run_case(env, rec, layout, "wizard", ["status", "--first-run"], [], note="--first-run outside wizard is refused", tag="wizard-flag",
+                           expect=chain(nothing, has("works with: wizard", rc=1))))
         for note, args in [("no name: the list", ["preset"]), ("the short name", ["preset", "raidz9"]), ("the short name of a real setup, no drives", ["preset", "raid6", "--dry-run"]), ("the other word", ["presets"]), ("an unknown name", ["preset", "raid7"]),
                            ("a name with an extra word", ["preset", "pool", "now"]), ("snapraid status with nothing built", ["snapraid", "status"]),
                            ("snapraid with a wrong action", ["snapraid", "explode"])]:
