@@ -81,6 +81,7 @@ MD_NAME="${MD_NAME:-homelab}"                                       # the name o
 MD_DEVICE="${DRIVES_MD_DEVICE:-/dev/md/$MD_NAME}"
 MD_CRYPT="$MD_NAME-crypt"                                           # the name of the unlocked (decrypted) RAID device
 PRESET_FILE="${PRESET_FILE:-$STATE_DIR/preset}"                     # what `drives preset` built: ID|date|labels
+WIZARD_FILE="${WIZARD_FILE:-$STATE_DIR/wizard}"                     # DATE|answer: the drive wizard was asked once (the first-run offer is not repeated)
 BOOT_OPTS="loop,noatime,nofail"
 BOOT_UNIT_BYTES="${BOOT_UNIT_BYTES:-1000000000}"; BOOT_UNIT_NAME="${BOOT_UNIT_NAME:-GB}"
 
@@ -111,6 +112,8 @@ NOW=0                # --now: do not wait for a running backup or upload
 WANT_SPARE=0         # --spare: a ready-made array setup also gets a hot spare drive
 WANT_CACHE=0         # --cache: a ready-made ZFS setup also gets an SSD read cache
 WANT_ENCRYPT=0       # --encrypt: a ready-made array setup is encrypted (key file on the boot drive)
+WANT_FIRST=0         # --first-run: the wizard was started by the installer (silent when there is nothing to offer; asks only once)
+WIZARD_DEVS=""       # the empty drives the wizard found, one per line: preset_pick_drives uses them instead of asking again
 BACKUP_LOCK="${BACKUP_LOCK:-/var/lock/homelab-backup.lock}"
 [ "$TEST_MODE" = 1 ] && BACKUP_LOCK="${BACKUP_LOCK_TEST:-$STATE_DIR/backup.lock}"
 BUSY_POLL_SECS="${BUSY_POLL_SECS:-30}"
@@ -120,6 +123,7 @@ PRESET_TOUCHED=0     # 1 once a ready-made setup has changed anything (a refused
 STOPPED=""
 START_FAILED=""      # containers that would not start again after a change
 ROLLED_BACK=0        # 1 once fstab was put back to what it was before the step
+NAME_CACHE=""        # a temporary folder of drive names while a look-only command runs (see with_name_cache)
 PENDING_NOTE=""      # a sentence for the end when the command stops halfway (for example a drive that left its pool)
 FSTAB_SNAP=""
 HOLD_HINT=""
@@ -450,27 +454,44 @@ FUJITSU	Fujitsu
 (^| )PNY( |$)	PNY
 TEAM ?GROUP|^TEAM 	TeamGroup'
 
+# The name helpers below use only what bash can do itself (no tr, sed, grep or awk): a status screen asks for the name of every
+# drive several times, and starting four or five programs for each question made `sudo drives status` slow with many drives.
 drive_brand() {   # drive_brand "TOSHIBA MQ01ABD100" -> Toshiba (nothing when the maker is not known)
-  local text pat name
-  text=$(printf '%s' "$1" | tr 'a-z_' 'A-Z ' | tr -s ' ' | sed 's/^ //; s/ $//')
+  local LC_ALL=C text=${1^^} pat name
+  text=${text//_/ }
+  while [[ $text == *"  "* ]]; do text=${text//  / }; done
+  text=${text# }; text=${text% }
   while IFS=$'\t' read -r pat name; do
-    if printf '%s' "$text" | grep -Eq -- "$pat"; then printf '%s' "$name"; return 0; fi
+    if [[ $text =~ $pat ]]; then printf '%s' "$name"; return 0; fi
   done <<<"$BRAND_TABLE"
   return 0
 }
 
 pretty_size() {   # bytes -> "1 TB", "750 GB" (as the drive is sold)
-  awk -v b="$1" 'BEGIN { if (b >= 0.95e12) { v = int(b / 1e11 + 0.5) / 10; printf "%g TB", v } else if (b >= 1e9) printf "%d GB", int(b / 1e9 + 0.5); else printf "%d MB", int(b / 1e6 + 0.5) }'
+  local b=$1 t
+  [[ $b =~ ^[0-9]+$ ]] || b=0
+  b=$((10#$b))
+  if [ "$b" -ge 950000000000 ]; then
+    t=$(( (b + 50000000000) / 100000000000 ))                      # tenths of a TB, rounded
+    if [ $((t % 10)) -eq 0 ]; then printf '%d TB' $((t / 10)); else printf '%d.%d TB' $((t / 10)) $((t % 10)); fi
+  elif [ "$b" -ge 1000000000 ]; then printf '%d GB' $(( (b + 500000000) / 1000000000 ))
+  else printf '%d MB' $(( (b + 500000) / 1000000 )); fi
 }
 
 clean_name() {   # safe as a folder name and inside a Docker volume line
-  printf '%s' "$1" | tr '_' ' ' | sed 's/[^A-Za-z0-9 .()+,-]/ /g' | tr -s ' ' | sed 's/^[ .-]*//; s/[ .-]*$//'
+  local LC_ALL=C s=${1//_/ } lead trail
+  s=${s//[^A-Za-z0-9 .()+,-]/ }
+  while [[ $s == *"  "* ]]; do s=${s//  / }; done
+  lead=${s%%[! .-]*}; s=${s#"$lead"}                             # leading spaces, dots and dashes
+  trail=${s##*[! .-]}; s=${s%"$trail"}                            # trailing ones
+  printf '%s' "$s"
 }
 
 drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, or nothing when it cannot be told
-  local model=$2 line rota tran
-  if printf '%s' "$model" | tr 'a-z_' 'A-Z ' | grep -Eq '(^|[^A-Z0-9])SSD([^A-Z0-9]|$)|NVME'; then printf SSD; return 0; fi
-  line=$(lsblk -dnbo ROTA,TRAN "$1" 2>/dev/null | head -1)
+  local LC_ALL=C model=${2^^} line rota tran
+  model=${model//_/ }
+  if [[ $model =~ (^|[^A-Z0-9])SSD([^A-Z0-9]|$)|NVME ]]; then printf SSD; return 0; fi
+  line=$(lsblk -dnbo ROTA,TRAN "$1" 2>/dev/null); line=${line%%$'\n'*}
   read -r rota tran <<<"$line"
   [ "${tran,,}" = nvme ] && { printf SSD; return 0; }
   case "$rota" in 1) printf HDD ;; 0) printf SSD ;; esac
@@ -514,7 +535,29 @@ name_store_del() {   # name_store_del LABEL
 
 name_store_get() { [ -r "$NAME_STORE" ] && awk -F'|' -v k="$1" '$1 == k {print $2; exit}' "$NAME_STORE"; return 0; }
 
-branch_base_name() {   # the name of one pool drive, before numbering: chosen, else scanned now, else the one kept, else the label
+# While a look-only command runs, NAME_CACHE is a temporary folder holding the names already worked out, so each drive is asked about once
+# instead of once for every other drive. It is created and removed by with_name_cache and is never set while anything is being changed.
+name_cached() {   # name_cached KIND MOUNTPOINT function -> prints the name, from the cache when there is one
+  local f
+  if [ -n "${NAME_CACHE:-}" ] && [ -d "$NAME_CACHE" ]; then
+    f="$NAME_CACHE/$1${2//\//_}"
+    if [ -f "$f" ]; then cat "$f"; return 0; fi
+    "$3" "$2" | tee "$f"
+    return 0
+  fi
+  "$3" "$2"
+}
+with_name_cache() {   # with_name_cache function [args]: run a look-only function with the name cache switched on
+  local rc=0
+  NAME_CACHE=$(mktemp -d 2>/dev/null) || NAME_CACHE=""
+  "$@" || rc=$?
+  [ -n "$NAME_CACHE" ] && rm -rf "$NAME_CACHE"
+  NAME_CACHE=""
+  return "$rc"
+}
+
+branch_base_name() { name_cached base "$1" branch_base_calc; }
+branch_base_calc() {   # the name of one pool drive, before numbering: chosen, else scanned now, else the one kept, else the label
   local mp=$1 label n part img
   label=$(basename "$mp")
   n=$(chosen_name "$label")
@@ -540,7 +583,8 @@ branch_base_name() {   # the name of one pool drive, before numbering: chosen, e
   printf '%s' "${n:-$label}"
 }
 
-branch_name() {   # the name shown for a pool drive; a name shared with another pool drive gets a number (1, 2, ...)
+branch_name() { name_cached shown "$1" branch_name_calc; }
+branch_name_calc() {   # the name shown for a pool drive; a name shared with another pool drive gets a number (1, 2, ...)
   local mp=$1 b n base total=0 mine=0
   base=$(branch_base_name "$mp")
   for b in $(all_branches); do
@@ -790,6 +834,8 @@ on_exit() {
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
   [ -n "${BALANCE_TMP:-}" ] && rm -rf "$BALANCE_TMP"
   [ -n "${SETTINGS_SNAP:-}" ] && rm -f "$SETTINGS_SNAP"
+  [ -n "${NAME_CACHE:-}" ] && rm -rf "$NAME_CACHE"
+  return 0
 }
 trap on_exit EXIT
 
@@ -992,7 +1038,9 @@ total_bytes() { echo $(( $(used_bytes "$1") + $(avail_bytes "$1") )); }   # as t
 
 pick_branch() {
   local -a items=() mps=()
-  local mp
+  local mp own=""
+  # the list below only looks: each name is worked out once (see with_name_cache); the cache is gone before anything can change
+  if [ -z "${NAME_CACHE:-}" ]; then NAME_CACHE=$(mktemp -d 2>/dev/null) && own=1 || NAME_CACHE=""; fi
   for mp in $(all_branches); do
     mps+=("$mp")
     if mountpoint -q "$mp"; then
@@ -1001,6 +1049,7 @@ pick_branch() {
       items+=("$(branch_name "$mp")  ($(branch_role "$mp"))  NOT CONNECTED")
     fi
   done
+  if [ -n "$own" ]; then rm -rf "$NAME_CACHE"; NAME_CACHE=""; fi
   if [ ${#mps[@]} -eq 0 ]; then note "No drives are connected to a pool yet."; return 1; fi
   local idx
   idx=$(choose "${1:-Which drive? }" "${items[@]}") || return 1
@@ -1767,8 +1816,10 @@ pick_pool_role() {   # pick_pool_role [MIN_REAL_DRIVES] -> main or backup (asks 
 }
 
 order_text() {   # order_text main|backup -> "Toshiba, Samsung, boot drive section" (the order the pool uses its drives)
-  local mp out="" n
+  local mp out="" n own=""
+  if [ -z "${NAME_CACHE:-}" ]; then NAME_CACHE=$(mktemp -d 2>/dev/null) && own=1 || NAME_CACHE=""; fi
   for mp in $(branches_of "$1"); do n=$(branch_name "$mp"); out="${out:+$out, }$n"; done
+  if [ -n "$own" ]; then rm -rf "$NAME_CACHE"; NAME_CACHE=""; fi
   printf '%s' "$out"
 }
 
@@ -3174,6 +3225,15 @@ preset_pick_drives() {   # preset_pick_drives ID -> prints the chosen devices, o
     note "Only empty or new drives are used. A drive with files on it has to be erased first:  sudo drives wipe"
     return 1
   fi
+  if [ -n "$WIZARD_DEVS" ]; then   # the wizard has already looked at the drives and the person said yes to this set
+    mapfile -t chosen < <(printf '%s\n' "$WIZARD_DEVS" | grep .)
+    if [ ${#chosen[@]} -ge "$min" ] && { [ "$max" -le 0 ] || [ ${#chosen[@]} -le "$max" ]; }; then
+      note "Using the ${#chosen[@]} empty drives found by the scan:"
+      for d in "${chosen[@]}"; do note "  $(disk_summary "$d")"; done
+      printf '%s\n' "${chosen[@]}"; return 0
+    fi
+    chosen=()
+  fi
   note "Empty drives that can be used (the boot drive and your pool drives are never listed):"
   while :; do
     d=$(pick_disk_list "Which drive do you want to use? " "${pool[@]}") || return 1
@@ -3487,6 +3547,85 @@ preset_menu() {   # menu entry: look at the setups, then pick one
   preset_flow "${ids[$choice]}"
 }
 
+# ---------- the drive wizard (drives wizard): look at the drives, suggest a setup, build it only if the person says yes ----------
+wizard_storage_exists() { array_active || [ -n "$(branches_of main)" ] || [ -n "$(branches_of backup)" ] || [ -n "$(parity_mounts)" ] || [ -n "$(legacy_disks)" ]; }
+wizard_suggest() {   # wizard_suggest N -> "FIRST SECOND": a simple setup first, the real ZFS setup of the same strength beside it ("-" = none)
+  case "$1" in
+    1) echo "pool -" ;;
+    2) echo "mirror zfs-mirror" ;;
+    3) echo "snapraid1 zfs-raidz1" ;;
+    *) echo "snapraid2 zfs-raidz2" ;;
+  esac
+}
+wizard_flow() {
+  local d s n=0 total=0 first second id other_n=0 idx hint
+  local -a blank=() others=() sizes=() ids=() items=()
+  if [ "$WANT_FIRST" = 1 ]; then
+    [ -e "$WIZARD_FILE" ] && return 0            # it was offered before
+    wizard_storage_exists && return 0
+    if [ "$TEST_MODE" != 1 ] && [ ! -t 0 ]; then
+      mapfile -t blank < <(blank_disks)
+      [ ${#blank[@]} -gt 0 ] && note "${#blank[@]} empty drive(s) found. To set up storage on them, run:  sudo drives wizard"
+      return 0
+    fi
+  elif wizard_storage_exists; then
+    say ""
+    say "Your storage is already set up, so the wizard is not needed. It is only for a fresh start."
+    say "  See it:  sudo drives status      Add a drive to it:  sudo drives connect      Start over:  sudo drives release"
+    return 0
+  fi
+
+  mapfile -t blank < <(blank_disks)
+  for d in $(candidate_disks); do
+    case " ${blank[*]:-} " in *" $d "*) ;; *) others+=("$d"); other_n=$((other_n + 1)) ;; esac
+  done
+  say ""
+  say "Drive scan"
+  say "  Never touched: the boot drive and drives that are already in a pool."
+  if [ ${#blank[@]} -eq 0 ]; then
+    say "  Empty drives found: none."
+    [ "$other_n" -gt 0 ] && say "  Drives that hold files ($other_n) are left alone. To use one, erase it first with  sudo drives wipe"
+    say "Plug in the drives you want to use, wait about 10 seconds, then run  sudo drives wizard  again."
+    return 0
+  fi
+  say "  Empty drives found: ${#blank[@]}"
+  for d in "${blank[@]}"; do
+    s=$(disk_size_bytes "$d"); [ -n "$s" ] || s=0
+    sizes+=("$s"); total=$((total + s)); n=$((n + 1))
+    say "    $(disk_summary "$d")"
+  done
+  [ "$other_n" -gt 0 ] && say "  Drives that hold files ($other_n) are left alone. To use one, erase it first with  sudo drives wipe"
+
+  read -r first second < <(wizard_suggest "$n")
+  ids=("$first"); [ "$second" != "-" ] && ids+=("$second")
+  say ""
+  say "What I suggest for $n empty drive(s):"
+  for id in "${ids[@]}"; do
+    s=$(preset_capacity "$id" "${sizes[@]}")
+    items+=("$(preset_title "$id")$([ "$id" = "$first" ] && echo '  (simple, my first suggestion)' || echo '  (real RAID, more advanced)')")
+    say ""
+    say "  ${#items[@]}) $(preset_title "$id")   [$id]"
+    say "       $(preset_blurb "$id")"
+    say "       Space you can use: $(pretty_size "${s:-0}") of $(pretty_size "$total") in the $n drives."
+    [ "$(preset_kind "$id")" = pool ] || { hint=$(preset_tool_hint "$id"); [ -z "$hint" ] || say "       It needs a program that is not installed yet:  $hint"; }
+  done
+  say ""
+  say "Your drives are formatted ONLY after you pick a setup, read its plan and type ERASE. Nothing is changed before that."
+  items+=("Show me every setup and let me pick one myself")
+  if [ "$ASSUME_YES" = 1 ]; then idx=0; note "(--yes) taking the first suggestion: $(preset_title "$first")"
+  else
+    idx=$(choose "Which one do you want? " "${items[@]}") || {
+      [ "$DRY_RUN" = 1 ] || { mkdir -p "$STATE_DIR" && printf '%s|not-now\n' "$(date +%F)" >"$WIZARD_FILE"; }
+      say "Okay, nothing was changed. You can do this any time:  sudo drives wizard"
+      return 0
+    }
+  fi
+  [ "$DRY_RUN" = 1 ] || { mkdir -p "$STATE_DIR" && printf '%s|%s\n' "$(date +%F)" "$([ "$idx" -lt "${#ids[@]}" ] && echo "${ids[$idx]}" || echo list)" >"$WIZARD_FILE"; }
+  if [ "$idx" -ge "${#ids[@]}" ]; then preset_menu; return $?; fi
+  WIZARD_DEVS=$(printf '%s\n' "${blank[@]}")
+  preset_flow "${ids[$idx]}"
+}
+
 # ---------- look-only commands: list, usage, health, check (they change nothing; check --full takes one drive offline for a while) ----------
 JSON=0               # --json: print machine-readable JSON (the messages go to stderr)
 FULL=0               # check --full
@@ -3596,7 +3735,7 @@ json_drives() {   # {"pools":[...],"drives":[...]} (usage, list and status all u
 
 list_flow() {
   local name role dev size used free state mount
-  if [ "$JSON" = 1 ]; then json_drives; printf '}\n'; return 0; fi
+  if [ "$JSON" = 1 ]; then with_name_cache json_drives; printf '}\n'; return 0; fi
   say ""
   printf '%-26s %-10s %-12s %-9s %s\n' DRIVE ROLE DEVICE SIZE STATE
   while IFS=$US read -r name role dev size used free state mount; do
@@ -3610,7 +3749,7 @@ list_flow() {
 
 usage_flow() {
   local role pool mounted fst size used free name dev state mount fb fp
-  if [ "$JSON" = 1 ]; then json_drives; printf '}\n'; return 0; fi
+  if [ "$JSON" = 1 ]; then with_name_cache json_drives; printf '}\n'; return 0; fi
   say ""
   printf '%-26s %-14s %-9s %-9s %-9s %s\n' POOL PATH SIZE USED FREE USED%
   while IFS=$US read -r role pool mounted fst size used free; do
@@ -3856,10 +3995,10 @@ look_menu() {
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
-      1) status_flow ;;
-      2) list_flow ;;
-      3) usage_flow ;;
-      4) health_flow ;;
+      1) with_name_cache status_flow ;;
+      2) with_name_cache list_flow ;;
+      3) with_name_cache usage_flow ;;
+      4) with_name_cache health_flow ;;
       5) check_flow ;;
       6) FULL=1 check_flow ;;
       0|"") return 0 ;;
@@ -3885,6 +4024,7 @@ Change the drives:
   move          move a drive between Main and Backup (its files are copied away first)
   bootsection   use part of the boot drive as a pool drive, with a size limit
   adopt         turn the old single data drive into a pool
+  wizard        look at the drives, suggest a setup for them and build it if you say yes (also offered after the first install)
   preset        build a whole setup on empty drives: a plain pool, a mirror with a nightly copy, SnapRAID, ZFS or RAID
   snapraid      look at or update the SnapRAID protection (status, diff, sync, scrub)
   spare         add a hot spare drive to a ZFS or RAID array (it takes over by itself when a drive dies)
@@ -4082,6 +4222,18 @@ sudo drives eject [--dry-run]
   sudo drives disconnect first. Nothing is erased.
 EOF
     ;;
+    wizard) cat <<'EOF'
+sudo drives wizard [--dry-run] [--yes] [--confirm-erase]
+  Looks at the drives (the boot drive and drives that are already in a pool are never touched), counts the EMPTY ones and suggests
+  a ready-made setup for that number: 1 drive a plain pool, 2 a mirror with a nightly copy, 3 SnapRAID with one protection drive,
+  4 or more SnapRAID with two. A real ZFS setup of the same strength is shown beside it. You pick one (or ask for the full list),
+  then the normal  sudo drives preset  steps run: the plan, then the setup name and ERASE before anything is erased.
+  It is only for a fresh start: when storage is already set up it says so and does nothing.
+  The installer offers it once at the end of the first install; run it again any time with  sudo drives wizard.
+  --dry-run shows the scan, the suggestion and the plan only. --yes takes the first suggestion without asking (the typing of
+  the setup name and ERASE is still needed, unless you add --confirm-erase).
+EOF
+    ;;
     preset) cat <<'EOF'
 sudo drives preset [NAME] [--dry-run] [--yes] [--confirm-erase] [--spare] [--cache] [--encrypt]
   Without a name: lists the ready-made setups and shows what the empty drives that are plugged in now would give.
@@ -4146,6 +4298,7 @@ EOF
 run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser; the exit code is the flow's (1 also when containers did not start)
   local rc=0
   "$@" || rc=$?
+  if [ "$1" = wizard_flow ] && [ "$PRESET_TOUCHED" != 1 ]; then return "$rc"; fi      # the wizard only looked, or the person said no
   if [ "$rc" -ne 0 ] && [ "$PRESET_TOUCHED" != 1 ]; then case "$1" in preset_flow|spare_flow|cache_flow) return "$rc" ;; esac; fi     # a setup that was refused or cancelled changed nothing
   [ -n "${STOPPED// /}" ] || sync_filebrowser
   if [ -n "${START_FAILED// /}" ] && [ "$rc" -eq 0 ]; then rc=1; fi
@@ -4166,6 +4319,7 @@ main() {
       --spare)       WANT_SPARE=1 ;;
       --cache)       WANT_CACHE=1 ;;
       --encrypt)     WANT_ENCRYPT=1 ;;
+      --first-run)   WANT_FIRST=1 ;;
       --json)        JSON=1 ;;
       --full)        FULL=1 ;;
       --folders)     FOLDERS=1 ;;
@@ -4184,6 +4338,7 @@ main() {
     add) set -- connect "${@:2}" ;;                    remove) set -- disconnect "${@:2}" ;;
     df) set -- usage "${@:2}" ;;                       erase|format) set -- wipe "${@:2}" ;;
     presets|setups) set -- preset "${@:2}" ;;
+    firstrun|first-run|scan-drives) set -- wizard "${@:2}" ;;
     help) case "${2:-}" in
             name) set -- help rename "${@:3}" ;;       smart) set -- help health "${@:3}" ;;
             spindown|standby) set -- help sleep "${@:3}" ;;   fsck|verify) set -- help check "${@:3}" ;;
@@ -4199,6 +4354,7 @@ main() {
   if [ "$JSON" = 1 ]; then case "$cmd" in status|list|usage|health|check) ;; *) note "--json works with: status, list, usage, health, check (not with '$cmd')."; exit 1 ;; esac; fi
   if [ "$FULL" = 1 ] && [ "$cmd" != check ]; then note "--full works with: check (not with '$cmd')."; exit 1; fi
   if { [ "$WANT_SPARE" = 1 ] || [ "$WANT_CACHE" = 1 ] || [ "$WANT_ENCRYPT" = 1 ]; } && [ "$cmd" != preset ]; then note "--spare, --cache and --encrypt work with: preset (not with '$cmd')."; exit 1; fi
+  if [ "$WANT_FIRST" = 1 ] && [ "$cmd" != wizard ]; then note "--first-run works with: wizard (not with '$cmd')."; exit 1; fi
   if [ "$FOLDERS" = 1 ] && [ "$cmd" != usage ]; then note "--folders works with: usage (not with '$cmd')."; exit 1; fi
   case "${1:-}" in   # a typo such as `release dry-run` must never be read as `release`
     test-setup|test-cleanup) ;;
@@ -4211,10 +4367,10 @@ main() {
   flock -n 9 || die "Another drives command is running."
   case "${1:-menu}" in
     menu)         menu ;;
-    status)       if [ "$JSON" = 1 ]; then json_drives; printf ',"last_backup":%s,"boot_free_bytes":%s}\n' "$(json_str "$(last_backup_line)")" "$(json_num "$(boot_free_bytes)")"; else status_flow; fi ;;
-    list)         list_flow ;;
-    usage)        usage_flow ;;
-    health)       health_flow ;;
+    status)       if [ "$JSON" = 1 ]; then with_name_cache json_drives; printf ',"last_backup":%s,"boot_free_bytes":%s}\n' "$(json_str "$(last_backup_line)")" "$(json_num "$(boot_free_bytes)")"; else with_name_cache status_flow; fi ;;
+    list)         with_name_cache list_flow ;;
+    usage)        with_name_cache usage_flow ;;
+    health)       with_name_cache health_flow ;;
     check)        check_flow ;;
     connect)      run_changing connect_flow ;;
     disconnect)   run_changing disconnect_flow ;;
@@ -4229,6 +4385,7 @@ main() {
     resize)       run_changing resize_flow ;;
     preset)       if [ -n "${2:-}" ]; then run_changing preset_flow "$2"; else preset_list_flow; fi ;;
     snapraid)     snapraid_flow "${2:-status}" ;;
+    wizard)       run_changing wizard_flow ;;
     spare)        run_changing spare_flow ;;
     cache)        run_changing cache_flow ;;
     release)      run_changing release_flow ;;
