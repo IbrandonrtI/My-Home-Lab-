@@ -106,6 +106,18 @@ check "only root can read the key file" "$(stat -c %a "$key")" 400
 check "a key is never overwritten" "$(key_make tank 32 >/dev/null 2>&1 && echo overwritten || echo refused)" refused
 rm -rf "$KEY_DIR"
 
+# --- the drive wizard: what it suggests for each number of empty drives, and the words around it
+check "1 drive: a plain pool" "$(wizard_suggest 1)" "pool -"
+check "2 drives: a mirror, ZFS mirror beside it" "$(wizard_suggest 2)" "mirror zfs-mirror"
+check "3 drives: SnapRAID 1, RAIDZ1 beside it" "$(wizard_suggest 3)" "snapraid1 zfs-raidz1"
+check "4 drives: SnapRAID 2, RAIDZ2 beside it" "$(wizard_suggest 4)" "snapraid2 zfs-raidz2"
+check "9 drives: the same as 4" "$(wizard_suggest 9)" "snapraid2 zfs-raidz2"
+check "every suggestion is a known setup that fits the number of drives" "$(for n in 1 2 3 4 5 6 8 12; do for id in $(wizard_suggest "$n"); do [ "$id" = - ] && continue; preset_known "$id" && [ "$n" -ge "$(preset_min "$id")" ] && { [ "$(preset_max "$id")" -le 0 ] || [ "$n" -le "$(preset_max "$id")" ]; } && printf y; done; done)" "yyyyyyyyyyyyyyy"
+check "the first suggestion never needs a program that may be missing" "$(for n in 1 2 3 4 5; do set -- $(wizard_suggest "$n"); [ "$(preset_kind "$1")" = pool ] && printf y; done)" yyyyy
+check "the wizard knows the --first-run flag only for itself" "$(bash "$DRIVES" status --first-run 2>&1 | grep -c 'works with: wizard')" 1
+check "help wizard exists" "$(bash "$DRIVES" help wizard 2>&1 | head -1)" "sudo drives wizard [--dry-run] [--yes] [--confirm-erase]"
+check "the command list shows wizard" "$(bash "$DRIVES" help 2>&1 | grep -c '^  wizard ')" 1
+
 # --- the command line: words, refusals and help
 out=$(bash "$DRIVES" preset nonsense 2>&1); rc=$?
 check "an unknown setup is refused with exit 1" "$rc" 1

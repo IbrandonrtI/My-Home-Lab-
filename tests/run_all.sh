@@ -34,6 +34,9 @@ run drive-power bash -c "bash '$HERE/t_power.sh' | tail -1 | grep -q '^OK'"
 run drive-pills bash -c "bash '$HERE/t_widgets.sh' | tail -1 | grep -q '^OK'"
 run update-command bash -c "bash '$HERE/t_update.sh' | tail -1 | grep -q '^OK'"
 run secret-scan bash -c "python3 '$HERE/t_check.py' | tail -1 | grep -q '^OK'"
+run wizard-offer bash -c "python3 '$HERE/t_wizard_offer.py' | tail -1 | grep -q '^OK'"
+run name-helpers bash -c "bash '$HERE/t_namefast.sh' | tail -1 | grep -q '^OK'"
+run speedcheck bash -c "python3 '$HERE/t_speedcheck.py' | tail -1 | grep -q '^OK'"
 run drive-bench bash -c "python3 '$HERE/t_bench.py' | tail -1 | grep -q '^OK'"
 if [ "${1:-}" = quick ]; then
   for s in S3 S24 S25; do bash "$HERE/run_tests.sh" "$s" >"$LOG/$s.log" 2>&1; count "$s"; done
