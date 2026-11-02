@@ -190,6 +190,8 @@ commands() {
   cmd "sudo drives bootsection"        "use part of the boot drive for a pool (size limit, used last)"
   cmd "sudo drives preset"             "ready-made setups on empty drives: pool, SnapRAID, ZFS, RAID"
   cmd "sudo drives snapraid"           "SnapRAID by hand: status, diff, sync or scrub"
+  cmd "sudo drives spare"              "add a hot spare drive to a ZFS or RAID array"
+  cmd "sudo drives cache"              "add an SSD read cache to a ZFS array"
   cmd "sudo hdd-recover"               "after an unplug or power cut: remount, restart containers"
   cmd "sudo drives replace"            "a drive died: swap it, restore the files from the backup"
   cmd "sudo drives power"              "re-apply the drive power settings"
