@@ -64,15 +64,57 @@ Tick the boxes as you go and send me anything that did not match.
 - [ ] Not for RAID 0: **pretend a drive died.** `sudo mdadm /dev/md/homelab --fail /dev/sdX --remove /dev/sdX`; the array stays
       usable (`degraded`). Add it back with `sudo mdadm /dev/md/homelab --add /dev/sdX` and watch it rebuild.
 
-## 3. What to send me
+## 3. The extras (hot spare, encryption, SSD cache)
+
+Try these on a ZFS or RAID setup (they are not offered for pools / SnapRAID). Use `--dry-run` first to read the plan.
+
+### Hot spare (`--spare`, or later with `sudo drives spare`)
+Works for ZFS mirror / RAIDZ1-3 and RAID 1 / 5 / 6 / 10, not for the striped setups.
+- [ ] `sudo drives preset zfs-raidz1 --spare` (or `md-raid5`) asks for the spare drive after the member drives. `sudo drives list`
+      shows it with the words `hot spare`.
+- [ ] ZFS: `zpool status tank` lists the drive under `spares` as `AVAIL`, and `zpool get autoreplace tank` says `on`.
+- [ ] RAID: `sudo mdadm --detail /dev/md/homelab` shows one drive as `spare`.
+- [ ] **Pretend a drive died**, with the array already holding a test file:
+      ZFS: `sudo zpool offline -f tank DRIVE`; RAID: `sudo mdadm /dev/md/homelab --fail DRIVE`.
+      Within a minute the spare must start taking over (`zpool status tank` shows `resilvering`; `cat /proc/mdstat` shows a
+      rebuild). The test file is still readable the whole time.
+- [ ] Adding one later: `sudo drives spare` on an array that was built without one. Same checks as above.
+- [ ] Refusals: `sudo drives spare` on a striped array says there is nothing to take over.
+
+### Encryption (`--encrypt`) — key file on the boot drive
+The server unlocks the array by itself at boot. This protects against a **stolen drive**, not against a stolen whole server.
+- [ ] After building, `sudo ls -l /etc/homelab-drives/keys/` shows ONE key file (`tank.key` for ZFS, `homelab.key` for RAID),
+      readable by root only (`-r--------`). `sudo drives status` says `Encrypted: yes`.
+- [ ] **Copy the key file somewhere safe that is NOT this server** (another computer, a USB stick kept away). Without it, a
+      dead boot drive means the data is gone for good. Check the copy is the same size.
+- [ ] ZFS: `zfs get encryption,keystatus tank` says `aes-256-gcm` and `available`. RAID: `lsblk` shows a `homelab-crypt`
+      layer on top of the array, and `grep homelab-crypt /etc/crypttab` shows the unlock line.
+- [ ] **Reboot.** `/mnt/storage` is mounted again without anyone typing a password, and your test file is there. (If it is not:
+      send me `journalctl -b -u homelab-zfs-key.service` for ZFS, or `journalctl -b | grep -i crypt` for RAID.)
+- [ ] The raw drive is unreadable on its own: take one member out of a mirror-type array on another computer and check that
+      `sudo strings /dev/sdX | grep hello` finds nothing (with ZFS the data is encrypted, with RAID the LUKS layer hides it).
+- [ ] `sudo drives release` removes the key file, the unlock line / unlock service and the encrypted layer. Afterwards
+      `ls /etc/homelab-drives/keys/` is empty.
+
+### SSD read cache (`--cache`, or later with `sudo drives cache`) — ZFS only
+- [ ] `sudo drives preset zfs-mirror --cache` asks for the cache drive. If the drive is not an SSD it warns you and asks first.
+- [ ] `zpool status tank` lists the drive under `cache` as `ONLINE`.
+- [ ] Read a big file twice; after a few minutes `zpool iostat -v tank` shows reads served from the cache drive.
+- [ ] Unplug the cache drive: the pool stays `ONLINE`, nothing is lost (a cache never holds the only copy of anything).
+
+## 4. What to send me
 
 For every step that did not match: the exact command, what you expected, and what you got. For a failed build also send
 `sudo tail -50 /var/log/homelab-drives.log`.
 
-## 4. Known limits (on purpose, for now)
+## 5. Known limits (on purpose, for now)
 
 - `drives replace`, `recover`, `connect`, `disconnect` and the other pool commands are refused on a ZFS / RAID array. Use the
   tools of the array (`zpool`, `mdadm`) to replace a drive; `sudo drives status` shows what is wrong.
 - A ZFS / RAID setup becomes the Main storage. It cannot be built while the Main storage already has drives.
+- Encryption, hot spare and SSD cache are for the ZFS / RAID setups only. Pools (plain, mirror, SnapRAID) are not encrypted
+  by this tool: that needs extra work in connect / replace / recover and can be added later if you want it.
+- The encryption key sits on the boot drive: it protects against a stolen drive, not a stolen server. Always keep a copy elsewhere.
+- A hot spare takes over by itself, but putting a new drive in the spare's place afterwards is done by hand (`zpool` / `mdadm`).
 - All drives of a RAID setup should be the same size: a bigger drive only uses as much space as the smallest one.
 - `sudo drives release` on an array deletes the array **and its files**. The Backup storage is not touched.

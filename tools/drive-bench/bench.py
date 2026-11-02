@@ -362,6 +362,46 @@ def size_of(dev):
 if name == "zfs":
     sys.exit(0)
 
+if name == "cryptsetup":
+    d = os.path.join(state, "fake-md")
+    os.makedirs(d, exist_ok=True)
+    mapper = os.path.join(state, "mapper")
+    os.makedirs(mapper, exist_ok=True)
+    cmd = args[0] if args else ""
+    keyfile = next((args[i + 1] for i, a in enumerate(args) if a == "--key-file"), "")
+    if cmd in ("luksFormat", "open") and (not keyfile or not os.path.exists(keyfile)):
+        die("cryptsetup: the key file %s does not exist" % keyfile)
+    if cmd == "luksFormat":
+        dev = args[-1]
+        if not os.path.exists(dev):
+            die("cryptsetup: device %s does not exist" % dev)
+        run(["mkfs.ext4", "-F", "-q", dev])        # gives the device an identity (a real LUKS header does that)
+        json.dump({"dev": dev, "key": keyfile}, open(os.path.join(d, "luks.json"), "w"))
+        sys.exit(0)
+    if cmd == "open":
+        dev, nm = args[-2], args[-1]
+        link = os.path.join(mapper, nm)
+        if not os.path.exists(os.path.join(d, "luks.json")):
+            die("cryptsetup: %s is not a LUKS device" % dev)
+        if os.path.lexists(link):
+            os.remove(link)
+        os.symlink(os.path.realpath(dev), link)
+        sys.exit(0)
+    if cmd == "close":
+        link = os.path.join(mapper, args[-1])
+        if not os.path.lexists(link):
+            die("cryptsetup: device %s is not active" % args[-1])
+        busy = run(["findmnt", "-rn", "-S", os.path.realpath(link)]).stdout.strip()
+        if busy:
+            die("cryptsetup: device %s is still in use" % args[-1])
+        os.remove(link)
+        try:
+            os.remove(os.path.join(d, "luks.json"))
+        except OSError:
+            pass
+        sys.exit(0)
+    sys.exit(0)
+
 if name == "zpool":
     d = os.path.join(state, "fake-zfs")
     os.makedirs(d, exist_ok=True)
@@ -404,6 +444,20 @@ if name == "zpool":
             print("\n".join(pools))
         elif "health" in args:
             print("ONLINE" if (args[-1] in pools) else "")
+        sys.exit(0)
+    if cmd in ("add", "set"):
+        pool_args = [a for a in args[1:] if a != "-f"]
+        if cmd == "set":
+            sys.exit(0 if os.path.exists(os.path.join(d, pool_args[-1] + ".json")) else die("no such pool"))
+        pool, kind, dev = pool_args[0], pool_args[1], pool_args[2]
+        meta = os.path.join(d, pool + ".json")
+        if not os.path.exists(meta):
+            die("cannot open '%s': no such pool" % pool)
+        if kind not in ("spare", "cache") or not os.path.exists(dev):
+            die("invalid vdev specification")
+        info = json.load(open(meta))
+        info.setdefault(kind + "s", []).append(dev)
+        json.dump(info, open(meta, "w"))
         sys.exit(0)
     if cmd == "destroy":
         pool = args[-1]
@@ -458,6 +512,13 @@ if name == "mdadm":
     if "--detail" in args:
         print("%s:\n     Raid Level : raid%s\n          State : clean" % (info["dev"], info["level"]))
         sys.exit(0)
+    if "--add" in args:
+        dev = args[args.index("--add") + 1]
+        if not os.path.exists(dev):
+            die("mdadm: cannot open %s" % dev)
+        info.setdefault("spares", []).append(dev)
+        json.dump(info, open(meta, "w"))
+        sys.exit(0)
     if "--stop" in args:
         busy = run(["findmnt", "-rn", "-S", info["loop"]]).stdout.strip()
         if busy:
@@ -509,7 +570,7 @@ def install_fakes(env):
         with open(path, "w") as f:
             f.write(body)
         os.chmod(path, 0o755)
-    for tool in ("zpool", "zfs", "mdadm"):
+    for tool in ("zpool", "zfs", "mdadm", "cryptsetup"):
         path = os.path.join(env.bin, tool)
         with open(path, "w") as f:
             f.write(FAKE_ARRAYTOOLS)
@@ -1486,11 +1547,49 @@ def picks_for(setup, n, total=5):
     return out
 
 
-# name, setup, picks (the answers that choose drives), how many drives, how many of them hold only protection data
+CAN_SPARE = {"zfs-mirror", "zfs-raidz1", "zfs-raidz2", "zfs-raidz3", "md-raid1", "md-raid5", "md-raid6", "md-raid10"}
+
+
+def array_answers(setup, n, spare=0, cache=0, enc=False, total=5):
+    """The answers for a ZFS / RAID setup on n of the 5 empty drives. spare / cache: which of the drives that are left (1 = the first
+    in the list) becomes the hot spare / the read cache; enc: encrypt."""
+    ans = picks_for(setup, n, total)
+    left = list(range(n, total))         # the loop numbers that are still empty
+    if setup in CAN_SPARE and left:
+        if spare:
+            ans += ["y", str(spare)]
+            left.pop(spare - 1)
+        else:
+            ans += ["n"]
+    if setup.startswith("zfs-") and left:
+        if cache:
+            ans += ["y", str(cache)]
+            if MODELS[left[cache - 1] % len(MODELS)][1] != 0:
+                ans += ["y"]                  # "does not say it is an SSD ... use it anyway?"
+            left.pop(cache - 1)
+        else:
+            ans += ["n"]
+    return ans + ["y" if enc else "n"]
+
+
+# name, setup, answers (the drives, then the extras), how many drives, how many of them hold only protection data, the extras
 PRESET_PLANS = []
 for _setup in PRESET_MIN:
     for _n in sorted({PRESET_MIN[_setup], 5} if _setup != "mirror" else {2}):
-        PRESET_PLANS.append(("%s, %d drives" % (_setup, _n), _setup, picks_for(_setup, _n), _n, PRESET_PARITY.get(_setup, 0)))
+        _arr = _setup.startswith(("zfs-", "md-"))
+        PRESET_PLANS.append(("%s, %d drives" % (_setup, _n), _setup, array_answers(_setup, _n) if _arr else picks_for(_setup, _n), _n,
+                             PRESET_PARITY.get(_setup, 0), {}))
+for _name, _setup, _n, _x in [
+        ("zfs-raidz1, 3 drives + hot spare + SSD cache + encrypted", "zfs-raidz1", 3, {"spare": 1, "cache": 1, "enc": True}),
+        ("zfs-mirror, 2 drives + hot spare (the 2nd empty drive)", "zfs-mirror", 2, {"spare": 2}),
+        ("zfs-stripe, 2 drives + SSD cache (an SSD)", "zfs-stripe", 2, {"cache": 2}),
+        ("zfs-raidz2, 4 drives + encrypted", "zfs-raidz2", 4, {"enc": True}),
+        ("zfs-raidz3, 5 drives + encrypted", "zfs-raidz3", 5, {"enc": True}),
+        ("md-raid5, 3 drives + hot spare + encrypted", "md-raid5", 3, {"spare": 1, "enc": True}),
+        ("md-raid10, 4 drives + hot spare", "md-raid10", 4, {"spare": 1}),
+        ("md-raid1, 2 drives + hot spare (the 3rd empty drive)", "md-raid1", 2, {"spare": 3}),
+        ("md-raid6, 4 drives + encrypted", "md-raid6", 4, {"enc": True})]:
+    PRESET_PLANS.append((_name, _setup, array_answers(_setup, _n, **_x), _n, 0, _x))
 
 
 def fstab_lines(env):
@@ -1507,9 +1606,12 @@ def read_text(path):
         return None
 
 
-def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
+def preset_expect(env, layout, setup, ndrives, nparity, dry=False, extras=None):
     """Checks for one run of `drives preset SETUP`: what must be on the machine when it is done (or nothing, for --dry-run / a refusal)."""
     arr = setup.startswith(("zfs-", "md-"))
+    extras = extras or {}
+    x_spare, x_cache, x_enc = bool(extras.get("spare")), bool(extras.get("cache")), bool(extras.get("enc"))
+    n_all = ndrives + x_spare + x_cache         # every drive the setup uses
 
     def chk(r):
         bad = []
@@ -1535,9 +1637,22 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
         if rec_txt is None or not rec_txt.startswith(setup + "|"):
             bad.append("INV-preset-record: the record of the setup says %r, expected it to start with %r" % (rec_txt, setup + "|"))
         if arr:
-            members = (rec_txt or "||").split("|")[2].split()
+            toks = (rec_txt or "||").split("|")[2].split()
+            members = [t for t in toks if t.startswith("/")]
             if len(members) != ndrives:
-                bad.append("INV-array-record: the record lists %d drives, expected %d" % (len(members), ndrives))
+                bad.append("INV-array-record: the record lists %d member drives, expected %d" % (len(members), ndrives))
+            if sum(t.startswith("spare=") for t in toks) != x_spare or sum(t.startswith("cache=") for t in toks) != x_cache:
+                bad.append("INV-array-record: the spare / cache drives in the record are %r, expected spare=%s cache=%s" % (toks, x_spare, x_cache))
+            if ("encrypted" in toks) != x_enc:
+                bad.append("INV-array-record: the record says encrypted=%s, expected %s" % ("encrypted" in toks, x_enc))
+            keyf = [os.path.join(env.state, "keys", n) for n in ("tank.key", "homelab.key")]
+            keys = [k for k in keyf if os.path.exists(k)]
+            if x_enc:
+                want_len = 32 if setup.startswith("zfs-") else 64
+                if len(keys) != 1 or os.path.getsize(keys[0]) != want_len or (os.stat(keys[0]).st_mode & 0o777) != 0o400:
+                    bad.append("INV-enc-key: expected one key file of %d bytes that only root can read, found %r" % (want_len, keys))
+            elif keys:
+                bad.append("INV-enc-key: a key file exists for an array that is not encrypted: %r" % keys)
             if (main_n, back_n, par_n) != (0, 0, 0):
                 bad.append("INV-array-fstab: an array setup left %d main, %d backup, %d protection drives in the fstab" % (main_n, back_n, par_n))
             if env.main not in types:
@@ -1562,6 +1677,18 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
                         bad.append("INV-zfs-pool: compression is not lz4")
                     if info["opts"].get("-oashift") != "12":
                         bad.append("INV-zfs-pool: ashift is not 12")
+                    if (info["opts"].get("-Oencryption") == "aes-256-gcm") != x_enc:
+                        bad.append("INV-zfs-pool: encryption is %r, expected encrypted=%s" % (info["opts"].get("-Oencryption"), x_enc))
+                    if x_enc and (info["opts"].get("-Okeyformat") != "raw" or not info["opts"].get("-Okeylocation", "").startswith("file://")):
+                        bad.append("INV-zfs-pool: the key is not a raw key file")
+                    if len(info.get("spares", [])) != x_spare or len(info.get("caches", [])) != x_cache:
+                        bad.append("INV-zfs-pool: the pool has %d spares and %d caches, expected %d and %d"
+                                   % (len(info.get("spares", [])), len(info.get("caches", [])), x_spare, x_cache))
+                    if x_spare and "zpool set autoreplace=on tank" not in tools:
+                        bad.append("INV-zfs-pool: automatic replacement was not turned on for the hot spare")
+                unit = os.path.exists(os.path.join(env.state, "homelab-zfs-key.service"))
+                if unit != x_enc:
+                    bad.append("INV-zfs-pool: the unlock service %s" % ("is missing" if x_enc else "exists for an array that is not encrypted"))
                 if not os.path.exists(os.path.join(env.state, "zfs-scrub-cron")):
                     bad.append("INV-zfs-scrub: the monthly check of the data was not scheduled")
                 if os.path.exists(os.path.join(env.state, "mdadm.conf")):
@@ -1574,9 +1701,22 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
                     info = json.loads(meta)
                     if info["level"] != setup.split("raid")[1] or len(info["members"]) != ndrives:
                         bad.append("INV-md-array: the array is level %s over %d drives, expected %s over %d" % (info["level"], len(info["members"]), setup.split("raid")[1], ndrives))
+                    if len(info.get("spares", [])) != x_spare:
+                        bad.append("INV-md-array: the array has %d spares, expected %d" % (len(info.get("spares", [])), x_spare))
+                crypt = read_text(os.path.join(env.state, "crypttab")) or ""
+                if x_enc and not re.search(r"^homelab-crypt UUID=\S+ \S+homelab\.key luks,nofail$", crypt, re.M):
+                    bad.append("INV-md-crypt: the unlock line is missing from crypttab (the array would not open after a reboot): %r" % crypt)
+                if not x_enc and crypt.strip():
+                    bad.append("INV-md-crypt: crypttab has lines for an array that is not encrypted")
+                if x_enc and not os.path.islink(os.path.join(env.state, "mapper", "homelab-crypt")):
+                    bad.append("INV-md-crypt: the encrypted layer is not open")
+                if x_spare and "mdadm /dev/md/homelab --add" not in tools and " --add " not in tools:
+                    bad.append("INV-md-array: the hot spare was not added")
                 line = [a for a in act if len(a) > 1 and a[1] == env.main]
                 if len(line) != 1 or line[0][2] != "ext4":
                     bad.append("INV-md-fstab: expected one ext4 line for the Main storage path, found %r" % line)
+                if x_enc and not any("x-systemd.device-timeout=60" in " ".join(a) for a in line):
+                    bad.append("INV-md-fstab: an encrypted array needs the longer wait for unlocking at boot")
                 conf_txt = read_text(os.path.join(env.state, "mdadm.conf")) or ""
                 if not re.search(r"^ARRAY .*homelab", conf_txt, re.M):
                     bad.append("INV-md-conf: the array is not in mdadm.conf (it would not start after a reboot)")
@@ -1630,12 +1770,16 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
             bad.append("INV-preset-list: 'drives list' failed after the setup (rc=%s)" % rc)
         elif arr:
             n_rows = len(re.findall(r"^\S.*\barray\b.*/dev/", out, re.M))
-            if n_rows != ndrives:
-                bad.append("INV-array-list: 'drives list' shows %d array drives, expected %d" % (n_rows, ndrives))
+            if n_rows != n_all:
+                bad.append("INV-array-list: 'drives list' shows %d array drives, expected %d" % (n_rows, n_all))
+            if x_spare and "hot spare" not in out:
+                bad.append("INV-array-list: the hot spare is not marked in 'drives list'")
+            if x_cache and "read cache" not in out:
+                bad.append("INV-array-list: the read cache is not marked in 'drives list'")
             n_spare = len(re.findall(r"^\S.*\bspare\b.*/dev/", out, re.M))
-            if n_spare != len(layout.spares) - ndrives:
+            if n_spare != len(layout.spares) - n_all:
                 bad.append("INV-array-list: %d spare drives are listed, expected %d (a drive of the array shown as a spare could be erased by mistake): %s"
-                           % (n_spare, len(layout.spares) - ndrives, " | ".join(l for l in out.splitlines() if "spare" in l and "/dev/" in l)[:200]))
+                           % (n_spare, len(layout.spares) - n_all, " | ".join(l for l in out.splitlines() if "spare" in l and "/dev/" in l)[:200]))
         elif nparity and len(re.findall(r"\bprotection\b|\bparity\b", out, re.I)) < nparity:
             bad.append("INV-preset-list: 'drives list' does not show the %d protection drive(s)" % nparity)
         rc, out, _ev, _s, to = run_shim(env, ["status"], timeout=60)
@@ -1643,11 +1787,13 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
             bad.append("INV-preset-status: 'drives status' does not mention the setup (rc=%s)" % rc)
         if arr and "Array health" not in out:
             bad.append("INV-array-status: 'drives status' does not show the health of the array")
+        if arr and x_enc and "Encrypted: yes" not in out:
+            bad.append("INV-array-status: 'drives status' does not say that the array is encrypted")
         if arr and "plain drive" in out:
             bad.append("INV-array-status: 'drives status' calls the array a plain drive that should be converted")
         rc, out, _ev, _s, to = run_shim(env, ["health"], timeout=60)
-        if arr and (rc != 0 or to or len(re.findall(r"loop\d+", out)) < ndrives):
-            bad.append("INV-array-health: 'drives health' does not list the %d drives of the array (rc=%s)" % (ndrives, rc))
+        if arr and (rc != 0 or to or len(set(re.findall(r"loop\d+", out))) < n_all):
+            bad.append("INV-array-health: 'drives health' does not list the %d drives of the array (rc=%s)" % (n_all, rc))
         rc, out, _ev, _s, to = run_shim(env, ["preset", setup, "--dry-run"], timeout=60)
         if "DRY RUN" in out or rc == 0:
             bad.append("INV-preset-twice: building a second setup on top of the first was not refused")
@@ -1667,7 +1813,7 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
         left = [a[1] for a in act2 if len(a) > 1 and (re.search(r"/T(MAIN|BACKUP|PARITY)\d+$", a[1]) or a[1] == env.main)]
         if left:
             bad.append("INV-preset-release: after 'release' these are still in the fstab: " + ", ".join(os.path.basename(x) for x in left))
-        for f in ("preset", "snapraid.conf", "snapraid-cron", "zfs-scrub-cron"):
+        for f in ("preset", "snapraid.conf", "snapraid-cron", "zfs-scrub-cron", "homelab-zfs-key.service"):
             if os.path.exists(os.path.join(env.state, f)):
                 bad.append("INV-preset-release: after 'release' the file %s is still there" % f)
         if arr:
@@ -1679,6 +1825,13 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False):
                 bad.append("INV-array-release: the array still exists after 'release'")
             if re.search(r"^ARRAY ", read_text(os.path.join(env.state, "mdadm.conf")) or "", re.M):
                 bad.append("INV-array-release: the array is still in mdadm.conf")
+            left_keys = [n for n in ("tank.key", "homelab.key") if os.path.exists(os.path.join(env.state, "keys", n))]
+            if left_keys:
+                bad.append("INV-array-release: the key file is still there after 'release': %r" % left_keys)
+            if (read_text(os.path.join(env.state, "crypttab")) or "").strip():
+                bad.append("INV-array-release: crypttab still has the unlock line after 'release'")
+            if os.path.lexists(os.path.join(env.state, "mapper", "homelab-crypt")):
+                bad.append("INV-array-release: the encrypted layer is still open after 'release'")
             rc, out, _ev, _s, to = run_shim(env, ["preset"], timeout=60)
             if "Empty drives plugged in now: %d" % len(layout.spares) not in out:
                 bad.append("INV-array-release: after 'release' the drives are not empty and usable again")
@@ -1703,18 +1856,65 @@ def run_presets(env, rec, layout, log):
             n += bool(run_case(env, rec, layout, "preset", ["preset", setup], [], note="a pool already exists: refused", tag="refuse-" + setup,
                                expect=refused))
     else:
-        for name, setup, picks, ndrives, nparity in PRESET_PLANS:
-            if ndrives > len(layout.spares) or not re.search(os.environ.get("BENCH_PRESETS", "."), setup):
+        for name, setup, picks, ndrives, nparity, extras in PRESET_PLANS:
+            if ndrives + bool(extras.get("spare")) + bool(extras.get("cache")) > len(layout.spares) or not re.search(os.environ.get("BENCH_PRESETS", "."), setup):
                 continue
             ans = picks + [setup, "ERASE"]
             n += bool(run_case(env, rec, layout, "preset", ["preset", setup], ans, note=name, tag="build-" + name,
-                               expect=preset_expect(env, layout, setup, ndrives, nparity), probe=False))
+                               expect=preset_expect(env, layout, setup, ndrives, nparity, extras=extras), probe=False))
             n += bool(run_case(env, rec, layout, "preset", ["preset", setup, "--dry-run"], picks, note=name + ": --dry-run", tag="dry-" + name,
                                expect=preset_expect(env, layout, setup, ndrives, nparity, dry=True), probe=False))
-            if ndrives == len(layout.spares) or setup == "mirror":      # --yes answers "use another drive?" with yes: it takes every empty drive
-                n += bool(run_case(env, rec, layout, "preset", ["preset", setup, "--yes", "--confirm-erase"], [a for a in picks if a not in ("y", "n")],
+            if not extras and (ndrives == len(layout.spares) or setup == "mirror"):      # --yes answers "use another drive?" with yes: it takes every empty drive
+                n += bool(run_case(env, rec, layout, "preset", ["preset", setup, "--yes", "--confirm-erase"], [a for a in picks if a not in ("y", "n")][:ndrives],
                                    note=name + ": --yes --confirm-erase", tag="yes-" + name,
                                    expect=preset_expect(env, layout, setup, ndrives, nparity), probe=False))
+        # the extras by option: --encrypt works with --yes (the other two need drives that are left over); a wrong use is refused
+        for setup, flags, ans, text, enc in [
+                ("zfs-raidz1", ["--yes", "--confirm-erase", "--encrypt"], ["1"] * 5, "", True),
+                ("md-raid5", ["--yes", "--confirm-erase", "--encrypt"], ["1"] * 5, "", True),
+                ("zfs-stripe", ["--spare"], ["1", "1", "n"], "has no protection to take over", False),
+                ("md-raid0", ["--spare"], ["1", "1", "n"], "has no protection to take over", False),
+                ("md-raid5", ["--cache"], ["1", "1", "1", "n"], "for the ZFS setups only", False),
+                ("zfs-raidz1", ["--yes", "--confirm-erase", "--spare"], ["1"] * 5, "No empty drive is left for a hot spare", False)]:
+            if text:
+                def refused_x(r, text=text):
+                    bad = []
+                    if r["changed"]:
+                        bad.append("INV-extra-refusal-changed: a setup with a wrong extra was refused but things changed")
+                    if r["rc"] == 0 or text not in r["output"]:
+                        bad.append("INV-extra-refusal: expected a refusal that says %r (rc=%s)" % (text, r["rc"]))
+                    return bad
+                n += bool(run_case(env, rec, layout, "preset", ["preset", setup] + flags, ans, note="option %s: refused" % " ".join(flags),
+                                   tag="opt-" + setup + "-".join(flags), expect=refused_x, probe=False))
+            else:
+                n += bool(run_case(env, rec, layout, "preset", ["preset", setup] + flags, ans, note="%s with --encrypt" % setup,
+                                   tag="opt-" + setup + "-".join(flags), expect=preset_expect(env, layout, setup, 5, 0, extras={"enc": enc}), probe=False))
+        # a spare or a cache added later, to an array that is already there
+        for setup, what, ans_extra, ok in [("zfs-raidz1", "spare", ["1", "ERASE"], True), ("zfs-raidz1", "cache", ["1", "ERASE"], True),
+                                           ("md-raid5", "spare", ["1", "ERASE"], True), ("md-raid5", "cache", ["1", "ERASE"], False),
+                                           ("zfs-stripe", "spare", ["1", "ERASE"], False)]:
+            nbase = PRESET_MIN[setup]
+
+            def build_first(setup=setup, nbase=nbase):
+                run_shim(env, ["preset", setup], array_answers(setup, nbase) + [setup, "ERASE"], timeout=300)
+
+            def later(r, what=what, ok=ok, setup=setup):
+                bad = []
+                toks = (read_text(os.path.join(env.state, "preset")) or "||").split("|")[2].split()
+                if ok:
+                    if r["outcome"] != "DONE":
+                        bad.append("INV-extra-later: adding a %s later was not done (%s, rc=%s)" % (what, r["outcome"], r["rc"]))
+                    if sum(t.startswith(what + "=") for t in toks) != 1:
+                        bad.append("INV-extra-later: the record does not list the new %s: %r" % (what, toks))
+                    meta = read_text(os.path.join(env.state, "fake-zfs" if setup.startswith("zfs") else "fake-md", "tank.json" if setup.startswith("zfs") else "array.json")) or "{}"
+                    if len(json.loads(meta).get(what + "s", [])) != 1:
+                        bad.append("INV-extra-later: the array does not have the new %s" % what)
+                else:
+                    if r["rc"] == 0 or any(t.startswith(what + "=") for t in toks):
+                        bad.append("INV-extra-later: adding a %s should have been refused (rc=%s)" % (what, r["rc"]))
+                return bad
+            n += bool(run_case(env, rec, layout, "preset", [what], ans_extra, note="%s: add a %s later%s" % (setup, what, "" if ok else " (refused)"),
+                               tag="later-%s-%s" % (setup, what), before_run=build_first, expect=later, probe=False))
         # answers that must change nothing
         def nothing(r):
             bad = []
