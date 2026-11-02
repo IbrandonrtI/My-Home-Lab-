@@ -15,7 +15,7 @@ set -u
 set -o pipefail
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-VERSION="1.7"
+VERSION="1.8"
 TEST_MODE="${DRIVES_TEST:-0}"
 # Owner of the top folder of a new main drive: DRIVES_OWNER, else the user who ran sudo, else the first normal user (uid 1000).
 OWNER="${DRIVES_OWNER:-${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}}"
@@ -34,6 +34,7 @@ if [ "$TEST_MODE" = 1 ]; then
   POOL_MINFREE="${POOL_MINFREE:-${DRIVES_MINFREE:-10M}}"   # the test disks are tiny
   BACKUP_STATUS_FILE="${BACKUP_STATUS_FILE:-$STATE_DIR/last-run}"   # test mode never reads the real backup record
   BOOT_SECTION_DIR="${BOOT_SECTION_DIR:-$STATE_DIR/boot-sections}"
+  TIMESHIFT_CONF="${TIMESHIFT_CONF:-$STATE_DIR/timeshift.json}"      # test mode never touches the real Timeshift settings
   BOOT_KEEP_FREE_BYTES="${DRIVES_BOOT_KEEP:-100000000}"     # the test machine is small: keep 100 MB, smallest section 16 MB
   BOOT_MIN_BYTES="${DRIVES_BOOT_MIN:-16000000}"
   BOOT_SMALL_BYTES="${DRIVES_BOOT_SMALL:-0}"                # a boot drive this small (or smaller) cannot lend a section (0 = never, for the tests)
@@ -60,6 +61,7 @@ else
   BACKUP_PREFIX="${BACKUP_PREFIX:-BACKUP}"
   LOGFILE="${LOGFILE:-/var/log/homelab-drives.log}"
   BOOT_SECTION_DIR="${BOOT_SECTION_DIR:-/var/lib/homelab-boot-sections}"
+  TIMESHIFT_CONF="${TIMESHIFT_CONF:-/etc/timeshift/timeshift.json}"
   BOOT_KEEP_FREE_BYTES="${HOMELAB_BOOT_KEEP_BYTES:-128000000000}"   # the boot drive always keeps 128 GB free for the system and the apps
   BOOT_SMALL_BYTES="${HOMELAB_BOOT_SMALL_BYTES:-130000000000}"      # a "128 GB" boot drive (or smaller) cannot lend any space: the system needs all of it
   BOOT_MIN_BYTES="${HOMELAB_BOOT_MIN_BYTES:-30000000000}"          # a section smaller than 30 GB is refused
@@ -1347,6 +1349,8 @@ status_flow() {
     say "Section in the $(branch_role "$bs") storage: $(branch_name "$bs")"
   done
   say "Add one with  sudo drives bootsection  (menu: Add or remove drives). It is the last place the pool puts files."
+  local tw; tw=$(timeshift_warn_text)
+  [ -z "$tw" ] || say "!! $tw"
   say ""
   say "=== Other drives ==="
   local prot legacy managed d
@@ -1948,6 +1952,96 @@ limit_flow() {   # how much free space a pool drive keeps before the pool uses t
 boot_free_bytes() { mkdir -p "$BOOT_SECTION_DIR" 2>/dev/null; avail_bytes "$BOOT_SECTION_DIR"; }
 boot_total_bytes() { mkdir -p "$BOOT_SECTION_DIR" 2>/dev/null; df -B1 --output=size "$BOOT_SECTION_DIR" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}'; }
 
+# ---------- Timeshift must not copy the boot drive sections ----------
+# Timeshift (the system snapshot tool of Linux Mint) copies the whole boot drive. A boot drive section is one huge file that
+# changes every day, so without an exclusion every snapshot would hold a full extra copy of it and fill the boot drive.
+timeshift_pattern() { printf '%s/**' "$BOOT_SECTION_DIR"; }
+timeshift_state() {   # prints: none (Timeshift is not set up here) | ok (the sections are excluded) | missing | unreadable
+  [ -f "$TIMESHIFT_CONF" ] || { echo none; return 0; }
+  python3 - "$TIMESHIFT_CONF" "$(timeshift_pattern)" <<'PY' 2>/dev/null || echo unreadable
+import json, sys
+try:
+    cfg = json.load(open(sys.argv[1]))
+except Exception:
+    print("unreadable"); sys.exit(0)
+ex = cfg.get("exclude", [])
+print("ok" if isinstance(ex, list) and sys.argv[2] in ex else "missing")
+PY
+}
+timeshift_exclude_add() {   # adds the pattern to the Timeshift settings (the old file is kept next to it); returns 0 when it is in place afterwards
+  local pat bak; pat=$(timeshift_pattern)
+  bak="$TIMESHIFT_CONF.bak-homelab-$(date +%Y%m%d-%H%M%S)"
+  cp -p "$TIMESHIFT_CONF" "$bak" || return 1
+  if ! python3 - "$TIMESHIFT_CONF" "$pat" <<'PY' >&2
+import json, os, sys
+path, pat = sys.argv[1], sys.argv[2]
+cfg = json.load(open(path))
+ex = cfg.get("exclude")
+if not isinstance(ex, list):
+    ex = []
+if pat not in ex:
+    ex.append(pat)
+cfg["exclude"] = ex
+tmp = path + ".new"
+with open(tmp, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+os.chmod(tmp, os.stat(path).st_mode & 0o777)
+os.replace(tmp, path)
+PY
+  then cp -p "$bak" "$TIMESHIFT_CONF"; return 1; fi
+  [ "$(timeshift_state)" = ok ] || { cp -p "$bak" "$TIMESHIFT_CONF"; return 1; }
+  log "added $pat to the Timeshift exclude list (old settings: $bak)"
+  return 0
+}
+timeshift_protect() {   # used after a section is made: adds the exclusion by itself when Timeshift is here
+  local st; st=$(timeshift_state)
+  case "$st" in
+    ok|none) return 0 ;;
+    missing) if timeshift_exclude_add; then
+               say "Timeshift is set up on this machine: I told it to skip $BOOT_SECTION_DIR, so its snapshots do not copy the section."
+             else
+               note "Timeshift is set up, but I could not add the exclusion for $BOOT_SECTION_DIR to $TIMESHIFT_CONF. Run:  sudo drives timeshift"
+             fi ;;
+    *) note "Timeshift's settings ($TIMESHIFT_CONF) could not be read. Make sure its exclude list has: $(timeshift_pattern)" ;;
+  esac
+  return 0
+}
+timeshift_warn_text() {   # one line for status when the exclusion is missing (prints nothing otherwise)
+  ls "$BOOT_SECTION_DIR"/*.img >/dev/null 2>&1 || return 0
+  case "$(timeshift_state)" in
+    missing) echo "Timeshift would copy the boot drive section into every snapshot and fill the boot drive. Fix it with:  sudo drives timeshift" ;;
+    unreadable) echo "Timeshift's settings ($TIMESHIFT_CONF) could not be read; make sure its exclude list has $(timeshift_pattern)" ;;
+  esac
+  return 0
+}
+timeshift_flow() {
+  local st; st=$(timeshift_state)
+  case "$st" in
+    none)
+      say "Timeshift is not set up on this machine ($TIMESHIFT_CONF does not exist), so there is nothing to change."
+      say "If you install it later, run  sudo drives timeshift  again: it must skip $BOOT_SECTION_DIR."
+      return 0 ;;
+    ok)
+      say "Fine: Timeshift already skips $BOOT_SECTION_DIR. Nothing was changed."
+      return 0 ;;
+    unreadable)
+      note "Timeshift's settings ($TIMESHIFT_CONF) could not be read, so nothing was changed."
+      note "Open Timeshift > Settings > Filters and add:  $(timeshift_pattern)"
+      return 1 ;;
+  esac
+  say "Timeshift copies the whole boot drive. The boot drive sections ($BOOT_SECTION_DIR) are big files that change every day,"
+  say "so each snapshot would hold a full extra copy of them and fill the boot drive."
+  say "I can tell Timeshift to skip them: add  $(timeshift_pattern)  to the exclude list in $TIMESHIFT_CONF (the old file is kept next to it)."
+  if [ "$DRY_RUN" = 1 ]; then say "(dry run: nothing was changed)"; return 0; fi
+  yn "Add it now?" || { say "Nothing was changed."; return 0; }
+  if timeshift_exclude_add; then
+    say "Done. New snapshots skip the boot drive sections. Snapshots made before this still hold the copies: delete the old ones with  sudo timeshift --delete"
+  else
+    note "Could not change $TIMESHIFT_CONF. Nothing was changed."; return 1
+  fi
+}
+
 bootsection_flow() {
   array_guard || return 1
   need_tools || return 1
@@ -2053,6 +2147,7 @@ bootsection_flow() {
   fi
   start_containers
   name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
+  timeshift_protect
   say ""
   say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
   log "connected $label ($img) to $role"
@@ -4023,6 +4118,7 @@ Change the drives:
   disconnect    take a drive out of its pool (its files can be copied to the other drives first)
   move          move a drive between Main and Backup (its files are copied away first)
   bootsection   use part of the boot drive as a pool drive, with a size limit
+  timeshift     make Timeshift skip the boot drive sections (otherwise its snapshots fill the boot drive)
   adopt         turn the old single data drive into a pool
   wizard        look at the drives, suggest a setup for them and build it if you say yes (also offered after the first install)
   preset        build a whole setup on empty drives: a plain pool, a mirror with a nightly copy, SnapRAID, ZFS or RAID
@@ -4128,6 +4224,14 @@ EOF
 sudo drives bootsection [--dry-run] [--yes] [--now]
   Uses part of the boot drive as a pool drive: a file of the size you choose, always the last drive of its pool. The boot
   drive keeps at least the reserved free space. A section saved by an earlier release can be used again with its files.
+EOF
+    ;;
+    timeshift) cat <<'EOF'
+sudo drives timeshift [--dry-run] [--yes]
+  Timeshift (system snapshots) copies the whole boot drive. A boot drive section is one big file that changes every day, so
+  each snapshot would hold a full extra copy of it. This adds the section folder to Timeshift's exclude list
+  (/etc/timeshift/timeshift.json; the old file is kept next to it). It is also done by itself when a section is made.
+  Does nothing when Timeshift is not set up or the exclusion is already there.
 EOF
     ;;
     adopt) cat <<'EOF'
@@ -4390,6 +4494,7 @@ main() {
     cache)        run_changing cache_flow ;;
     release)      run_changing release_flow ;;
     bootsection)  run_changing bootsection_flow ;;
+    timeshift)    timeshift_flow ;;
     restore)      run_changing restore_flow ;;
     rename)       run_changing rename_flow ;;
     sleep)        sleep_flow ;;
