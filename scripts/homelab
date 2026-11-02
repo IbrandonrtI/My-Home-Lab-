@@ -1482,6 +1482,8 @@ LIST
   else
     if [ "$(stat -c %d "$dest" 2>/dev/null)" = "$(stat -c %d "$BOOT_PATH" 2>/dev/null)" ]; then
       warn "Backup place" "$dest is on the boot drive: it is lost if that drive dies (connect a backup drive)"
+    elif only_boot_section BACKUP; then
+      warn "Backup place" "$dest is a section of the boot drive: it is lost if that drive dies (connect a backup drive)"
     else
       ok "Backup place" "$dest is on its own drive"
     fi
