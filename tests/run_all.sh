@@ -31,6 +31,7 @@ run drive-script-names bash -c "bash '$HERE/t_drivenames.sh' | tail -1 | grep -q
 run boot-sections bash -c "bash '$HERE/t_bootsection.sh' | tail -1 | grep -q '^OK'"
 run timeshift-exclusion bash -c "bash '$HERE/t_timeshift.sh' | tail -1 | grep -q '^OK'"
 run presets bash -c "bash '$HERE/t_preset.sh' | tail -1 | grep -q '^OK'"
+run wizard-keep bash -c "bash '$HERE/t_wizard_keep.sh' | tail -1 | grep -q '^OK'"
 run drive-power bash -c "bash '$HERE/t_power.sh' | tail -1 | grep -q '^OK'"
 run drive-pills bash -c "bash '$HERE/t_widgets.sh' | tail -1 | grep -q '^OK'"
 run update-command bash -c "bash '$HERE/t_update.sh' | tail -1 | grep -q '^OK'"

@@ -113,6 +113,10 @@ check "3 drives: SnapRAID 1, RAIDZ1 beside it" "$(wizard_suggest 3)" "snapraid1 
 check "4 drives: SnapRAID 2, RAIDZ2 beside it" "$(wizard_suggest 4)" "snapraid2 zfs-raidz2"
 check "9 drives: the same as 4" "$(wizard_suggest 9)" "snapraid2 zfs-raidz2"
 check "every suggestion is a known setup that fits the number of drives" "$(for n in 1 2 3 4 5 6 8 12; do for id in $(wizard_suggest "$n"); do [ "$id" = - ] && continue; preset_known "$id" && [ "$n" -ge "$(preset_min "$id")" ] && { [ "$(preset_max "$id")" -le 0 ] || [ "$n" -le "$(preset_max "$id")" ]; } && printf y; done; done)" "yyyyyyyyyyyyyyy"
+check "kept files, 2 drives, 1 kept: the mirror first, the plain pool beside it" "$(wizard_suggest_keep 2 1)" "mirror pool"
+check "kept files, 2 drives, both kept: only the plain pool" "$(wizard_suggest_keep 2 2)" "pool -"
+check "kept files, 3 drives: only the plain pool (RAID would format the kept drive)" "$(wizard_suggest_keep 3 1)" "pool -"
+check "kept files, 1 drive: the plain pool" "$(wizard_suggest_keep 1 1)" "pool -"
 check "the first suggestion never needs a program that may be missing" "$(for n in 1 2 3 4 5; do set -- $(wizard_suggest "$n"); [ "$(preset_kind "$1")" = pool ] && printf y; done)" yyyyy
 check "the wizard knows the --first-run flag only for itself" "$(bash "$DRIVES" status --first-run 2>&1 | grep -c 'works with: wizard')" 1
 check "help wizard exists" "$(bash "$DRIVES" help wizard 2>&1 | head -1)" "sudo drives wizard [--dry-run] [--yes] [--confirm-erase]"
