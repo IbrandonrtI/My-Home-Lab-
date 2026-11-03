@@ -1651,6 +1651,46 @@ def hp_set_widget(card_id, values):
     write_file(path, "\n".join(lines), owner=(Ctx.uid, Ctx.gid))
 
 
+def hp_remove_card(text, card_id):
+    """A services.yaml without one card (and the blank line that followed it)."""
+    lines = text.split("\n")
+    r = hp_ranges(lines, card_id)
+    if r:
+        del lines[r[0]:r[1]]
+        if r[0] < len(lines) and not lines[r[0]].strip():
+            del lines[r[0]]
+    return "\n".join(lines)
+
+
+def hp_add_card(card_id):
+    """Put a card of the repository's services.yaml into this machine's file, without its widget block (that comes after the key
+    is tested), in front of the card that follows it in the repository file. True when it was added."""
+    lines = read_file(hp_path()).split("\n")
+    if hp_ranges(lines, card_id):
+        return False
+    tmpl = subst(read_file(repo_file("homepage-config", "services.yaml"))).split("\n")
+    r = hp_ranges(tmpl, card_id)
+    if not r:
+        return False
+    block = tmpl[r[0]:r[1]]
+    if r[2] is not None:
+        block = block[:r[2] - r[0]] + block[r[3] - r[0]:]
+    at = None
+    for l in tmpl[r[1]:]:
+        m = re.match(r"^\s*id:\s*(\S+)\s*$", l)
+        if m:
+            nxt = hp_ranges(lines, m.group(1))
+            if nxt:
+                at = nxt[0]
+                break
+    if at is None:
+        lines += [""] + block
+    else:
+        lines[at:at] = block + [""]
+    write_file(hp_path(), "\n".join(lines), owner=(Ctx.uid, Ctx.gid))
+    return True
+
+
 def hp_strip_widgets(text):
     """Remove the widget blocks that need keys. They come back one by one, after each key is tested."""
     lines = text.split("\n")
@@ -1948,6 +1988,19 @@ def run_pass(res, selected=None):
 class Mode:
     """How the machine was classified: new, or an existing lab."""
     existing = False          # this machine already runs the lab (built by hand)
+
+
+def adguard_wanted():
+    """True when AdGuard Home is part of this machine's setup. It is optional: the install asks at the start (the default is yes).
+    A machine that already runs the lab keeps it, and so does an install that began before the question existed."""
+    if Mode.existing:
+        return True
+    return State.data["answers"].get("adguard", "yes") != "no"
+
+
+def serve_items():
+    """The Tailscale Serve ports to set up: all of them, except AdGuard Home's when it is not installed."""
+    return [(p, s) for p, s in SERVE if s != "adguard" or adguard_wanted()]
 
 
 def fetch_bytes(u, timeout=60):
@@ -2254,11 +2307,11 @@ class ServeMappings(Step):
 
     def probe(self):
         cur = self._current()
-        return "done" if all(cur.get(p, "").rstrip("/") == "http://%s:%d" % (Ctx.lan, PORTS[s]) for p, s in SERVE) else "todo"
+        return "done" if all(cur.get(p, "").rstrip("/") == "http://%s:%d" % (Ctx.lan, PORTS[s]) for p, s in serve_items()) else "todo"
 
     def run(self):
         cur = self._current()
-        for p, s in SERVE:
+        for p, s in serve_items():
             want = "http://%s:%d" % (Ctx.lan, PORTS[s])
             if cur.get(p, "").rstrip("/") != want:
                 rc, txt = act(["tailscale", "serve", "--bg", "--https=%d" % p, want], timeout=60)
@@ -2290,6 +2343,9 @@ def port53_listeners():
 class Port53(Step):
     id, group, title = "port53", "Network", "Port 53 is free for AdGuard Home"
     needs = ("docker",)
+
+    def applies(self):
+        return adguard_wanted()
 
     def probe(self):
         procs = port53_listeners()
@@ -2690,6 +2746,9 @@ class StackStep(Step):
         self.name, self.needs, self.title, self.wait = name, tuple(needs), title, wait
         self.id = "stack-" + name
 
+    def applies(self):
+        return self.name != "adguard" or adguard_wanted()
+
     def probe(self):
         return "done" if stack_up(self.name) else "todo"
 
@@ -2954,6 +3013,8 @@ class HomepageFiles(Step):
                     raise Abort("The repository file homepage-config/%s is missing." % f)
                 if f == "services.yaml":
                     body = hp_strip_widgets(body)
+                    if not adguard_wanted():
+                        body = hp_remove_card(body, "adguard-card")
                 if f == "widgets.yaml":
                     body = widgets_for_machine(body)
                 write_file(dst, body, 0o644, (Ctx.uid, Ctx.gid))
@@ -2981,6 +3042,9 @@ def adguard_auth():
 class AdGuardSetup(Step):
     id, group, title = "adguard-setup", "Logins and keys", "AdGuard Home first-run setup done (admin account, web port 3000, DNS port 53)"
     needs = ("stack-adguard",)
+
+    def applies(self):
+        return adguard_wanted()
 
     def probe(self):
         return "done" if re.search(r"^users:\s*\n\s*-\s*name:", adguard_yaml(), re.M) else "todo"
@@ -3010,6 +3074,9 @@ class AdGuardDns(Step):
     id, group, title = "adguard-dns", "Logins and keys", "AdGuard Home upstream DNS set (Quad9, Cloudflare, Google over HTTPS)"
     needs = ("adguard-setup",)
     optional = True
+
+    def applies(self):
+        return adguard_wanted()
 
     def probe(self):
         return "done" if "dns.quad9.net" in adguard_yaml() else "todo"
@@ -3343,6 +3410,9 @@ def v_nextcloud(v):
 class WidgetStep(Step):
     group = "Homepage"
     unsure = False          # the last test got no answer from the service (the saved key was kept)
+
+    def applies(self):
+        return self.card != "adguard-card" or adguard_wanted()
 
     def __init__(self, sid, card, title, needs, fields, verify, auto=None, prompts=None, kind="auto", help_text="", pre=None, fill_text=""):
         self.id, self.card, self.title = sid, card, title
@@ -3815,6 +3885,11 @@ class LoginHook(Step):
 
 # ================================================================ things only you can do
 EXPECTED_CONTAINERS = 16
+
+
+def expected_containers():
+    """How many containers a finished install runs: 16, or one fewer without AdGuard Home."""
+    return EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
 WEATHER_DEFAULT = (40.7128, -74.0060)
 
 
@@ -3895,7 +3970,7 @@ def chk_speedtest():
 def chk_reboot():
     """All containers are up and the machine has restarted since the lab was first seen running."""
     n = len([l for l in run(["docker", "ps", "-q"])[1].split("\n") if l.strip()])
-    if n < EXPECTED_CONTAINERS:
+    if n < expected_containers():
         return False
     seen, cur = State.data.get("boot_seen"), boot_id()
     if not seen:
@@ -3909,12 +3984,13 @@ class AckStep(Step):
     kind = "ack"
     group = "Your devices and drives"
 
-    def __init__(self, sid, title, text, optional=False, needs=(), auto=None):
+    def __init__(self, sid, title, text, optional=False, needs=(), auto=None, wants=None):
         self.id, self.title, self.text, self.optional, self.needs = sid, title, text, optional, tuple(needs)
         self.auto = auto
+        self.wants = wants       # a function: False means this step is not part of this machine's list
 
     def applies(self):
-        return not Mode.existing
+        return not Mode.existing and (self.wants is None or self.wants())
 
     def probe(self):
         if not self.auto:
@@ -3950,7 +4026,7 @@ def _register_acks():
                 auto=lambda: bool(State.data.get("secrets_shown"))),
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
-                needs=("adguard-setup",), auto=chk_devices_dns),
+                needs=("adguard-setup",), auto=chk_devices_dns, wants=adguard_wanted),
         AckStep("speedtest-first", "Speedtest Tracker has run its first speed test",
                 "Open Speedtest Tracker (port 8088), log in with your email address and the admin password, and click Speedtest. The Homepage card fills in afterwards. If the login fails, the application's default login is admin@example.com / password: log in with it and change it immediately.",
                 needs=("w-speedtest",), auto=chk_speedtest),
@@ -3978,7 +4054,7 @@ class Blocklists(Step):
     optional = True
 
     def applies(self):
-        return not Mode.existing
+        return not Mode.existing and adguard_wanted()
 
     def probe(self):
         return "done" if chk_blocklists() else "todo"
@@ -4039,10 +4115,10 @@ def load_all():
 def password_warning():
     """Explain that one password is used for every login."""
     out("")
-    warn("One password is used for every admin login (Portainer, AdGuard Home, Beszel, Immich, Nextcloud, FileBrowser, "
+    warn("One password is used for every admin login (Portainer, %sBeszel, Immich, Nextcloud, FileBrowser, "
          "Speedtest Tracker). If one service leaks it, all of them are exposed. Homepage's configuration file also stores "
          "some of these logins in plain text. Use a long password that you use nowhere else and keep it in a password "
-         "manager.")
+         "manager." % ("AdGuard Home, " if adguard_wanted() else ""))
 
 
 def ask_weather(a):
@@ -4095,6 +4171,12 @@ def ask_answers():
     while not is_ipv4(a["lan"].strip()):
         a["lan"] = ask("That is not an address like 192.168.1.20. Enter it again", "")
     a["lan"] = a["lan"].strip()
+    if "adguard" not in a:
+        out("")
+        say("AdGuard Home blocks ads and trackers for every device on your network by acting as the network's DNS server. To do "
+            "that it takes port 53 from this machine's built-in DNS resolver, and you then point each device at it. You can "
+            "skip it now and add it later with:  sudo homelab-setup adguard")
+        a["adguard"] = "yes" if yesno("Install AdGuard Home?", True) else "no"
     State.save()
     Ctx.detect()
     if not Runtime.password:
@@ -4208,7 +4290,7 @@ def system_check():
     """Look at the running system and report whether everything is up. Returns the number of problems."""
     rule("System check")
     problems = []
-    names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1]]
+    names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
     up = containers_running()
     missing = [c for c in names if c not in up]
     if missing:
@@ -4231,6 +4313,8 @@ def system_check():
     out("")
     out("  %sServices on the local network%s" % (B, N))
     for key, label in SERVICE_LABELS:
+        if key == "adguard" and not adguard_wanted():
+            continue
         st = http("GET", url(key), timeout=10)[0]
         if 0 < st < 500:
             out("  %s%s%s %-18s %s" % (G, S_OK, N, label, mark(url(key))))
@@ -4240,7 +4324,7 @@ def system_check():
     if Ctx.fqdn:
         out("")
         out("  %sServices over Tailscale%s %s(use these from your other devices; a machine cannot open its own Tailscale addresses)%s" % (B, N, D, N))
-        for port, key in SERVE:
+        for port, key in serve_items():
             label = dict(SERVICE_LABELS)[key]
             out("    %-18s %s" % (label, mark("https://%s:%d" % (Ctx.fqdn, port))))
     out("")
@@ -4305,7 +4389,7 @@ DURING_INSTALL = ("tailscale-login", "tailscale-https")
 GROUP_BLURB = {
     "System": "updates, helper programs and Docker",
     "Tailscale": "the private network that reaches the lab from anywhere",
-    "Network": "keeps DNS working and frees port 53 for AdGuard Home",
+    "Network": "keeps DNS working and frees port 53 for AdGuard Home (if you chose it)",
     "Platform": "folders, generated passwords and Portainer, which deploys the apps",
     "Services": "downloads and starts the apps (the longest part)",
     "Logins and keys": "creates the admin accounts and API keys inside the apps",
@@ -4317,8 +4401,9 @@ GROUP_BLURB = {
 
 def welcome():
     """Print the welcome screen."""
-    say("This turns this machine into a home lab: Docker, Tailscale and nine apps (Homepage, Portainer, AdGuard Home, "
-        "Beszel, Netdata, Speedtest Tracker, FileBrowser, Immich and Nextcloud), with their logins and dashboard widgets.")
+    say("This turns this machine into a home lab: Docker, Tailscale and up to nine apps (Homepage, Portainer, AdGuard Home "
+        "(optional, you are asked), Beszel, Netdata, Speedtest Tracker, FileBrowser, Immich and Nextcloud), with their logins "
+        "and dashboard widgets.")
     out("")
     say("It takes roughly 30 to 60 minutes and downloads about 10 GB. You can leave it running; it only asks when it needs you. "
         "If it stops, run the same command again: finished steps are skipped.")
@@ -4510,6 +4595,35 @@ def cmd_refresh():
     write_progress(res)
     show_checklist(res)
     next_step_section(res)
+
+
+def cmd_adguard():
+    """`adguard`: add AdGuard Home to a machine that was installed without it."""
+    load_all()
+    if Mode.existing:
+        say("This machine already runs AdGuard Home (the lab was built by hand). Nothing to add.")
+        return
+    if not State.exists():
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    if State.data["answers"].get("adguard") != "no":
+        say("AdGuard Home is already part of this machine's setup. Continuing with whatever is left of it.")
+        return cmd_refresh()
+    out("")
+    say("AdGuard Home blocks ads and trackers for every device on your network by acting as the network's DNS server. To do "
+        "that it takes port 53 from this machine's built-in DNS resolver (which is stopped and disabled), and you then point "
+        "each device at it.")
+    if Opt.dry:
+        say("This is a dry run: it would add AdGuard Home to the setup, put its card back on the Homepage dashboard and run "
+            "the steps for it. Nothing was changed.")
+        return
+    if not Opt.yes and not yesno("Install AdGuard Home now?", True):
+        say("Nothing was changed.")
+        return
+    State.data["answers"]["adguard"] = "yes"
+    State.save()
+    if os.path.exists(hp_path()) and hp_add_card("adguard-card"):
+        good("The AdGuard Home card is back on the Homepage dashboard.")
+    cmd_refresh()
 
 
 def cmd_filebrowser():
@@ -4763,6 +4877,7 @@ Commands:
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
   homepage                 let Homepage see the Main and Backup pool, and move custom.css to the current layout
+  adguard                  add AdGuard Home, if you skipped it during the install
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -4775,7 +4890,7 @@ The installer never formats or modifies a drive and never saves the admin passwo
 # every command that needs no more than its name (done STEP and skip STEP also take the step)
 COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
             "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
-            "homepage": cmd_homepage}
+            "homepage": cmd_homepage, "adguard": cmd_adguard}
 
 
 def main(argv):
