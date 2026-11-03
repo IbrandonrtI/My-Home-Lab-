@@ -1,33 +1,15 @@
-/* Homepage custom.css: frosted-glass cards, per-service accent colours and responsive scaling.
-   Tested with Homepage 2.6. Many rules use !important and match Homepage's internal class names
-   ([class*=...] and :has()), so a Homepage update can change the look. If that happens, rename this file to
-   custom.css.off and restart Homepage to get the default look back.
-
-   How this file is organised: every setting lives in ONE place. To change something, change the number or the
-   line where it is set; do not add a second rule further down to override it.
-     1. Settings         the numbers you are most likely to change
-     2. Cards            the service cards: glass, accent colours, text
-     3. Top pills        the row of pills (Server, pools, Network, date, weather) and the search bar
-     4. Screen sizes     zoom steps for big screens, and the phone / small window layout
-   The theme command of the server (type: homelab, then see its commands list) changes the accent colour lines in
-   section 2 and writes its own marked block at the very end of the file. */
-
-
-/* ================================================================ 1. Settings */
 :root {
-  /* Top pills on a desktop (1500px wide and up) */
-  --d-pill-height: 80px;    /* height of the pills; the name under the numbers (Main pool ...) has to fit inside */
-  --d-pool-width: 200px;    /* width of the two drive pills (Main pool and Backup pool); change only this number */
-  --d-search-top: 100px;    /* the search bar: pill height + 10px margin above the pills + a gap of 10px */
-  --d-search-space: 110px;  /* free space kept under the search bar for the cards below */
+  
+  --d-pill-height: 80px;    
+  --d-pool-width: 200px;    
+  --d-search-top: 100px;    
+  --d-search-space: 110px;  
 
-  /* Phones, tablets and small windows */
-  --m-gap: 12px;            /* space between every pill */
-  --m-search-top: 12px;     /* space between the date/weather and the search*/
+  --m-gap: 12px;           
+  --m-search-top: 12px;     
   --m-search-bottom: 8px;
   --m-search-pad: 10px;
 
-  /* The look of one pill (the big desktop pills change these in section 3) */
   --pill-bg: rgba(14, 19, 31, 0.58);
   --pill-border: rgba(255, 255, 255, 0.09);
   --pill-radius: 999px;
@@ -38,9 +20,6 @@
 ::-webkit-scrollbar { display: none; }
 body { -ms-overflow-style: none; scrollbar-width: none; }
 
-
-/* ================================================================ 2. Cards */
-/* Outer wrapper and inner card share one radius so the corners clip cleanly. */
 .service-card,
 .group-header,
 div[id$="-card"],
@@ -138,14 +117,11 @@ div[id$="-card"] > div {
   border-radius: 10px !important;
 }
 
-
-/* ================================================================ 3. Top pills */
 #information-widgets {
   flex-wrap: wrap !important;
   row-gap: 8px !important;
 }
 
-/* Every pill. Its look (colour, border, corners, height, padding) comes from the --pill-* settings in section 1. */
 .widget-container,
 .information-widget-logo,
 [class*="information-widget-glances"] {
@@ -186,8 +162,6 @@ div[id$="-card"] > div {
 .widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource) .information-widget-resource:nth-of-type(2) svg { color: #4ade80 !important; } /* Disk 2 */
 .widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource) .information-widget-resource:nth-of-type(3) svg { color: #3b82f6 !important; } /* Network */
 
-/* Desktop (1500px wide and up): big pills, the stats on top and the name (Main pool ...) inside the pill underneath,
-   and the search bar on its own row below the pills. */
 @media (min-width: 1500px) {
 
   .widget-container {
@@ -208,8 +182,6 @@ div[id$="-card"] > div {
     margin-left: 0 !important;
   }
 
-  /* Main pool and Backup pool: both this wide (--d-pool-width in section 1).
-     They are the stats pills that have another stats pill before them (Server) and after them (Network). */
   .widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource):has(~ .widget-container .information-widget-resource) {
     box-sizing: border-box !important;
     width: var(--d-pool-width) !important;
@@ -247,9 +219,6 @@ div[id$="-card"] > div {
   }
 }
 
-
-/* ================================================================ 4. Screen sizes */
-/*scaling changes for zooming on browsers*/
 @media (min-width: 2040px) and (max-width: 2399px) { #information-widgets { zoom: 0.90; } }  /* 1440p at 125% (2048px) */
 @media (min-width: 1800px) and (max-width: 2039px) { #information-widgets { zoom: 0.80; } }
 @media (min-width: 1650px) and (max-width: 1799px) { #information-widgets { zoom: 0.70; } }
@@ -282,8 +251,6 @@ div[id$="-card"] > div {
     border-radius: 26px !important;
   }
 
-  /* Server / Pool / Network pills: stats in a grid, label centred underneath.
-     Narrower than the row and centred (try 90%, 85%, or a fixed value like 320px). */
   #information-widgets .widget-container:has(.information-widget-resource) {
     flex-wrap: wrap !important;
     gap: 8px !important;

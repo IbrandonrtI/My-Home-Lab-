@@ -1,18 +1,4 @@
-# Homepage services (see docs/build-guide.md, section 14). The placeholder words below stand for your logins and
-# keys, the server's address and your Tailscale network name. The installer fills them in and tests each key
-# before it saves it; by hand, replace them yourself.
 - Network & DNS:
-    - AdGuard Home:
-        id: adguard-card
-        href: https://pc.your-tailnet.ts.net:1004
-        siteMonitor: http://192.168.X.X:3000
-        icon: adguard-home.svg
-        description: DNS ad blocking
-        widget:
-          type: adguard
-          url: http://192.168.X.X:3000
-          username: your-own-key
-          password: your-own-key
 
     - Tailscale:
         id: tailscale-card
@@ -22,92 +8,110 @@
         description: Connected to Tailscale
         widget:
           type: tailscale
-          deviceid: your-own-key
-          key: your-own-key
+          deviceid: np88wBiYpN11CNTRL
+          key: tskey-api-kDaKYLbNnS11CNTRL-PGmYPxe28mNUZD6RC2jEkNqdfqFMhHs3
 
-- Monitoring:
-    - Beszel:
-        id: beszel-card
-        href: https://pc.your-tailnet.ts.net:1003
-        siteMonitor: http://192.168.X.X:8090
-        icon: beszel.svg
-        description: Server health and resource usage
+    - AdGuard Home:
+        id: adguard-card
+        href: https://homelab.griffin-luma.ts.net:1004
+        siteMonitor: http://192.168.1.198:3000
+        icon: adguard-home.svg
+        description: DNS ad blocking
         widget:
-          type: beszel
-          url: http://192.168.X.X:8090
-          username: your-email@example.com
-          password: your-own-key
-          version: 2
-
-    - Netdata:
-        id: netdata-card
-        href: https://pc.your-tailnet.ts.net:1008
-        siteMonitor: http://192.168.X.X:19999
-        icon: netdata.svg
-        description: Live server metrics
-        widget:
-          type: netdata
-          url: http://192.168.X.X:19999
+          type: adguard
+          url: http://192.168.1.198:3000
+          username: Brandon
+          password: Spot0912spot
 
     - Speedtest Tracker:
         id: speedtest-card
-        href: https://pc.your-tailnet.ts.net:1007/admin
-        siteMonitor: http://192.168.X.X:8088
+        href: https://homelab.griffin-luma.ts.net:1007/admin
+        siteMonitor: http://192.168.1.198:8088
         icon: speedtest-tracker.png
         description: Internet speed and connection history
         widget:
           type: speedtest
-          url: http://192.168.X.X:8088
+          url: http://192.168.1.198:8088
           version: 2
-          key: your-own-key
+          key: 1|mrdc8FriAtOBBnCUaBseWB2jm3Pc5Wf7YpMROBwY3a8512f9
           bitratePrecision: 2
 
-- Management:
+- Monitoring & Management:
+
     - Portainer:
         id: portainer-card
-        href: https://pc.your-tailnet.ts.net:1001
-        siteMonitor: http://192.168.X.X:9000
+        href: https://homelab.griffin-luma.ts.net:1001
+        siteMonitor: http://192.168.1.198:9000
         icon: portainer.svg
         description: Docker containers and stacks
         widget:
           type: portainer
-          url: http://192.168.X.X:9000
-          env: 3
-          key: your-own-key
+          url: http://192.168.1.198:9000
+          env: 1
+          key: ptr_RYnxEbyyWKw5zVI2+IFkT1hFNX0gEscIjfUQxXoKSNc=
+
+    - Beszel:
+        id: beszel-card
+        href: https://homelab.griffin-luma.ts.net:1003
+        siteMonitor: http://192.168.1.198:8090
+        icon: beszel.svg
+        description: Server health and resource usage
+        widget:
+          type: beszel
+          url: http://192.168.1.198:8090
+          username: brandonrt407@gmail.com
+          password: Spot0912spot
+          version: 2
+
+    - Netdata:
+        id: netdata-card
+        href: https://homelab.griffin-luma.ts.net:1008
+        siteMonitor: http://192.168.1.198:19999
+        icon: netdata.svg
+        description: Live server metrics
+        widget:
+          type: netdata
+          url: http://192.168.1.198:19999
 
 - Files & Photos:
-    - FileBrowser:
-        id: filebrowser-card
-        href: https://pc.your-tailnet.ts.net:1006
-        siteMonitor: http://192.168.X.X:8081
-        icon: filebrowser.svg
-        description: View and edit the backups
-        widget:
-          type: filebrowser
-          url: http://192.168.X.X:8081
-          username: your-own-key
-          password: your-own-key
 
     - Immich:
         id: immich-card
-        href: https://pc.your-tailnet.ts.net:1002/photos
-        siteMonitor: http://192.168.X.X:2283
+        href: https://homelab.griffin-luma.ts.net:1002/photos
+        siteMonitor: http://192.168.1.198:2283
         icon: immich.svg
         description: Photo and video library
         widget:
           type: immich
-          url: http://192.168.X.X:2283
-          key: your-own-key
+          url: http://192.168.1.198:2283
+          key: bCX7yhyHqZ00dcUXnusiqWgpnNv1DWQwM9JkMtzw
           version: 2
 
     - Nextcloud:
         id: nextcloud-card
-        href: https://pc.your-tailnet.ts.net:1005
-        siteMonitor: http://192.168.X.X:8082/status.php
+        href: https://homelab.griffin-luma.ts.net:1005
+        siteMonitor: http://192.168.1.198:8082/status.php
         icon: nextcloud.svg
         description: Personal cloud
         widget:
           type: nextcloud
-          url: http://192.168.X.X:8082
-          key: your-own-key
+          url: http://192.168.1.198:8082
+          key: 6de5f8d37aa667c60319e84fd17fef66be4492ef2f4fe968
           fields: ["freespace", "activeusers", "numfiles", "numshares"]
+      
+    - FileBrowser:
+        id: filebrowser-card
+        href: https://homelab.griffin-luma.ts.net:1006
+        siteMonitor: http://192.168.1.198:8081
+        icon: filebrowser.svg
+        description: View and edit the backups
+        widget:
+          type: filebrowser
+          url: http://192.168.1.198:8081
+          username: Brandon
+          password: Spot0912spot
+
+#- Media & Entertainment:
+    
+    
+

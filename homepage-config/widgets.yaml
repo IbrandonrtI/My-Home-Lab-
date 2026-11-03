@@ -1,19 +1,17 @@
 - resources:
-    label: Server
+    label: HomeLab
     cpu: true
     memory: true
     cputemp: true
     uptime: true
 
-# One pill for each pool. homelab-sample changes the label to "Connect Main Drive" / "Connect Backup Drive"
-# while that pool is not mounted, and back again when it is. The expanded view shows free space and the total.
 - resources:
-    label: Main pool
+    label: Main Pool
     disk: /mnt/storage
     expanded: true
 
 - resources:
-    label: Backup pool
+    label: Connect Backup Drive
     disk: /mnt/backup
     expanded: true
 
@@ -29,8 +27,8 @@
       hour12: true
 
 - openmeteo:
-    label: City
-    latitude: 40.7128
+    label: "New York"
+    latitude: 40.7143
     longitude: -74.0060
     units: imperial
     cache: 5
