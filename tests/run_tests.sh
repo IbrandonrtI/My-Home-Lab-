@@ -11,7 +11,7 @@ approve_in(){ ( sleep "$1"; setw ts.approved true ) & }
 fresh(){ export PATH="$ORIG_PATH"; unset SIM_KEEP; source $SIMDIR/start.sh mint; }
 keep(){ export PATH="$ORIG_PATH"; export SIM_KEEP=1; source $SIMDIR/start.sh; }
 install_in(){ # install_in "https-enter" "port53-answer"
-  printf '%s\n' Tester tester@example.com "" "" "" $PW $PW yes "${1:-}" "${2:-y}" ; }
+  printf '%s\n' Tester tester@example.com "" "" "" "" $PW $PW yes "${1:-}" "${2:-y}" ; }
 
 # ------------------------------------------------------------------ S1: a full install on a blank machine
 if scen S1; then
@@ -173,13 +173,13 @@ fi
 if scen S5; then
 echo "### S5 weak / mismatched passwords"
 fresh
-printf '%s\n' Tester tester@example.com "" "" "" short Abc12345 "Pass word!12345" | hls install > $SIM_DIR/s5.out 2>&1; RC=$?
+printf '%s\n' Tester tester@example.com "" "" "" "" short Abc12345 "Pass word!12345" | hls install > $SIM_DIR/s5.out 2>&1; RC=$?
 ok "S5 three bad passwords stop the install" '[ $RC -ne 0 ] && grep -q "No valid password" $SIM_DIR/s5.out'
 ok "S5 too-short password gives the 12 character message" 'grep -q "at least 12" $SIM_DIR/s5.out'
 ok "S5 symbols give the letters-and-numbers message" 'grep -q "letters and digits only" $SIM_DIR/s5.out'
 ok "S5 nothing was changed on the machine" 'wj "w[\"events\"]" | tee $SIM_DIR/s5.ev | grep -q . ; ! grep -q "apt\|systemctl\|docker" $SIM_DIR/s5.ev'
 fresh; approve_in 3
-printf '%s\n' Tester tester@example.com "" "" "" CorrectHorse1234 Different12345 CorrectHorse1234 CorrectHorse1234 yes "" y | hls install > $SIM_DIR/s5b.out 2>&1
+printf '%s\n' Tester tester@example.com "" "" "" "" CorrectHorse1234 Different12345 CorrectHorse1234 CorrectHorse1234 yes "" y | hls install > $SIM_DIR/s5b.out 2>&1
 ok "S5 mismatched confirmation is caught and asked again" 'grep -q "did not match" $SIM_DIR/s5b.out && [ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
 fi
 
@@ -267,7 +267,7 @@ fi
 if scen S11; then
 echo "### S11 restore from a backup of the same user"
 fresh; approve_in 3; bash $SIMDIR/mkbackup.sh $SIM_DIR/bk testuser
-printf '%s\n' Tester tester@example.com "" "" "" $PW $PW y y yes "" y RESTORE RESTORE | hls install --backup $SIM_DIR/bk > $SIM_DIR/s11.out 2>&1
+printf '%s\n' Tester tester@example.com "" "" "" "" $PW $PW y y yes "" y RESTORE RESTORE | hls install --backup $SIM_DIR/bk > $SIM_DIR/s11.out 2>&1
 ok "S11 install finished all 16 containers" '[ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
 ok "S11 photos copied back before Immich started" '[ -f $HLS_ROOT/mnt/storage/immich/library/photo2.jpg ] && [ -f $HLS_ROOT/mnt/storage/nextcloud/data/doc.txt ] && [ -f $HLS_ROOT/mnt/storage/filebrowser/file.txt ]'
 ok "S11 saved Homepage settings restored" 'grep -q from_backup $HLS_ROOT/home/testuser/homepage-config/bookmarks.yaml'
@@ -278,14 +278,14 @@ ok "S11 restore asked for the typed word RESTORE" 'grep -q "Type RESTORE" $SIM_D
 ok "S11 the typed password still never appears in files or logs" '[ -z "$(grep -rl $PW $HLS_ROOT/root $HLS_ROOT/var 2>/dev/null)" ]'
 echo "### S11b the person does not type RESTORE"
 fresh; approve_in 3; bash $SIMDIR/mkbackup.sh $SIM_DIR/bk testuser
-printf '%s\n' Tester tester@example.com "" "" "" $PW $PW y y yes "" y no no | hls install --backup $SIM_DIR/bk > $SIM_DIR/s11b.out 2>&1
+printf '%s\n' Tester tester@example.com "" "" "" "" $PW $PW y y yes "" y no no | hls install --backup $SIM_DIR/bk > $SIM_DIR/s11b.out 2>&1
 ok "S11b nothing was copied into /mnt/storage" '[ ! -e $HLS_ROOT/mnt/storage/immich/library/photo1.jpg ]'
 ok "S11b the restore step is reported failed, not a crash" 'hls 2>&1 | grep -q "Saved settings restored" && ! grep -q Traceback $SIM_DIR/s11b.out'
 ok "S11b steps that must follow the restore did not run (Nextcloud stack waits)" '! wj "list(w[\"containers\"])" | grep -q "^nextcloud$\|nextcloud_db"'
 ok "S11b other services still installed" 'wj "list(w[\"containers\"])" | grep -q portainer'
 echo "### S12 the backup belongs to another user (otheruser)"
 fresh; approve_in 3; bash $SIMDIR/mkbackup.sh $SIM_DIR/bk otheruser
-printf '%s\n' Tester tester@example.com "" "" "" $PW $PW y yes "" y RESTORE | hls install --backup $SIM_DIR/bk > $SIM_DIR/s12.out 2>&1
+printf '%s\n' Tester tester@example.com "" "" "" "" $PW $PW y yes "" y RESTORE | hls install --backup $SIM_DIR/bk > $SIM_DIR/s12.out 2>&1
 ok "S12 warned that the backup is another user's" 'grep -qi "belongs to the user otheruser" $SIM_DIR/s12.out'
 ok "S12 saved settings NOT restored, nothing written to /home/otheruser" '[ ! -e $HLS_ROOT/home/otheruser ] && [ ! -e $HLS_ROOT/home/testuser/nextcloud/html/config/config.php ]'
 echo "### S13 no backup, and --no-restore"
@@ -382,7 +382,7 @@ ok "S17 the right password was then accepted and the step finished" '! hls 2>&1 
 ok "S17 the wrong password was never used (Speedtest user still has the real one)" '[ "$(wj "w[\"speedtest\"][\"user\"][\"pw\"]")" = "$PW" ]'
 echo "### S17b Portainer admin does not exist yet: the prompt asks twice"
 fresh; approve_in 3
-printf '%s\n' Tester tester@example.com "" "" "" $PW $PW yes "" y | hls install > $SIM_DIR/s17c.out 2>&1
+printf '%s\n' Tester tester@example.com "" "" "" "" $PW $PW yes "" y | hls install > $SIM_DIR/s17c.out 2>&1
 ok "S17b normal install still asks twice at the start and finishes" '[ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
 fi
 
@@ -402,7 +402,7 @@ fi
 if scen S19; then
 echo "### S19 city question: unknown name, then a name with two matches"
 fresh; approve_in 3
-printf '%s\n' Tester tester@example.com "" Nowhereville Springfield 2 "" $PW $PW yes "" y | hls install > $SIM_DIR/s19.out 2>&1
+printf '%s\n' Tester tester@example.com "" Nowhereville Springfield 2 "" "" $PW $PW yes "" y | hls install > $SIM_DIR/s19.out 2>&1
 ok "S19 an unknown city gets a plain message and the question is asked again" 'grep -q "No city named .Nowhereville. was found" $SIM_DIR/s19.out'
 ok "S19 the second Springfield (Massachusetts) was chosen" 'grep -q "latitude: 42.1015" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml && grep -q "label: \"Springfield\"" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml'
 ok "S19 the weather step is done" '! hls 2>&1 | grep -q "○ Homepage weather location"'
@@ -654,6 +654,40 @@ ok "S34 the Nextcloud widget key step passed in spite of the delay" 'grep -q "�
 T34=$(grep '^NC_SERVERINFO_TOKEN=' $HLS_ROOT/root/.homelab-setup/secrets.env)
 hls refresh > $SIM_DIR/s34b.out 2>&1
 ok "S34 a retry keeps the token that works instead of making a new one" '[ "$(grep "^NC_SERVERINFO_TOKEN=" $HLS_ROOT/root/.homelab-setup/secrets.env)" = "$T34" ] && [ -n "$T34" ]'
+fi
+
+# ------------------------------------------------------------------ S35: AdGuard Home is optional (the question, the skipped steps, the command that adds it later)
+if scen S35; then
+echo "### S35 install without AdGuard Home, then add it with: homelab-setup adguard"
+fresh; approve_in 3
+printf '%s\n' Tester tester@example.com "" "" "" n $PW $PW yes "" y | hls install > $SIM_DIR/s35.out 2>&1; RC=$?
+ok "S35 the question is asked and the install finishes" 'grep -q "Install AdGuard Home?" $SIM_DIR/s35.out && [ $RC -eq 0 ]'
+ok "S35 no AdGuard container, the other 15 run" '! wj "list(w[\"containers\"])" | grep -q adguard && [ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 15 ]'
+ok "S35 port 53 was not touched: systemd-resolved still runs and the question about it was not asked" '[ "$(wj "w[\"units\"][\"systemd-resolved\"]")" = active ] && ! grep -q "Free port 53 now" $SIM_DIR/s35.out'
+setw ts.https true
+hls refresh > $SIM_DIR/s35r.out 2>&1
+ok "S35 eight Tailscale Serve addresses, none for AdGuard Home (1004)" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 8 ] && ! wj "list(w[\"ts\"][\"serve\"])" | grep -q 1004'
+ok "S35 the Homepage dashboard has no AdGuard card but keeps Tailscale and the others" '! grep -q "adguard-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "tailscale-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "beszel-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
+ok "S35 services.yaml is still valid YAML" 'python3 -c "import yaml,sys; yaml.safe_load(open(\"$HLS_ROOT/home/testuser/homepage-config/services.yaml\"))"'
+ok "S35 no AdGuard step is on the checklist, and nothing failed" '! hls 2>&1 | grep -qi "adguard" && ! grep -q "✗" $SIM_DIR/s35.out'
+ok "S35 the final check does not list AdGuard Home" '! grep -qi "adguard" <(hls verify 2>&1)'
+# add it later
+approve_in 3
+printf '%s\n' $PW | hls adguard --yes > $SIM_DIR/s35b.out 2>&1; RC=$?
+ok "S35 homelab-setup adguard finishes" '[ $RC -eq 0 ]'
+ok "S35 AdGuard Home runs now, port 53 is free for it" 'wj "list(w[\"containers\"])" | grep -q adguard && [ "$(wj "w[\"units\"][\"systemd-resolved\"]")" = inactive ]'
+ok "S35 the card is back on the dashboard, with its widget filled in" 'grep -q "adguard-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && python3 -c "import yaml; yaml.safe_load(open(\"$HLS_ROOT/home/testuser/homepage-config/services.yaml\"))" && grep -A12 "adguard-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml | grep -q "type: adguard"'
+ok "S35 the Tailscale address for AdGuard Home (1004) is set, nine in all" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 9 ] && wj "list(w[\"ts\"][\"serve\"])" | grep -q 1004'
+ok "S35 running it again changes nothing and does not ask again" 'printf "%s\n" $PW | hls adguard --yes 2>&1 | grep -q "already part of this machine"'
+fi
+
+# ------------------------------------------------------------------ S36: the default answer is yes (pressing Enter installs AdGuard Home)
+if scen S36; then
+echo "### S36 pressing Enter at the AdGuard Home question installs it"
+fresh; approve_in 3
+printf '%s\n' Tester tester@example.com "" "" "" "" $PW $PW yes "" y | hls install > $SIM_DIR/s36.out 2>&1; RC=$?
+ok "S36 install finishes with all 16 containers" '[ $RC -eq 0 ] && [ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
+ok "S36 the dashboard has the AdGuard card" 'grep -q "adguard-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
 fi
 
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
