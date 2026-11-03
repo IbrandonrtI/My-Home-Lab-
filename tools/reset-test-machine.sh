@@ -33,7 +33,7 @@ rm_() {   # rm_ PATH...: remove files or folders (only those that exist)
   local p
   for p in "$@"; do
     [ -e "$p" ] || [ -L "$p" ] || continue
-    if [ "$DRY" = 1 ]; then say "   would remove: $p"; else rm -rf --one-file-system -- "$p"; fi
+    if [ "$DRY" = 1 ]; then say "   would remove: $p"; else rm -rf --one-file-system -- "$p" && say "   removed: $p"; fi
   done
 }
 
@@ -63,8 +63,10 @@ if command -v docker >/dev/null 2>&1; then
   if [ "$DRY" = 1 ]; then
     say "   would remove all containers, images, networks and volumes ($(docker ps -aq 2>/dev/null | wc -l) containers now)"
   else
+    say "   removing $(docker ps -aq 2>/dev/null | wc -l) containers, then all images, networks and volumes ..."
     docker ps -aq 2>/dev/null | xargs -r docker rm -f >/dev/null 2>&1
     docker system prune -af --volumes >/dev/null 2>&1
+    say "   done: $(docker ps -aq 2>/dev/null | wc -l) containers left"
   fi
 else
   say "   Docker is not installed."
@@ -74,6 +76,7 @@ step "2. Tailscale"
 if command -v tailscale >/dev/null 2>&1; then
   do_ tailscale serve reset
   do_ tailscale logout
+  [ "$DRY" = 1 ] || say "   logged out of Tailscale"
 fi
 do_ systemctl disable --now tailscaled
 
@@ -85,6 +88,7 @@ if [ "$DRY" = 1 ]; then
 else
   DEBIAN_FRONTEND=noninteractive apt-get purge -y -q docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin tailscale >/dev/null 2>&1 || true
   DEBIAN_FRONTEND=noninteractive apt-get autoremove -y -q >/dev/null 2>&1 || true
+  say "   purged the Docker and Tailscale packages"
 fi
 rm_ /etc/apt/sources.list.d/docker.sources /etc/apt/keyrings/docker.asc /etc/apt/sources.list.d/tailscale.list \
     /usr/share/keyrings/tailscale-archive-keyring.gpg /var/lib/docker /var/lib/containerd /var/lib/tailscale
@@ -115,11 +119,12 @@ if crontab -l >/dev/null 2>&1; then
     crontab -l | grep -E 'homelab-(sample|update|backup|setup)|drives power' | sed 's/^/     /'
   else
     crontab -l | grep -vE 'homelab-(sample|update|backup|setup)|drives power' | crontab - 2>/dev/null || true
+    say "   removed the lab's lines from root's crontab"
   fi
 fi
 if [ -f "$HOME_DIR/.bashrc" ] && grep -q '# >>> homelab login display >>>' "$HOME_DIR/.bashrc"; then
   if [ "$DRY" = 1 ]; then say "   would remove the homelab login block from $HOME_DIR/.bashrc"
-  else sed -i '/# >>> homelab login display >>>/,/# <<< homelab login display <<</d' "$HOME_DIR/.bashrc"; fi
+  else sed -i '/# >>> homelab login display >>>/,/# <<< homelab login display <<</d' "$HOME_DIR/.bashrc"; say "   removed the login screen block from $HOME_DIR/.bashrc"; fi
 fi
 rm_ "$HOME_DIR/.bashrc.bak-homelab-setup"
 
@@ -129,6 +134,7 @@ if [ "$DRY" = 1 ]; then
 else
   systemctl enable --now systemd-resolved >/dev/null 2>&1 || true
   if [ -e /run/systemd/resolve/stub-resolv.conf ]; then ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf; fi
+  say "   systemd-resolved is $(systemctl is-active systemd-resolved 2>/dev/null)"
 fi
 
 say ""
