@@ -355,6 +355,7 @@ def docker_exec(w):
             out(json.dumps({"system": conf, "apps": {}}))
         elif sub == "config:app:set":
             N["token"] = next(c.split("=", 1)[1] for c in cmd if c.startswith("--value="))
+            N["seen"] = 0
         return
     if cont == "beszel" and cmd[:3] == ["/beszel", "superuser", "upsert"]:
         w["beszel"]["superusers"][cmd[3]] = cmd[4]
