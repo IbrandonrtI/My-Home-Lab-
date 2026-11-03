@@ -173,7 +173,7 @@ class WidgetStep(Step):
         return "This could not be created automatically. Run `sudo homelab-setup fill`."
 
     def fill_help(self):
-        return self.fill_text or self.help()
+        return self.fill_text or "Paste the value below, or skip it and run `sudo homelab-setup refresh` to let the installer try again."
 
     def prefill(self):
         """Values the person is not asked for in `fill` (a widget with such values overrides this)."""
@@ -309,11 +309,20 @@ def auto_immich():
 
 def auto_nextcloud():
     """Create a Nextcloud token and return the values for its widget."""
+    old = Secrets.get("NC_SERVERINFO_TOKEN")
+    if old and not Opt.dry and v_nextcloud({"key": old}) is True:
+        return {"key": old}      # an earlier attempt made a token that works now: keep it instead of making another one
     tok = rand_hex(24)
     rc, txt = occ("config:app:set", "serverinfo", "token", "--value=" + tok)
     if rc != 0:
         raise Abort("occ could not set the serverinfo token: %s" % txt.strip()[-200:])
     Secrets.set("NC_SERVERINFO_TOKEN", tok)
+    # Nextcloud's web side can keep the old token in a short-lived cache, so a token that was only just set may be refused
+    # for a while. Wait for it to be accepted (up to 3 minutes); the test that follows then decides.
+    try:
+        wait_for(lambda: v_nextcloud({"key": tok}) is True, "Nextcloud to accept the new token", 3 if FAKE else 180, every=5)
+    except Abort:
+        pass
     return {"key": tok}
 
 
