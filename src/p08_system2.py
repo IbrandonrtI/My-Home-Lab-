@@ -139,7 +139,7 @@ class DataDrive(Step):
         return "done" if os.path.ismount(P("/mnt/storage")) or os.environ.get("HLS_MOUNTED") == "1" else "todo"
 
     def help(self):
-        return ("/mnt/storage is currently a plain folder on the boot drive, which is fine for testing. To use a dedicated drive, connect it and run the drive wizard. It looks at the drives, suggests a ready-made setup and asks before changing anything, and the installer itself never formats a drive:\n$ sudo drives wizard\nThen turn on the daily backup:\n$ sudo homelab-setup refresh\nTo skip this step:\n$ sudo homelab-setup skip data-drive")
+        return ("/mnt/storage is currently a plain folder on the boot drive, which is fine for testing. To use a dedicated drive, connect it, then either open the drives menu and choose what to do:\n$ sudo drives\nor let the drive wizard look at the drives, suggest a ready-made setup and ask before changing anything (the installer itself never formats a drive):\n$ sudo drives wizard\nThen turn on the daily backup:\n$ sudo homelab-setup refresh\nTo skip this step:\n$ sudo homelab-setup skip data-drive")
 
 
 @step
