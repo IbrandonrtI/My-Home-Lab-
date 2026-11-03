@@ -15,7 +15,7 @@ set -u
 set -o pipefail
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-VERSION="1.8"
+VERSION="1.9"
 TEST_MODE="${DRIVES_TEST:-0}"
 # Owner of the top folder of a new main drive: DRIVES_OWNER, else the user who ran sudo, else the first normal user (uid 1000).
 OWNER="${DRIVES_OWNER:-${SUDO_USER:-$(getent passwd 1000 | cut -d: -f1)}}"
@@ -950,7 +950,7 @@ confirm_erase() {   # confirm_erase /dev/sdX: the two typed confirmations before
   typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
 }
 
-connect_flow() {   # connect_flow [dev] [role] [force_erase] [already_confirmed]
+connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without asking, 2 = keep the files without asking] [already_confirmed]
   array_guard || return 1
   local dev=${1:-} role=${2:-} force=${3:-0} confirmed=${4:-0} label part mode="erase" idx uuid mp
   local gate=pre_change; [ "$confirmed" = 1 ] && gate=dry_gate   # called from move: the check for a running backup was done before the drive left its pool
@@ -971,7 +971,11 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase] [already_confirmed]
   say "It will be added to the $([ "$role" = main ] && echo Main || echo Backup) storage."
   [ "$same" -gt 0 ] && say "You already have a drive with this name, so the drives with this name get a number (1, 2, ...)."
 
-  if [ "$force" != 1 ]; then
+  if [ "$force" = 2 ]; then   # the wizard already asked: keep the files as they are
+    local -a kparts; mapfile -t kparts < <(parts_of "$dev")
+    if [ ${#kparts[@]} -eq 1 ] && [ "$(fs_type "${kparts[0]}")" = ext4 ]; then mode="keep"; part=${kparts[0]}
+    else die "$dev does not have one ext4 partition, so its files cannot be kept."; fi
+  elif [ "$force" != 1 ]; then
     local -a parts; mapfile -t parts < <(parts_of "$dev")
     if [ ${#parts[@]} -eq 1 ] && [ "$(fs_type "${parts[0]}")" = ext4 ]; then
       say "This drive already has one ext4 partition (label '$(fs_label "${parts[0]}")') with data on it."
@@ -3275,7 +3279,7 @@ preset_list_flow() {   # preset: what can be built, and what the empty drives th
   say ""
   say "Ready-made setups. Each one is built on EMPTY drives (they are formatted), in one go."
   if [ "$n" -eq 0 ]; then
-    say "Empty drives plugged in now: none. (A drive with files on it is not used: erase it first with  sudo drives wipe)"
+    say "Empty drives plugged in now: none. (A drive with files on it is used only through  sudo drives wizard,  which asks if you want to keep or erase its files)"
   else
     for s in "${bsizes[@]}"; do sizes_text="$sizes_text, $(pretty_size "$s")"; done
     say "Empty drives plugged in now: $n (${sizes_text#, })"
@@ -3313,17 +3317,17 @@ preset_list_flow() {   # preset: what can be built, and what the empty drives th
 preset_pick_drives() {   # preset_pick_drives ID -> prints the chosen devices, one per line (empty drives only)
   local id=$1 min max d n=0 left
   local -a pool=() chosen=()
-  mapfile -t pool < <(blank_disks)
+  mapfile -t pool < <({ blank_disks; printf '%s\n' "$WIZARD_DEVS"; } | grep . | sort -u)
   min=$(preset_min "$id"); max=$(preset_max "$id")
   if [ ${#pool[@]} -lt "$min" ]; then
     note "$(preset_title "$id") needs $(preset_drives_text "$id") empty drives; I found ${#pool[@]}."
-    note "Only empty or new drives are used. A drive with files on it has to be erased first:  sudo drives wipe"
+    note "This list only has empty or new drives. A drive with files on it can be added with  sudo drives wizard  (keep or erase its files) or erased first with  sudo drives wipe"
     return 1
   fi
   if [ -n "$WIZARD_DEVS" ]; then   # the wizard has already looked at the drives and the person said yes to this set
     mapfile -t chosen < <(printf '%s\n' "$WIZARD_DEVS" | grep .)
     if [ ${#chosen[@]} -ge "$min" ] && { [ "$max" -le 0 ] || [ ${#chosen[@]} -le "$max" ]; }; then
-      note "Using the ${#chosen[@]} empty drives found by the scan:"
+      note "Using the ${#chosen[@]} drives chosen in the scan:"
       for d in "${chosen[@]}"; do note "  $(disk_summary "$d")"; done
       printf '%s\n' "${chosen[@]}"; return 0
     fi
@@ -3378,13 +3382,19 @@ rest_drives() {   # the empty drives that are left when these are taken: rest_dr
 }
 
 preset_flow() {   # preset_flow ID
-  local id d i n=0 usable total=0 mp label par s hint smallest biggest enc=0 spare_dev="" cache_dev="" key_path=""
+  local id d i n=0 usable total=0 mp label par s hint smallest biggest enc=0 spare_dev="" cache_dev="" key_path="" bk_dev="" used_b kept_n=0 force
   local -a devs=() sizes=() order=() main_devs=() par_devs=() ids=() rest=() erase_list=()
   id=$(preset_alias "${1:-}")
   if ! preset_known "$id"; then
     note "There is no setup called '${1:-}'. The setups are: $PRESET_IDS"
     note "See what each one needs and gives:  sudo drives preset"
     return 1
+  fi
+  if [ -n "$WIZARD_KEEP" ]; then
+    case "$id" in
+      pool|mirror) ;;
+      *) note "$(preset_title "$id") erases every drive, so it cannot keep the files you chose to keep. Choose the plain pool or the mirror, or erase that drive first."; return 1 ;;
+    esac
   fi
   if preset_is_array "$id"; then need_cmds wipefs blkid mkfs.ext4 || return 1; else need_tools || return 1; fi
   hint=$(preset_tool_hint "$id")
@@ -3423,13 +3433,22 @@ preset_flow() {   # preset_flow ID
   [ ${#devs[@]} -gt 0 ] || return 1
   for d in "${devs[@]}"; do
     refuse_unsafe_disk "$d"
-    disk_is_blank "$d" || die "$d is not empty. Refusing."
+    if in_list "$d" "$WIZARD_KEEP"; then keepable_disk "$d" || die "$d does not have one ext4 partition, so its files cannot be kept."
+    elif in_list "$d" "$WIZARD_ERASE"; then :     # the person chose to erase it in the wizard
+    else disk_is_blank "$d" || die "$d is not empty. Refusing."; fi
     sizes+=("$(disk_size_bytes "$d")")
   done
   mapfile -t order < <(for i in "${!devs[@]}"; do printf '%s %s\n' "${sizes[$i]}" "${devs[$i]}"; done | sort -rn -s -k1,1 | awk '{print $2}')   # the biggest first
   case "$id" in
     pool|zfs-*|md-*) main_devs=("${devs[@]}") ;;
-    mirror) main_devs=("${order[1]}"); par_devs=() ;;     # the smaller drive is the Main drive; the bigger one holds its copy
+    mirror)
+      par_devs=(); bk_dev=${order[0]}
+      if [ -n "$WIZARD_KEEP" ]; then      # the drive whose files stay is the Main drive; the other one holds the copy
+        for d in "${devs[@]}"; do if in_list "$d" "$WIZARD_KEEP"; then main_devs+=("$d"); else bk_dev=$d; fi; done
+        [ ${#main_devs[@]} -eq 1 ] || { note "A mirror can keep the files of one drive only (the other drive becomes the copy)."; return 1; }
+      else
+        main_devs=("${order[1]}")        # the smaller drive is the Main drive; the bigger one holds its copy
+      fi ;;
     snapraid1|snapraid2)
       par=$(preset_parity_count "$id")
       par_devs=("${order[@]:0:par}"); main_devs=("${order[@]:par}") ;;
@@ -3469,7 +3488,8 @@ preset_flow() {   # preset_flow ID
       if [ -e "$key_path" ]; then note "The key file $key_path already exists (an old array?). Move it away first."; return 1; fi
     fi
   fi
-  erase_list=("${devs[@]}")
+  erase_list=()
+  for d in "${devs[@]}"; do in_list "$d" "$WIZARD_KEEP" && kept_n=$((kept_n + 1)) || erase_list+=("$d"); done
   [ -z "$spare_dev" ] || erase_list+=("$spare_dev")
   [ -z "$cache_dev" ] || erase_list+=("$cache_dev")
   [ -z "$spare_dev" ] || refuse_unsafe_disk "$spare_dev"
@@ -3484,10 +3504,18 @@ preset_flow() {   # preset_flow ID
   for d in "${main_devs[@]}"; do
     i=$((i + 1))
     printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$d")" "$d" "$(pretty_size "$(disk_size_bytes "$d")")" \
-      "$(if preset_is_array "$id"; then echo "Main storage, array member $i"; else echo "Main storage, drive $i"; fi)"
+      "$(if preset_is_array "$id"; then echo "Main storage, array member $i"; else echo "Main storage, drive $i"; fi)$(in_list "$d" "$WIZARD_KEEP" && echo "  [its files are KEPT]")"
   done
   if [ "$id" = mirror ]; then
-    printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "${order[0]}")" "${order[0]}" "$(pretty_size "$(disk_size_bytes "${order[0]}")")" "Backup storage (the nightly copy)"
+    printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$bk_dev")" "$bk_dev" "$(pretty_size "$(disk_size_bytes "$bk_dev")")" "Backup storage (the nightly copy)$(in_list "$bk_dev" "$WIZARD_ERASE" && echo "  [ERASED: it has files]")"
+    if [ -n "$WIZARD_KEEP" ]; then
+      used_b=$(disk_used_bytes "${main_devs[0]}")
+      if [ -n "$used_b" ] && [ "$(disk_size_bytes "$bk_dev")" -lt "$used_b" ]; then
+        note "The Backup drive ($(pretty_size "$(disk_size_bytes "$bk_dev")")) is smaller than the files on the Main drive ($(pretty_size "$used_b")), so the nightly copy would not fit."
+        note "Nothing was changed. Choose the plain pool, or a bigger drive for the copy."
+        return 1
+      fi
+    fi
   fi
   i=0
   for d in ${par_devs[@]+"${par_devs[@]}"}; do i=$((i + 1)); printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$d")" "$d" "$(pretty_size "$(disk_size_bytes "$d")")" "SnapRAID protection drive $i"; done
@@ -3515,11 +3543,17 @@ preset_flow() {   # preset_flow ID
       esac ;;
   esac
   say ""
-  say "!! ERASE WARNING !!"
-  say "Everything on these ${#erase_list[@]} drives will be permanently deleted:"
-  for d in "${erase_list[@]}"; do say "  - $d  ($(disk_base_name "$d"))"; done
+  if [ ${#erase_list[@]} -gt 0 ]; then
+    say "!! ERASE WARNING !!"
+    if [ ${#erase_list[@]} -eq 1 ]; then say "Everything on this drive will be permanently deleted:"; else say "Everything on these ${#erase_list[@]} drives will be permanently deleted:"; fi
+    for d in "${erase_list[@]}"; do say "  - $d  ($(disk_base_name "$d"))$(in_list "$d" "$WIZARD_ERASE" && echo "   <- it has files: $(disk_files_text "$d")")"; done
+  fi
+  if [ "$kept_n" -gt 0 ]; then
+    if [ "$kept_n" -eq 1 ]; then say "The files on this drive are KEPT as they are (nothing on it is deleted):"; else say "The files on these $kept_n drives are KEPT as they are (nothing on them is deleted):"; fi
+    for d in "${devs[@]}"; do in_list "$d" "$WIZARD_KEEP" && say "  - $d  ($(disk_base_name "$d"))   $(disk_files_text "$d")"; done
+  fi
   typed "$id" "Type the name of the setup ($id) to continue: " || { say "Cancelled. Nothing was changed."; return 1; }
-  typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+  [ ${#erase_list[@]} -eq 0 ] || typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
   if preset_is_array "$id"; then
     pre_change "Erase the ${#erase_list[@]} drives and build the $(preset_title "$id") array on them." \
                "Stop the containers that use the Main storage for a minute." \
@@ -3558,17 +3592,18 @@ preset_flow() {   # preset_flow ID
     return 0
   fi
   PRESET_TOUCHED=1
-  pre_change "Format the ${#devs[@]} drives." \
+  pre_change "$([ "$kept_n" -gt 0 ] && echo "Format ${#erase_list[@]} drive(s) and keep the files on the other $kept_n." || echo "Format the ${#devs[@]} drives.")" \
              "Stop the containers that use the storage while each drive is added (once per drive), then start them again." \
              "Make the Main storage from the data drives$([ "$id" = mirror ] && echo ", and the Backup storage from the other drive")." \
              "$([ -n "${par_devs[*]:-}" ] && echo "Make the protection drives, write the SnapRAID settings and the 04:00 schedule." || echo "Write down what was built.")" && return 0
 
   for d in "${main_devs[@]}"; do
-    connect_flow "$d" main 1 1 || { warn "Stopped at $d. The drives before it are already in the Main storage; the rest were not touched. See: sudo drives list"; return 1; }
+    force=1; in_list "$d" "$WIZARD_KEEP" && force=2
+    connect_flow "$d" main "$force" 1 || { warn "Stopped at $d. The drives before it are already in the Main storage; the rest were not touched. See: sudo drives list"; return 1; }
     n=$((n + 1))
   done
   if [ "$id" = mirror ]; then
-    connect_flow "${order[0]}" backup 1 1 || { warn "Stopped at ${order[0]}. The Main drive is ready; the Backup drive was not added. See: sudo drives list"; return 1; }
+    connect_flow "$bk_dev" backup 1 1 || { warn "Stopped at $bk_dev. The Main drive is ready; the Backup drive was not added. See: sudo drives list"; return 1; }
   fi
   i=0
   for d in ${par_devs[@]+"${par_devs[@]}"}; do
@@ -3643,6 +3678,35 @@ preset_menu() {   # menu entry: look at the setups, then pick one
 }
 
 # ---------- the drive wizard (drives wizard): look at the drives, suggest a setup, build it only if the person says yes ----------
+WIZARD_KEEP=""         # the drives (one per line) whose files the person chose to keep in the wizard
+WIZARD_ERASE=""        # the drives with files that the person chose to erase in the wizard
+in_list() { [ -n "${2:-}" ] && grep -qxF -- "$1" <<<"$2"; }   # in_list DEV LIST: the device is one of the lines
+keepable_disk() {   # true when the drive has exactly one partition with an ext4 file system: its files can stay as they are
+  local -a p; mapfile -t p < <(parts_of "$1")
+  [ ${#p[@]} -eq 1 ] && [ "$(fs_type "${p[0]}")" = ext4 ]
+}
+disk_files_text() {   # disk_files_text DEV: what is on a drive that is not empty, in a few words
+  local d=$1 fs label used total n
+  local -a p; mapfile -t p < <(parts_of "$d")
+  n=${#p[@]}
+  if [ "$n" -eq 0 ]; then fs=$(blkid -p -s TYPE -o value "$d" 2>/dev/null); echo "${fs:-unknown} file system on the whole drive"; return 0; fi
+  fs=$(fs_type "${p[0]}"); label=$(fs_label "${p[0]}")
+  if [ "$n" -eq 1 ] && [ "$fs" = ext4 ]; then
+    used=$(disk_used_bytes "$d")
+    total=$(disk_size_bytes "$d")
+    echo "ext4${label:+, label '$label'}, ${used:+about $(pretty_size "$used") of }$(pretty_size "${total:-0}")${used:+ used}"
+  else
+    echo "$n partition(s)${fs:+, the first is $fs}${label:+ '$label'}"
+  fi
+}
+disk_used_bytes() {   # used space of a keepable drive, in bytes (nothing when unknown)
+  local -a p; mapfile -t p < <(parts_of "$1")
+  [ ${#p[@]} -eq 1 ] || return 0
+  dumpe2fs -h "${p[0]}" 2>/dev/null | awk -F: '/^Block count/ {bc=$2+0} /^Free blocks/ {fb=$2+0} /^Block size/ {bs=$2+0} END {if (bs > 0) print (bc - fb) * bs}'
+}
+wizard_suggest_keep() {   # wizard_suggest_keep N KEPT: with drives whose files stay, only the plain pool and the mirror can be used
+  if [ "$1" -eq 2 ] && [ "$2" -eq 1 ]; then echo "mirror pool"; else echo "pool -"; fi
+}
 wizard_storage_exists() { array_active || [ -n "$(branches_of main)" ] || [ -n "$(branches_of backup)" ] || [ -n "$(parity_mounts)" ] || [ -n "$(legacy_disks)" ]; }
 wizard_suggest() {   # wizard_suggest N -> "FIRST SECOND": a simple setup first, the real ZFS setup of the same strength beside it ("-" = none)
   case "$1" in
@@ -3653,8 +3717,8 @@ wizard_suggest() {   # wizard_suggest N -> "FIRST SECOND": a simple setup first,
   esac
 }
 wizard_flow() {
-  local d s n=0 total=0 first second id other_n=0 idx hint
-  local -a blank=() others=() sizes=() ids=() items=()
+  local d s n=0 total=0 first second id other_n=0 idx hint kept_n=0 erased_n=0 left_n=0 other_size
+  local -a blank=() others=() sizes=() ids=() items=() all=() acts=()
   if [ "$WANT_FIRST" = 1 ]; then
     [ -e "$WIZARD_FILE" ] && return 0            # it was offered before
     wizard_storage_exists && return 0
@@ -3674,30 +3738,82 @@ wizard_flow() {
   for d in $(candidate_disks); do
     case " ${blank[*]:-} " in *" $d "*) ;; *) others+=("$d"); other_n=$((other_n + 1)) ;; esac
   done
+  WIZARD_KEEP=""; WIZARD_ERASE=""; WIZARD_DEVS=""
   say ""
   say "Drive scan"
   say "  Never touched: the boot drive and drives that are already in a pool."
-  if [ ${#blank[@]} -eq 0 ]; then
-    say "  Empty drives found: none."
-    [ "$other_n" -gt 0 ] && say "  Drives that hold files ($other_n) are left alone. To use one, erase it first with  sudo drives wipe"
-    say "Plug in the drives you want to use, wait about 10 seconds, then run  sudo drives wizard  again."
+  if [ ${#blank[@]} -eq 0 ]; then say "  Empty drives found: none."; else
+    say "  Empty drives found: ${#blank[@]}"
+    for d in "${blank[@]}"; do say "    $(disk_summary "$d")"; done
+  fi
+
+  # drives that hold files: the person decides for each one (keep its files, erase it, or leave it alone)
+  if [ "$other_n" -gt 0 ]; then
+    say "  Drives that hold files: $other_n"
+    for d in "${others[@]}"; do say "    $(disk_summary "$d")"; say "       on it: $(disk_files_text "$d")"; done
+    if [ "$ASSUME_YES" = 1 ]; then
+      note "(--yes) drives that hold files are left alone: erasing or keeping a drive always needs a real answer."
+      left_n=$other_n
+    else
+      say ""
+      say "A drive that holds files can still be used. For each one you say what happens to its files."
+      for d in "${others[@]}"; do
+        say ""
+        say "Drive $(disk_summary "$d")"
+        say "  on it: $(disk_files_text "$d")"
+        if keepable_disk "$d"; then
+          idx=$(choose "What should I do with this drive? " \
+            "Keep its files and use the drive as it is (nothing on it is deleted)" \
+            "Erase everything on it and use it as a new, empty drive" \
+            "Leave it alone (do not use it)") || idx=2
+        else
+          note "Its files cannot be kept: only a drive with one ext4 partition can be added with its files. It can be erased, or left alone."
+          idx=$(choose "What should I do with this drive? " \
+            "Erase everything on it and use it as a new, empty drive" \
+            "Leave it alone (do not use it)") || idx=1
+          idx=$((idx + 1))
+        fi
+        case "$idx" in
+          0) WIZARD_KEEP="${WIZARD_KEEP:+$WIZARD_KEEP$'\n'}$d"; kept_n=$((kept_n + 1)); acts+=("$d") ;;
+          1) WIZARD_ERASE="${WIZARD_ERASE:+$WIZARD_ERASE$'\n'}$d"; erased_n=$((erased_n + 1)); acts+=("$d") ;;
+          *) left_n=$((left_n + 1)) ;;
+        esac
+      done
+    fi
+  fi
+  all=("${blank[@]}" ${acts[@]+"${acts[@]}"})
+  if [ ${#all[@]} -eq 0 ]; then
+    if [ "$left_n" -gt 0 ]; then say "No drive is left to use. Run  sudo drives wizard  again when you want to choose differently."
+    else say "Plug in the drives you want to use, wait about 10 seconds, then run  sudo drives wizard  again."; fi
     return 0
   fi
-  say "  Empty drives found: ${#blank[@]}"
-  for d in "${blank[@]}"; do
+  [ "$left_n" -gt 0 ] && say "  Left alone: $left_n drive(s) with files."
+  [ "$kept_n" -gt 0 ] && say "  Files kept: $kept_n drive(s). Erased: $erased_n drive(s) with files."
+  for d in "${all[@]}"; do
     s=$(disk_size_bytes "$d"); [ -n "$s" ] || s=0
     sizes+=("$s"); total=$((total + s)); n=$((n + 1))
-    say "    $(disk_summary "$d")"
   done
-  [ "$other_n" -gt 0 ] && say "  Drives that hold files ($other_n) are left alone. To use one, erase it first with  sudo drives wipe"
 
-  read -r first second < <(wizard_suggest "$n")
+  if [ "$kept_n" -gt 0 ]; then
+    read -r first second < <(wizard_suggest_keep "$n" "$kept_n")
+    if [ "$first" = mirror ]; then   # the copy has to be able to hold the files that stay
+      local kd="" od="" used_b
+      for d in "${all[@]}"; do if in_list "$d" "$WIZARD_KEEP"; then kd=$d; else od=$d; fi; done
+      used_b=$(disk_used_bytes "$kd"); other_size=$(disk_size_bytes "$od")
+      if [ -n "$used_b" ] && [ -n "$other_size" ] && [ "$other_size" -lt "$used_b" ]; then first=pool; second="-"; fi
+    fi
+  else
+    read -r first second < <(wizard_suggest "$n")
+  fi
   ids=("$first"); [ "$second" != "-" ] && ids+=("$second")
   say ""
-  say "What I suggest for $n empty drive(s):"
+  say "What I suggest for these $n drive(s):"
+  [ "$kept_n" -gt 0 ] && say "(Because you keep the files of $kept_n drive(s), only setups that do not format that drive are offered: the plain pool and the mirror. ZFS, RAID and SnapRAID need drives that are erased.)"
   for id in "${ids[@]}"; do
     s=$(preset_capacity "$id" "${sizes[@]}")
-    items+=("$(preset_title "$id")$([ "$id" = "$first" ] && echo '  (simple, my first suggestion)' || echo '  (real RAID, more advanced)')")
+    if [ "$id" = "$first" ]; then items+=("$(preset_title "$id")  (simple, my first suggestion)")
+    elif [ "$(preset_kind "$id")" = pool ]; then items+=("$(preset_title "$id")  (simple alternative)")
+    else items+=("$(preset_title "$id")  (real RAID, more advanced)"); fi
     say ""
     say "  ${#items[@]}) $(preset_title "$id")   [$id]"
     say "       $(preset_blurb "$id")"
@@ -3705,7 +3821,11 @@ wizard_flow() {
     [ "$(preset_kind "$id")" = pool ] || { hint=$(preset_tool_hint "$id"); [ -z "$hint" ] || say "       It needs a program that is not installed yet:  $hint"; }
   done
   say ""
-  say "Your drives are formatted ONLY after you pick a setup, read its plan and type ERASE. Nothing is changed before that."
+  if [ "$kept_n" -gt 0 ] || [ "$erased_n" -gt 0 ]; then
+    say "Nothing is changed before you have picked a setup, read its plan and confirmed it. The plan lists which drives are erased and which keep their files."
+  else
+    say "Your drives are formatted ONLY after you pick a setup, read its plan and type ERASE. Nothing is changed before that."
+  fi
   items+=("Show me every setup and let me pick one myself")
   if [ "$ASSUME_YES" = 1 ]; then idx=0; note "(--yes) taking the first suggestion: $(preset_title "$first")"
   else
@@ -3716,9 +3836,17 @@ wizard_flow() {
     }
   fi
   [ "$DRY_RUN" = 1 ] || { mkdir -p "$STATE_DIR" && printf '%s|%s\n' "$(date +%F)" "$([ "$idx" -lt "${#ids[@]}" ] && echo "${ids[$idx]}" || echo list)" >"$WIZARD_FILE"; }
-  if [ "$idx" -ge "${#ids[@]}" ]; then preset_menu; return $?; fi
-  WIZARD_DEVS=$(printf '%s\n' "${blank[@]}")
-  preset_flow "${ids[$idx]}"
+  if [ "$idx" -ge "${#ids[@]}" ]; then
+    # the full list: with kept files the preset flow itself refuses the setups that would format that drive
+    if [ "$kept_n" -gt 0 ] || [ "$erased_n" -gt 0 ]; then WIZARD_DEVS=$(printf '%s\n' "${all[@]}"); fi
+    preset_menu; local rc=$?
+    WIZARD_DEVS=""; WIZARD_KEEP=""; WIZARD_ERASE=""
+    return $rc
+  fi
+  WIZARD_DEVS=$(printf '%s\n' "${all[@]}")
+  preset_flow "${ids[$idx]}"; local rc=$?
+  WIZARD_DEVS=""; WIZARD_KEEP=""; WIZARD_ERASE=""
+  return $rc
 }
 
 # ---------- look-only commands: list, usage, health, check (they change nothing; check --full takes one drive offline for a while) ----------
@@ -4332,17 +4460,23 @@ sudo drives wizard [--dry-run] [--yes] [--confirm-erase]
   a ready-made setup for that number: 1 drive a plain pool, 2 a mirror with a nightly copy, 3 SnapRAID with one protection drive,
   4 or more SnapRAID with two. A real ZFS setup of the same strength is shown beside it. You pick one (or ask for the full list),
   then the normal  sudo drives preset  steps run: the plan, then the setup name and ERASE before anything is erased.
+  A drive that already HOLDS FILES can be used too. For each such drive you choose: keep its files and use it as it is, erase it
+  and use it like an empty drive, or leave it alone. Files can be kept only on a drive with one ext4 partition (another kind of
+  drive can be erased or left alone). When a drive keeps its files, only the plain pool and the mirror (the kept drive is the Main
+  drive) are suggested, because ZFS, RAID and SnapRAID format every drive they use. The plan says which drives are erased and
+  which keep their files; ERASE is only asked when a drive is really erased.
   It is only for a fresh start: when storage is already set up it says so and does nothing.
   The installer offers it once at the end of the first install; run it again any time with  sudo drives wizard.
   --dry-run shows the scan, the suggestion and the plan only. --yes takes the first suggestion without asking (the typing of
-  the setup name and ERASE is still needed, unless you add --confirm-erase).
+  the setup name and ERASE is still needed, unless you add --confirm-erase). With --yes, drives that hold files are left alone.
 EOF
     ;;
     preset) cat <<'EOF'
 sudo drives preset [NAME] [--dry-run] [--yes] [--confirm-erase] [--spare] [--cache] [--encrypt]
   Without a name: lists the ready-made setups and shows what the empty drives that are plugged in now would give.
   With a name: builds it. You pick the drives, see the plan and what you can use, and type the setup name and ERASE
-  before anything is erased. Only EMPTY or new drives are used (a drive with files must be erased first: sudo drives wipe).
+  before anything is erased. Only EMPTY or new drives are used (a drive with files: use  sudo drives wizard  to keep or erase its files,
+  or erase it first with  sudo drives wipe).
   The Main storage must not have drives yet (to add to it use connect).
     pool        all the drives in one pool (no protection)
     mirror      exactly 2 drives: the smaller one is Main, the bigger one is Backup; the backup copies Main to it every day
