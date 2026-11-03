@@ -161,7 +161,13 @@ class CronBackup(Step):
 LOGIN_BLOCK = """
 # >>> homelab login display >>>
 if [[ $- == *i* ]] && [ -t 1 ] && command -v homelab >/dev/null 2>&1; then
-  timeout 20 homelab login
+  # The screen is made out of sight (into a file, without the keyboard) and shown when ready, for at most 20 seconds.
+  # Running it straight on the terminal under "timeout" could freeze the login on Ubuntu 26.04 (Ctrl+C did nothing).
+  _hl_out=$(mktemp 2>/dev/null) && {
+    HOMELAB_COLOR=1 timeout --foreground 20 homelab login >"$_hl_out" 2>&1 </dev/null
+    cat "$_hl_out"; rm -f "$_hl_out"
+  }
+  unset _hl_out
 fi
 # <<< homelab login display <<<
 """
@@ -174,11 +180,11 @@ class LoginHook(Step):
 
     def probe(self):
         txt = read_file(P(Ctx.home + "/.bashrc"))
-        # an older block (without "homelab login" on its command line) is replaced: the new one remembers the screen for 2 minutes
+        # an older block (without "timeout --foreground 20 homelab login") is replaced: the new one cannot freeze the login
         if "# >>> homelab login display >>>" not in txt:
             return "todo"
         # a server built by hand is only looked at, so its older block counts too
-        return "done" if Mode.existing or "timeout 20 homelab login" in txt else "todo"
+        return "done" if Mode.existing or "timeout --foreground 20 homelab login" in txt else "todo"
 
     def run(self):
         path = P(Ctx.home + "/.bashrc")
