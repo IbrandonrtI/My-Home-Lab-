@@ -5,6 +5,19 @@ class Mode:
     existing = False          # this machine already runs the lab (built by hand)
 
 
+def adguard_wanted():
+    """True when AdGuard Home is part of this machine's setup. It is optional: the install asks at the start (the default is yes).
+    A machine that already runs the lab keeps it, and so does an install that began before the question existed."""
+    if Mode.existing:
+        return True
+    return State.data["answers"].get("adguard", "yes") != "no"
+
+
+def serve_items():
+    """The Tailscale Serve ports to set up: all of them, except AdGuard Home's when it is not installed."""
+    return [(p, s) for p, s in SERVE if s != "adguard" or adguard_wanted()]
+
+
 def fetch_bytes(u, timeout=60):
     """Download a file and return its bytes."""
     if FAKE:
@@ -309,11 +322,11 @@ class ServeMappings(Step):
 
     def probe(self):
         cur = self._current()
-        return "done" if all(cur.get(p, "").rstrip("/") == "http://%s:%d" % (Ctx.lan, PORTS[s]) for p, s in SERVE) else "todo"
+        return "done" if all(cur.get(p, "").rstrip("/") == "http://%s:%d" % (Ctx.lan, PORTS[s]) for p, s in serve_items()) else "todo"
 
     def run(self):
         cur = self._current()
-        for p, s in SERVE:
+        for p, s in serve_items():
             want = "http://%s:%d" % (Ctx.lan, PORTS[s])
             if cur.get(p, "").rstrip("/") != want:
                 rc, txt = act(["tailscale", "serve", "--bg", "--https=%d" % p, want], timeout=60)
@@ -345,6 +358,9 @@ def port53_listeners():
 class Port53(Step):
     id, group, title = "port53", "Network", "Port 53 is free for AdGuard Home"
     needs = ("docker",)
+
+    def applies(self):
+        return adguard_wanted()
 
     def probe(self):
         procs = port53_listeners()

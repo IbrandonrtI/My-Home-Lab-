@@ -90,6 +90,9 @@ class WidgetStep(Step):
     group = "Homepage"
     unsure = False          # the last test got no answer from the service (the saved key was kept)
 
+    def applies(self):
+        return self.card != "adguard-card" or adguard_wanted()
+
     def __init__(self, sid, card, title, needs, fields, verify, auto=None, prompts=None, kind="auto", help_text="", pre=None, fill_text=""):
         self.id, self.card, self.title = sid, card, title
         self.needs = tuple(needs) + ("homepage-files",)

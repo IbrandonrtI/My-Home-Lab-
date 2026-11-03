@@ -186,6 +186,8 @@ class HomepageFiles(Step):
                     raise Abort("The repository file homepage-config/%s is missing." % f)
                 if f == "services.yaml":
                     body = hp_strip_widgets(body)
+                    if not adguard_wanted():
+                        body = hp_remove_card(body, "adguard-card")
                 if f == "widgets.yaml":
                     body = widgets_for_machine(body)
                 write_file(dst, body, 0o644, (Ctx.uid, Ctx.gid))
@@ -213,6 +215,9 @@ def adguard_auth():
 class AdGuardSetup(Step):
     id, group, title = "adguard-setup", "Logins and keys", "AdGuard Home first-run setup done (admin account, web port 3000, DNS port 53)"
     needs = ("stack-adguard",)
+
+    def applies(self):
+        return adguard_wanted()
 
     def probe(self):
         return "done" if re.search(r"^users:\s*\n\s*-\s*name:", adguard_yaml(), re.M) else "todo"
@@ -242,6 +247,9 @@ class AdGuardDns(Step):
     id, group, title = "adguard-dns", "Logins and keys", "AdGuard Home upstream DNS set (Quad9, Cloudflare, Google over HTTPS)"
     needs = ("adguard-setup",)
     optional = True
+
+    def applies(self):
+        return adguard_wanted()
 
     def probe(self):
         return "done" if "dns.quad9.net" in adguard_yaml() else "todo"

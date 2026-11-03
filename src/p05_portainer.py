@@ -268,6 +268,9 @@ class StackStep(Step):
         self.name, self.needs, self.title, self.wait = name, tuple(needs), title, wait
         self.id = "stack-" + name
 
+    def applies(self):
+        return self.name != "adguard" or adguard_wanted()
+
     def probe(self):
         return "done" if stack_up(self.name) else "todo"
 

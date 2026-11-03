@@ -196,6 +196,11 @@ class LoginHook(Step):
 
 # ================================================================ things only you can do
 EXPECTED_CONTAINERS = 16
+
+
+def expected_containers():
+    """How many containers a finished install runs: 16, or one fewer without AdGuard Home."""
+    return EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
 WEATHER_DEFAULT = (40.7128, -74.0060)
 
 
@@ -276,7 +281,7 @@ def chk_speedtest():
 def chk_reboot():
     """All containers are up and the machine has restarted since the lab was first seen running."""
     n = len([l for l in run(["docker", "ps", "-q"])[1].split("\n") if l.strip()])
-    if n < EXPECTED_CONTAINERS:
+    if n < expected_containers():
         return False
     seen, cur = State.data.get("boot_seen"), boot_id()
     if not seen:
@@ -290,12 +295,13 @@ class AckStep(Step):
     kind = "ack"
     group = "Your devices and drives"
 
-    def __init__(self, sid, title, text, optional=False, needs=(), auto=None):
+    def __init__(self, sid, title, text, optional=False, needs=(), auto=None, wants=None):
         self.id, self.title, self.text, self.optional, self.needs = sid, title, text, optional, tuple(needs)
         self.auto = auto
+        self.wants = wants       # a function: False means this step is not part of this machine's list
 
     def applies(self):
-        return not Mode.existing
+        return not Mode.existing and (self.wants is None or self.wants())
 
     def probe(self):
         if not self.auto:
@@ -331,7 +337,7 @@ def _register_acks():
                 auto=lambda: bool(State.data.get("secrets_shown"))),
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
-                needs=("adguard-setup",), auto=chk_devices_dns),
+                needs=("adguard-setup",), auto=chk_devices_dns, wants=adguard_wanted),
         AckStep("speedtest-first", "Speedtest Tracker has run its first speed test",
                 "Open Speedtest Tracker (port 8088), log in with your email address and the admin password, and click Speedtest. The Homepage card fills in afterwards. If the login fails, the application's default login is admin@example.com / password: log in with it and change it immediately.",
                 needs=("w-speedtest",), auto=chk_speedtest),
@@ -359,7 +365,7 @@ class Blocklists(Step):
     optional = True
 
     def applies(self):
-        return not Mode.existing
+        return not Mode.existing and adguard_wanted()
 
     def probe(self):
         return "done" if chk_blocklists() else "todo"

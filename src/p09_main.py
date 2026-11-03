@@ -22,10 +22,10 @@ def load_all():
 def password_warning():
     """Explain that one password is used for every login."""
     out("")
-    warn("One password is used for every admin login (Portainer, AdGuard Home, Beszel, Immich, Nextcloud, FileBrowser, "
+    warn("One password is used for every admin login (Portainer, %sBeszel, Immich, Nextcloud, FileBrowser, "
          "Speedtest Tracker). If one service leaks it, all of them are exposed. Homepage's configuration file also stores "
          "some of these logins in plain text. Use a long password that you use nowhere else and keep it in a password "
-         "manager.")
+         "manager." % ("AdGuard Home, " if adguard_wanted() else ""))
 
 
 def ask_weather(a):
@@ -78,6 +78,12 @@ def ask_answers():
     while not is_ipv4(a["lan"].strip()):
         a["lan"] = ask("That is not an address like 192.168.1.20. Enter it again", "")
     a["lan"] = a["lan"].strip()
+    if "adguard" not in a:
+        out("")
+        say("AdGuard Home blocks ads and trackers for every device on your network by acting as the network's DNS server. To do "
+            "that it takes port 53 from this machine's built-in DNS resolver, and you then point each device at it. You can "
+            "skip it now and add it later with:  sudo homelab-setup adguard")
+        a["adguard"] = "yes" if yesno("Install AdGuard Home?", True) else "no"
     State.save()
     Ctx.detect()
     if not Runtime.password:
@@ -191,7 +197,7 @@ def system_check():
     """Look at the running system and report whether everything is up. Returns the number of problems."""
     rule("System check")
     problems = []
-    names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1]]
+    names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
     up = containers_running()
     missing = [c for c in names if c not in up]
     if missing:
@@ -214,6 +220,8 @@ def system_check():
     out("")
     out("  %sServices on the local network%s" % (B, N))
     for key, label in SERVICE_LABELS:
+        if key == "adguard" and not adguard_wanted():
+            continue
         st = http("GET", url(key), timeout=10)[0]
         if 0 < st < 500:
             out("  %s%s%s %-18s %s" % (G, S_OK, N, label, mark(url(key))))
@@ -223,7 +231,7 @@ def system_check():
     if Ctx.fqdn:
         out("")
         out("  %sServices over Tailscale%s %s(use these from your other devices; a machine cannot open its own Tailscale addresses)%s" % (B, N, D, N))
-        for port, key in SERVE:
+        for port, key in serve_items():
             label = dict(SERVICE_LABELS)[key]
             out("    %-18s %s" % (label, mark("https://%s:%d" % (Ctx.fqdn, port))))
     out("")
@@ -288,7 +296,7 @@ DURING_INSTALL = ("tailscale-login", "tailscale-https")
 GROUP_BLURB = {
     "System": "updates, helper programs and Docker",
     "Tailscale": "the private network that reaches the lab from anywhere",
-    "Network": "keeps DNS working and frees port 53 for AdGuard Home",
+    "Network": "keeps DNS working and frees port 53 for AdGuard Home (if you chose it)",
     "Platform": "folders, generated passwords and Portainer, which deploys the apps",
     "Services": "downloads and starts the apps (the longest part)",
     "Logins and keys": "creates the admin accounts and API keys inside the apps",
@@ -300,8 +308,9 @@ GROUP_BLURB = {
 
 def welcome():
     """Print the welcome screen."""
-    say("This turns this machine into a home lab: Docker, Tailscale and nine apps (Homepage, Portainer, AdGuard Home, "
-        "Beszel, Netdata, Speedtest Tracker, FileBrowser, Immich and Nextcloud), with their logins and dashboard widgets.")
+    say("This turns this machine into a home lab: Docker, Tailscale and up to nine apps (Homepage, Portainer, AdGuard Home "
+        "(optional, you are asked), Beszel, Netdata, Speedtest Tracker, FileBrowser, Immich and Nextcloud), with their logins "
+        "and dashboard widgets.")
     out("")
     say("It takes roughly 30 to 60 minutes and downloads about 10 GB. You can leave it running; it only asks when it needs you. "
         "If it stops, run the same command again: finished steps are skipped.")
@@ -493,6 +502,35 @@ def cmd_refresh():
     write_progress(res)
     show_checklist(res)
     next_step_section(res)
+
+
+def cmd_adguard():
+    """`adguard`: add AdGuard Home to a machine that was installed without it."""
+    load_all()
+    if Mode.existing:
+        say("This machine already runs AdGuard Home (the lab was built by hand). Nothing to add.")
+        return
+    if not State.exists():
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    if State.data["answers"].get("adguard") != "no":
+        say("AdGuard Home is already part of this machine's setup. Continuing with whatever is left of it.")
+        return cmd_refresh()
+    out("")
+    say("AdGuard Home blocks ads and trackers for every device on your network by acting as the network's DNS server. To do "
+        "that it takes port 53 from this machine's built-in DNS resolver (which is stopped and disabled), and you then point "
+        "each device at it.")
+    if Opt.dry:
+        say("This is a dry run: it would add AdGuard Home to the setup, put its card back on the Homepage dashboard and run "
+            "the steps for it. Nothing was changed.")
+        return
+    if not Opt.yes and not yesno("Install AdGuard Home now?", True):
+        say("Nothing was changed.")
+        return
+    State.data["answers"]["adguard"] = "yes"
+    State.save()
+    if os.path.exists(hp_path()) and hp_add_card("adguard-card"):
+        good("The AdGuard Home card is back on the Homepage dashboard.")
+    cmd_refresh()
 
 
 def cmd_filebrowser():
@@ -746,6 +784,7 @@ Commands:
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
   homepage                 let Homepage see the Main and Backup pool, and move custom.css to the current layout
+  adguard                  add AdGuard Home, if you skipped it during the install
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -758,7 +797,7 @@ The installer never formats or modifies a drive and never saves the admin passwo
 # every command that needs no more than its name (done STEP and skip STEP also take the step)
 COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
             "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
-            "homepage": cmd_homepage}
+            "homepage": cmd_homepage, "adguard": cmd_adguard}
 
 
 def main(argv):

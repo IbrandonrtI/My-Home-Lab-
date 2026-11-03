@@ -122,6 +122,46 @@ def hp_set_widget(card_id, values):
     write_file(path, "\n".join(lines), owner=(Ctx.uid, Ctx.gid))
 
 
+def hp_remove_card(text, card_id):
+    """A services.yaml without one card (and the blank line that followed it)."""
+    lines = text.split("\n")
+    r = hp_ranges(lines, card_id)
+    if r:
+        del lines[r[0]:r[1]]
+        if r[0] < len(lines) and not lines[r[0]].strip():
+            del lines[r[0]]
+    return "\n".join(lines)
+
+
+def hp_add_card(card_id):
+    """Put a card of the repository's services.yaml into this machine's file, without its widget block (that comes after the key
+    is tested), in front of the card that follows it in the repository file. True when it was added."""
+    lines = read_file(hp_path()).split("\n")
+    if hp_ranges(lines, card_id):
+        return False
+    tmpl = subst(read_file(repo_file("homepage-config", "services.yaml"))).split("\n")
+    r = hp_ranges(tmpl, card_id)
+    if not r:
+        return False
+    block = tmpl[r[0]:r[1]]
+    if r[2] is not None:
+        block = block[:r[2] - r[0]] + block[r[3] - r[0]:]
+    at = None
+    for l in tmpl[r[1]:]:
+        m = re.match(r"^\s*id:\s*(\S+)\s*$", l)
+        if m:
+            nxt = hp_ranges(lines, m.group(1))
+            if nxt:
+                at = nxt[0]
+                break
+    if at is None:
+        lines += [""] + block
+    else:
+        lines[at:at] = block + [""]
+    write_file(hp_path(), "\n".join(lines), owner=(Ctx.uid, Ctx.gid))
+    return True
+
+
 def hp_strip_widgets(text):
     """Remove the widget blocks that need keys. They come back one by one, after each key is tested."""
     lines = text.split("\n")
