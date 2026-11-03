@@ -1335,7 +1335,11 @@ containers_line() {
     case "$(systemctl is-active docker 2>/dev/null)" in
       activating) warn "Containers" "Docker is still starting after the restart. Wait a minute, then run  homelab  again" ;;
       inactive|failed) warn "Containers" "Docker is not running. Start it with:  sudo systemctl start docker" ;;
-      *) warn "Containers" "cannot read Docker (is Docker running, and are you in the docker group?)" ;;
+      *) if [ "$(id -u)" != 0 ] && getent group docker 2>/dev/null | cut -d: -f4 | tr ',' '\n' | grep -qx "$(id -un)" && ! id -nG | tr ' ' '\n' | grep -qx docker; then
+           warn "Containers" "this terminal has not picked up your Docker access yet. Log out and back in (or run: newgrp docker), or use: sudo homelab"
+         else
+           warn "Containers" "cannot read Docker (is Docker running, and are you in the docker group?)"
+         fi ;;
     esac
   fi
 }
