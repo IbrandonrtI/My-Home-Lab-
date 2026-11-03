@@ -21,7 +21,7 @@
 # The full report is saved in your home folder as homelab-selftest-<date>.txt. Known secret formats
 # (tokens, keys, passwords) are hidden in it, but read it before you share it.
 
-VERSION="1.4"
+VERSION="1.5"
 case "${1:-}" in
   version|--version) echo "homelab-selftest $VERSION"; exit 0 ;;
   -h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
@@ -281,11 +281,14 @@ PY
   fi
 
   # ---- the web pages of the apps (answered on this machine)
-  local svc port code
+  local svc port code has_adguard=1
+  # AdGuard Home is optional: without its container and its settings file it was left out on purpose
+  if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx adguardhome && [ ! -f /opt/adguard-docker/conf/AdGuardHome.yaml ]; then has_adguard=0; fi
   LAN_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") {print $(i+1); exit}}')
   [ -n "$LAN_IP" ] || LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
   for svc in "Homepage:3001" "Portainer:9000" "AdGuard Home:3000" "Beszel:8090" "Netdata:19999" "Speedtest Tracker:8088" "FileBrowser:8081" "Immich:2283" "Nextcloud:8082"; do
     port=${svc##*:}; svc=${svc%:*}
+    if [ "$svc" = "AdGuard Home" ] && [ "$has_adguard" = 0 ]; then info "AdGuard Home is not installed (optional: sudo homelab-setup adguard adds it)"; continue; fi
     # Homepage only answers the addresses it was told about (HOMEPAGE_ALLOWED_HOSTS), so ask by this machine's address
     code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://${LAN_IP:-127.0.0.1}:$port/" 2>/dev/null)
     case "$code" in
@@ -303,7 +306,8 @@ PY
   fi
   local p53
   p53=$(ss -lntupH 2>/dev/null | awk '$5 ~ /:53$/ {print $0}' | head -3)
-  if printf '%s' "$p53" | grep -q 'systemd-resolve'; then fail "systemd-resolved still holds port 53, so AdGuard Home cannot use it"
+  if [ "$has_adguard" = 0 ]; then info "AdGuard Home is not installed, so port 53 stays with the built-in resolver"
+  elif printf '%s' "$p53" | grep -q 'systemd-resolve'; then fail "systemd-resolved still holds port 53, so AdGuard Home cannot use it"
   elif [ -z "$p53" ]; then warn "nothing listens on port 53 (AdGuard Home is not answering DNS)"
   else ok "port 53 is held by something other than systemd-resolved"; fi
   if getent hosts example.com >/dev/null 2>&1; then ok "this machine resolves names"; else fail "this machine cannot resolve names"; fi
