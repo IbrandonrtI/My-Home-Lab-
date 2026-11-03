@@ -33,7 +33,7 @@ BOOT_GRACE_SECS="${HOMELAB_BOOT_GRACE_SECS:-600}"          # after a boot the lo
 JUST_BOOTED=0
 
 # colours only when printing to a terminal that supports them
-if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
+if { [ -t 1 ] || [ "${HOMELAB_COLOR:-}" = 1 ]; } && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then   # HOMELAB_COLOR=1: the login hook writes to a file first but the screen is shown in colour
   B=$'\033[1m'; D=$'\033[2m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; N=$'\033[0m'
 else
   B=""; D=""; G=""; Y=""; R=""; N=""
