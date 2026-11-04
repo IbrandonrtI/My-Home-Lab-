@@ -24,48 +24,53 @@ background:
 # To go back to one page without tabs, delete everything from the line "layout:" down (the installer does not add it again).
 layout:
   Network & DNS:
-    tab: HOME
+    tab: Home
     icon: mdi-lan
   Monitoring & Management:
-    tab: HOME
+    tab: Home
     icon: mdi-monitor-dashboard
   Files & Photos:
-    tab: HOME
+    tab: Home
     icon: mdi-folder-multiple-image
   Media & Entertainment:
-    tab: HOME
+    tab: Home
     icon: mdi-movie-open
+  Calendar:
+    tab: Home
+    icon: mdi-calendar-month
+    style: row
+    columns: 2
   Entertainment:
-    tab: LINKS
+    tab: Links
     icon: mdi-popcorn
   Online Shopping:
-    tab: LINKS
+    tab: Links
     icon: mdi-cart
   Productivity:
-    tab: LINKS
+    tab: Links
     icon: mdi-briefcase
-  At a glance:
-    tab: STATS
+  At a Glance:
+    tab: Stats
     icon: mdi-view-dashboard
     style: row
     columns: 4
-  Library totals:
-    tab: STATS
+  Library Totals:
+    tab: Stats
     icon: mdi-image-multiple
     style: row
     columns: 2
   Storage:
-    tab: STATS
+    tab: Stats
     icon: mdi-harddisk
     style: row
     columns: 2
-  Backup & updates:
-    tab: STATS
+  Backup & Updates:
+    tab: Stats
     icon: mdi-backup-restore
     style: row
     columns: 2
-  Folder sizes:
-    tab: STATS
+  Folder Sizes:
+    tab: Stats
     icon: mdi-folder-multiple
     style: row
     columns: 1

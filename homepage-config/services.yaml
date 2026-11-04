@@ -119,7 +119,7 @@
 # This block is brought up to date by the installer. To remove the tab: delete everything between the two marker lines, then
 # delete the five STATS groups from the layout: block of settings.yaml.
 
-- At a glance:
+- At a Glance:
 
     - Library:
         id: stat-library
@@ -137,7 +137,7 @@
             - field: glance.files
               label: Files
 
-    - Storage used:
+    - Storage Used:
         id: stat-storage
         icon: mdi-harddisk
         description: How full the pools are
@@ -147,11 +147,11 @@
           refreshInterval: 60000
           mappings:
             - field: glance.main_pct
-              label: Main pool
+              label: Main Pool
             - field: glance.backup_pct
-              label: Backup pool
+              label: Backup Pool
 
-    - Last backup:
+    - Last Backup:
         id: stat-lastbackup
         icon: mdi-backup-restore
         description: When it ran and how big it is
@@ -179,7 +179,7 @@
             - field: glance.updates
               label: Updates
 
-- Library totals:
+- Library Totals:
 
     - Immich:
         id: stat-immich
@@ -219,7 +219,7 @@
 
 - Storage:
 
-    - Main pool:
+    - Main Pool:
         id: stat-mainpool
         icon: mdi-harddisk
         description: Your files and photos
@@ -237,7 +237,7 @@
             - field: main.health
               label: Health
 
-    - Backup pool:
+    - Backup Pool:
         id: stat-backuppool
         icon: mdi-database-check
         description: The copy of the main pool
@@ -255,9 +255,9 @@
             - field: backup.health
               label: Health
 
-- Backup & updates:
+- Backup & Updates:
 
-    - Last backup:
+    - Last Backup:
         id: stat-backup
         icon: mdi-backup-restore
         description: When it ran and how it went
@@ -275,7 +275,7 @@
             - field: last_backup.took
               label: Took
 
-    - Containers & updates:
+    - Containers & Updates:
         id: stat-updates
         icon: mdi-docker
         description: Checked by homelab-update
@@ -293,9 +293,9 @@
             - field: updates.system
               label: System
 
-- Folder sizes:
+- Folder Sizes:
 
-    - Folder sizes:
+    - Folder Sizes:
         id: stat-folders
         icon: mdi-folder-multiple
         description: Counted again only when something changed
@@ -305,12 +305,65 @@
           refreshInterval: 60000
           mappings:
             - field: folders.backup
-              label: Backup pool
+              label: Backup Pool
             - field: folders.main
-              label: Main pool
+              label: Main Pool
             - field: folders.nextcloud
               label: Nextcloud
             - field: folders.immich
               label: Immich
 
 # <<< homelab stats <<<
+
+# >>> homelab calendar >>>
+# The Calendar at the bottom of the Home tab: US federal holidays (and Lincoln's Birthday and Election Day), a few more days
+# (Valentine's Day, Lunar New Year, Diwali ...) and your own events. The calendar files are made by the command homelab-calendar
+# (the installer runs it, and a weekly job keeps the years coming). Add your own events with:  homelab event add 2026-12-25 "Family dinner"
+# This block is brought up to date by the installer. To remove the calendar: delete everything between the two marker lines, then delete
+# the Calendar entry from the layout: block of settings.yaml.
+- Calendar:
+
+    - Calendar:
+        id: cal-month
+        icon: mdi-calendar-month
+        widget:
+          type: calendar
+          view: monthly
+          firstDayInWeek: sunday
+          maxEvents: 8
+          integrations:
+            - type: ical
+              name: Holidays
+              url: http://192.168.X.X:3001/images/holidays.ics
+              color: rose
+            - type: ical
+              name: Observances
+              url: http://192.168.X.X:3001/images/observances.ics
+              color: amber
+            - type: ical
+              name: My Events
+              url: http://192.168.X.X:3001/images/events.ics
+              color: sky
+
+    - Coming Up:
+        id: cal-agenda
+        icon: mdi-calendar-clock
+        widget:
+          type: calendar
+          view: agenda
+          maxEvents: 8
+          integrations:
+            - type: ical
+              name: Holidays
+              url: http://192.168.X.X:3001/images/holidays.ics
+              color: rose
+            - type: ical
+              name: Observances
+              url: http://192.168.X.X:3001/images/observances.ics
+              color: amber
+            - type: ical
+              name: My Events
+              url: http://192.168.X.X:3001/images/events.ics
+              color: sky
+
+# <<< homelab calendar <<<
