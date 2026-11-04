@@ -749,24 +749,41 @@ def js_groups_block(live, shipped):
 
 
 STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"      # the block of STATS groups in the shipped services.yaml
-# The STATS groups: name -> (icon, columns). layout_complete puts them on the STATS tab (never on HOME).
-STATS_GROUPS = {"At a glance": ("mdi-view-dashboard", 4), "Library totals": ("mdi-image-multiple", 2), "Storage": ("mdi-harddisk", 2),
-                "Backup & updates": ("mdi-backup-restore", 2), "Folder sizes": ("mdi-folder-multiple", 1)}
+# The STATS groups: name -> (icon, columns). layout_complete puts them on the Stats tab (never on Home).
+STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Library Totals": ("mdi-image-multiple", 2), "Storage": ("mdi-harddisk", 2),
+                "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
+# Names and tab names used before they were capitalised: layout_renamed() renames them in a layout: block that has them.
+OLD_NAMES = {"At a glance": "At a Glance", "Library totals": "Library Totals", "Backup & updates": "Backup & Updates", "Folder sizes": "Folder Sizes"}
+OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
+
+
+CAL_BEGIN, CAL_END = "# >>> homelab calendar >>>", "# <<< homelab calendar <<<"      # the block with the Calendar group in the shipped services.yaml
+CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Home tab, in a row of its own
+
+
+def services_block(live, shipped, begin, end):
+    """This machine's services.yaml with a managed block (the lines between two marker lines of the shipped file) put in at the end, or
+    brought up to date. Everything outside the block is left alone. `shipped` already has this machine's address filled in."""
+    a = shipped.find(begin)
+    z = shipped.find(end, a) if a >= 0 else -1
+    if a < 0 or z < 0:
+        return live
+    block = shipped[a:z + len(end)]
+    la = live.find(begin)
+    lz = live.find(end, la) if la >= 0 else -1
+    if la >= 0 and lz >= 0:
+        return live[:la] + block + live[lz + len(end):]
+    return live.rstrip("\n") + "\n\n" + block + "\n"
 
 
 def services_stats_block(live, shipped):
-    """This machine's services.yaml with the STATS groups (the block between the two marker lines) put in at the end, or brought up to
-    date. Everything outside the block is left alone. `shipped` already has this machine's address filled in."""
-    a = shipped.find(STATS_BEGIN)
-    z = shipped.find(STATS_END, a) if a >= 0 else -1
-    if a < 0 or z < 0:
-        return live
-    block = shipped[a:z + len(STATS_END)]
-    la = live.find(STATS_BEGIN)
-    lz = live.find(STATS_END, la) if la >= 0 else -1
-    if la >= 0 and lz >= 0:
-        return live[:la] + block + live[lz + len(STATS_END):]
-    return live.rstrip("\n") + "\n\n" + block + "\n"
+    """The STATS groups (see services_block)."""
+    return services_block(live, shipped, STATS_BEGIN, STATS_END)
+
+
+def services_calendar_block(live, shipped):
+    """The Calendar group (see services_block)."""
+    return services_block(live, shipped, CAL_BEGIN, CAL_END)
 
 
 def settings_with_layout(live, shipped):
@@ -797,9 +814,29 @@ def yaml_key(name):
     return name
 
 
+def layout_renamed(settings):
+    """Older layout: blocks name the STATS groups and the tabs in capitals / small letters ("At a glance", "tab: HOME"). Rename them in place
+    (their icon and every other line stay) so the layout and the services.yaml block agree. Only the shipped names are touched."""
+    m = re.search(r"(?m)^layout:[ \t]*(?:#.*)?$", settings)
+    if not m:
+        return settings
+    head, tail = settings[:m.end()], settings[m.end():]
+    lines = tail.split("\n")
+    for i, l in enumerate(lines):
+        k = re.match(r"^  ([^\s#][^:]*?):\s*$", l)
+        if k and k.group(1) in OLD_NAMES:
+            lines[i] = "  %s:" % OLD_NAMES[k.group(1)]
+        t = re.match(r"^    tab:\s*(\S+)\s*$", l)
+        if t and t.group(1) in OLD_TABS:
+            lines[i] = "    tab: %s" % OLD_TABS[t.group(1)]
+        if l and l[0] not in " \t#":
+            break                      # the layout: block ends at the next top level key
+    return head + "\n".join(lines)
+
+
 def layout_complete(settings, service_groups, bookmark_groups, seen):
-    """Put the groups of this machine that the layout: block does not know yet on a tab (a service group on HOME, a bookmark group on
-    LINKS), so they do not show up on every tab. Only groups that were never offered before (not in `seen`) are added, so a group
+    """Put the groups of this machine that the layout: block does not know yet on a tab (a service group on Home, a bookmark group on
+    Links), so they do not show up on every tab. Only groups that were never offered before (not in `seen`) are added, so a group
     that was taken out of the layout on purpose stays out. Returns (settings, seen)."""
     m = re.search(r"(?m)^layout:[ \t]*(?:#.*)?$", settings)
     present = [g for g in service_groups + bookmark_groups if g]
@@ -818,13 +855,15 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
         if k:
             known.add(k.group(1).strip())
     add = []
-    for tab, icon, groups in (("HOME", "mdi-apps", service_groups), ("LINKS", "mdi-bookmark-multiple", bookmark_groups)):
+    for tab, icon, groups in (("Home", "mdi-apps", service_groups), ("Links", "mdi-bookmark-multiple", bookmark_groups)):
         for g in groups:
             if g and g not in known and g not in seen and g not in [a[0] for a in add]:
-                add.append((g, "STATS" if g in STATS_GROUPS and tab == "HOME" else tab, icon))
+                add.append((g, "Stats" if g in STATS_GROUPS and tab == "Home" else tab, icon))
     for g, tab, icon in add:
-        if tab == "STATS":
-            new = ["  %s:" % yaml_key(g), "    tab: STATS", "    icon: %s" % STATS_GROUPS[g][0], "    style: row", "    columns: %d" % STATS_GROUPS[g][1]]
+        if tab == "Stats":
+            new = ["  %s:" % yaml_key(g), "    tab: Stats", "    icon: %s" % STATS_GROUPS[g][0], "    style: row", "    columns: %d" % STATS_GROUPS[g][1]]
+        elif g in CALENDAR_GROUPS and tab == "Home":
+            new = ["  %s:" % yaml_key(g), "    tab: Home", "    icon: %s" % CALENDAR_GROUPS[g][0], "    style: row", "    columns: %d" % CALENDAR_GROUPS[g][1]]
         else:
             new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
         lines[end:end] = new
