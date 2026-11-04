@@ -387,7 +387,7 @@ class NavidromeCard(Step):
         svc = read_file(hp_path("services.yaml"))
         if card_widget_type(svc, "navidrome-card") != "iframe":
             return "todo"
-        return "done" if card_range(svc.split("\n"), PLAYER_ID) is None and navidrome_card_first(svc) else "todo"
+        return "done" if card_range(svc.split("\n"), PLAYER_ID) is None and navidrome_card_first(svc) and navidrome_card_named(svc) == svc else "todo"
 
     def run(self):
         if Opt.dry:
@@ -418,12 +418,13 @@ class NavidromeCard(Step):
         new = services_without_card(old, PLAYER_ID)                    # zip 33 had a second card for the player: it is one card now
         new = services_with_iframe_widget(new, "navidrome-card", Ctx.lan or svc_host())
         new = card_to_top(new, "navidrome-card")
+        new = navidrome_card_named(new)
         if new != old:
             if not os.path.exists(hp_path("services.yaml") + ".before-navidrome"):
                 write_file(hp_path("services.yaml") + ".before-navidrome", old, 0o644, (Ctx.uid, Ctx.gid))
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
-            out("      The Navidrome card is first in its group and has Navidrome's own player inside (previous, next, shuffle, repeat). "
-                "Clicking its title opens the full Navidrome page.")
+            out("      The Navidrome card is first in its group, called Navidrome (\"Spotify Music Player\"), and has Navidrome's own player inside "
+                "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
 
 
 def run_calendar_build():

@@ -1040,6 +1040,31 @@ def card_to_top(text, card_id):
     return "\n".join(lines)
 
 
+def card_retitled(text, card_id, old_title, new_title, old_desc, new_desc):
+    """services.yaml with the name and the description of a card changed, but only where they are still the old words (a name or a
+    description you wrote yourself is left alone)."""
+    lines = text.split("\n")
+    r = card_range(lines, card_id)
+    if not r:
+        return text
+    m = re.match(r"^(\s+- )(.+?):\s*$", lines[r[0]])
+    if m and m.group(2) == old_title:
+        lines[r[0]] = "%s%s:" % (m.group(1), new_title)
+    for i in range(*r):
+        m = re.match(r"^(\s+description:\s*)(.*?)\s*$", lines[i])
+        if m and m.group(2).strip("\"'") == old_desc:
+            lines[i] = m.group(1) + new_desc
+    return "\n".join(lines)
+
+
+NAVIDROME_TITLE, NAVIDROME_DESC = "Navidrome", "Spotify Music Player"
+
+
+def navidrome_card_named(text):
+    """The Navidrome card with the name Navidrome (not navidrome) and the description Spotify Music Player."""
+    return card_retitled(text, "navidrome-card", "navidrome", NAVIDROME_TITLE, "Music streaming server", NAVIDROME_DESC)
+
+
 PLAYER_ID = "navidrome-player"      # the separate player card of zip 33; the player now lives inside the Navidrome card and this card is taken out
 
 
