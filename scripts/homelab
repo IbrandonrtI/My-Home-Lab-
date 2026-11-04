@@ -131,14 +131,17 @@ lan_address() {   # this machine's address on the home network
 
 open_section() {   # where to click: the dashboard on the home network, and from anywhere through Tailscale
   [ -d "$HOMEPAGE_DIR" ] || return 0
-  local ip ts=""
+  local ip ts="" port=""
   ip=$(lan_address)
   [ -n "$ip" ] || return 0
+  # the port Homepage listens on: ask Docker (the installer's default is 3001; 3000 belongs to AdGuard Home)
+  command -v docker >/dev/null 2>&1 && port=$(timeout 3 docker port homepage 2>/dev/null | awk -F: 'NR == 1 {print $NF}')
+  [[ "$port" =~ ^[0-9]+$ ]] || port="${HOMELAB_HOMEPAGE_PORT:-3001}"
   if command -v tailscale >/dev/null 2>&1; then
-    ts=$(timeout 3 tailscale serve status 2>/dev/null | awk '/^https:\/\// {u = $1} /proxy .*:3000[[:space:]]*$/ && u {print u; exit}')
+    ts=$(timeout 3 tailscale serve status 2>/dev/null | awk -v p=":$port" '/^https:\/\// {u = $1} $0 ~ "proxy .*" p "[[:space:]]*$" && u {print u; exit}')
   fi
   rule "Open in your browser"
-  printf '   %-30s %s%s%s\n' "Dashboard, at home" "$B" "http://$ip:3000" "$N"
+  printf '   %-30s %s%s%s\n' "Dashboard, at home" "$B" "http://$ip:$port" "$N"
   [ -z "$ts" ] || printf '   %-30s %s%s%s\n' "Dashboard, from anywhere" "$B" "$ts" "$N"
   [ -z "$ts" ] || printf '   %s%-30s needs the Tailscale app on that device, signed in to your account%s\n' "$D" "" "$N"
 }
@@ -1261,7 +1264,7 @@ updates_line() {
     local fix=""
     [ "${n:-0}" -gt 0 ] && fix="install the system ones: sudo apt upgrade"
     [ "$img_n" -gt 0 ] && fix="${fix:+$fix; }update the containers: sudo homelab-update"
-    warn "Updates" "$text ($fix)"
+    warn "Updates" "$text -> $fix"
     [ "$img_n" -gt 0 ] && suggest 4 "sudo homelab-update" "newer container versions are waiting: it downloads and updates them"
     [ "${n:-0}" -gt 0 ] && suggest 5 "sudo apt update && sudo apt upgrade" "install the waiting system updates"
   else ok "Updates" "$text"; fi
