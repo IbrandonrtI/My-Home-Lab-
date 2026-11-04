@@ -32,12 +32,19 @@ S, C = rd("settings.yaml"), rd("custom.css")
 # ---- the shipped files
 check("shipped settings.yaml has a layout: block", re.search(r"(?m)^layout:", S) is not None)
 tabs = re.findall(r"(?m)^    tab: (\w+)$", S)
-check("exactly two tabs are used: HOME and LINKS", sorted(set(tabs)) == ["HOME", "LINKS"], str(set(tabs)))
+check("exactly three tabs are used: HOME, LINKS and STATS", sorted(set(tabs)) == ["HOME", "LINKS", "STATS"], str(set(tabs)))
 check("every group in layout has an icon", len(re.findall(r"(?m)^    icon: mdi-[\w-]+$", S)) == len(tabs))
 svc_groups = re.findall(r"(?m)^- ([^:\n]+):\s*$", rd("services.yaml"))
 book_groups = re.findall(r"(?m)^- ([^:\n]+):\s*$", rd("bookmarks.yaml"))
 lay = re.findall(r"(?m)^  ([^\s:][^:\n]*):\s*$", S[S.index("\nlayout:"):])
-check("every shipped service group is on the HOME tab", all(g in lay for g in svc_groups), str(svc_groups))
+check("every shipped service group is on a tab", all(g in lay for g in svc_groups), str(svc_groups))
+stat_groups = list(m.STATS_GROUPS)
+check("the STATS groups of the code are the groups of the shipped block",
+      stat_groups == [g for g in svc_groups if g in m.STATS_GROUPS] and len(svc_groups) - len(stat_groups) == 3, str(svc_groups))
+for g in stat_groups:
+    blk = re.search(r"(?m)^  %s:\n((?:    .*\n)+)" % re.escape(g), S).group(0)
+    ok = "tab: STATS" in blk and "icon: %s" % m.STATS_GROUPS[g][0] in blk and "columns: %d" % m.STATS_GROUPS[g][1] in blk
+    check("the shipped layout puts %s on the STATS tab" % g, ok, blk)
 check("every shipped bookmark group is on the LINKS tab", all(g in lay for g in book_groups), str(book_groups))
 check("all four card sections of homelab-cards are in the layout",
       all(g in lay for g in ["Network & DNS", "Monitoring & Management", "Files & Photos", "Media & Entertainment"]))
@@ -94,6 +101,30 @@ r3, _ = m.layout_complete(gone, ["Network & DNS", "My Apps"], ["Productivity", "
 check("a group that was taken out on purpose is not put back", "Others" not in r3)
 r4, _ = m.layout_complete(r, ["Network & DNS", "My Apps", "Third"], ["Productivity", "Others"], seen)
 check("a group that is new later is added once", r4.count("  Third:\n    tab: HOME") == 1)
+rs, _ = m.layout_complete(base, ["Network & DNS", "At a glance", "Folder sizes"], ["Productivity"], [])
+check("the STATS groups go on the STATS tab with their icon and columns",
+      "  At a glance:\n    tab: STATS\n    icon: mdi-view-dashboard\n    style: row\n    columns: 4" in rs
+      and "  Folder sizes:\n    tab: STATS\n    icon: mdi-folder-multiple\n    style: row\n    columns: 1" in rs and "tab: HOME" in rs, rs)
+rs2, _ = m.layout_complete(rs, ["Network & DNS", "At a glance", "Folder sizes"], ["Productivity"], _)
+check("and only once", rs2 == rs)
+
+# ---- the STATS cards in services.yaml (a managed block at the end)
+V = rd("services.yaml")
+check("the shipped services.yaml has the STATS block", m.STATS_BEGIN in V and m.STATS_END in V and V.index(m.STATS_BEGIN) > V.index("- Files & Photos:"))
+check("a shipped services.yaml is already up to date", m.services_stats_block(V, V) == V)
+OLDV = V[:V.index(m.STATS_BEGIN)].rstrip("\n") + "\n"
+newv = m.services_stats_block(OLDV, V)
+check("a machine without the block gets it at the end and keeps everything before", newv.startswith(OLDV.rstrip("\n")) and newv.count(m.STATS_BEGIN) == 1)
+check("running it again changes nothing", m.services_stats_block(newv, V) == newv)
+stale = OLDV + "\n" + m.STATS_BEGIN + "\n- Old:\n" + m.STATS_END + "\n# mine\n"
+rv = m.services_stats_block(stale, V)
+check("an older block is replaced and what follows it is kept", "- Old:" not in rv and "# mine" in rv and rv.count(m.STATS_BEGIN) == 1)
+check("no shipped block: the file is left alone", m.services_stats_block(OLDV, "") == OLDV)
+check("the STATS cards use the address placeholder of the other cards", "http://192.168.X.X:3001/images/stats.json" in V)
+ids = re.findall(r"(?m)^        id: (stat-[\w-]+)$", V)
+check("every STATS card has an id that starts with stat-", len(ids) == 11 and len(set(ids)) == 11, str(ids))
+check("every STATS card has its colour in the css", all(re.search(r"#%s\b[^{]*\{[^}]*--accent" % i, C) for i in ids if i not in ("stat-folders",)) and "#stat-folders" in C)
+check("the STATS card styles are inside the managed block", C.index('li[id^="stat-"]::before') > C.index(m.TABS_BEGIN) and C.index('li[id^="stat-"]::before') < C.index(m.TABS_END))
 check("no layout block: nothing is added, the groups are still remembered", m.layout_complete("title: X\n", ["A"], ["B"], [])[0] == "title: X\n" and m.layout_complete("title: X\n", ["A"], ["B"], [])[1] == ["A", "B"])
 tail = base + "\n# comment\nhideVersion: true\n"
 r5, _ = m.layout_complete(tail, ["Z"], [], [])

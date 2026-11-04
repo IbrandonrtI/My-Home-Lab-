@@ -80,7 +80,7 @@ live = (shipped_css.replace("How this file is organised", "xx")
 live = live + "\n" + THEME
 r = m.css_new_layout(live, shipped_css)
 check("moving an old file: the layout mark is there", m.CSS_LAYOUT_MARK in r)
-check("moving an old file: the changed accent colour is kept", "#immich-card      { --accent: 1, 2, 3;   }   /* Immich my own */" in r and "209, 18" not in r)
+check("moving an old file: the changed accent colour is kept", "#immich-card      { --accent: 1, 2, 3;   }   /* Immich my own */" in r and "#immich-card      { --accent: 209" not in r)
 check("moving an old file: the other accent colours are the shipped ones", "#adguard-card     { --accent: 104, 186, 72;" in r)
 check("moving an old file: a number changed in :root is kept", "--m-gap: 20px;" in r and "--m-gap: 12px;" not in r)
 check("moving an old file: the homelab theme block is kept at the end", r.rstrip().endswith(m.THEME_END) and "rgba(10, 10, 10, 0.9)" in r)

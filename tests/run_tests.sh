@@ -45,7 +45,7 @@ ok "S1 typed password NOT in the install log" '! grep -q $PW $HLS_ROOT/var/log/h
 ok "S1 typed password only in the three Homepage logins" '[ "$(grep -rl $PW $HLS_ROOT | grep -v "/proc" | sort | tr "\n" " ")" = "$HLS_ROOT/home/testuser/homepage-config/services.yaml " ]'
 ok "S1 services.yaml has no placeholders left" '! grep -q "your-own-key\|192.168.X.X\|your-tailnet\|your-email" $HLS_ROOT/home/testuser/homepage-config/services.yaml || grep -B3 -A3 "your-own-key" $HLS_ROOT/home/testuser/homepage-config/services.yaml | grep -q tailscale'
 ok "S1 progress file written" '[ -s $HLS_ROOT/var/lib/homelab/setup-progress ]'
-ok "S1 cron has 6 lines (with the service cards), no backup line (no data drive)" '[ "$(grep -c . $SIM_DIR/crontab)" = 6 ] && ! grep -q homelab-backup $SIM_DIR/crontab'
+ok "S1 cron has 7 lines (with the service cards and the stats), no backup line (no data drive)" '[ "$(grep -c . $SIM_DIR/crontab)" = 7 ] && grep -q "homelab-stats" $SIM_DIR/crontab && ! grep -q homelab-backup $SIM_DIR/crontab'
 ok "S1 login hook added to .bashrc once" '[ "$(grep -c "homelab login display >>>" $HLS_ROOT/home/testuser/.bashrc)" = 1 ]'
 ok "S1 a clean machine gets no notice about drives left by an earlier install" '! grep -q "sudo drives release" $SIM_DIR/s1.out'
 ok "S1 scripts installed with this machine's user pinned in them (no lookup left, nobody else's name)" 'grep -q "HOMELAB_USER:-testuser" $HLS_ROOT/usr/local/sbin/homelab-backup && grep -q "SUDO_USER:-testuser" $HLS_ROOT/usr/local/sbin/drives && ! grep -q "getent passwd 1000" $HLS_ROOT/usr/local/sbin/homelab-backup $HLS_ROOT/usr/local/sbin/drives && ! grep -rq "otheruser" $HLS_ROOT/usr/local'
@@ -776,7 +776,9 @@ install_in "" y | hls install > $SIM_DIR/s39a.out 2>&1
 HP39=$HLS_ROOT/home/testuser/homepage-config
 ok "S39 a fresh install already has the layout, the small settings and the tab styles" 'grep -q "^layout:" $HP39/settings.yaml && grep -q "^hideVersion: true" $HP39/settings.yaml && grep -q "homelab tabs >>>" $HP39/custom.css'
 ok "S39 a fresh install has custom.js with the group tags" 'grep -q "homelab groups >>>" $HP39/custom.js'
-ok "S39 a fresh install did not make any backup copy" '[ ! -e $HP39/settings.yaml.before-tabs ] && [ ! -e $HP39/custom.css.before-tabs ]'
+ok "S39 a fresh install did not make any backup copy" '[ ! -e $HP39/settings.yaml.before-tabs ] && [ ! -e $HP39/custom.css.before-tabs ] && [ ! -e $HP39/services.yaml.before-tabs ]'
+ok "S39 a fresh install has the STATS cards (with this machine's address) and the STATS tab" 'grep -q "homelab stats >>>" $HP39/services.yaml && grep -q "id: stat-folders" $HP39/services.yaml && ! grep -q "192.168.X.X:3001/images/stats.json" $HP39/services.yaml && grep -q "/images/stats.json" $HP39/services.yaml && grep -q "tab: STATS" $HP39/settings.yaml && grep -q "^  Folder sizes:" $HP39/settings.yaml'
+ok "S39 the stats command is installed and scheduled every 15 minutes" '[ -x $HLS_ROOT/usr/local/sbin/homelab-stats ] && grep -q "^5,20,35,50 \* \* \* \* /usr/local/sbin/homelab-stats" $SIM_DIR/crontab'
 export HP39
 python3 - <<PY
 import os,re,json
@@ -789,8 +791,10 @@ c=open(hp+"/custom.css").read()
 c=c[:c.index("/* >>> homelab tabs >>>")]+"/* mine */\n"
 open(hp+"/custom.css","w").write(c)
 os.remove(hp+"/custom.js")
+v=open(hp+"/services.yaml").read()
+open(hp+"/services.yaml","w").write(v[:v.index("# >>> homelab stats >>>")].rstrip("\n")+"\n")
 sp=os.environ["HLS_ROOT"]+"/var/lib/homelab-setup/state.json"
-st=json.load(open(sp)); st["ran"].pop("homepage-tabs",None); json.dump(st,open(sp,"w"))
+st=json.load(open(sp)); st["ran"].pop("homepage-tabs",None); st["ran"].pop("homepage-stats",None); json.dump(st,open(sp,"w"))
 PY
 ok "S39 (set up) an older machine: no layout, no tab styles" '! grep -q "^layout:" $HP39/settings.yaml && ! grep -q "homelab tabs" $HP39/custom.css'
 hls refresh > $SIM_DIR/s39b.out 2>&1
@@ -799,9 +803,19 @@ ok "S39 it keeps this machine's own title and own css rule" 'grep -q "title: My 
 ok "S39 the old files were saved first" '[ -f $HP39/settings.yaml.before-tabs ] && ! grep -q "^layout:" $HP39/settings.yaml.before-tabs && [ -f $HP39/custom.css.before-tabs ] && ! grep -q "homelab tabs" $HP39/custom.css.before-tabs'
 ok "S39 custom.js is back, and the bookmark card styles are in custom.css" 'grep -q "homelab groups >>>" $HP39/custom.js && grep -q "bookmark > a::before" $HP39/custom.css'
 ok "S39 it says to reload the dashboard" 'grep -q "Ctrl+Shift+R" $SIM_DIR/s39b.out'
+ok "S39 refresh adds the STATS cards at the end of services.yaml and the five groups to the STATS tab" 'grep -q "homelab stats >>>" $HP39/services.yaml && grep -q "id: immich-card" $HP39/services.yaml && python3 - <<PY
+import re,os
+t=open(os.environ["HP39"]+"/settings.yaml").read()
+for g,c in (("At a glance",4),("Library totals",2),("Storage",2),("Backup & updates",2),("Folder sizes",1)):
+    assert re.search(r"(?m)^  %s:\n    tab: STATS\n    icon: mdi-[a-z-]+\n    style: row\n    columns: %d\n" % (re.escape(g),c), t), (g, t)
+assert "tab: HOME\n    icon: mdi-apps" not in t.split("At a glance:")[1].split("Folder sizes:")[0]
+PY'
+ok "S39 the old services.yaml was saved without the STATS cards" '[ -f $HP39/services.yaml.before-tabs ] && ! grep -q "homelab stats" $HP39/services.yaml.before-tabs && grep -q "id: immich-card" $HP39/services.yaml.before-tabs'
+ok "S39 it tells how to fill the STATS tab in now" 'grep -q "sudo homelab-stats" $SIM_DIR/s39b.out'
 cp $HP39/settings.yaml $SIM_DIR/s39.keep
+cp $HP39/services.yaml $SIM_DIR/s39svc.keep
 hls refresh > $SIM_DIR/s39c.out 2>&1
-ok "S39 a second refresh changes nothing" 'cmp -s $HP39/settings.yaml $SIM_DIR/s39.keep && ! grep -q "Ctrl+Shift+R" $SIM_DIR/s39c.out'
+ok "S39 a second refresh changes nothing" 'cmp -s $HP39/settings.yaml $SIM_DIR/s39.keep && cmp -s $HP39/services.yaml $SIM_DIR/s39svc.keep && ! grep -q "Ctrl+Shift+R" $SIM_DIR/s39c.out'
 printf '\n- Others:\n    - Indeed:\n        - abbr: IN\n          href: https://www.indeed.com/\n' >> $HP39/bookmarks.yaml
 hls refresh > $SIM_DIR/s39f.out 2>&1
 ok "S39 a bookmark group of this machine that no tab knew is put on LINKS (so it does not show on every tab)" 'python3 - <<PY
@@ -829,6 +843,14 @@ hls refresh > $SIM_DIR/s39d.out 2>&1
 ok "S39 taking the layout out is respected (it is not put back)" '! grep -q "^layout:" $HP39/settings.yaml'
 hls refresh --dry-run > $SIM_DIR/s39e.out 2>&1
 ok "S39 a dry run changes no file" '! grep -q "^layout:" $HP39/settings.yaml'
+python3 - <<PY
+import os
+hp=os.environ["HP39"]
+v=open(hp+"/services.yaml").read()
+open(hp+"/services.yaml","w").write(v[:v.index("# >>> homelab stats >>>")].rstrip("\n")+"\n")
+PY
+hls refresh > $SIM_DIR/s39h.out 2>&1
+ok "S39 taking the STATS cards out is respected (they are not put back)" '! grep -q "homelab stats" $HP39/services.yaml'
 fi
 
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
