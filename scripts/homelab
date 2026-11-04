@@ -1270,6 +1270,14 @@ updates_line() {
     names=$(tail -n +2 "$STATE_DIR/image-updates" | awk 'NF {printf "%s%s", (c++ ? ", " : ""), $1}')
     img_n=$(tail -n +2 "$STATE_DIR/image-updates" | awk 'NF' | wc -l)
   fi
+  # the saved count is from the last reading (up to 6 hours ago). When apt ran since then (an upgrade, or an apt update that
+  # found new lists) it is out of date, so count again now: a simulation that changes nothing and needs no sudo.
+  if [[ "$n" =~ ^[0-9]+$ && "$ep" =~ ^[0-9]+$ ]] && [ "$JUST_BOOTED" != 1 ] && command -v apt-get >/dev/null 2>&1; then
+    local m1 m2
+    m1=$(stat -c %Y "${HOMELAB_DPKG_STATUS:-/var/lib/dpkg/status}" 2>/dev/null || echo 0)
+    m2=$(stat -c %Y "${HOMELAB_APT_LISTS:-/var/lib/apt/lists}" 2>/dev/null || echo 0)
+    if [ "$m1" -gt "$ep" ] || [ "$m2" -gt "$ep" ]; then n=$(timeout 8 apt-get -s upgrade 2>/dev/null | grep -c '^Inst ' || true); fi
+  fi
   [[ "$n" =~ ^[0-9]+$ ]] || n=""
   [ -n "$n" ] || [ -r "$STATE_DIR/image-updates" ] || return 0
   if [ -n "$n" ]; then
