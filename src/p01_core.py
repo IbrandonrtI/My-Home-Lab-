@@ -10,7 +10,7 @@
 #   sudo homelab-setup secrets         show the generated passwords (once, then keep them in a password manager)
 #   homelab-setup progress | version | help
 #
-# It never formats or changes a drive. It never stores the password you type.
+# It never formats or erases a drive (the one exception: it can grow an LVM system volume into unused space, after asking). It never stores the password you type.
 # Python 3 standard library only.
 
 import atexit

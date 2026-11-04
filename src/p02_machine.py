@@ -371,6 +371,34 @@ def pretty_size(nbytes):
     return "%d MB" % round(nbytes / 1e6)
 
 
+LVM_MIN_FREE = 20 * 1024 ** 3     # less unused space than this is not worth a question
+
+
+def root_lvm_info():
+    """When / is a logical volume (LVM) on a file system lvextend can grow: {"src", "size", "free"} in bytes, where free is the
+    unused space of its volume group. None for everything else (a plain partition, no LVM tools, an unreadable answer)."""
+    if not (have("lvs") and have("lvextend")):
+        return None
+    rc, text = run(["findmnt", "-no", "SOURCE,FSTYPE", "/"], timeout=10)
+    parts = text.split()
+    if rc != 0 or not parts or not parts[0].startswith("/dev/"):
+        return None
+    src, fstype = parts[0], (parts[1] if len(parts) > 1 else "")
+    if fstype and fstype not in ("ext2", "ext3", "ext4", "xfs"):
+        return None
+    rc, text = run(["lvs", "--noheadings", "--nosuffix", "--units", "b", "--separator", "|", "-o", "lv_size,vg_free", src], timeout=20)
+    if rc != 0:
+        return None
+    for line in text.splitlines():
+        f = [x.strip() for x in line.split("|")]
+        if len(f) == 2:
+            try:
+                return {"src": src, "size": int(float(f[0])), "free": int(float(f[1]))}
+            except ValueError:
+                return None
+    return None
+
+
 def clean_folder_name(text):
     """A name that is safe as a FileBrowser folder and inside a Docker volume line."""
     text = re.sub(r"[^\w .()+,-]", " ", text.replace("_", " "))
