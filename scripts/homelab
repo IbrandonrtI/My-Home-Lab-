@@ -10,14 +10,18 @@
 #                     server can confirm (values are never shown; sudo gives a fuller check)
 #   homelab version   the version of this command
 #
+#   Short forms (they run the real command with sudo and say which one):
+#   homelab backup | update | upgrade | setup | drives | cards | selftest   [options]
+#                     = sudo homelab-backup | homelab-update | homelab-setup upgrade | homelab-setup | drives | homelab-cards | homelab-selftest
+#
 #   homelab theme     change the Homepage dashboard's background, and the colour of all cards or of one card (homelab theme shows how)
 #   homelab bookmark  add, list, move or remove bookmarks, by category; logos come from Brandfetch as SVG files
 #
-# Apart from theme and bookmark (which edit the Homepage files in your own home folder), it only reads
-# information. It never needs sudo.
+# Apart from theme and bookmark (which edit the Homepage files in your own home folder) and the short
+# forms above (which ask sudo for the real command), it only reads information and never needs sudo.
 # ~/.bashrc runs it when a terminal opens (the installer adds that line; see docs/build-guide.md).
 
-VERSION="2.0"
+VERSION="2.1"
 MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
 BACKUP_POOL="${HOMELAB_BACKUP_POOL:-/mnt/backup}"
 LAST_RUN_FILE="${HOMELAB_LAST_RUN_FILE:-/var/lib/homelab-backup/last-run}"
@@ -199,45 +203,53 @@ hint_line() {
 
 commands() {
   # keep every description short: a section prints as a table only if its longest line fits the window (about 100 columns)
-  section "Every day"
+  # each section is in alphabetical order (not counting "sudo")
+  section "Start here"
   cmd "docker ps"                      "what is running right now, and how healthy it is"
   cmd "sudo drives status"             "pools, drives, SMART health, free space, last backup"
   cmd "homelab"                        "this machine at a glance: status and what to do next"
   cmd "sudo homelab-backup"            "run the backup now (about a minute, longer after many new files)"
-  cmd "sudo homelab-selftest"          "check everything for problems or leftovers (report saved in ~)"
+  cmd "sudo homelab-setup upgrade"     "update the lab: new files from GitHub, new scripts here"
   cmd "sudo homelab-update check"      "look online for newer container images (changes nothing)"
-  section "Storage and drives"
+  section "Which check do I run?"
+  cmd "sudo drives check"              "scan the pool drives for file system errors (changes nothing)"
+  cmd "sudo drives health"             "SMART health, temperature and wear of every drive"
+  cmd "homelab status"                 "a quick look at everything (the login screen, live)"
+  cmd "homelab-check ~/My-Home-Lab-"   "the repository files only, before an upload (not the server)"
+  cmd "sudo homelab-selftest"          "the big check of the whole lab (report saved in ~)"
+  cmd "sudo homelab-setup verify"      "does every container and service answer?"
+  section "Drives: the main ones"
   cmd "df -h /"                        "free space on the boot drive (the one the system runs from)"
-  cmd "sudo drives"                    "menu: connect, remove or move drives, boot drive section, more"
+  cmd "sudo drives"                    "menu: look at, connect, remove or fix drives"
+  cmd "sudo drives connect"            "add a new drive to the main or backup storage (asks before erasing)"
+  cmd "sudo drives disconnect"         "take a drive out of a storage, copying its files to the others first"
+  cmd "sudo drives list"               "one line per drive: name, size, pool, state"
+  cmd "sudo drives recover"            "after an unplug or power cut: remount, restart containers"
+  cmd "sudo drives replace"            "a drive died: swap it, restore the files from the backup"
+  cmd "sudo drives usage"              "space used and free, per drive and per pool"
+  cmd "sudo drives wizard"             "suggest a ready-made setup (drives with files too)"
+  cmd "findmnt /mnt/storage"           "is the main pool connected? (prints nothing if not)"
+  section "More drive commands"
   cmd "sudo drives adopt"              "turn the old single data drive into a pool"
   cmd "sudo drives balance"            "even out the files over one storage's drives (shows the plan)"
   cmd "sudo drives bootsection"        "use part of the boot drive for a pool (size limit, used last)"
   cmd "sudo drives cache"              "add an SSD read cache to a ZFS array"
-  cmd "sudo drives check"              "quick check of every pool drive for errors (changes nothing)"
-  cmd "sudo drives connect"            "add a new drive to the main or backup storage (asks before erasing)"
-  cmd "sudo drives disconnect"         "take a drive out of a storage, copying its files to the others first"
   cmd "sudo drives eject"              "get a spare drive ready to unplug"
   cmd "sudo drives fillorder"          "how new files pick a drive (one by one or spread), and the order"
-  cmd "sudo drives health"             "SMART health, temperature and wear of every drive"
+  cmd "sudo drives help"               "every drive command with its options (sudo drives help NAME)"
   cmd "sudo drives limit"              "how much free space a drive keeps before the next is used"
-  cmd "sudo drives list"               "one line per drive: name, size, pool, state"
   cmd "sudo drives move"               "move a drive between the main and the backup storage"
   cmd "sudo drives power"              "re-apply the drive power settings"
   cmd "sudo drives preset"             "ready-made setups on empty drives: pool, SnapRAID, ZFS, RAID"
   cmd "sudo drives release"            "take all drives out of the pools (files stay on the drives)"
   cmd "sudo drives rename"             "give a pool drive a name of your own"
-  cmd "sudo drives replace"            "a drive died: swap it, restore the files from the backup"
   cmd "sudo drives resize"             "change the size of a boot drive section"
   cmd "sudo drives restore"            "copy back only the files that are missing from the backup"
   cmd "sudo drives sleep"              "spin a drive down now (sudo drives wake wakes it)"
   cmd "sudo drives snapraid"           "SnapRAID by hand: status, diff, sync or scrub"
   cmd "sudo drives spare"              "add a hot spare drive to a ZFS or RAID array"
   cmd "sudo drives timeshift"          "stop Timeshift copying the boot drive sections"
-  cmd "sudo drives usage"              "space used and free, per drive and per pool"
   cmd "sudo drives wipe"               "erase a spare drive that is not in a pool"
-  cmd "sudo drives wizard"             "suggest a ready-made setup (drives with files too)"
-  cmd "findmnt /mnt/storage"           "is the main pool connected? (prints nothing if not)"
-  cmd "sudo hdd-recover"               "after an unplug or power cut: remount, restart containers"
   section "Backup"
   cmd "sudo homelab-restore-configs check" "after a rebuild: preview restoring saved settings"
   cmd "sudo tail -f /var/log/homelab-backup.log" "watch a backup while it runs (Ctrl+C to leave)"
@@ -281,12 +293,21 @@ commands() {
   fi
   section "Rebuild and safety"
   cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
-  cmd "homelab-check ~/My-Home-Lab-"   "look for mistakes in the repository files before upload"
   section "This screen and the guides"
-  cmd "sudo homelab-setup upgrade"     "update the lab: new files from GitHub, new scripts here"
   cmd "homelab commands"               "this list"
   cmd "homelab docs"                   "sections of the README and the guides in docs/"
   cmd "homelab status"                 "only the status block"
+  section "Short forms"
+  cmd "homelab backup"                 "the same as: sudo homelab-backup (also update, cards, selftest)"
+  cmd "homelab drives"                 "the same as: sudo drives (add a command: homelab drives health)"
+  cmd "homelab upgrade"                "the same as: sudo homelab-setup upgrade"
+  section "Words used here"
+  cmd "Backup / Main"                  "Main holds your files; Backup holds the nightly copy of them"
+  cmd "boot drive"                     "the drive the system itself runs from"
+  cmd "container"                      "an app running in Docker; a stack is a group of them"
+  cmd "mirror, SnapRAID, ZFS, RAID"    "ways to keep your files if a drive dies (sudo drives wizard)"
+  cmd "pool"                           "several drives shown as one folder (Main: /mnt/storage)"
+  cmd "SMART"                          "a drive's own health report: temperature, bad sectors, wear"
   flush_cmds
 }
 
@@ -1607,16 +1628,29 @@ login_screen() {
   fi
 }
 
+forward() {   # short forms: "homelab backup" runs "sudo homelab-backup" (it says so, so the real name is learned)
+  local word="$1"; shift
+  local -a real
+  case "$word" in
+    backup)          real=(homelab-backup) ;;
+    update)          real=(homelab-update) ;;
+    upgrade)         real=(homelab-setup upgrade) ;;
+    setup)           real=(homelab-setup) ;;
+    drives|drive)    real=(drives) ;;
+    cards)           real=(homelab-cards) ;;
+    selftest)        real=(homelab-selftest) ;;
+  esac
+  printf '  %sRunning:  sudo %s%s\n' "$D" "${real[*]}${*:+ $*}" "$N" >&2
+  if [ "$(id -u)" = 0 ]; then exec "${real[@]}" "$@"; fi
+  exec sudo "${real[@]}" "$@"
+}
+
 did_you_mean() {   # a word that is not a homelab option: point to the command the person most likely meant
   local w="${1:-}" c="" why=""
   case "$w" in
-    backup|backups)                    c="sudo homelab-backup";                why="run the backup now" ;;
-    update|updates|upgrade-images)     c="sudo homelab-update";                why="check for newer container versions and update them (the lab's own files: sudo homelab-setup upgrade)" ;;
-    upgrade|pull|install)              c="sudo homelab-setup upgrade";         why="download the newest lab files from GitHub and put them on this server" ;;
-    drives|drive|disk|disks|storage|pool|pools) c="sudo drives";               why="the drive menu: look at, connect, remove or fix drives" ;;
-    cards|card|services)               c="sudo homelab-cards";                 why="give new services their dashboard cards" ;;
-    setup)                             c="sudo homelab-setup";                 why="the setup checklist" ;;
-    selftest|test|check|health|verify) c="sudo homelab-selftest";              why="check everything for problems (drive health: sudo drives health)" ;;
+    disk|disks|storage|pool|pools)     c="homelab drives";                     why="the drive menu: look at, connect, remove or fix drives" ;;
+    pull|install)                      c="homelab upgrade";                    why="download the newest lab files from GitHub and put them on this server" ;;
+    check|test|health|verify)          c="sudo homelab-selftest";              why="the big check of the whole lab. Which check fits? see: homelab commands" ;;
     restore)                           c="sudo homelab-restore-configs check"; why="preview restoring the saved settings after a rebuild" ;;
     recover|remount|mount)             c="sudo drives recover";                why="after an unplug or power cut: remount the drives and start the containers" ;;
     logs|log)                          c="docker logs --tail 50 NAME";         why="the last lines a container printed" ;;
@@ -1628,6 +1662,7 @@ did_you_mean() {   # a word that is not a homelab option: point to the command t
 }
 
 case "${1:-}" in
+  backup|update|upgrade|setup|drives|drive|cards|selftest) forward "$@" ;;
   theme)  homepage_edit theme "${@:2}" ;;
   bookmark|bookmarks) homepage_edit bookmark "${@:2}" ;;
   docs)   show_docs ;;
