@@ -222,6 +222,8 @@ class HomepageTabs(Step):
                 svc = services_calendar_block(svc, shipped_svc)
         sett = layout_renamed(sett)
         sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
+        if re.search(r"(?m)^layout:", sett):
+            sett, seen = layout_storage_wide(sett, seen)
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))
         return sett, new_css, seen, new_js, svc
