@@ -13,6 +13,7 @@ services:
     image: ghcr.io/gethomepage/homepage:v2.6.0
     container_name: homepage
     restart: unless-stopped
+    init: true   # a tiny init program inside the container collects finished child programs, so no "zombie" processes pile up
     ports:
       - 3001:3000
     environment:
