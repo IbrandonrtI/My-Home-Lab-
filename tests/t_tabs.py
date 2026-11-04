@@ -105,6 +105,26 @@ rs, _ = m.layout_complete(base, ["Network & DNS", "At a Glance", "Folder Sizes"]
 check("the STATS groups go on the STATS tab with their icon and columns",
       "  At a Glance:\n    tab: Stats\n    icon: mdi-view-dashboard\n    style: row\n    columns: 4" in rs
       and "  Folder Sizes:\n    tab: Stats\n    icon: mdi-folder-multiple\n    style: row\n    columns: 1" in rs and "tab: Home" in rs, rs)
+# a later STATS group (Music Library) goes right under At a Glance, not at the end
+lay = "title: X\nlayout:\n  Network & DNS:\n    tab: Home\n  At a Glance:\n    tab: Stats\n    style: row\n    columns: 4\n  Library Totals:\n    tab: Stats\n  Folder Sizes:\n    tab: Stats\nhideVersion: true\n"
+rm, sm = m.layout_complete(lay, ["Network & DNS", "At a Glance", "Music Library", "Library Totals", "Folder Sizes"], [], ["At a Glance", "Library Totals", "Folder Sizes", "Network & DNS"])
+check("Music Library is put right under At a Glance, with its icon and one column",
+      "    columns: 4\n  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 1\n  Library Totals:" in rm and rm.endswith("hideVersion: true\n"), rm)
+rm2, _ = m.layout_complete(rm, ["Network & DNS", "At a Glance", "Music Library", "Library Totals", "Folder Sizes"], [], sm)
+check("and only once", rm2 == rm and rm.count("Music Library:") == 1)
+rm3, _ = m.layout_complete(lay.replace("  At a Glance:\n    tab: Stats\n    style: row\n    columns: 4\n", ""), ["Music Library"], [], ["Network & DNS", "Library Totals", "Folder Sizes"])
+check("without At a Glance in the layout it goes to the end of the layout", rm3.index("Music Library:") > rm3.index("Folder Sizes:") and rm3.endswith("hideVersion: true\n"), rm3)
+# the Storage row holds three cards: columns 2 -> 3, once
+st = "title: X\nlayout:\n  Storage:\n    tab: Stats\n    icon: mdi-harddisk\n    style: row\n    columns: 2\n  Folder Sizes:\n    tab: Stats\n    columns: 2\n"
+sw, sws = m.layout_storage_wide(st, ["Storage"])
+check("the Storage row gets three columns, the other groups keep theirs", "  Storage:\n    tab: Stats\n    icon: mdi-harddisk\n    style: row\n    columns: 3\n  Folder Sizes:\n    tab: Stats\n    columns: 2" in sw and m.STORAGE_WIDE in sws, sw)
+sw2, sws2 = m.layout_storage_wide(sw.replace("columns: 3", "columns: 2"), sws)
+check("it is done once: a later change by the owner stays", "columns: 2\n  Folder Sizes" in sw2 and sws2 == sws)
+check("a layout without a Storage group is left alone", m.layout_storage_wide("title: X\nlayout:\n  A:\n    tab: Home\n", [])[0] == "title: X\nlayout:\n  A:\n    tab: Home\n")
+check("the shipped layout has Music Library under At a Glance and three columns for Storage",
+      "columns: 4\n  Music Library:" in rd("settings.yaml") and re.search(r"  Storage:\n(?:    .*\n)*?    columns: 3", rd("settings.yaml")) is not None)
+check("the calendar card is no longer called Calendar like its group", "- Calendar:\n\n    - This Month:\n        id: cal-month" in rd("services.yaml"))
+check("the stats css has the music and temperature colours and room between the rows", "#stat-music" in C and "#stat-temps" in C and ".services-group:has(" in C)
 rs2, _ = m.layout_complete(rs, ["Network & DNS", "At a Glance", "Folder Sizes"], ["Productivity"], _)
 check("and only once", rs2 == rs)
 oldl = "title: X\nlayout:\n  Network & DNS:\n    tab: HOME\n    icon: mdi-lan\n  Productivity:\n    tab: LINKS\n  At a glance:\n    tab: STATS\n    icon: mdi-my-own\n    style: row\n    columns: 4\n  Folder sizes:\n    tab: STATS\nhideVersion: true\n"
@@ -131,7 +151,7 @@ check("an older block is replaced and what follows it is kept", "- Old:" not in 
 check("no shipped block: the file is left alone", m.services_stats_block(OLDV, "") == OLDV)
 check("the STATS cards use the address placeholder of the other cards", "http://192.168.X.X:3001/images/stats.json" in V)
 ids = re.findall(r"(?m)^        id: (stat-[\w-]+)$", V)
-check("every STATS card has an id that starts with stat-", len(ids) == 11 and len(set(ids)) == 11, str(ids))
+check("every STATS card has an id that starts with stat-", len(ids) == 13 and len(set(ids)) == 13, str(ids))
 check("every STATS card has its colour in the css", all(re.search(r"#%s\b[^{]*\{[^}]*--accent" % i, C) for i in ids if i not in ("stat-folders",)) and "#stat-folders" in C)
 check("the icons of the groups and cards get a light colour, inside the managed block",
       "--icon-color" in C and ".service-group-icon > div" in C and ".bookmark-group-icon > div" in C and ".service-icon > div" in C

@@ -807,7 +807,7 @@ ok "S39 it says to reload the dashboard" 'grep -q "Ctrl+Shift+R" $SIM_DIR/s39b.o
 ok "S39 refresh adds the STATS cards at the end of services.yaml and the five groups to the STATS tab" 'grep -q "homelab stats >>>" $HP39/services.yaml && grep -q "id: immich-card" $HP39/services.yaml && python3 - <<PY
 import re,os
 t=open(os.environ["HP39"]+"/settings.yaml").read()
-for g,c in (("At a Glance",4),("Library Totals",2),("Storage",2),("Backup & Updates",2),("Folder Sizes",1)):
+for g,c in (("At a Glance",4),("Music Library",1),("Library Totals",2),("Storage",3),("Backup & Updates",2),("Folder Sizes",1)):
     assert re.search(r"(?m)^  %s:\n    tab: Stats\n    icon: mdi-[a-z-]+\n    style: row\n    columns: %d\n" % (re.escape(g),c), t), (g, t)
 assert "tab: Home\n    icon: mdi-apps" not in t.split("At a Glance:")[1].split("Folder Sizes:")[0]
 PY'
@@ -854,6 +854,29 @@ open(hp+"/services.yaml","w").write(v)
 PY
 hls refresh > $SIM_DIR/s39i.out 2>&1
 ok "S39 a machine with the earlier capital tab names and group names is renamed in place (Home, Links, Stats, At a Glance ...)" '! grep -q "tab: HOME\|tab: LINKS\|tab: STATS\|At a glance\|Folder sizes" $HP39/settings.yaml && grep -q "tab: Home" $HP39/settings.yaml && grep -q "tab: Links" $HP39/settings.yaml && grep -q "^  At a Glance:" $HP39/settings.yaml && [ "$(grep -c "^  Folder Sizes:" $HP39/settings.yaml)" = 1 ] && grep -q "^- At a Glance:" $HP39/services.yaml && ! grep -q "^- At a glance:" $HP39/services.yaml'
+# a machine from the time before the Music Library and the drive temperatures: Storage had two columns, there was no Music Library entry
+python3 - <<PY
+import os,re,json
+hp=os.environ["HP39"]
+t=open(hp+"/settings.yaml").read()
+t=t.replace("  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 1\n","")
+t=re.sub(r"(  Storage:\n(?:    .*\n)*?    columns: )3", r"\g<1>2", t)
+open(hp+"/settings.yaml","w").write(t)
+sf=os.environ["HLS_ROOT"]+"/var/lib/homelab-setup/state.json"
+st=json.load(open(sf))
+st["layout_seen"]=[g for g in st.get("layout_seen",[]) if g!="Music Library" and not g.startswith("~")]
+json.dump(st,open(sf,"w"))
+PY
+hls refresh > $SIM_DIR/s39m.out 2>&1
+ok "S39 a machine from before the Music Library gets it right under At a Glance, and the Storage row gets three columns" 'python3 - <<PY
+import re,os
+t=open(os.environ["HP39"]+"/settings.yaml").read()
+assert re.search(r"(?m)^  At a Glance:\n(?:    .*\n)+  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 1\n  Library Totals:", t), t
+assert re.search(r"(?m)^  Storage:\n(?:    .*\n)*?    columns: 3\n", t), t
+PY'
+cp $HP39/settings.yaml $SIM_DIR/s39mk.keep
+hls refresh > $SIM_DIR/s39n.out 2>&1
+ok "S39 and a later refresh changes nothing more" 'cmp -s $HP39/settings.yaml $SIM_DIR/s39mk.keep'
 cp $HP39/settings.yaml $SIM_DIR/s39.keep
 python3 - <<PY
 import os
