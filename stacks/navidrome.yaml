@@ -5,6 +5,9 @@
 #          The music folder is mounted read-only, so Navidrome can never change or delete a song.
 #          The installer replaces the music folder below with the real one (the folder Downtify saves into).
 # First login: the installer creates the login (your admin name and the shared admin password).
+# Look:    the Spotify-ish theme is the default for a browser that has not chosen one (each person can still pick another in Navidrome's settings).
+# Frame:   the frame header is relaxed so the dashboard can show the player in a card (see the Navidrome Player card of the dashboard).
+#          Navidrome is only on your own network (and your Tailscale), so this is safe. To undo it, set it back to DENY and delete the player card.
 services:
   navidrome:
     image: ghcr.io/navidrome/navidrome:0.61.0
@@ -17,6 +20,8 @@ services:
       ND_SCANSCHEDULE: 1h
       ND_LOGLEVEL: info
       ND_SESSIONTIMEOUT: 24h
+      ND_DEFAULTTHEME: "Spotify-ish"
+      ND_HTTPHEADERS_FRAMEOPTIONS: "ALLOWALL"
     volumes:
       - /home/your-username/navidrome:/data
       - /mnt/storage/music:/music:ro
