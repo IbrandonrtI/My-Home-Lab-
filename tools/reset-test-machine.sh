@@ -106,19 +106,19 @@ fi
 step "5. Passwords, settings, records and logs of the installer"
 rm_ /root/.homelab-setup /var/lib/homelab-setup /var/lib/homelab /var/lib/homelab-drives /var/lib/homelab-backup /var/lib/homelab-boot-sections \
     /etc/homelab-backup.conf /etc/homelab-drive-names /var/log/homelab-setup.log /var/log/homelab-drives.log /var/lock/homelab-drives.lock \
-    /var/log/homelab-backup.log /var/log/homelab-update.log /var/log/homelab-snapraid.log
+    /var/log/homelab-backup.log /var/log/homelab-update.log /var/log/homelab-snapraid.log /var/log/homelab-cards.log /var/lock/homelab-cards.lock
 
 step "6. The homelab commands"
-for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-selftest homelab-setup; do rm_ "/usr/local/sbin/$f"; done
+for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-selftest homelab-cards homelab-setup; do rm_ "/usr/local/sbin/$f"; done
 for f in hdd-recover homelab homelab-check; do rm_ "/usr/local/bin/$f"; done
 
 step "7. The schedule (root's crontab) and the login screen"
 if crontab -l >/dev/null 2>&1; then
   if [ "$DRY" = 1 ]; then
     say "   would remove these lines from root's crontab:"
-    crontab -l | grep -E 'homelab-(sample|update|backup|setup)|drives power' | sed 's/^/     /'
+    crontab -l | grep -E 'homelab-(sample|update|backup|setup|cards)|drives power' | sed 's/^/     /'
   else
-    crontab -l | grep -vE 'homelab-(sample|update|backup|setup)|drives power' | crontab - 2>/dev/null || true
+    crontab -l | grep -vE 'homelab-(sample|update|backup|setup|cards)|drives power' | crontab - 2>/dev/null || true
     say "   removed the lab's lines from root's crontab"
   fi
 fi
