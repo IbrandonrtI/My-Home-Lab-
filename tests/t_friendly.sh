@@ -38,10 +38,11 @@ hasnt "an unknown word does not invent a suggestion" "$($H banana 2>&1)" "Did yo
 
 # the login screen
 printf '1|56|\n' >"$T/st/setup-progress"; printf '26|%s\n' "$(date +%s)" >"$T/st/apt"
-printf '%s\n' '#!/bin/sh' 'case "$1" in serve) printf "https://lab.example.ts.net:1004 (tailnet only)\n|-- / proxy http://192.168.1.50:3000\n" ;; esac' >"$T/bin/tailscale"; chmod +x "$T/bin/tailscale"
+printf '%s\n' '#!/bin/sh' 'case "$1" in serve) printf "https://lab.example.ts.net:1004 (tailnet only)\n|-- / proxy http://192.168.1.50:3001\n" ;; esac' >"$T/bin/tailscale"; chmod +x "$T/bin/tailscale"
 SCREEN=$(PATH="$T/bin:$PATH" HOMELAB_CACHE_DIR="$T/cache" $H 2>&1)
 has "the screen has an Open in your browser block" "$SCREEN" "Open in your browser"
-has "it shows the dashboard address at home" "$SCREEN" "http://192.168.1.50:3000"
+has "it shows the dashboard address at home" "$SCREEN" "http://192.168.1.50:3001"
+hasnt "it does not show AdGuard Home's port as the dashboard" "$SCREEN" ":3000"
 has "it shows the Tailscale address when there is one" "$SCREEN" "https://lab.example.ts.net:1004"
 has "it says what the Tailscale address needs" "$SCREEN" "needs the Tailscale app"
 has "an unfinished setup is explained as the reason for warnings" "$SCREEN" "Some warnings below are normal until it is"
@@ -49,6 +50,11 @@ has "the next step is named" "$SCREEN" "sudo homelab-setup"
 has "system updates say how to install them" "$SCREEN" "sudo apt upgrade"
 has "a missing backup says how to run it" "$SCREEN" "sudo homelab-backup"
 has "an unconnected backup pool says how to connect one" "$SCREEN" "sudo drives connect"
+printf '#!/bin/sh\n[ "$1" = port ] && echo "0.0.0.0:3009" && exit 0\nexit 1\n' >"$T/bin/docker"; chmod +x "$T/bin/docker"
+SCREEN5=$(PATH="$T/bin:$PATH" HOMELAB_CACHE_DIR="$T/cache5" $H 2>&1)
+has "the dashboard port is read from Docker when it can be" "$SCREEN5" "http://192.168.1.50:3009"
+hasnt "no Tailscale address is guessed for another port" "$SCREEN5" "ts.net:1004"
+rm -f "$T/bin/docker"
 SCREEN2=$(PATH="$T/bin:$PATH" $H status 2>&1)
 hasnt "homelab status alone has no browser block" "$SCREEN2" "Open in your browser"
 rm -rf "$T/hp"
