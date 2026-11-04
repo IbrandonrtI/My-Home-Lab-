@@ -75,6 +75,7 @@ CRON_LINES = [
     ("homelab-sample", "*/15 * * * * /usr/local/sbin/homelab-sample >/dev/null 2>&1"),
     ("homelab-stats", "5,20,35,50 * * * * /usr/local/sbin/homelab-stats >/dev/null 2>&1"),
     ("homelab-calendar build", "30 3 * * 1 /usr/local/bin/homelab-calendar build >/dev/null 2>&1"),
+    ("homelab-calendar sync", "40 4 * * * /usr/local/bin/homelab-calendar sync >/dev/null 2>&1"),
     ("homelab-update", "17 * * * * /usr/local/sbin/homelab-update auto >/dev/null 2>&1"),
     ("homelab-cards", "*/5 * * * * /usr/local/sbin/homelab-cards auto >/dev/null 2>&1"),
     ("drives power", "@reboot sleep 60 && /usr/local/sbin/drives power >/dev/null 2>&1"),

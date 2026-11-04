@@ -224,6 +224,8 @@ class HomepageTabs(Step):
         sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
         if re.search(r"(?m)^layout:", sett):
             sett, seen = layout_storage_wide(sett, seen)
+            sett, seen = layout_music_wide(sett, seen)
+        sett, seen = settings_quicklaunch(sett, seen)
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))
         return sett, new_css, seen, new_js, svc
@@ -278,6 +280,129 @@ class HomepageTabs(Step):
             out("      The Stats tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
         if CAL_BEGIN in svc:
             out("      The Calendar is at the bottom of the Home tab. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
+
+
+def fetch_picture(addr):
+    """The bytes of a picture from the web (None when it cannot be had or is not a picture). FAKE mode: the file named in HLS_FAKE_BG_FILE."""
+    if FAKE:
+        f = os.environ.get("HLS_FAKE_BG_FILE", "")
+        data = open(f, "rb").read() if f and os.path.isfile(f) else None
+    else:
+        try:
+            req = urllib.request.Request(addr, headers={"User-Agent": "homelab-setup"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = r.read(30 * 1024 * 1024)
+        except (urllib.error.URLError, OSError, ValueError):
+            return None
+    return data if data and (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")) else None
+
+
+@step
+class HomepageBackground(Step):
+    id, group, title = "homepage-background", "Homepage", "The dashboard's background picture is saved on this server (loads fast, works offline)"
+    needs = ("homepage-tabs",)
+
+    def applies(self):
+        return not Mode.existing and os.path.exists(hp_path("settings.yaml"))
+
+    def probe(self):
+        cur = background_image(read_file(hp_path("settings.yaml")))
+        tried = time.time() - State.data.get("background_tried", 0) < 7 * 86400          # a failed attempt is repeated a week later, not on every run
+        return "done" if State.ran(self.id) or tried or not re.match(r"https?://", cur) else "todo"
+
+    def detail(self):
+        return background_image(read_file(hp_path("settings.yaml")))[:60]
+
+    def run(self):
+        sett = read_file(hp_path("settings.yaml"))
+        cur = background_image(sett)
+        if Opt.dry:
+            out("      would download the background picture into %s and use it from there" % hp_path("images"))
+            return
+        data = fetch_picture(cur)
+        if data is None:
+            warn("Could not download the background picture (%s). It stays as it is; an upgrade a week from now tries again." % cur[:70])
+            State.data["background_tried"] = int(time.time())
+            State.save()
+            return
+        ext = ".png" if data[:4] == b"\x89PNG" else ".webp" if data[:4] == b"RIFF" else ".jpg"
+        name = "background" + ext
+        os.makedirs(hp_path("images"), exist_ok=True)
+        path = hp_path("images/" + name)
+        with open(path, "wb") as f:
+            f.write(data)
+        os.chmod(path, 0o644)
+        chown(path, Ctx.uid, Ctx.gid)
+        if not os.path.exists(hp_path("settings.yaml") + ".before-background"):
+            write_file(hp_path("settings.yaml") + ".before-background", sett, 0o644, (Ctx.uid, Ctx.gid))
+        write_file(hp_path("settings.yaml"), settings_with_background(sett, "/images/" + name), 0o644, (Ctx.uid, Ctx.gid))
+        State.mark(self.id)
+        if not FAKE and "homepage" in containers_all():
+            act(["docker", "restart", "homepage"], timeout=120)       # Homepage only serves a new picture after a restart
+        out("      The background is now %s in the images folder (the old settings.yaml is kept as settings.yaml.before-background). "
+            "To use another picture later:  homelab theme background URL-or-FILE" % name)
+
+
+# ================================================================ Navidrome (plays the songs Downtify saved)
+class NavidromeStack(StackStep):
+    """Only on a machine that has a music folder (the folder Downtify saves into). A hand-built server is only looked at."""
+
+    def applies(self):
+        return not Mode.existing and bool(music_folder())
+
+    def detail(self):
+        return "music folder %s" % music_folder()
+
+    def run(self):
+        folder = Ctx.home + "/navidrome"
+        if not Opt.dry:
+            os.makedirs(P(folder), exist_ok=True)
+            chown(P(folder), Ctx.uid, Ctx.gid)
+        StackStep.run(self)
+
+
+register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome music server (plays the songs Downtify saved)"))
+
+
+@step
+class NavidromeCard(Step):
+    id, group = "navidrome-card", "Homepage"
+    title = "Navidrome login and its dashboard card with live numbers (songs, albums, artists)"
+    needs = ("stack-navidrome", "homepage-files")
+
+    def applies(self):
+        return BY_ID["stack-navidrome"].applies()
+
+    def probe(self):
+        return "done" if card_widget_type(read_file(hp_path("services.yaml")), "navidrome-card") == "navidrome" else "todo"
+
+    def run(self):
+        if Opt.dry:
+            out("      would create the Navidrome login (%s), then add its card and the live numbers to the dashboard" % Ctx.admin)
+            return
+        pw = need_password("to create the Navidrome login")
+        if not wait_for(lambda: http("GET", url("navidrome", "/"), raw=True, timeout=10)[0] == 200, "Navidrome to answer", 120):
+            raise Abort("Navidrome does not answer on port %d. Look at its log:  docker logs navidrome" % PORTS["navidrome"])
+        creds = {"username": Ctx.admin, "password": pw}
+        st, _, _ = http("POST", url("navidrome", "/auth/createAdmin"), body=creds, timeout=30)
+        if st != 200:                                    # 403: it has a login already. Is it ours?
+            st, _, _ = http("POST", url("navidrome", "/auth/login"), body=creds, timeout=30)
+            if st != 200:
+                warn("Navidrome already has a login that is not %s with the shared admin password, so the dashboard cannot show its numbers. "
+                     "Open it, add that user or change its password, then run:  sudo homelab-setup upgrade" % Ctx.admin)
+                return
+        if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
+            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)            # makes the card (and its Tailscale address) now
+        old = read_file(hp_path("services.yaml"))
+        new = services_with_widget(old, "navidrome-card", navidrome_widget(Ctx.lan or svc_host(), Ctx.admin, pw, rand_alnum(12)))
+        if new == old:
+            warn("The dashboard has no Navidrome card yet. homelab-cards makes it within 5 minutes; run `sudo homelab-setup upgrade` after that "
+                 "to add its live numbers.")
+            return
+        if not os.path.exists(hp_path("services.yaml") + ".before-navidrome"):
+            write_file(hp_path("services.yaml") + ".before-navidrome", old, 0o644, (Ctx.uid, Ctx.gid))
+        write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
+        out("      Navidrome is at %s. Log in as %s with the shared admin password; the dashboard card shows its numbers." % (url("navidrome"), Ctx.admin))
 
 
 def run_calendar_build():

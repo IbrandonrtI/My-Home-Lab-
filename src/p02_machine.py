@@ -750,9 +750,10 @@ def js_groups_block(live, shipped):
 
 STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"      # the block of STATS groups in the shipped services.yaml
 # The STATS groups: name -> (icon, columns). layout_complete puts them on the Stats tab (never on Home).
-STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 1), "Library Totals": ("mdi-image-multiple", 2),
+STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 2), "Library Totals": ("mdi-image-multiple", 2),
                 "Storage": ("mdi-harddisk", 3), "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
 STATS_AFTER = {"Music Library": "At a Glance"}          # a STATS group that is added later goes right under this one, not at the end
+MUSIC_WIDE = "~music-2-columns"                         # the same for the Music Library row (two cards)
 STORAGE_WIDE = "~storage-3-columns"                     # in the groups-seen list: the Storage row was widened to three cards (done once)
 # Names and tab names used before they were capitalised: layout_renamed() renames them in a layout: block that has them.
 OLD_NAMES = {"At a glance": "At a Glance", "Library totals": "Library Totals", "Backup & updates": "Backup & Updates", "Folder sizes": "Folder Sizes"}
@@ -802,6 +803,41 @@ def settings_with_layout(live, shipped):
             line = "%s: %s\n" % (key, val)
             out = out[:m.end()] + line + out[m.end():] if m else line + out
     return out
+
+
+QUICKLAUNCH_DONE = "~quicklaunch"                        # in the groups-seen list: Quick Launch was offered once
+QUICKLAUNCH_BLOCK = ("# Quick Launch: start typing anywhere on the page to jump to a card, search the web or open an address.\n"
+                     "quicklaunch:\n  searchDescriptions: true\n  hideInternetSearch: false\n  showSearchSuggestions: true\n  provider: google\n\n")
+
+
+def settings_quicklaunch(settings, seen):
+    """Quick Launch is added to settings.yaml once (a machine without a quicklaunch: setting). Taking it out later is respected.
+    Returns (settings, seen)."""
+    if QUICKLAUNCH_DONE in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {QUICKLAUNCH_DONE})
+    if re.search(r"(?m)^quicklaunch:", settings):
+        return settings, seen
+    m = re.search(r"(?m)^%s" % re.escape(LAYOUT_MARK), settings) or re.search(r"(?m)^layout:", settings)
+    if m:
+        return settings[:m.start()] + QUICKLAUNCH_BLOCK + settings[m.start():], seen
+    return settings.rstrip("\n") + "\n\n" + QUICKLAUNCH_BLOCK.rstrip("\n") + "\n", seen
+
+
+def background_image(settings):
+    """The picture of the background: block of settings.yaml (a web address or /images/name), or ''."""
+    m = re.search(r"(?m)^background:[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)*)", settings)
+    i = re.search(r"(?m)^[ \t]+image:[ \t]*(.*?)\s*$", m.group(1)) if m else None
+    return i.group(1).strip("'\"") if i else ""
+
+
+def settings_with_background(settings, value):
+    """settings.yaml with the picture of the background: block set to `value` (the block is not changed otherwise)."""
+    m = re.search(r"(?m)^background:[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)*)", settings)
+    if not m:
+        return settings
+    block = re.sub(r"(?m)^([ \t]+image:[ \t]*).*$", lambda x: x.group(1) + value, m.group(1), count=1)
+    return settings[:m.start(1)] + block + settings[m.end(1):]
 
 
 def group_names(text):
@@ -882,23 +918,33 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
     return "\n".join(lines), sorted(set(seen) | set(present))
 
 
-def layout_storage_wide(settings, seen):
-    """The Storage row holds three cards since the drive temperatures were added: `columns: 2` of that group becomes 3, once (a later
-    change by the owner is left alone). Returns (settings, seen)."""
-    if STORAGE_WIDE in seen:
+def layout_columns_changed(settings, seen, group, old, new, marker):
+    """`columns: old` of one group of the layout becomes `columns: new`, once (the marker is put in the groups-seen list, so a later change
+    by the owner is left alone). Returns (settings, seen)."""
+    if marker in seen:
         return settings, seen
-    seen = sorted(set(seen) | {STORAGE_WIDE})
+    seen = sorted(set(seen) | {marker})
     lines = settings.split("\n")
     for i, l in enumerate(lines):
-        if re.match(r"^  Storage:\s*$", l):
+        if re.match(r"^  %s:\s*$" % re.escape(group), l):
             for j in range(i + 1, len(lines)):
                 if lines[j] and not lines[j].startswith("    "):
                     break
-                if re.match(r"^    columns:\s*2\s*$", lines[j]):
-                    lines[j] = "    columns: 3"
+                if re.match(r"^    columns:\s*%d\s*$" % old, lines[j]):
+                    lines[j] = "    columns: %d" % new
                     break
             break
     return "\n".join(lines), seen
+
+
+def layout_storage_wide(settings, seen):
+    """The Storage row holds three cards since the drive temperatures were added: columns 2 becomes 3, once."""
+    return layout_columns_changed(settings, seen, "Storage", 2, 3, STORAGE_WIDE)
+
+
+def layout_music_wide(settings, seen):
+    """The Music Library row holds two cards since Recently Saved Songs was added: columns 1 becomes 2, once."""
+    return layout_columns_changed(settings, seen, "Music Library", 1, 2, MUSIC_WIDE)
 
 
 def stack_text(name):
@@ -913,10 +959,85 @@ def stack_text(name):
     if name == "speedtest-tracker":
         key = Secrets.get("APP_KEY")
         text = re.sub(r'(APP_KEY:\s*)"[^"]*"', lambda m: '%s"%s"' % (m.group(1), key), text)
+    if name == "navidrome":
+        text = text.replace("/mnt/storage/music:/music:ro", "%s:/music:ro" % (music_folder() or "/mnt/storage/music"))
+        text = text.replace('user: "1000:1000"', 'user: "%d:%d"' % (Ctx.uid, Ctx.gid))
     if name == "beszel-agent":
         text = re.sub(r"(\n\s*KEY:\s*)'[^']*'", lambda m: "%s'%s'" % (m.group(1), Secrets.get("BESZEL_KEY")), text)
         text = re.sub(r"(\n\s*TOKEN:\s*)\S+", lambda m: "%s%s" % (m.group(1), Secrets.get("BESZEL_TOKEN")), text)
     return text
+
+
+MUSIC_FOLDER_NAMES = ("music", "Music", "downtify", "Downtify", "Downtify/music", "downtify/music", "media/music", "Media/Music", "downloads/music")
+
+
+def music_folder():
+    """The folder with the songs Downtify saved, or '' (the same search as homelab-stats). In this order: HOMELAB_MUSIC_DIR, the line in
+    /var/lib/homelab/music-dir, the music folder of the Downtify container, a few usual names in the main pool."""
+    forced = os.environ.get("HOMELAB_MUSIC_DIR") or read_file(P("/var/lib/homelab/music-dir")).strip()
+    if forced:
+        return forced if os.path.isdir(P(forced)) else ""
+    rc, ps = run(["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}"], timeout=20)
+    for line in ps.splitlines():
+        f = line.split("|")
+        if rc == 0 and len(f) == 2 and "downtify" in line.lower():
+            rc2, mounts = run(["docker", "inspect", f[0], "--format", "{{range .Mounts}}{{.Destination}}|{{.Source}}{{println}}{{end}}"], timeout=10)
+            for m in mounts.splitlines():
+                d = m.split("|", 1)
+                if len(d) == 2 and re.search(r"music|download", d[0], re.I) and os.path.isdir(P(d[1])):
+                    return d[1]
+    for name in MUSIC_FOLDER_NAMES:
+        if os.path.isdir(P("/mnt/storage/" + name)):
+            return "/mnt/storage/" + name
+    return ""
+
+
+def card_range(lines, card_id):
+    """(start, end) of the card with this id in a services.yaml split into lines, or None."""
+    idx = next((i for i, l in enumerate(lines) if re.match(r"^\s*id:\s*%s\s*$" % re.escape(card_id), l)), None)
+    if idx is None:
+        return None
+    ind = len(lines[idx]) - len(lines[idx].lstrip())
+    start = idx
+    while start > 0 and not (re.match(r"^\s*- .+:\s*$", lines[start]) and len(lines[start]) - len(lines[start].lstrip()) < ind):
+        start -= 1
+    end = idx + 1
+    while end < len(lines) and (not lines[end].strip() or len(lines[end]) - len(lines[end].lstrip()) >= ind):
+        end += 1
+    while end > idx + 1 and not lines[end - 1].strip():
+        end -= 1
+    return start, end
+
+
+def card_widget_type(text, card_id):
+    """The widget type of a card of services.yaml ('' when the card has no widget, None when there is no such card)."""
+    lines = text.split("\n")
+    r = card_range(lines, card_id)
+    if not r:
+        return None
+    block = "\n".join(lines[r[0]:r[1]])
+    m = re.search(r"(?m)^\s+widget:\s*\n\s+type:\s*(\S+)", block)
+    return m.group(1) if m else ""
+
+
+def services_with_widget(text, card_id, widget_lines):
+    """services.yaml with a widget added to the card (at the end of the card). A card that has a widget already, or a file without that
+    card, is returned as it was."""
+    lines = text.split("\n")
+    r = card_range(lines, card_id)
+    if not r or any(re.match(r"^\s+widget:\s*$", l) for l in lines[r[0]:r[1]]):
+        return text
+    ind = len(lines[r[0] + 1]) - len(lines[r[0] + 1].lstrip()) if r[0] + 1 < len(lines) else 8
+    pad = " " * ind
+    new = [pad + "widget:"] + [pad + "  " + l for l in widget_lines]
+    lines[r[1]:r[1]] = new
+    return "\n".join(lines)
+
+
+def navidrome_widget(lan, user, password, salt):
+    """The lines of the Navidrome widget (the key is md5(password + salt), as the Subsonic protocol wants it)."""
+    token = hashlib.md5((password + salt).encode()).hexdigest()
+    return ["type: navidrome", "url: http://%s:%d" % (lan, PORTS["navidrome"]), "user: %s" % user, "token: %s" % token, "salt: %s" % salt]
 
 
 def stack_env(name):
