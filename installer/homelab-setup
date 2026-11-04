@@ -59,7 +59,7 @@ SECRET_DIR = P("/root/.homelab-setup")
 SECRET_FILE = SECRET_DIR + "/secrets.env"
 LOG_FILE = P("/var/log/homelab-setup.log")
 
-# ---------------------------------------------------------------- the nine stacks
+# ---------------------------------------------------------------- the nine stacks (and Navidrome, an optional tenth)
 # name -> (file in stacks/, containers that must run)
 STACKS = {
     "adguard": ("adguard.yaml", ["adguardhome"]),
@@ -71,13 +71,14 @@ STACKS = {
     "nextcloud": ("nextcloud.yaml", ["nextcloud", "nextcloud_db", "nextcloud_redis", "nextcloud_cron"]),
     "homepage": ("homepage.yaml", ["homepage"]),
     "beszel-agent": ("beszel-agent.yaml", ["beszel-agent"]),
+    "navidrome": ("navidrome.yaml", ["navidrome"]),        # optional: only on a machine with a music folder (see NavidromeStack)
 }
 STACK_ORDER = ["adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
                "immich", "nextcloud", "homepage", "beszel-agent"]
 
 # local port of each service, and the HTTPS port Tailscale Serve uses for it
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,
-         "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999}
+         "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999, "navidrome": 4533}
 SERVE = [(1000, "homepage"), (1001, "portainer"), (1002, "immich"), (1003, "beszel"), (1004, "adguard"),
          (1005, "nextcloud"), (1006, "filebrowser"), (1007, "speedtest"), (1008, "netdata")]
 
@@ -1561,9 +1562,10 @@ def js_groups_block(live, shipped):
 
 STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"      # the block of STATS groups in the shipped services.yaml
 # The STATS groups: name -> (icon, columns). layout_complete puts them on the Stats tab (never on Home).
-STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 1), "Library Totals": ("mdi-image-multiple", 2),
+STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 2), "Library Totals": ("mdi-image-multiple", 2),
                 "Storage": ("mdi-harddisk", 3), "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
 STATS_AFTER = {"Music Library": "At a Glance"}          # a STATS group that is added later goes right under this one, not at the end
+MUSIC_WIDE = "~music-2-columns"                         # the same for the Music Library row (two cards)
 STORAGE_WIDE = "~storage-3-columns"                     # in the groups-seen list: the Storage row was widened to three cards (done once)
 # Names and tab names used before they were capitalised: layout_renamed() renames them in a layout: block that has them.
 OLD_NAMES = {"At a glance": "At a Glance", "Library totals": "Library Totals", "Backup & updates": "Backup & Updates", "Folder sizes": "Folder Sizes"}
@@ -1613,6 +1615,41 @@ def settings_with_layout(live, shipped):
             line = "%s: %s\n" % (key, val)
             out = out[:m.end()] + line + out[m.end():] if m else line + out
     return out
+
+
+QUICKLAUNCH_DONE = "~quicklaunch"                        # in the groups-seen list: Quick Launch was offered once
+QUICKLAUNCH_BLOCK = ("# Quick Launch: start typing anywhere on the page to jump to a card, search the web or open an address.\n"
+                     "quicklaunch:\n  searchDescriptions: true\n  hideInternetSearch: false\n  showSearchSuggestions: true\n  provider: google\n\n")
+
+
+def settings_quicklaunch(settings, seen):
+    """Quick Launch is added to settings.yaml once (a machine without a quicklaunch: setting). Taking it out later is respected.
+    Returns (settings, seen)."""
+    if QUICKLAUNCH_DONE in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {QUICKLAUNCH_DONE})
+    if re.search(r"(?m)^quicklaunch:", settings):
+        return settings, seen
+    m = re.search(r"(?m)^%s" % re.escape(LAYOUT_MARK), settings) or re.search(r"(?m)^layout:", settings)
+    if m:
+        return settings[:m.start()] + QUICKLAUNCH_BLOCK + settings[m.start():], seen
+    return settings.rstrip("\n") + "\n\n" + QUICKLAUNCH_BLOCK.rstrip("\n") + "\n", seen
+
+
+def background_image(settings):
+    """The picture of the background: block of settings.yaml (a web address or /images/name), or ''."""
+    m = re.search(r"(?m)^background:[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)*)", settings)
+    i = re.search(r"(?m)^[ \t]+image:[ \t]*(.*?)\s*$", m.group(1)) if m else None
+    return i.group(1).strip("'\"") if i else ""
+
+
+def settings_with_background(settings, value):
+    """settings.yaml with the picture of the background: block set to `value` (the block is not changed otherwise)."""
+    m = re.search(r"(?m)^background:[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)*)", settings)
+    if not m:
+        return settings
+    block = re.sub(r"(?m)^([ \t]+image:[ \t]*).*$", lambda x: x.group(1) + value, m.group(1), count=1)
+    return settings[:m.start(1)] + block + settings[m.end(1):]
 
 
 def group_names(text):
@@ -1693,23 +1730,33 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
     return "\n".join(lines), sorted(set(seen) | set(present))
 
 
-def layout_storage_wide(settings, seen):
-    """The Storage row holds three cards since the drive temperatures were added: `columns: 2` of that group becomes 3, once (a later
-    change by the owner is left alone). Returns (settings, seen)."""
-    if STORAGE_WIDE in seen:
+def layout_columns_changed(settings, seen, group, old, new, marker):
+    """`columns: old` of one group of the layout becomes `columns: new`, once (the marker is put in the groups-seen list, so a later change
+    by the owner is left alone). Returns (settings, seen)."""
+    if marker in seen:
         return settings, seen
-    seen = sorted(set(seen) | {STORAGE_WIDE})
+    seen = sorted(set(seen) | {marker})
     lines = settings.split("\n")
     for i, l in enumerate(lines):
-        if re.match(r"^  Storage:\s*$", l):
+        if re.match(r"^  %s:\s*$" % re.escape(group), l):
             for j in range(i + 1, len(lines)):
                 if lines[j] and not lines[j].startswith("    "):
                     break
-                if re.match(r"^    columns:\s*2\s*$", lines[j]):
-                    lines[j] = "    columns: 3"
+                if re.match(r"^    columns:\s*%d\s*$" % old, lines[j]):
+                    lines[j] = "    columns: %d" % new
                     break
             break
     return "\n".join(lines), seen
+
+
+def layout_storage_wide(settings, seen):
+    """The Storage row holds three cards since the drive temperatures were added: columns 2 becomes 3, once."""
+    return layout_columns_changed(settings, seen, "Storage", 2, 3, STORAGE_WIDE)
+
+
+def layout_music_wide(settings, seen):
+    """The Music Library row holds two cards since Recently Saved Songs was added: columns 1 becomes 2, once."""
+    return layout_columns_changed(settings, seen, "Music Library", 1, 2, MUSIC_WIDE)
 
 
 def stack_text(name):
@@ -1724,10 +1771,85 @@ def stack_text(name):
     if name == "speedtest-tracker":
         key = Secrets.get("APP_KEY")
         text = re.sub(r'(APP_KEY:\s*)"[^"]*"', lambda m: '%s"%s"' % (m.group(1), key), text)
+    if name == "navidrome":
+        text = text.replace("/mnt/storage/music:/music:ro", "%s:/music:ro" % (music_folder() or "/mnt/storage/music"))
+        text = text.replace('user: "1000:1000"', 'user: "%d:%d"' % (Ctx.uid, Ctx.gid))
     if name == "beszel-agent":
         text = re.sub(r"(\n\s*KEY:\s*)'[^']*'", lambda m: "%s'%s'" % (m.group(1), Secrets.get("BESZEL_KEY")), text)
         text = re.sub(r"(\n\s*TOKEN:\s*)\S+", lambda m: "%s%s" % (m.group(1), Secrets.get("BESZEL_TOKEN")), text)
     return text
+
+
+MUSIC_FOLDER_NAMES = ("music", "Music", "downtify", "Downtify", "Downtify/music", "downtify/music", "media/music", "Media/Music", "downloads/music")
+
+
+def music_folder():
+    """The folder with the songs Downtify saved, or '' (the same search as homelab-stats). In this order: HOMELAB_MUSIC_DIR, the line in
+    /var/lib/homelab/music-dir, the music folder of the Downtify container, a few usual names in the main pool."""
+    forced = os.environ.get("HOMELAB_MUSIC_DIR") or read_file(P("/var/lib/homelab/music-dir")).strip()
+    if forced:
+        return forced if os.path.isdir(P(forced)) else ""
+    rc, ps = run(["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}"], timeout=20)
+    for line in ps.splitlines():
+        f = line.split("|")
+        if rc == 0 and len(f) == 2 and "downtify" in line.lower():
+            rc2, mounts = run(["docker", "inspect", f[0], "--format", "{{range .Mounts}}{{.Destination}}|{{.Source}}{{println}}{{end}}"], timeout=10)
+            for m in mounts.splitlines():
+                d = m.split("|", 1)
+                if len(d) == 2 and re.search(r"music|download", d[0], re.I) and os.path.isdir(P(d[1])):
+                    return d[1]
+    for name in MUSIC_FOLDER_NAMES:
+        if os.path.isdir(P("/mnt/storage/" + name)):
+            return "/mnt/storage/" + name
+    return ""
+
+
+def card_range(lines, card_id):
+    """(start, end) of the card with this id in a services.yaml split into lines, or None."""
+    idx = next((i for i, l in enumerate(lines) if re.match(r"^\s*id:\s*%s\s*$" % re.escape(card_id), l)), None)
+    if idx is None:
+        return None
+    ind = len(lines[idx]) - len(lines[idx].lstrip())
+    start = idx
+    while start > 0 and not (re.match(r"^\s*- .+:\s*$", lines[start]) and len(lines[start]) - len(lines[start].lstrip()) < ind):
+        start -= 1
+    end = idx + 1
+    while end < len(lines) and (not lines[end].strip() or len(lines[end]) - len(lines[end].lstrip()) >= ind):
+        end += 1
+    while end > idx + 1 and not lines[end - 1].strip():
+        end -= 1
+    return start, end
+
+
+def card_widget_type(text, card_id):
+    """The widget type of a card of services.yaml ('' when the card has no widget, None when there is no such card)."""
+    lines = text.split("\n")
+    r = card_range(lines, card_id)
+    if not r:
+        return None
+    block = "\n".join(lines[r[0]:r[1]])
+    m = re.search(r"(?m)^\s+widget:\s*\n\s+type:\s*(\S+)", block)
+    return m.group(1) if m else ""
+
+
+def services_with_widget(text, card_id, widget_lines):
+    """services.yaml with a widget added to the card (at the end of the card). A card that has a widget already, or a file without that
+    card, is returned as it was."""
+    lines = text.split("\n")
+    r = card_range(lines, card_id)
+    if not r or any(re.match(r"^\s+widget:\s*$", l) for l in lines[r[0]:r[1]]):
+        return text
+    ind = len(lines[r[0] + 1]) - len(lines[r[0] + 1].lstrip()) if r[0] + 1 < len(lines) else 8
+    pad = " " * ind
+    new = [pad + "widget:"] + [pad + "  " + l for l in widget_lines]
+    lines[r[1]:r[1]] = new
+    return "\n".join(lines)
+
+
+def navidrome_widget(lan, user, password, salt):
+    """The lines of the Navidrome widget (the key is md5(password + salt), as the Subsonic protocol wants it)."""
+    token = hashlib.md5((password + salt).encode()).hexdigest()
+    return ["type: navidrome", "url: http://%s:%d" % (lan, PORTS["navidrome"]), "user: %s" % user, "token: %s" % token, "salt: %s" % salt]
 
 
 def stack_env(name):
@@ -3274,6 +3396,8 @@ class HomepageTabs(Step):
         sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
         if re.search(r"(?m)^layout:", sett):
             sett, seen = layout_storage_wide(sett, seen)
+            sett, seen = layout_music_wide(sett, seen)
+        sett, seen = settings_quicklaunch(sett, seen)
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))
         return sett, new_css, seen, new_js, svc
@@ -3328,6 +3452,129 @@ class HomepageTabs(Step):
             out("      The Stats tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
         if CAL_BEGIN in svc:
             out("      The Calendar is at the bottom of the Home tab. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
+
+
+def fetch_picture(addr):
+    """The bytes of a picture from the web (None when it cannot be had or is not a picture). FAKE mode: the file named in HLS_FAKE_BG_FILE."""
+    if FAKE:
+        f = os.environ.get("HLS_FAKE_BG_FILE", "")
+        data = open(f, "rb").read() if f and os.path.isfile(f) else None
+    else:
+        try:
+            req = urllib.request.Request(addr, headers={"User-Agent": "homelab-setup"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                data = r.read(30 * 1024 * 1024)
+        except (urllib.error.URLError, OSError, ValueError):
+            return None
+    return data if data and (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")) else None
+
+
+@step
+class HomepageBackground(Step):
+    id, group, title = "homepage-background", "Homepage", "The dashboard's background picture is saved on this server (loads fast, works offline)"
+    needs = ("homepage-tabs",)
+
+    def applies(self):
+        return not Mode.existing and os.path.exists(hp_path("settings.yaml"))
+
+    def probe(self):
+        cur = background_image(read_file(hp_path("settings.yaml")))
+        tried = time.time() - State.data.get("background_tried", 0) < 7 * 86400          # a failed attempt is repeated a week later, not on every run
+        return "done" if State.ran(self.id) or tried or not re.match(r"https?://", cur) else "todo"
+
+    def detail(self):
+        return background_image(read_file(hp_path("settings.yaml")))[:60]
+
+    def run(self):
+        sett = read_file(hp_path("settings.yaml"))
+        cur = background_image(sett)
+        if Opt.dry:
+            out("      would download the background picture into %s and use it from there" % hp_path("images"))
+            return
+        data = fetch_picture(cur)
+        if data is None:
+            warn("Could not download the background picture (%s). It stays as it is; an upgrade a week from now tries again." % cur[:70])
+            State.data["background_tried"] = int(time.time())
+            State.save()
+            return
+        ext = ".png" if data[:4] == b"\x89PNG" else ".webp" if data[:4] == b"RIFF" else ".jpg"
+        name = "background" + ext
+        os.makedirs(hp_path("images"), exist_ok=True)
+        path = hp_path("images/" + name)
+        with open(path, "wb") as f:
+            f.write(data)
+        os.chmod(path, 0o644)
+        chown(path, Ctx.uid, Ctx.gid)
+        if not os.path.exists(hp_path("settings.yaml") + ".before-background"):
+            write_file(hp_path("settings.yaml") + ".before-background", sett, 0o644, (Ctx.uid, Ctx.gid))
+        write_file(hp_path("settings.yaml"), settings_with_background(sett, "/images/" + name), 0o644, (Ctx.uid, Ctx.gid))
+        State.mark(self.id)
+        if not FAKE and "homepage" in containers_all():
+            act(["docker", "restart", "homepage"], timeout=120)       # Homepage only serves a new picture after a restart
+        out("      The background is now %s in the images folder (the old settings.yaml is kept as settings.yaml.before-background). "
+            "To use another picture later:  homelab theme background URL-or-FILE" % name)
+
+
+# ================================================================ Navidrome (plays the songs Downtify saved)
+class NavidromeStack(StackStep):
+    """Only on a machine that has a music folder (the folder Downtify saves into). A hand-built server is only looked at."""
+
+    def applies(self):
+        return not Mode.existing and bool(music_folder())
+
+    def detail(self):
+        return "music folder %s" % music_folder()
+
+    def run(self):
+        folder = Ctx.home + "/navidrome"
+        if not Opt.dry:
+            os.makedirs(P(folder), exist_ok=True)
+            chown(P(folder), Ctx.uid, Ctx.gid)
+        StackStep.run(self)
+
+
+register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome music server (plays the songs Downtify saved)"))
+
+
+@step
+class NavidromeCard(Step):
+    id, group = "navidrome-card", "Homepage"
+    title = "Navidrome login and its dashboard card with live numbers (songs, albums, artists)"
+    needs = ("stack-navidrome", "homepage-files")
+
+    def applies(self):
+        return BY_ID["stack-navidrome"].applies()
+
+    def probe(self):
+        return "done" if card_widget_type(read_file(hp_path("services.yaml")), "navidrome-card") == "navidrome" else "todo"
+
+    def run(self):
+        if Opt.dry:
+            out("      would create the Navidrome login (%s), then add its card and the live numbers to the dashboard" % Ctx.admin)
+            return
+        pw = need_password("to create the Navidrome login")
+        if not wait_for(lambda: http("GET", url("navidrome", "/"), raw=True, timeout=10)[0] == 200, "Navidrome to answer", 120):
+            raise Abort("Navidrome does not answer on port %d. Look at its log:  docker logs navidrome" % PORTS["navidrome"])
+        creds = {"username": Ctx.admin, "password": pw}
+        st, _, _ = http("POST", url("navidrome", "/auth/createAdmin"), body=creds, timeout=30)
+        if st != 200:                                    # 403: it has a login already. Is it ours?
+            st, _, _ = http("POST", url("navidrome", "/auth/login"), body=creds, timeout=30)
+            if st != 200:
+                warn("Navidrome already has a login that is not %s with the shared admin password, so the dashboard cannot show its numbers. "
+                     "Open it, add that user or change its password, then run:  sudo homelab-setup upgrade" % Ctx.admin)
+                return
+        if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
+            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)            # makes the card (and its Tailscale address) now
+        old = read_file(hp_path("services.yaml"))
+        new = services_with_widget(old, "navidrome-card", navidrome_widget(Ctx.lan or svc_host(), Ctx.admin, pw, rand_alnum(12)))
+        if new == old:
+            warn("The dashboard has no Navidrome card yet. homelab-cards makes it within 5 minutes; run `sudo homelab-setup upgrade` after that "
+                 "to add its live numbers.")
+            return
+        if not os.path.exists(hp_path("services.yaml") + ".before-navidrome"):
+            write_file(hp_path("services.yaml") + ".before-navidrome", old, 0o644, (Ctx.uid, Ctx.gid))
+        write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
+        out("      Navidrome is at %s. Log in as %s with the shared admin password; the dashboard card shows its numbers." % (url("navidrome"), Ctx.admin))
 
 
 def run_calendar_build():
@@ -4079,6 +4326,7 @@ CRON_LINES = [
     ("homelab-sample", "*/15 * * * * /usr/local/sbin/homelab-sample >/dev/null 2>&1"),
     ("homelab-stats", "5,20,35,50 * * * * /usr/local/sbin/homelab-stats >/dev/null 2>&1"),
     ("homelab-calendar build", "30 3 * * 1 /usr/local/bin/homelab-calendar build >/dev/null 2>&1"),
+    ("homelab-calendar sync", "40 4 * * * /usr/local/bin/homelab-calendar sync >/dev/null 2>&1"),
     ("homelab-update", "17 * * * * /usr/local/sbin/homelab-update auto >/dev/null 2>&1"),
     ("homelab-cards", "*/5 * * * * /usr/local/sbin/homelab-cards auto >/dev/null 2>&1"),
     ("drives power", "@reboot sleep 60 && /usr/local/sbin/drives power >/dev/null 2>&1"),
