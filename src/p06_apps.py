@@ -377,7 +377,7 @@ register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome mu
 @step
 class NavidromeCard(Step):
     id, group = "navidrome-card", "Homepage"
-    title = "Navidrome login, its dashboard card with live numbers (first in its group) and the Navidrome Player card"
+    title = "Navidrome login and its dashboard card (first in its group) with Navidrome's own player inside"
     needs = ("stack-navidrome", "homepage-files")
 
     def applies(self):
@@ -385,18 +385,17 @@ class NavidromeCard(Step):
 
     def probe(self):
         svc = read_file(hp_path("services.yaml"))
-        if card_widget_type(svc, "navidrome-card") != "navidrome":
+        if card_widget_type(svc, "navidrome-card") != "iframe":
             return "todo"
-        return "done" if card_widget_type(svc, PLAYER_ID) == "iframe" and navidrome_card_first(svc) else "todo"
+        return "done" if card_range(svc.split("\n"), PLAYER_ID) is None and navidrome_card_first(svc) else "todo"
 
     def run(self):
         if Opt.dry:
-            out("      would create the Navidrome login (%s), then add its card with the live numbers and the player card to the dashboard, "
-                "with the Navidrome card first in its group" % Ctx.admin)
+            out("      would create the Navidrome login (%s), then put Navidrome's player inside its dashboard card, first in its group" % Ctx.admin)
             return
         old = read_file(hp_path("services.yaml"))
         new = old
-        if card_widget_type(old, "navidrome-card") != "navidrome":          # first time: the login and the live numbers
+        if card_widget_type(old, "navidrome-card") not in ("navidrome", "iframe"):          # first time: the login
             pw = need_password("to create the Navidrome login")
             if not wait_for(lambda: http("GET", url("navidrome", "/"), raw=True, timeout=10)[0] == 200, "Navidrome to answer", 120):
                 raise Abort("Navidrome does not answer on port %d. Look at its log:  docker logs navidrome" % PORTS["navidrome"])
@@ -405,25 +404,26 @@ class NavidromeCard(Step):
             if st != 200:                                    # 403: it has a login already. Is it ours?
                 st, _, _ = http("POST", url("navidrome", "/auth/login"), body=creds, timeout=30)
                 if st != 200:
-                    warn("Navidrome already has a login that is not %s with the shared admin password, so the dashboard cannot show its numbers. "
-                         "Open it, add that user or change its password, then run:  sudo homelab-setup upgrade" % Ctx.admin)
-                    return
+                    warn("Navidrome already has a login that is not %s with the shared admin password. Open it and log in with the login it has. "
+                         "(The player card of the dashboard works with any login.)" % Ctx.admin)
+            else:
+                out("      Navidrome is at %s. Log in as %s with the shared admin password." % (url("navidrome"), Ctx.admin))
             if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
                 run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)        # makes the card (and its Tailscale address) now
             old = read_file(hp_path("services.yaml"))
-            new = services_with_widget(old, "navidrome-card", navidrome_widget(Ctx.lan or svc_host(), Ctx.admin, pw, rand_alnum(12)))
-            if new == old:
+            if card_widget_type(old, "navidrome-card") is None:
                 warn("The dashboard has no Navidrome card yet. homelab-cards makes it within 5 minutes; run `sudo homelab-setup upgrade` after that "
-                     "to add its live numbers and the player.")
+                     "to put the player in it.")
                 return
-            out("      Navidrome is at %s. Log in as %s with the shared admin password; the dashboard card shows its numbers." % (url("navidrome"), Ctx.admin))
+        new = services_without_card(old, PLAYER_ID)                    # zip 33 had a second card for the player: it is one card now
+        new = services_with_iframe_widget(new, "navidrome-card", Ctx.lan or svc_host())
         new = card_to_top(new, "navidrome-card")
-        new = services_with_player(new, "navidrome-card", Ctx.lan or svc_host())
         if new != old:
             if not os.path.exists(hp_path("services.yaml") + ".before-navidrome"):
                 write_file(hp_path("services.yaml") + ".before-navidrome", old, 0o644, (Ctx.uid, Ctx.gid))
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
-            out("      The Navidrome card is first in its group, with the Navidrome Player card under it (Navidrome's own player: previous, next, shuffle, repeat).")
+            out("      The Navidrome card is first in its group and has Navidrome's own player inside (previous, next, shuffle, repeat). "
+                "Clicking its title opens the full Navidrome page.")
 
 
 def run_calendar_build():

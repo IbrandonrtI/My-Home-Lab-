@@ -1020,20 +1020,6 @@ def card_widget_type(text, card_id):
     return m.group(1) if m else ""
 
 
-def services_with_widget(text, card_id, widget_lines):
-    """services.yaml with a widget added to the card (at the end of the card). A card that has a widget already, or a file without that
-    card, is returned as it was."""
-    lines = text.split("\n")
-    r = card_range(lines, card_id)
-    if not r or any(re.match(r"^\s+widget:\s*$", l) for l in lines[r[0]:r[1]]):
-        return text
-    ind = len(lines[r[0] + 1]) - len(lines[r[0] + 1].lstrip()) if r[0] + 1 < len(lines) else 8
-    pad = " " * ind
-    new = [pad + "widget:"] + [pad + "  " + l for l in widget_lines]
-    lines[r[1]:r[1]] = new
-    return "\n".join(lines)
-
-
 def card_to_top(text, card_id):
     """services.yaml with the card moved to the top of its group (a card that is first already, or a file without it, is returned as it was)."""
     lines = text.split("\n")
@@ -1054,43 +1040,54 @@ def card_to_top(text, card_id):
     return "\n".join(lines)
 
 
-PLAYER_ID = "navidrome-player"
+PLAYER_ID = "navidrome-player"      # the separate player card of zip 33; the player now lives inside the Navidrome card and this card is taken out
 
 
-def navidrome_player_card(lan, ind=4):
-    """The lines of the Navidrome Player card: Navidrome's own web player shown inside the dashboard (an iframe widget)."""
-    pad = " " * ind
-    return [pad + "- Navidrome Player:", pad + "    id: " + PLAYER_ID, pad + "    icon: navidrome.svg",
-            pad + "    description: Play, pause, next, shuffle and repeat",
-            pad + "    widget:", pad + "      type: iframe", pad + "      name: navidrome-player",
-            pad + "      src: http://%s:%d" % (lan, PORTS["navidrome"]),
-            pad + "      classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96",
-            pad + "      allowPolicy: autoplay; fullscreen",
-            pad + "      loadingStrategy: lazy"]
+def navidrome_iframe_widget(lan):
+    """The lines of the widget that shows Navidrome's own web player inside its card (an iframe widget)."""
+    return ["type: iframe", "name: navidrome-player", "src: http://%s:%d" % (lan, PORTS["navidrome"]),
+            "classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96", "allowPolicy: autoplay; fullscreen", "loadingStrategy: lazy"]
 
 
-def services_with_player(text, after_id, lan):
-    """services.yaml with the Navidrome Player card right under the card `after_id` (nothing changes when it is there or the card is missing)."""
+def services_with_iframe_widget(text, card_id, lan):
+    """services.yaml with the player (an iframe widget) as the widget of the card. A widget the card has already (the live numbers of an
+    earlier version) is replaced; a card that shows the player already, or a file without that card, is returned as it was."""
     lines = text.split("\n")
-    if card_range(lines, PLAYER_ID):
+    r = card_range(lines, card_id)
+    if not r or card_widget_type(text, card_id) == "iframe":
         return text
-    r = card_range(lines, after_id)
+    w = next((i for i in range(*r) if re.match(r"^\s+widget:\s*$", lines[i])), None)
+    if w is not None:
+        wind = len(lines[w]) - len(lines[w].lstrip())
+        end = w + 1
+        while end < len(lines) and (not lines[end].strip() or len(lines[end]) - len(lines[end].lstrip()) > wind):
+            end += 1
+        while end > w + 1 and not lines[end - 1].strip():
+            end -= 1
+        del lines[w:end]
+        r = card_range(lines, card_id)
+    ind = len(lines[r[0] + 1]) - len(lines[r[0] + 1].lstrip()) if r[0] + 1 < len(lines) else 8
+    pad = " " * ind
+    lines[r[1]:r[1]] = [pad + "widget:"] + [pad + "  " + l for l in navidrome_iframe_widget(lan)]
+    return "\n".join(lines)
+
+
+def services_without_card(text, card_id):
+    """services.yaml without the card (and the blank line in front of it). A file without that card is returned as it was."""
+    lines = text.split("\n")
+    r = card_range(lines, card_id)
     if not r:
         return text
-    ind = len(lines[r[0]]) - len(lines[r[0]].lstrip())
-    lines[r[1]:r[1]] = [""] + navidrome_player_card(lan, ind)
+    s = r[0]
+    while s > 0 and not lines[s - 1].strip():
+        s -= 1
+    del lines[s:r[1]]
     return "\n".join(lines)
 
 
 def navidrome_card_first(text):
     """True when the Navidrome card is the first card of its group (or there is no such card)."""
     return card_to_top(text, "navidrome-card") == text
-
-
-def navidrome_widget(lan, user, password, salt):
-    """The lines of the Navidrome widget (the key is md5(password + salt), as the Subsonic protocol wants it)."""
-    token = hashlib.md5((password + salt).encode()).hexdigest()
-    return ["type: navidrome", "url: http://%s:%d" % (lan, PORTS["navidrome"]), "user: %s" % user, "token: %s" % token, "salt: %s" % salt]
 
 
 def stack_env(name):
