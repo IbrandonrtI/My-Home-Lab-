@@ -487,6 +487,8 @@ li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-colo
 #stat-containers, #stat-updates { --accent: 0, 197, 253; }      /* containers: light blue */
 #stat-nextcloud { --accent: 36, 140, 255; }                     /* files: blue */
 #stat-folders { --accent: 214, 90, 22; }                        /* folders: orange */
+#stat-music { --accent: 236, 72, 153; }                         /* music: pink */
+#stat-temps { --accent: 245, 158, 11; }                         /* temperatures: amber */
 #cal-month { --accent: 36, 140, 255; }                          /* calendar: blue */
 #cal-agenda { --accent: 147, 51, 234; }                         /* coming up: purple */
 li[id^="stat-"]::before, li[id^="cal-"]::before {
@@ -508,6 +510,7 @@ li[id^="stat-"]::after, li[id^="cal-"]::after {
   pointer-events: none;
   background: rgb(var(--accent));
 }
+.services-group:has(li[id^="stat-"]), .services-group:has(li[id^="cal-"]) { padding-bottom: 1.1rem !important; }      /* air between the rows */
 li[id^="stat-"] .service-block-value { font-size: 1rem !important; font-weight: 600 !important; color: #f4f6fa; }
 li[id^="stat-"] .service-block-label { opacity: 0.7; }
 

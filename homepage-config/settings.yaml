@@ -54,6 +54,11 @@ layout:
     icon: mdi-view-dashboard
     style: row
     columns: 4
+  Music Library:
+    tab: Stats
+    icon: mdi-music
+    style: row
+    columns: 1
   Library Totals:
     tab: Stats
     icon: mdi-image-multiple
@@ -63,7 +68,7 @@ layout:
     tab: Stats
     icon: mdi-harddisk
     style: row
-    columns: 2
+    columns: 3
   Backup & Updates:
     tab: Stats
     icon: mdi-backup-restore

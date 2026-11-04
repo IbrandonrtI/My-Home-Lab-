@@ -164,6 +164,8 @@
               label: Ran
             - field: glance.backup_size
               label: Size
+            - field: glance.backup_saved
+              label: Saved To
 
     - Containers:
         id: stat-containers
@@ -178,6 +180,26 @@
               label: Running
             - field: glance.updates
               label: Updates
+            - field: updated_text
+              label: Refreshed
+
+- Music Library:
+
+    - Downtify:
+        id: stat-music
+        icon: mdi-music
+        description: The songs Downtify saved
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: music.songs
+              label: Songs
+            - field: music.artists
+              label: Artists
+            - field: music.size
+              label: Size
 
 - Library Totals:
 
@@ -255,6 +277,20 @@
             - field: backup.health
               label: Health
 
+    - Drive Temperatures:
+        id: stat-temps
+        icon: mdi-thermometer
+        description: Boot, main and backup drives
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          display: dynamic-list
+          mappings:
+            items: temps
+            name: name
+            label: label
+
 - Backup & Updates:
 
     - Last Backup:
@@ -272,8 +308,8 @@
               label: Result
             - field: last_backup.size
               label: Size
-            - field: last_backup.took
-              label: Took
+            - field: last_backup.saved_to
+              label: Saved To
 
     - Containers & Updates:
         id: stat-updates
@@ -323,7 +359,7 @@
 # the Calendar entry from the layout: block of settings.yaml.
 - Calendar:
 
-    - Calendar:
+    - This Month:
         id: cal-month
         icon: mdi-calendar-month
         widget:
