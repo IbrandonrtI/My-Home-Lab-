@@ -549,10 +549,15 @@ def card_block(name, card_id, href, monitor, icon, desc):
             "        icon: %s" % icon, "        description: %s" % yaml_text(desc)]
 
 
-def insert_card(lines, section, block):
+def insert_card(lines, section, block, top=False):
+    """Put a card at the end of its section (top=True: as the first card)."""
     gs = groups_of(lines)
     for name, start, end in gs:
         if name == section:
+            first = next((i for i in range(start + 1, end) if re.match(r"^\s+- .+:\s*$", lines[i])), None) if top else None
+            if first is not None:
+                lines[first:first] = block + [""]
+                return
             at = end
             while at > start + 1 and (not lines[at - 1].strip() or lines[at - 1].strip().startswith("#")):
                 at -= 1
@@ -789,7 +794,7 @@ def sync():
         sp = ensure_serve(port, None, lan, serve)
         href = "https://%s:%d" % (fq, sp) if fq and sp else "http://%s:%d" % (lan, port)
         icon = find_icon(c)
-        insert_card(f.lines, section, card_block(title, card_id, href, "http://%s:%d" % (lan, port), icon, description_of(c)))
+        insert_card(f.lines, section, card_block(title, card_id, href, "http://%s:%d" % (lan, port), icon, description_of(c)), top=(name == "navidrome"))
         f.css = css_add(f.css, card_id, rgb, title)
         st["managed"][name] = {"card": card_id, "name": title, "section": section, "hostport": port, "serve": sp, "unsure": not sure,
                                "rgb": list(rgb), "added": int(time.time()), "missing": 0}
