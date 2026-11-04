@@ -1,11 +1,3 @@
-# Immich: photo and video backup with a phone app.
-# Stack name in Portainer: immich
-# Port:    2283 (web interface).
-# Folders: photos in UPLOAD_LOCATION (the main pool), the database in DB_DATA_LOCATION (boot drive).
-# Variables: set them in Portainer (Environment variables, advanced mode). The list is at the end of this file.
-# Portainer reads stack.env from the variables you enter; for plain `docker compose up` create a stack.env file
-# with the same lines next to this file.
-# Immich changes often: compare this file with the docker-compose.yml of Immich's current release before you deploy.
 name: immich
 
 services:
