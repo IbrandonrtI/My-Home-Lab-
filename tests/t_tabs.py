@@ -32,7 +32,7 @@ S, C = rd("settings.yaml"), rd("custom.css")
 # ---- the shipped files
 check("shipped settings.yaml has a layout: block", re.search(r"(?m)^layout:", S) is not None)
 tabs = re.findall(r"(?m)^    tab: (\w+)$", S)
-check("exactly three tabs are used: HOME, LINKS and STATS", sorted(set(tabs)) == ["HOME", "LINKS", "STATS"], str(set(tabs)))
+check("exactly three tabs are used: Home, Links and Stats", sorted(set(tabs)) == ["Home", "Links", "Stats"], str(set(tabs)))
 check("every group in layout has an icon", len(re.findall(r"(?m)^    icon: mdi-[\w-]+$", S)) == len(tabs))
 svc_groups = re.findall(r"(?m)^- ([^:\n]+):\s*$", rd("services.yaml"))
 book_groups = re.findall(r"(?m)^- ([^:\n]+):\s*$", rd("bookmarks.yaml"))
@@ -40,10 +40,10 @@ lay = re.findall(r"(?m)^  ([^\s:][^:\n]*):\s*$", S[S.index("\nlayout:"):])
 check("every shipped service group is on a tab", all(g in lay for g in svc_groups), str(svc_groups))
 stat_groups = list(m.STATS_GROUPS)
 check("the STATS groups of the code are the groups of the shipped block",
-      stat_groups == [g for g in svc_groups if g in m.STATS_GROUPS] and len(svc_groups) - len(stat_groups) == 3, str(svc_groups))
+      stat_groups == [g for g in svc_groups if g in m.STATS_GROUPS] and len(svc_groups) - len(stat_groups) - len(m.CALENDAR_GROUPS) == 3, str(svc_groups))
 for g in stat_groups:
     blk = re.search(r"(?m)^  %s:\n((?:    .*\n)+)" % re.escape(g), S).group(0)
-    ok = "tab: STATS" in blk and "icon: %s" % m.STATS_GROUPS[g][0] in blk and "columns: %d" % m.STATS_GROUPS[g][1] in blk
+    ok = "tab: Stats" in blk and "icon: %s" % m.STATS_GROUPS[g][0] in blk and "columns: %d" % m.STATS_GROUPS[g][1] in blk
     check("the shipped layout puts %s on the STATS tab" % g, ok, blk)
 check("every shipped bookmark group is on the LINKS tab", all(g in lay for g in book_groups), str(book_groups))
 check("all four card sections of homelab-cards are in the layout",
@@ -87,26 +87,35 @@ check("no shipped block: the file is left alone", m.css_tabs_block(BASE, "") == 
 
 # ---- groups of this machine that the layout does not know yet
 check("the tabs css keeps the side margins of the tab bar", re.search(r"#tabs\s*\{[^}]*margin:\s*[\d.]+px 0", C) is None and "margin-top: 6px" in C)
-base = "title: X\nlayout:\n  Network & DNS:\n    tab: HOME\n    icon: mdi-lan\n  Productivity:\n    tab: LINKS\n"
+base = "title: X\nlayout:\n  Network & DNS:\n    tab: Home\n    icon: mdi-lan\n  Productivity:\n    tab: Links\n"
 r, seen = m.layout_complete(base, ["Network & DNS", "My Apps"], ["Productivity", "Others"], [])
-check("a new service group goes on HOME and a new bookmark group on LINKS",
-      "  My Apps:\n    tab: HOME\n    icon: mdi-apps" in r and "  Others:\n    tab: LINKS\n    icon: mdi-dots-horizontal-circle" in r)
+check("a new service group goes on Home and a new bookmark group on Links",
+      "  My Apps:\n    tab: Home\n    icon: mdi-apps" in r and "  Others:\n    tab: Links\n    icon: mdi-dots-horizontal-circle" in r)
 check("groups already in the layout are not added twice", r.count("Network & DNS:") == 1 and r.count("Productivity:") == 1)
 check("every group is now remembered", seen == ["My Apps", "Network & DNS", "Others", "Productivity"], str(seen))
 check("the file before the layout is kept", r.startswith("title: X\nlayout:"))
 r2, seen2 = m.layout_complete(r, ["Network & DNS", "My Apps"], ["Productivity", "Others"], seen)
 check("a second run changes nothing", r2 == r and seen2 == seen)
-gone = r.replace("  Others:\n    tab: LINKS\n    icon: mdi-dots-horizontal-circle\n", "")
+gone = r.replace("  Others:\n    tab: Links\n    icon: mdi-dots-horizontal-circle\n", "")
 r3, _ = m.layout_complete(gone, ["Network & DNS", "My Apps"], ["Productivity", "Others"], seen)
 check("a group that was taken out on purpose is not put back", "Others" not in r3)
 r4, _ = m.layout_complete(r, ["Network & DNS", "My Apps", "Third"], ["Productivity", "Others"], seen)
-check("a group that is new later is added once", r4.count("  Third:\n    tab: HOME") == 1)
-rs, _ = m.layout_complete(base, ["Network & DNS", "At a glance", "Folder sizes"], ["Productivity"], [])
+check("a group that is new later is added once", r4.count("  Third:\n    tab: Home") == 1)
+rs, _ = m.layout_complete(base, ["Network & DNS", "At a Glance", "Folder Sizes"], ["Productivity"], [])
 check("the STATS groups go on the STATS tab with their icon and columns",
-      "  At a glance:\n    tab: STATS\n    icon: mdi-view-dashboard\n    style: row\n    columns: 4" in rs
-      and "  Folder sizes:\n    tab: STATS\n    icon: mdi-folder-multiple\n    style: row\n    columns: 1" in rs and "tab: HOME" in rs, rs)
-rs2, _ = m.layout_complete(rs, ["Network & DNS", "At a glance", "Folder sizes"], ["Productivity"], _)
+      "  At a Glance:\n    tab: Stats\n    icon: mdi-view-dashboard\n    style: row\n    columns: 4" in rs
+      and "  Folder Sizes:\n    tab: Stats\n    icon: mdi-folder-multiple\n    style: row\n    columns: 1" in rs and "tab: Home" in rs, rs)
+rs2, _ = m.layout_complete(rs, ["Network & DNS", "At a Glance", "Folder Sizes"], ["Productivity"], _)
 check("and only once", rs2 == rs)
+oldl = "title: X\nlayout:\n  Network & DNS:\n    tab: HOME\n    icon: mdi-lan\n  Productivity:\n    tab: LINKS\n  At a glance:\n    tab: STATS\n    icon: mdi-my-own\n    style: row\n    columns: 4\n  Folder sizes:\n    tab: STATS\nhideVersion: true\n"
+rn = m.layout_renamed(oldl)
+check("older capital tab names and group names are renamed in place",
+      "  Network & DNS:\n    tab: Home\n" in rn and "    tab: Links\n" in rn and "  At a Glance:\n    tab: Stats\n    icon: mdi-my-own" in rn and "  Folder Sizes:\n    tab: Stats" in rn
+      and "HOME" not in rn and "STATS" not in rn and "At a glance" not in rn and rn.endswith("hideVersion: true\n"), rn)
+check("renaming twice changes nothing, and a file without a layout is left alone", m.layout_renamed(rn) == rn and m.layout_renamed("title: X\n") == "title: X\n")
+check("a tab the user made up is kept", "tab: HOME2" in m.layout_renamed("layout:\n  A:\n    tab: HOME2\n"))
+rnn, _s = m.layout_complete(rn, ["Network & DNS", "At a Glance", "Folder Sizes"], ["Productivity"], ["At a glance", "Folder sizes"])
+check("after the rename the STATS groups are not added a second time", rnn.count("At a Glance:") == 1 and rnn.count("Folder Sizes:") == 1, rnn)
 
 # ---- the STATS cards in services.yaml (a managed block at the end)
 V = rd("services.yaml")
@@ -124,6 +133,9 @@ check("the STATS cards use the address placeholder of the other cards", "http://
 ids = re.findall(r"(?m)^        id: (stat-[\w-]+)$", V)
 check("every STATS card has an id that starts with stat-", len(ids) == 11 and len(set(ids)) == 11, str(ids))
 check("every STATS card has its colour in the css", all(re.search(r"#%s\b[^{]*\{[^}]*--accent" % i, C) for i in ids if i not in ("stat-folders",)) and "#stat-folders" in C)
+check("the icons of the groups and cards get a light colour, inside the managed block",
+      "--icon-color" in C and ".service-group-icon > div" in C and ".bookmark-group-icon > div" in C and ".service-icon > div" in C
+      and C.index("--icon-color") > C.index(m.TABS_BEGIN) and C.index("--icon-color") < C.index(m.TABS_END))
 check("the STATS card styles are inside the managed block", C.index('li[id^="stat-"]::before') > C.index(m.TABS_BEGIN) and C.index('li[id^="stat-"]::before') < C.index(m.TABS_END))
 check("no layout block: nothing is added, the groups are still remembered", m.layout_complete("title: X\n", ["A"], ["B"], [])[0] == "title: X\n" and m.layout_complete("title: X\n", ["A"], ["B"], [])[1] == ["A", "B"])
 tail = base + "\n# comment\nhideVersion: true\n"
@@ -132,6 +144,24 @@ check("the group goes inside the layout block, before the keys that follow it", 
 check("a name with a colon is quoted", m.yaml_key("A: b") == "'A: b'" and m.yaml_key("Plain & Name") == "Plain & Name")
 check("group_names reads the top level groups", m.group_names("- Net & DNS:\n\n    - Card:\n        id: x\n- Files:\n  - A:\n") == ["Net & DNS", "Files"])
 check("group_names skips comments", m.group_names("# - Not:\n- Real:  # note\n") == ["Real"])
+
+# ---- the Calendar group in services.yaml (a second managed block) and in the layout
+check("the Calendar group is on the Home tab, in a row of its own, in the shipped layout",
+      re.search(r"(?m)^  Calendar:\n    tab: Home\n    icon: mdi-calendar-month\n    style: row\n    columns: 2\n", S) is not None)
+check("the shipped services.yaml has the calendar block after the STATS block", m.CAL_BEGIN in V and m.CAL_END in V and V.index(m.CAL_BEGIN) > V.index(m.STATS_END))
+check("a shipped services.yaml is up to date for the calendar too", m.services_calendar_block(V, V) == V)
+NOCAL = V[:V.index(m.CAL_BEGIN)].rstrip("\n") + "\n"
+nc = m.services_calendar_block(NOCAL, V)
+check("a machine without the calendar block gets it at the end and keeps everything before", nc.startswith(NOCAL.rstrip("\n")) and nc.count(m.CAL_BEGIN) == 1 and m.STATS_BEGIN in nc)
+check("running it again changes nothing", m.services_calendar_block(nc, V) == nc)
+rv2 = m.services_calendar_block(NOCAL + "\n" + m.CAL_BEGIN + "\n- Old:\n" + m.CAL_END + "\n# mine\n", V)
+check("an older calendar block is replaced and what follows it is kept", "- Old:" not in rv2 and "# mine" in rv2 and rv2.count(m.CAL_BEGIN) == 1)
+check("the calendar reads the three files homelab-calendar writes",
+      all("http://192.168.X.X:3001/images/%s.ics" % n in V for n in ("holidays", "observances", "events")))
+rc, _s = m.layout_complete(base, ["Network & DNS", "Calendar"], ["Productivity"], [])
+check("a Calendar group goes on Home with its icon, in a row", "  Calendar:\n    tab: Home\n    icon: mdi-calendar-month\n    style: row\n    columns: 2" in rc, rc)
+check("the Calendar cards share the stats card look in the css", all(x in C for x in ('li[id^="cal-"]::before', 'li[id^="cal-"]::after', "#cal-month", "#cal-agenda")))
+check("the calendar cards have ids that start with cal-", re.findall(r"(?m)^        id: (cal-[\w-]+)$", V) == ["cal-month", "cal-agenda"])
 
 # ---- custom.js (tags every bookmark group with its name) and the bookmark card styles
 J = rd("custom.js")
