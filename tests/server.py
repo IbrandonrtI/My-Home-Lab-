@@ -73,7 +73,7 @@ class H(BaseHTTPRequestHandler):
         with World() as w:
             names = {"portainer": ["portainer"], "adguard": ["adguardhome"], "immich": ["immich_server"],
                      "beszel": ["beszel"], "nextcloud": ["nextcloud"], "speedtest": ["speedtest-tracker"],
-                     "filebrowser": ["filebrowser-filebrowser-1"], "netdata": ["netdata-netdata-1"],
+                     "filebrowser": ["filebrowser-filebrowser-1"], "netdata": ["netdata-netdata-1"], "navidrome": ["navidrome"],
                      "tsapi": [], "homepage": ["homepage"]}[self.svc]
             if names and not all(running(w, n) for n in names):
                 return self.send(502, "not running")
@@ -346,6 +346,22 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, {})
         return self.send(404)
 
+    # --- Navidrome: the first admin is made through /auth/createAdmin (403 once there is one), then /auth/login
+    def s_navidrome(self, w, m, path, q, b):
+        N = w["navidrome"]
+        if path == "/" and m == "GET":
+            return self.send(200, "<html>Navidrome</html>", "text/html")
+        if path == "/auth/createAdmin" and m == "POST":
+            if N["user"]:
+                return self.send(403, {"error": "admin exists"})
+            N["user"], N["pw"] = b.get("username"), b.get("password")
+            return self.send(200, {"username": N["user"], "isAdmin": True})
+        if path == "/auth/login" and m == "POST":
+            if N["user"] and b.get("username") == N["user"] and b.get("password") == N["pw"]:
+                return self.send(200, {"username": N["user"], "isAdmin": True})
+            return self.send(401, {"error": "Invalid username or password"})
+        return self.send(404)
+
     def s_netdata(self, w, m, path, q, b):
         if w.get("netdata_fail", 0) > 0:
             w["netdata_fail"] -= 1
@@ -368,7 +384,7 @@ class H(BaseHTTPRequestHandler):
 
 
 PORTS = {"portainer": 9000, "adguard": 3000, "immich": 2283, "beszel": 8090, "nextcloud": 8082,
-         "speedtest": 8088, "filebrowser": 8081, "netdata": 19999, "tsapi": 9999, "homepage": 3001}
+         "speedtest": 8088, "filebrowser": 8081, "netdata": 19999, "tsapi": 9999, "homepage": 3001, "navidrome": 4533}
 
 
 def main():

@@ -84,6 +84,10 @@ try:
                        ("cover.jpg", 9999), ("Artist C/Album/track.mp3", 8000)):
         with open(os.path.join(music, name), "wb") as f:
             f.write(b"m" * size)
+    import datetime
+    noon = lambda back: datetime.datetime.combine(datetime.date.today() - datetime.timedelta(days=back), datetime.time(12)).timestamp()
+    for name, back in (("Artist A - Song One.mp3", 0), ("Artist A, Guest - Song Two.mp3", 1), ("Artist B - Song Three.flac", 3), ("Artist C/Album/track.mp3", 20)):
+        os.utime(os.path.join(music, name), (noon(back), noon(back)))
     p = port()
     srv = http.server.HTTPServer(("127.0.0.1", p), Web)
     srv.seen, srv.down = [], False
@@ -180,6 +184,10 @@ esac
     check("the Updated text is a clock time", re.match(r"^\d{1,2}:\d{2} (AM|PM)$", d["updated_text"]) is not None, d["updated_text"])
     check("music library: songs, artists, size (found through the Downtify container)", d["music"]["songs"] == "4" and d["music"]["artists"] == "3"
           and d["music"]["size"] == "14.6 KB" and d["music"]["folder"] == music, d["music"])
+    rec = d["music"]["recent"]
+    check("recently saved songs: newest first, with when", [(x["name"], x["label"]) for x in rec][:3] == [
+        ("Artist A - Song One", "Today"), ("Artist A, Guest - Song Two", "Yesterday"), ("Artist B - Song Three", "3 days ago")]
+          and rec[3]["name"] == "track" and re.match(r"^[A-Z][a-z]{2} \d{1,2}$", rec[3]["label"]) and len(rec) == 4, rec)
     check("last backup saved to the backup pool", d["last_backup"]["saved_to"] == "Backup pool" and d["glance"]["backup_saved"] == "Backup pool", d["last_backup"])
     lb = d["last_backup"]
     check("last backup", lb["result"] == "OK" and lb["size"] == "3.0 GB" and lb["took"] == "1 min 12 s" and lb["ago"] == "3 h ago", lb)
@@ -216,7 +224,7 @@ esac
             v = d
             for part in fld.split("."):
                 v = v.get(part) if isinstance(v, dict) else None
-            if fld == "temps":
+            if fld in ("temps", "music.recent"):
                 if not (isinstance(v, list) and v and all(isinstance(x.get("name"), str) and isinstance(x.get("label"), str) for x in v)):
                     missing.append(fld)
             elif not isinstance(v, str) or v == "":

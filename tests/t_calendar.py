@@ -95,12 +95,12 @@ try:
 
     r = run("build")
     img = os.path.join(hp, "images")
-    check("build makes the three files", r.returncode == 0 and sorted(os.listdir(img)) == ["events.ics", "holidays.ics", "observances.ics"], r.stdout)
+    check("build makes the four files", r.returncode == 0 and sorted(os.listdir(img)) == ["events.ics", "holidays.ics", "mycalendars.ics", "observances.ics"], r.stdout)
     check("the files can be read by everyone", all(os.stat(os.path.join(img, f)).st_mode & 0o044 == 0o044 for f in os.listdir(img)))
     hol = rd("images/holidays.ics")
     y = datetime.date.today().year
     check("the holidays cover last year to five years ahead", hol.count("SUMMARY:Thanksgiving") == 7 and "DTSTART;VALUE=DATE:%d1126" % 2026 in hol, hol.count("SUMMARY:Thanksgiving"))
-    check("a new calendar has no events of its own yet", "No events yet" in rd("images/events.ics"))
+    check("a new calendar has no events of its own yet", "No events yet" in rd("images/events.ics") and "No calendars added yet" in rd("images/mycalendars.ics"))
     before = {f: os.stat(os.path.join(img, f)).st_mtime_ns for f in os.listdir(img)}
     run("build")
     check("building again changes no file", before == {f: os.stat(os.path.join(img, f)).st_mtime_ns for f in os.listdir(img)})
@@ -139,6 +139,66 @@ try:
     check("an unknown word is refused with the list of what works", r.returncode == 1 and "add | list | remove | holidays" in r.stdout, r.stdout)
     r = run("version")
     check("version", r.stdout.startswith("homelab-calendar "))
+    # ---- online calendars (a small web server on this machine serves two calendars)
+    import http.server
+    import threading
+    today = datetime.date.today()
+    soon, old = today + datetime.timedelta(days=5), today - datetime.timedelta(days=800)
+    ICS = ("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:America/New_York\r\nEND:VTIMEZONE\r\n"
+           "BEGIN:VEVENT\r\nUID:a1\r\nDTSTART;VALUE=DATE:%s\r\nSUMMARY:Midterm\r\n  exam\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nUID:a2\r\nDTSTART;VALUE=DATE:%s\r\nSUMMARY;LANGUAGE=en:Ancient one-time\r\nEND:VEVENT\r\n"
+           "BEGIN:VEVENT\r\nUID:a3\r\nDTSTART;VALUE=DATE:%s\r\nRRULE:FREQ=YEARLY\r\nSUMMARY:Old but repeating\r\nEND:VEVENT\r\n"
+           "END:VCALENDAR\r\n") % (soon.strftime("%Y%m%d"), old.strftime("%Y%m%d"), old.strftime("%Y%m%d"))
+    state = {"down": False}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if state["down"]:
+                self.send_response(500)
+                self.end_headers()
+                return
+            body = ICS.encode() if self.path.startswith("/school") else b"<html>not a calendar</html>"
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = "http://127.0.0.1:%d" % srv.server_address[1]
+    r = run("feed", "add", "School", base + "/school.ics")
+    check("calendar add reads the address and says how many events", r.returncode == 0 and "Added School (2 events)" in r.stdout, r.stdout)
+    mine = rd("images/mycalendars.ics")
+    check("the events are in mycalendars.ics with the calendar name in front of the title", "SUMMARY:[School] Midterm exam" in mine and "[School] Old but repeating" in mine, mine)
+    check("an old one-time event is left out, a repeating one is kept", "Ancient" not in mine and "RRULE:FREQ=YEARLY" in mine)
+    check("the time zone block is kept", "TZID:America/New_York" in mine and mine.count("BEGIN:VCALENDAR") == 1 and mine.endswith("END:VCALENDAR\n"))
+    check("calendars.txt is private (only its owner can read it)", os.stat(os.path.join(hp, "calendars.txt")).st_mode & 0o077 == 0)
+    r = run("feed", "list")
+    check("calendar list shows the name, not the private address", "School" in r.stdout and "/school.ics" not in r.stdout and r.stdout.lstrip().startswith("1 "), r.stdout)
+    r = run("feed", "add", "School", base + "/school.ics")
+    check("the same name twice is refused", r.returncode == 1 and "already an online calendar" in r.stdout)
+    r = run("feed", "add", "Junk", base + "/other")
+    check("an address that is not a calendar is refused and nothing is saved", r.returncode == 1 and "Junk" not in rd("calendars.txt") and "not an iCal" in r.stdout, r.stdout)
+    r = run("feed", "add", "Junk", "ftp://x/y")
+    check("an address that does not start with https:// is refused", r.returncode == 1 and "https://" in r.stdout)
+    r = run("feed", "add", "Only")
+    check("add without an address shows the usage", r.returncode == 1 and "Usage" in r.stdout)
+    state["down"] = True
+    r = run("sync")
+    check("sync with the web site down says so, and the last copy stays", r.returncode == 1 and "PROBLEM" in r.stdout and "[School] Midterm exam" in rd("images/mycalendars.ics"), r.stdout)
+    state["down"] = False
+    r = run("sync")
+    check("sync with the site back is quiet when run from a job (no terminal) and succeeds", r.returncode == 0 and r.stdout.strip() == "", r.stdout)
+    r = run("feed", "remove", "5")
+    check("a wrong calendar number is refused", r.returncode == 1 and "no online calendar number 5" in r.stdout)
+    r = run("feed", "remove", "1")
+    check("remove takes the calendar out of mycalendars.ics", r.returncode == 0 and "Midterm" not in rd("images/mycalendars.ics") and "No calendars added yet" in rd("images/mycalendars.ics")
+          and not os.path.exists(os.path.join(hp, "calendar-cache", "school.ics")), r.stdout)
+    check("the events of the other kinds are not touched", "Family dinner" in rd("images/events.ics"))
+    srv.shutdown()
+
     shutil.rmtree(hp)
     r = run("list")
     check("no Homepage folder: a plain message, no crash", r.returncode == 1 and "does not exist" in r.stdout and "Traceback" not in r.stdout, r.stdout)

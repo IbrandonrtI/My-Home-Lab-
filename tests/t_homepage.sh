@@ -116,6 +116,18 @@ out=$(hl theme links entertainment red; hl theme links entertainment default); c
 check "after the group colours, custom.css equals the shipped file again" 'diff -q <(sed -e :a -e "/^\$/{\$d;N;ba" -e "}" $T/hp/custom.css) <(sed -e :a -e "/^\$/{\$d;N;ba" -e "}" $REPO/homepage-config/custom.css) >/dev/null'
 cp "$REPO/homepage-config/services.yaml" "$T/hp/services.yaml"
 
+# ---- homelab simple: less busy cards (off by default)
+out=$(hl simple status); check "simple: off by default" 'echo "$out" | grep -q "OFF" && ! grep -q "homelab simple" $T/hp/custom.css'
+out=$(hl simple on); check "simple on hides the small text under card names, in a marked block at the end" 'echo "$out" | grep -q "now ON" && tail -4 $T/hp/custom.css | grep -q "service-description { display: none" && grep -q "homelab simple >>>" $T/hp/custom.css'
+out=$(hl simple on); check "simple on twice says so and adds nothing" 'echo "$out" | grep -q "already on" && [ "$(grep -c "homelab simple >>>" $T/hp/custom.css)" = 1 ]'
+out=$(hl simple status); check "simple status says ON" 'echo "$out" | grep -q "ON"'
+out=$(hl theme cards blue 40); check "simple and theme blocks live side by side" 'grep -q "homelab simple >>>" $T/hp/custom.css && grep -q "homelab theme >>>" $T/hp/custom.css'
+out=$(hl theme reset); check "theme reset leaves the simple block alone" 'grep -q "homelab simple >>>" $T/hp/custom.css && ! grep -q "homelab theme" $T/hp/custom.css'
+out=$(hl simple off); check "simple off takes the block out and leaves the rest" 'echo "$out" | grep -q "now OFF" && ! grep -q "homelab simple" $T/hp/custom.css'
+check "after simple off, custom.css equals the shipped file again" 'diff -q <(sed -e :a -e "/^\$/{\$d;N;ba" -e "}" $T/hp/custom.css) <(sed -e :a -e "/^\$/{\$d;N;ba" -e "}" $REPO/homepage-config/custom.css) >/dev/null'
+out=$(hl simple off); check "simple off twice says so" 'echo "$out" | grep -q "already off"'
+out=$(hl simple maybe 2>&1); check "simple with a wrong word shows the usage" 'echo "$out" | grep -q "Usage: homelab simple on | off | status"'
+
 # ---- bookmark categories
 cp "$REPO/homepage-config/bookmarks.yaml" "$T/hp/bookmarks.yaml"
 out=$(hl bookmark add Netflix netflix.com onlineshopping); check "a category is found whatever the capital letters and spaces" 'echo "$out" | grep -q "Added .Netflix. to .Online Shopping." && ! echo "$out" | grep -q "new category" && grep -c "^- " $T/hp/bookmarks.yaml | grep -q "^3$"'

@@ -25,6 +25,7 @@ DEFAULT = {
     "nc": {"calls": 0, "token": "", "conf": {}, "domains": {}},
     "speedtest": {"user": None, "tokens": []},
     "fb": {"gen": "", "user": "admin", "pw": ""},
+    "navidrome": {"user": None, "pw": None},
     "users_in_docker": [],
     "usermod": [],
     "crontab": "",

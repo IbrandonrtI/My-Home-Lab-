@@ -69,6 +69,40 @@ check("an own hideVersion: false is not changed", "hideVersion: false" in m.sett
 check("a file without a newline at the end is handled", m.settings_with_layout(OLD.rstrip("\n"), S).count("\nlayout:") == 1)
 check("an empty file gets the block", "layout:" in m.settings_with_layout("", S))
 
+# ---- Quick Launch and the saved background picture
+check("the shipped settings.yaml has Quick Launch above the layout", "\nquicklaunch:\n  searchDescriptions: true" in S and S.index("quicklaunch:") < S.index(m.LAYOUT_MARK))
+ql, qs = m.settings_quicklaunch(OLD + "\n" + new[new.index(m.LAYOUT_MARK):], [])
+check("an older settings.yaml gets Quick Launch once, above the layout comment", ql.count("quicklaunch:") == 1 and ql.index("quicklaunch:") < ql.index(m.LAYOUT_MARK) and m.QUICKLAUNCH_DONE in qs, ql)
+ql2, qs2 = m.settings_quicklaunch(ql, qs)
+check("and not twice", ql2 == ql and qs2 == qs)
+gone_ql = ql.replace(m.QUICKLAUNCH_BLOCK, "")
+check("taking it out is respected", "quicklaunch" not in m.settings_quicklaunch(gone_ql, qs)[0])
+own = OLD + "quicklaunch:\n  provider: duckduckgo\n"
+check("an own quicklaunch: setting is kept as it is", m.settings_quicklaunch(own, [])[0] == own)
+check("a file without any layout gets it at the end", m.settings_quicklaunch("title: X\n", [])[0].endswith("provider: google\n"))
+check("the background picture is read", m.background_image(S).startswith("https://images.unsplash.com") and m.background_image("title: X\n") == "")
+bg = m.settings_with_background(S, "/images/background.jpg")
+check("the background picture line is changed, the rest of the block is not", "  image: /images/background.jpg\n" in bg and "  brightness: 42" in bg and "unsplash" not in bg
+      and bg.count("image:") == S.count("image:") and m.background_image(bg) == "/images/background.jpg", bg[:400])
+check("a file without a background block is left alone", m.settings_with_background("title: X\n", "/images/a.jpg") == "title: X\n")
+
+# ---- the Navidrome card: a widget put into a card that homelab-cards made
+SV = ("- Media & Entertainment:\n\n    - Metube:\n        id: metube-card\n        href: x\n\n"
+      "    - Navidrome:\n        id: navidrome-card\n        href: https://h.ts.net:1011\n        siteMonitor: http://192.168.1.5:4533\n        icon: navidrome.svg\n"
+      "        description: Music streaming server\n\n    - Other:\n        id: other-card\n        href: y\n\n- Files & Photos:\n    - Nextcloud:\n        id: nextcloud-card\n")
+wl = m.navidrome_widget("192.168.1.5", "Brandon", "pw", "abc")
+check("the widget lines: type, url with the port, user, key = md5(password + salt), salt", wl == ["type: navidrome", "url: http://192.168.1.5:4533", "user: Brandon",
+      "token: 3aea0e5b7b0cf1a2e0d4a1d3f1b53f9b".replace("3aea0e5b7b0cf1a2e0d4a1d3f1b53f9b", __import__("hashlib").md5(b"pwabc").hexdigest()), "salt: abc"], wl)
+nv = m.services_with_widget(SV, "navidrome-card", wl)
+check("the widget is added at the end of its own card, nowhere else", "        description: Music streaming server\n        widget:\n          type: navidrome\n          url: http://192.168.1.5:4533\n"
+      "          user: Brandon\n          token: " in nv and nv.count("widget:") == 1 and "          salt: abc\n\n    - Other:" in nv and "id: other-card\n        href: y" in nv, nv)
+check("a card that has a widget already is not changed", m.services_with_widget(nv, "navidrome-card", wl) == nv)
+check("a file without that card is not changed", m.services_with_widget(SV, "nothing-card", wl) == SV)
+check("the widget type of a card is read", m.card_widget_type(nv, "navidrome-card") == "navidrome" and m.card_widget_type(SV, "navidrome-card") == "" and m.card_widget_type(SV, "zzz-card") is None)
+check("a card at the very end of the file gets its widget", m.services_with_widget(SV, "nextcloud-card", ["type: nextcloud"]).rstrip("\n").endswith("widget:\n          type: nextcloud"))
+check("the shipped navidrome.yaml: pinned image, music folder read-only, its own port", re.search(r"image: ghcr\.io/navidrome/navidrome:\d+\.\d+\.\d+", open(os.path.join(HERE, "..", "stacks", "navidrome.yaml")).read())
+      and ":/music:ro" in open(os.path.join(HERE, "..", "stacks", "navidrome.yaml")).read() and '"4533:4533"' in open(os.path.join(HERE, "..", "stacks", "navidrome.yaml")).read())
+
 # ---- custom.css
 BASE = C[:C.index(m.TABS_BEGIN)].rstrip("\n") + "\n"
 check("(set up) an old css has no tabs block", m.TABS_BEGIN not in BASE)
@@ -108,8 +142,8 @@ check("the STATS groups go on the STATS tab with their icon and columns",
 # a later STATS group (Music Library) goes right under At a Glance, not at the end
 lay = "title: X\nlayout:\n  Network & DNS:\n    tab: Home\n  At a Glance:\n    tab: Stats\n    style: row\n    columns: 4\n  Library Totals:\n    tab: Stats\n  Folder Sizes:\n    tab: Stats\nhideVersion: true\n"
 rm, sm = m.layout_complete(lay, ["Network & DNS", "At a Glance", "Music Library", "Library Totals", "Folder Sizes"], [], ["At a Glance", "Library Totals", "Folder Sizes", "Network & DNS"])
-check("Music Library is put right under At a Glance, with its icon and one column",
-      "    columns: 4\n  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 1\n  Library Totals:" in rm and rm.endswith("hideVersion: true\n"), rm)
+check("Music Library is put right under At a Glance, with its icon and two columns",
+      "    columns: 4\n  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 2\n  Library Totals:" in rm and rm.endswith("hideVersion: true\n"), rm)
 rm2, _ = m.layout_complete(rm, ["Network & DNS", "At a Glance", "Music Library", "Library Totals", "Folder Sizes"], [], sm)
 check("and only once", rm2 == rm and rm.count("Music Library:") == 1)
 rm3, _ = m.layout_complete(lay.replace("  At a Glance:\n    tab: Stats\n    style: row\n    columns: 4\n", ""), ["Music Library"], [], ["Network & DNS", "Library Totals", "Folder Sizes"])
@@ -121,6 +155,10 @@ check("the Storage row gets three columns, the other groups keep theirs", "  Sto
 sw2, sws2 = m.layout_storage_wide(sw.replace("columns: 3", "columns: 2"), sws)
 check("it is done once: a later change by the owner stays", "columns: 2\n  Folder Sizes" in sw2 and sws2 == sws)
 check("a layout without a Storage group is left alone", m.layout_storage_wide("title: X\nlayout:\n  A:\n    tab: Home\n", [])[0] == "title: X\nlayout:\n  A:\n    tab: Home\n")
+ml = "title: X\nlayout:\n  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 1\n  Storage:\n    columns: 1\n"
+mw, mws = m.layout_music_wide(ml, ["Music Library"])
+check("the Music Library row gets two columns, once, and other groups keep theirs", "  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 2\n  Storage:\n    columns: 1" in mw
+      and m.MUSIC_WIDE in mws and m.layout_music_wide(mw.replace("columns: 2", "columns: 1"), mws)[0] == mw.replace("columns: 2", "columns: 1"), mw)
 check("the shipped layout has Music Library under At a Glance and three columns for Storage",
       "columns: 4\n  Music Library:" in rd("settings.yaml") and re.search(r"  Storage:\n(?:    .*\n)*?    columns: 3", rd("settings.yaml")) is not None)
 check("the calendar card is no longer called Calendar like its group", "- Calendar:\n\n    - This Month:\n        id: cal-month" in rd("services.yaml"))
@@ -151,7 +189,7 @@ check("an older block is replaced and what follows it is kept", "- Old:" not in 
 check("no shipped block: the file is left alone", m.services_stats_block(OLDV, "") == OLDV)
 check("the STATS cards use the address placeholder of the other cards", "http://192.168.X.X:3001/images/stats.json" in V)
 ids = re.findall(r"(?m)^        id: (stat-[\w-]+)$", V)
-check("every STATS card has an id that starts with stat-", len(ids) == 13 and len(set(ids)) == 13, str(ids))
+check("every STATS card has an id that starts with stat-", len(ids) == 14 and len(set(ids)) == 14, str(ids))
 check("every STATS card has its colour in the css", all(re.search(r"#%s\b[^{]*\{[^}]*--accent" % i, C) for i in ids if i not in ("stat-folders",)) and "#stat-folders" in C)
 check("the icons of the groups and cards get a light colour, inside the managed block",
       "--icon-color" in C and ".service-group-icon > div" in C and ".bookmark-group-icon > div" in C and ".service-icon > div" in C

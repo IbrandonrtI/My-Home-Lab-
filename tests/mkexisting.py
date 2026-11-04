@@ -84,7 +84,7 @@ put(H + "/.bashrc", "# existing\n\n# >>> homelab login display >>>\nif true; the
 put(simlib.SIM + "/crontab",
     "@reboot sleep 60 && /usr/local/sbin/drives power >/dev/null 2>&1\n0 6 * * * echo x >> /var/log/loadcycles.log\n"
     '@reboot sleep 60 && /usr/sbin/hdparm -B 254 "/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")"\n'
-    "0 6 * * * /usr/local/sbin/homelab-backup\n*/15 * * * * /usr/local/sbin/homelab-sample\n5,20,35,50 * * * * /usr/local/sbin/homelab-stats\n30 3 * * 1 /usr/local/bin/homelab-calendar build\n13 * * * * /usr/local/sbin/homelab-update auto\n*/5 * * * * /usr/local/sbin/homelab-cards auto\n")
+    "0 6 * * * /usr/local/sbin/homelab-backup\n*/15 * * * * /usr/local/sbin/homelab-sample\n5,20,35,50 * * * * /usr/local/sbin/homelab-stats\n30 3 * * 1 /usr/local/bin/homelab-calendar build\n40 4 * * * /usr/local/bin/homelab-calendar sync\n13 * * * * /usr/local/sbin/homelab-update auto\n*/5 * * * * /usr/local/sbin/homelab-cards auto\n")
 # the typical pieces the program reads
 os.makedirs(R + "/bin-dummy", exist_ok=True)
 # symlinks for installed bins

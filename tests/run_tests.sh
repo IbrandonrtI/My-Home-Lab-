@@ -45,7 +45,7 @@ ok "S1 typed password NOT in the install log" '! grep -q $PW $HLS_ROOT/var/log/h
 ok "S1 typed password only in the three Homepage logins" '[ "$(grep -rl $PW $HLS_ROOT | grep -v "/proc" | sort | tr "\n" " ")" = "$HLS_ROOT/home/testuser/homepage-config/services.yaml " ]'
 ok "S1 services.yaml has no placeholders left" '! grep -q "your-own-key\|192.168.X.X\|your-tailnet\|your-email" $HLS_ROOT/home/testuser/homepage-config/services.yaml || grep -B3 -A3 "your-own-key" $HLS_ROOT/home/testuser/homepage-config/services.yaml | grep -q tailscale'
 ok "S1 progress file written" '[ -s $HLS_ROOT/var/lib/homelab/setup-progress ]'
-ok "S1 cron has 8 lines (with the service cards, the stats and the calendar), no backup line (no data drive)" '[ "$(grep -c . $SIM_DIR/crontab)" = 8 ] && grep -q "homelab-stats" $SIM_DIR/crontab && grep -q "homelab-calendar build" $SIM_DIR/crontab && ! grep -q homelab-backup $SIM_DIR/crontab'
+ok "S1 cron has 9 lines (with the service cards, the stats and the calendar with its daily sync), no backup line (no data drive)" '[ "$(grep -c . $SIM_DIR/crontab)" = 9 ] && grep -q "homelab-stats" $SIM_DIR/crontab && grep -q "homelab-calendar build" $SIM_DIR/crontab && grep -q "homelab-calendar sync" $SIM_DIR/crontab && ! grep -q homelab-backup $SIM_DIR/crontab'
 ok "S1 login hook added to .bashrc once" '[ "$(grep -c "homelab login display >>>" $HLS_ROOT/home/testuser/.bashrc)" = 1 ]'
 ok "S1 a clean machine gets no notice about drives left by an earlier install" '! grep -q "sudo drives release" $SIM_DIR/s1.out'
 ok "S1 scripts installed with this machine's user pinned in them (no lookup left, nobody else's name)" 'grep -q "HOMELAB_USER:-testuser" $HLS_ROOT/usr/local/sbin/homelab-backup && grep -q "SUDO_USER:-testuser" $HLS_ROOT/usr/local/sbin/drives && ! grep -q "getent passwd 1000" $HLS_ROOT/usr/local/sbin/homelab-backup $HLS_ROOT/usr/local/sbin/drives && ! grep -rq "otheruser" $HLS_ROOT/usr/local'
@@ -778,7 +778,7 @@ ok "S39 a fresh install already has the layout, the small settings and the tab s
 ok "S39 a fresh install has custom.js with the group tags" 'grep -q "homelab groups >>>" $HP39/custom.js'
 ok "S39 a fresh install did not make any backup copy" '[ ! -e $HP39/settings.yaml.before-tabs ] && [ ! -e $HP39/custom.css.before-tabs ] && [ ! -e $HP39/services.yaml.before-tabs ]'
 ok "S39 a fresh install has the STATS cards (with this machine's address) and the STATS tab" 'grep -q "homelab stats >>>" $HP39/services.yaml && grep -q "id: stat-folders" $HP39/services.yaml && ! grep -q "192.168.X.X:3001/images/stats.json" $HP39/services.yaml && grep -q "/images/stats.json" $HP39/services.yaml && grep -q "tab: Stats" $HP39/settings.yaml && grep -q "^  Folder Sizes:" $HP39/settings.yaml'
-ok "S39 a fresh install has the Calendar (its three files exist, the cards read them) and its layout entry" '[ -x $HLS_ROOT/usr/local/bin/homelab-calendar ] && grep -q "homelab calendar >>>" $HP39/services.yaml && ! grep -q "192.168.X.X:3001/images/holidays.ics" $HP39/services.yaml && grep -q "/images/holidays.ics" $HP39/services.yaml && grep -q "^  Calendar:" $HP39/settings.yaml && [ -s $HP39/images/holidays.ics ] && [ -s $HP39/images/observances.ics ] && [ -s $HP39/images/events.ics ]'
+ok "S39 a fresh install has the Calendar (its three files exist, the cards read them) and its layout entry" '[ -x $HLS_ROOT/usr/local/bin/homelab-calendar ] && grep -q "homelab calendar >>>" $HP39/services.yaml && ! grep -q "192.168.X.X:3001/images/holidays.ics" $HP39/services.yaml && grep -q "/images/holidays.ics" $HP39/services.yaml && grep -q "^  Calendar:" $HP39/settings.yaml && [ -s $HP39/images/holidays.ics ] && [ -s $HP39/images/observances.ics ] && [ -s $HP39/images/events.ics ] && [ -s $HP39/images/mycalendars.ics ]'
 ok "S39 the stats command is installed and scheduled every 15 minutes" '[ -x $HLS_ROOT/usr/local/sbin/homelab-stats ] && grep -q "^5,20,35,50 \* \* \* \* /usr/local/sbin/homelab-stats" $SIM_DIR/crontab'
 export HP39
 python3 - <<PY
@@ -807,7 +807,7 @@ ok "S39 it says to reload the dashboard" 'grep -q "Ctrl+Shift+R" $SIM_DIR/s39b.o
 ok "S39 refresh adds the STATS cards at the end of services.yaml and the five groups to the STATS tab" 'grep -q "homelab stats >>>" $HP39/services.yaml && grep -q "id: immich-card" $HP39/services.yaml && python3 - <<PY
 import re,os
 t=open(os.environ["HP39"]+"/settings.yaml").read()
-for g,c in (("At a Glance",4),("Music Library",1),("Library Totals",2),("Storage",3),("Backup & Updates",2),("Folder Sizes",1)):
+for g,c in (("At a Glance",4),("Music Library",2),("Library Totals",2),("Storage",3),("Backup & Updates",2),("Folder Sizes",1)):
     assert re.search(r"(?m)^  %s:\n    tab: Stats\n    icon: mdi-[a-z-]+\n    style: row\n    columns: %d\n" % (re.escape(g),c), t), (g, t)
 assert "tab: Home\n    icon: mdi-apps" not in t.split("At a Glance:")[1].split("Folder Sizes:")[0]
 PY'
@@ -871,7 +871,7 @@ hls refresh > $SIM_DIR/s39m.out 2>&1
 ok "S39 a machine from before the Music Library gets it right under At a Glance, and the Storage row gets three columns" 'python3 - <<PY
 import re,os
 t=open(os.environ["HP39"]+"/settings.yaml").read()
-assert re.search(r"(?m)^  At a Glance:\n(?:    .*\n)+  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 1\n  Library Totals:", t), t
+assert re.search(r"(?m)^  At a Glance:\n(?:    .*\n)+  Music Library:\n    tab: Stats\n    icon: mdi-music\n    style: row\n    columns: 2\n  Library Totals:", t), t
 assert re.search(r"(?m)^  Storage:\n(?:    .*\n)*?    columns: 3\n", t), t
 PY'
 cp $HP39/settings.yaml $SIM_DIR/s39mk.keep
@@ -904,6 +904,66 @@ open(hp+"/services.yaml","w").write(v[:v.index("# >>> homelab calendar >>>")].rs
 PY
 hls refresh > $SIM_DIR/s39i.out 2>&1
 ok "S39 taking the Calendar out is respected too" '! grep -q "homelab calendar" $HP39/services.yaml'
+fi
+
+# ------------------------------------------------------------------ S40: Quick Launch, the saved background picture, Navidrome
+if scen S40; then
+echo "### S40 Quick Launch, the background picture saved on the server, and Navidrome (only with a music folder)"
+fresh; approve_in 3
+install_in "" y | hls install > $SIM_DIR/s40a.out 2>&1
+HP40=$HLS_ROOT/home/testuser/homepage-config
+export HP40
+ok "S40 a fresh install has Quick Launch in settings.yaml" 'grep -q "^quicklaunch:" $HP40/settings.yaml'
+ok "S40 without a music folder there is no Navidrome (no container, no step)" '[ "$(wj "len([c for c in w[\"containers\"] if c == \"navidrome\"])")" = 0 ] && ! grep -q "navidrome" $HP40/services.yaml'
+ok "S40 the picture could not be downloaded (no network here): the address stays and the install went on" 'grep -q "image: https://" $HP40/settings.yaml && grep -q "Could not download the background picture" $SIM_DIR/s40a.out'
+printf '\x89PNG\r\n\x1a\n0000000000000000' > $SIM_DIR/bg.png
+hls refresh > $SIM_DIR/s40b0.out 2>&1
+ok "S40 a failed download is not tried again on every run (the next try is a week later)" '! grep -q "Could not download" $SIM_DIR/s40b0.out && grep -q "image: https://" $HP40/settings.yaml'
+python3 - <<PY
+import json,os
+sp=os.environ["HLS_ROOT"]+"/var/lib/homelab-setup/state.json"
+st=json.load(open(sp)); st.pop("background_tried",None); json.dump(st,open(sp,"w"))
+PY
+HLS_FAKE_BG_FILE=$SIM_DIR/bg.png hls refresh > $SIM_DIR/s40b.out 2>&1
+ok "S40 with the picture available: it is saved in the images folder and settings.yaml points to it" '[ -s $HP40/images/background.png ] && grep -q "^  image: /images/background.png$" $HP40/settings.yaml && [ -f $HP40/settings.yaml.before-background ] && grep -q "brightness: 42" $HP40/settings.yaml'
+cp $HP40/settings.yaml $SIM_DIR/s40.keep
+hls refresh > $SIM_DIR/s40c.out 2>&1
+ok "S40 a second refresh changes nothing and does not look for the picture again" 'cmp -s $HP40/settings.yaml $SIM_DIR/s40.keep && ! grep -q "Could not download" $SIM_DIR/s40c.out'
+python3 - <<PY
+import os
+p=os.environ["HP40"]+"/settings.yaml"
+t=open(p).read().replace("image: /images/background.png","image: https://example.com/mine.jpg")
+open(p,"w").write(t)
+PY
+hls refresh > $SIM_DIR/s40d.out 2>&1
+ok "S40 a web address set later on purpose is respected (offered once)" 'grep -q "image: https://example.com/mine.jpg" $HP40/settings.yaml'
+python3 - <<PY
+import os
+p=os.environ["HP40"]+"/settings.yaml"
+t=open(p).read()
+i=t.index("# Quick Launch:"); j=t.index("# Tabs and group icons")
+open(p,"w").write(t[:i]+t[j:])
+PY
+hls refresh > $SIM_DIR/s40e.out 2>&1
+ok "S40 a Quick Launch that was taken out is not put back" '! grep -q "^quicklaunch:" $HP40/settings.yaml'
+mkdir -p $HLS_ROOT/mnt/storage/music; echo song > "$HLS_ROOT/mnt/storage/music/Artist - Song.mp3"
+printf '\n- Media & Entertainment:\n    - Navidrome:\n        id: navidrome-card\n        href: https://pc.example.ts.net:1011\n        siteMonitor: http://192.168.50.23:4533\n        icon: navidrome.svg\n        description: Music streaming server\n' >> $HP40/services.yaml
+printf 'y\n%s\n' $PW | hls refresh > $SIM_DIR/s40f.out 2>&1
+ok "S40 with a music folder Navidrome is installed and running, with its music folder mounted read-only" '[ "$(wj "w[\"containers\"][\"navidrome\"][\"running\"]")" = True ] && [ -d $HLS_ROOT/home/testuser/navidrome ]'
+ok "S40 its login was made with the admin name and the shared password" '[ "$(wj "w[\"navidrome\"][\"user\"]")" = Tester ] && [ "$(wj "w[\"navidrome\"][\"pw\"]")" = $PW ]'
+ok "S40 its card got the widget with this machine address and the key (not the password)" 'python3 - <<PY
+import os,re,hashlib
+t=open(os.environ["HP40"]+"/services.yaml").read()
+i=t.index("id: navidrome-card"); card=t[i:i+700]
+assert "widget:\n          type: navidrome\n          url: http://192.168.50.23:4533\n          user: Tester\n" in card, card
+salt=re.search(r"salt: (\w+)", card).group(1); tok=re.search(r"token: (\w+)", card).group(1)
+assert tok == hashlib.md5(("CorrectHorse1234"+salt).encode()).hexdigest()
+assert "CorrectHorse1234" not in card
+PY'
+ok "S40 the old services.yaml was kept" '[ -f $HP40/services.yaml.before-navidrome ] && ! grep -q "type: navidrome" $HP40/services.yaml.before-navidrome'
+cp $HP40/services.yaml $SIM_DIR/s40svc.keep
+hls refresh > $SIM_DIR/s40g.out 2>&1
+ok "S40 a second refresh changes nothing and asks for no password" 'cmp -s $HP40/services.yaml $SIM_DIR/s40svc.keep && ! grep -qi "admin password" $SIM_DIR/s40g.out'
 fi
 
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
