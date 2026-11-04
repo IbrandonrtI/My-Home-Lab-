@@ -533,6 +533,17 @@ def cmd_adguard():
     cmd_refresh()
 
 
+def cmd_cards(rest):
+    """`cards`: look for new services (containers with a web page) and give each its Homepage card; also move, ignore, list."""
+    prog = installed_copy("homelab-cards", "/usr/local/sbin")
+    if not prog:
+        raise Abort("The helper homelab-cards is not installed yet. Run `sudo homelab-setup refresh` first.")
+    if FAKE:
+        say("(simulation) would run: homelab-cards %s" % " ".join(rest))
+        return 0
+    return subprocess.call([prog] + list(rest) + (["--dry-run"] if Opt.dry else []))
+
+
 def cmd_filebrowser():
     """Update FileBrowser's drive folders after a drive was connected or removed (sudo drives calls this by itself)."""
     load_all()
@@ -785,6 +796,7 @@ Commands:
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
   homepage                 let Homepage see the Main and Backup pool, and move custom.css to the current layout
   adguard                  add AdGuard Home, if you skipped it during the install
+  cards                    give every new service (a container with a web page) its Homepage card; also: cards list | move | ignore
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -845,7 +857,7 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in COMMANDS and cmd not in ("done", "skip"):
+    if cmd not in COMMANDS and cmd not in ("done", "skip", "cards"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
@@ -855,6 +867,8 @@ def main(argv):
                 out("Which step? Example: homelab-setup %s reboot-test" % cmd)
                 return 1
             cmd_mark("ack" if cmd == "done" else "skip", pos[1])
+        elif cmd == "cards":
+            return cmd_cards(pos[1:])
         else:
             COMMANDS[cmd]()
     except Abort as e:

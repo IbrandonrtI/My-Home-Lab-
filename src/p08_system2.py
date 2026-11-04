@@ -2,7 +2,7 @@
 
 # ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
-           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"),
+           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-cards", "/usr/local/sbin"),
            ("homelab-selftest", "/usr/local/sbin"), ("hdd-recover", "/usr/local/bin"), ("homelab", "/usr/local/bin"), ("homelab-check", "/usr/local/bin")]
 
 
@@ -74,6 +74,7 @@ class BackupConf(Step):
 CRON_LINES = [
     ("homelab-sample", "*/15 * * * * /usr/local/sbin/homelab-sample >/dev/null 2>&1"),
     ("homelab-update", "17 * * * * /usr/local/sbin/homelab-update auto >/dev/null 2>&1"),
+    ("homelab-cards", "*/5 * * * * /usr/local/sbin/homelab-cards auto >/dev/null 2>&1"),
     ("drives power", "@reboot sleep 60 && /usr/local/sbin/drives power >/dev/null 2>&1"),
     ("hdparm -B 254", '@reboot sleep 60 && /usr/sbin/hdparm -B 254 "/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")" >/dev/null 2>&1'),
 ]
@@ -207,7 +208,7 @@ EXPECTED_CONTAINERS = 16
 def expected_containers():
     """How many containers a finished install runs: 16, or one fewer without AdGuard Home."""
     return EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
-WEATHER_DEFAULT = (40.7128, -74.0060)
+WEATHER_DEFAULTS = ((40.7128, -74.0060), (40.7143, -74.0060))    # the coordinates the shipped widgets.yaml has had (New York)
 
 
 def boot_id():
@@ -228,7 +229,7 @@ def chk_weather():
     if not (lat and lon):
         return False
     try:
-        return (float(lat.group(1)), float(lon.group(1))) != WEATHER_DEFAULT
+        return (float(lat.group(1)), float(lon.group(1))) not in WEATHER_DEFAULTS
     except ValueError:
         return False
 
