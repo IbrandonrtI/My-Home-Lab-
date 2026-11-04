@@ -109,7 +109,7 @@ rm_ /root/.homelab-setup /var/lib/homelab-setup /var/lib/homelab /var/lib/homela
     /var/log/homelab-backup.log /var/log/homelab-update.log /var/log/homelab-snapraid.log /var/log/homelab-cards.log /var/lock/homelab-cards.lock
 
 step "6. The homelab commands"
-for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-selftest homelab-cards homelab-setup; do rm_ "/usr/local/sbin/$f"; done
+for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-stats homelab-selftest homelab-cards homelab-setup; do rm_ "/usr/local/sbin/$f"; done
 for f in hdd-recover homelab homelab-check; do rm_ "/usr/local/bin/$f"; done
 
 step "7. The schedule (root's crontab) and the login screen"
