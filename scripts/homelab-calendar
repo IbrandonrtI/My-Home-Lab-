@@ -6,6 +6,7 @@ Home tab reads:
   holidays.ics       US federal holidays, plus Lincoln's Birthday and Election Day (New York State)
   observances.ics    Valentine's Day, Mother's Day, Father's Day, Halloween, Lunar New Year and Diwali
   events.ics         your own events (kept in ~/homepage-config/events.txt, one per line, you may edit that file by hand)
+  mycalendars.ics    your online calendars (Google Calendar, school, work ... any calendar with an iCal address), all in one file
 The holiday dates are worked out by rule (for example "third Monday of January"), so they are always right. Lunar New Year and Diwali
 come from a fixed list of dates (2026 to 2035).
 
@@ -15,6 +16,11 @@ Usage (type  homelab event ...  instead of  homelab-calendar ...):
   homelab event list                        your events, numbered
   homelab event remove NUMBER               take one away (the number from the list)
   homelab event holidays                    the next holidays
+  homelab calendar add NAME ADDRESS         show an online calendar (its iCal address, https://... or webcal://...) next to your own.
+                                            Google Calendar: Settings > your calendar > Integrate calendar > the address in iCal format.
+  homelab calendar list                     your online calendars, numbered
+  homelab calendar remove NUMBER            stop showing one
+  homelab calendar sync                     fetch them again now (a daily job does this)
   homelab-calendar build                    rewrite the calendar files (the installer and a weekly job do this)
   homelab-calendar version
 """
@@ -25,6 +31,8 @@ import os
 import pwd
 import re
 import sys
+import urllib.error
+import urllib.request
 
 VERSION = "1.0"
 STATE_DIR = os.environ.get("HOMELAB_STATE_DIR", "/var/lib/homelab")
@@ -36,6 +44,12 @@ DIWALI = {2026: (11, 8), 2027: (10, 29), 2028: (10, 17), 2029: (11, 5), 2030: (1
           2034: (11, 10), 2035: (10, 30)}
 EVENTS_HEADER = ("# Your own events for the Calendar on the Homepage dashboard. One per line:  DATE | once or yearly | text\n"
                  "# Add one with:  homelab event add 2026-12-25 \"Family dinner\"   (you may also edit this file by hand)\n")
+
+
+FEEDS_HEADER = ("# Your online calendars for the Calendar on the Homepage dashboard. One per line:  NAME | ADDRESS\n"
+                "# The address of a Google Calendar is private: do not share this file. Add one with:  homelab calendar add NAME ADDRESS\n")
+FEED_MAX_BYTES = 8 * 1024 * 1024
+FEED_KEEP_DAYS = 400                  # events that do not repeat and ended longer ago than this are left out (keeps the file small)
 
 
 class Fail(Exception):
@@ -234,8 +248,142 @@ def save_events(hp, events):
     write_if_changed(os.path.join(hp, "events.txt"), text, hp)
 
 
+# ---------------------------------------------------------------- your online calendars
+def load_feeds(hp):
+    """[(name, address)] from calendars.txt. Lines that cannot be read are skipped."""
+    out = []
+    for line in read(os.path.join(hp, "calendars.txt")).splitlines():
+        if not line.strip() or line.lstrip().startswith("#") or "|" not in line:
+            continue
+        name, addr = [p.strip() for p in line.split("|", 1)]
+        if name and re.match(r"^(https?|webcal)://", addr, re.I):
+            out.append((name, addr))
+    return out
+
+
+def save_feeds(hp, feeds):
+    path = os.path.join(hp, "calendars.txt")
+    write_if_changed(path, FEEDS_HEADER + "".join("%s | %s\n" % f for f in feeds), hp)
+    os.chmod(path, 0o600)                      # the address of a calendar must stay private
+
+
+def feed_url(addr):
+    return re.sub(r"^webcal://", "https://", addr, flags=re.I)
+
+
+def fetch_feed(addr):
+    """The text of an online calendar. Raises Fail when it cannot be had or is not a calendar."""
+    req = urllib.request.Request(feed_url(addr), headers={"User-Agent": "homelab-calendar"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as r:
+            data = r.read(FEED_MAX_BYTES + 1)
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        raise Fail("could not read that address (%s)" % getattr(e, "reason", e)) from None
+    if len(data) > FEED_MAX_BYTES:
+        raise Fail("that calendar is bigger than %d MB" % (FEED_MAX_BYTES >> 20))
+    text = data.decode("utf-8", "replace")
+    if "BEGIN:VCALENDAR" not in text:
+        raise Fail("that address is not an iCal calendar (it should end in .ics)")
+    return text
+
+
+def feed_slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-") or "calendar"
+
+
+def unfold(text):
+    """The lines of an .ics text, with continuation lines joined."""
+    lines = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if raw[:1] in (" ", "\t") and lines:
+            lines[-1] += raw[1:]
+        elif raw:
+            lines.append(raw)
+    return lines
+
+
+def feed_parts(text, name, today=None):
+    """(time zone blocks, events) of one calendar. Every event title starts with [name]. Old one-time events are dropped."""
+    today = today or datetime.date.today()
+    cutoff = (today - datetime.timedelta(days=FEED_KEEP_DAYS)).strftime("%Y%m%d")
+    zones, events, cur, kind = [], [], None, ""
+    for line in unfold(text):
+        if cur is None:
+            if line in ("BEGIN:VEVENT", "BEGIN:VTIMEZONE"):
+                cur, kind = [line], line[6:]
+            continue
+        cur.append(line)
+        if line == "END:" + kind:
+            if kind == "VTIMEZONE":
+                zones.append(cur)
+            else:
+                events.append(tag_event(cur, name, cutoff))
+            cur = None
+    return zones, [e for e in events if e]
+
+
+def tag_event(lines, name, cutoff):
+    """The event with [name] in front of its title, or None for an old event that does not repeat."""
+    start = next((l for l in lines if l.startswith("DTSTART")), "")
+    day = re.sub(r"\D", "", start.split(":", 1)[-1])[:8]
+    if day and day < cutoff and not any(l.startswith("RRULE") for l in lines):
+        return None
+    out, done = [], False
+    for l in lines:
+        m = re.match(r"^SUMMARY(?:;[^:]*)?:(.*)$", l)
+        if m and not done:
+            out.append("SUMMARY:[%s] %s" % (esc(name), m.group(1)))
+            done = True
+        else:
+            out.append(l)
+    if not done:
+        out.insert(1, "SUMMARY:[%s]" % esc(name))
+    return out
+
+
+def merged_feeds(hp):
+    """The text of mycalendars.ics from the saved copies of the online calendars."""
+    zones, seen, body = [], set(), []
+    for name, _addr in load_feeds(hp):
+        z, ev = feed_parts(read(os.path.join(hp, "calendar-cache", feed_slug(name) + ".ics")), name)
+        for block in z:
+            tz = next((l for l in block if l.startswith("TZID:")), "")
+            if tz not in seen:
+                seen.add(tz)
+                zones.append(block)
+        body += ev
+    if not body:
+        body = vevent(datetime.date(2000, 1, 1), "No calendars added yet", False)
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//homelab//calendar//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:My Calendars"]
+    for block in zones:
+        lines += block
+    lines += [l for e in body for l in (e if isinstance(e, list) else [e])]
+    lines.append("END:VCALENDAR")
+    return "\r\n".join(fold(l) for l in lines) + "\r\n"
+
+
+def sync_feeds(hp, only=None):
+    """Fetch the online calendars again (a calendar that cannot be fetched keeps its last copy). Returns [(name, 'ok' or the problem)]."""
+    cache = os.path.join(hp, "calendar-cache")
+    os.makedirs(cache, exist_ok=True)
+    if os.geteuid() == 0:
+        st = os.stat(hp)
+        os.chown(cache, st.st_uid, st.st_gid)
+    results = []
+    for name, addr in load_feeds(hp):
+        if only and name != only:
+            continue
+        try:
+            text = fetch_feed(addr)
+            write_if_changed(os.path.join(cache, feed_slug(name) + ".ics"), text, hp)
+            results.append((name, "ok"))
+        except Fail as e:
+            results.append((name, str(e)))
+    return results
+
+
 def build(hp):
-    """Write the three calendar files. Returns the list of files that changed."""
+    """Write the calendar files. Returns the list of files that changed."""
     img = os.path.join(hp, "images")
     os.makedirs(img, exist_ok=True)
     if os.geteuid() == 0:
@@ -246,7 +394,8 @@ def build(hp):
     obs = sorted(e for y in ys for e in observances(y))
     files = [("holidays.ics", ics("Holidays", [(d, n, False) for d, n in hol])),
              ("observances.ics", ics("Observances", [(d, n, False) for d, n in obs])),
-             ("events.ics", ics("My Events", load_events(hp)))]
+             ("events.ics", ics("My Events", load_events(hp))),
+             ("mycalendars.ics", merged_feeds(hp))]
     return [n for n, text in files if write_if_changed(os.path.join(img, n), text, hp)]
 
 
@@ -272,6 +421,62 @@ def say_events(events):
     for i, (d, t, y) in enumerate(events, 1):
         when = d.strftime("%a %b %d") + " (every year)" if y else d.strftime("%a %b %d, %Y") + ("" if d >= today else " (past)")
         print("%3d  %s  %s" % (i, when, t))
+
+
+def short_addr(addr):
+    m = re.match(r"^(\w+://[^/]+)", addr)
+    return (m.group(1) if m else addr[:30]) + "/..."          # the rest of the address is private
+
+
+def feed_cmd(hp, a):
+    sub = a[0] if a else ""
+    feeds = load_feeds(hp)
+    if sub == "list":
+        if not feeds:
+            print("No online calendars yet. Add one with:  homelab calendar add NAME ADDRESS")
+        for i, (n, addr) in enumerate(feeds, 1):
+            print("  %d  %-20s %s" % (i, n, short_addr(addr)))
+        return 0
+    if sub == "add":
+        words = a[1:]
+        if len(words) < 2:
+            raise Fail("Usage:  homelab calendar add NAME ADDRESS     for example:  homelab calendar add School \"https://calendar.google.com/calendar/ical/.../basic.ics\"")
+        addr, name = words[-1], " ".join(words[:-1]).replace("|", "/").strip()
+        if not re.match(r"^(https?|webcal)://", addr, re.I):
+            raise Fail("The address must start with https:// or webcal://  (Google Calendar: Settings > your calendar > Integrate calendar > the address in iCal format).")
+        if any(n.lower() == name.lower() for n, _ in feeds):
+            raise Fail("There is already an online calendar called %s. Remove it first, or use another name." % name)
+        text = fetch_feed(addr)                    # refuses an address that is not a calendar
+        feeds.append((name, addr))
+        save_feeds(hp, feeds)
+        cache = os.path.join(hp, "calendar-cache")
+        os.makedirs(cache, exist_ok=True)
+        if os.geteuid() == 0:
+            st = os.stat(hp)
+            os.chown(cache, st.st_uid, st.st_gid)
+        write_if_changed(os.path.join(cache, feed_slug(name) + ".ics"), text, hp)
+        build(hp)
+        n = len(feed_parts(text, name)[1])
+        print("Added %s (%d events). They show in the dashboard's Calendar within 5 minutes (or reload the page). A daily job keeps them fresh." % (name, n))
+        return 0
+    if sub in ("remove", "rm", "delete"):
+        if len(a) != 2 or not a[1].isdigit():
+            raise Fail("Usage:  homelab calendar remove NUMBER     (the number from  homelab calendar list)")
+        n = int(a[1])
+        if not 1 <= n <= len(feeds):
+            raise Fail("There is no online calendar number %d. See the numbers with:  homelab calendar list" % n)
+        name, _ = feeds.pop(n - 1)
+        save_feeds(hp, feeds)
+        try:
+            os.remove(os.path.join(hp, "calendar-cache", feed_slug(name) + ".ics"))
+        except OSError:
+            pass
+        build(hp)
+        print("Removed %s." % name)
+        return 0
+    if sub == "sync":
+        return run(["sync"])
+    raise Fail("Try:  homelab calendar add NAME ADDRESS | list | remove NUMBER | sync")
 
 
 def run(argv):
@@ -331,7 +536,18 @@ def run(argv):
         build(hp)
         print("Removed: %s  %s" % (d.strftime("%a %b %d, %Y"), t))
         return 0
-    raise Fail("I do not know '%s'. Try:  homelab event add | list | remove | holidays" % cmd)
+    if cmd == "sync":
+        res = sync_feeds(hp)
+        changed = build(hp)
+        if sys.stdout.isatty() or any(r != "ok" for _, r in res):
+            for name, r in res:
+                print("  %-20s %s" % (name, "up to date" if r == "ok" else "PROBLEM: " + r))
+            if not res:
+                print("No online calendars yet. Add one with:  homelab calendar add NAME ADDRESS")
+        return 1 if any(r != "ok" for _, r in res) else 0
+    if cmd == "feed":
+        return feed_cmd(hp, argv[1:])
+    raise Fail("I do not know '%s'. Try:  homelab event add | list | remove | holidays   or   homelab calendar add | list | remove | sync" % cmd)
 
 
 def main(argv):

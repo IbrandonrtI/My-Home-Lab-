@@ -413,28 +413,53 @@ def first_artist(name):
     return re.split(r",|;| & | feat\.?| ft\.?", name.split(" - ", 1)[0].strip(), maxsplit=1, flags=re.I)[0].strip()
 
 
+RECENT_SONGS = 5
+
+
+def song_age(mtime, now):
+    """'Today', 'Yesterday', '3 days ago' or 'Oct 12' for the day a song was saved."""
+    days = (datetime.date.fromtimestamp(now) - datetime.date.fromtimestamp(mtime)).days
+    if days <= 0:
+        return "Today"
+    if days == 1:
+        return "Yesterday"
+    if days < 7:
+        return "%d days ago" % days
+    d = datetime.date.fromtimestamp(mtime)
+    return "%s %d" % (MONTHS[d.month - 1], d.day)
+
+
 def count_music(root):
-    """(songs, artists, bytes): the audio files below root. An artist is a folder directly in root, or the name before ' - ' in a file name."""
+    """(songs, artists, bytes, newest): the audio files below root. An artist is a folder directly in root, or the name before ' - ' in a
+    file name. newest = [(mtime, song name)], the last few songs saved."""
     songs = size = 0
     artists = set()
+    newest = []
     for here, _dirs, files in os.walk(root):
         top = os.path.relpath(here, root).split(os.sep)[0] if here != root else ""
         for fn in files:
             if not fn.lower().endswith(AUDIO):
                 continue
             try:
-                size += os.stat(os.path.join(here, fn)).st_size
+                st = os.stat(os.path.join(here, fn))
             except OSError:
                 continue
+            size += st.st_size
+            newest = sorted(newest + [(int(st.st_mtime), os.path.splitext(fn)[0])], reverse=True)[:RECENT_SONGS]
             songs += 1
             who = top or first_artist(fn)
             if who and who != ".":
                 artists.add(who.casefold())
-    return songs, len(artists), size
+    return songs, len(artists), size, newest
+
+
+def recent_rows(c, now):
+    rows = [{"name": n, "label": song_age(t, now)} for t, n in c.get("newest", [])]
+    return rows or [{"name": "No songs yet", "label": "-"}]
 
 
 def music_block(quick):
-    none = {"songs": "Not found", "artists": "-", "size": "-", "folder": "Not found"}
+    none = {"songs": "Not found", "artists": "-", "size": "-", "folder": "Not found", "recent": [{"name": "No music folder found", "label": "-"}]}
     root = music_dir()
     if not root:
         return none
@@ -442,18 +467,19 @@ def music_block(quick):
     if cache.get("path") == root and (quick or time.time() - cache.get("at", 0) < 600):
         c = cache
     elif quick:
-        return {"songs": "Counting...", "artists": "-", "size": "-", "folder": root}
+        return {"songs": "Counting...", "artists": "-", "size": "-", "folder": root, "recent": [{"name": "Counting...", "label": "-"}]}
     else:
         try:
-            n, a, b = count_music(root)
+            n, a, b, newest = count_music(root)
         except OSError:
             return none
-        c = {"path": root, "at": int(time.time()), "songs": n, "artists": a, "bytes": b}
+        c = {"path": root, "at": int(time.time()), "songs": n, "artists": a, "bytes": b, "newest": newest}
         try:
             write_atomic(MUSIC_CACHE, json.dumps(c))
         except OSError:
             pass
-    return {"songs": num(c.get("songs", 0)), "artists": num(c.get("artists", 0)), "size": human(c.get("bytes", 0)), "folder": root}
+    return {"songs": num(c.get("songs", 0)), "artists": num(c.get("artists", 0)), "size": human(c.get("bytes", 0)), "folder": root,
+            "recent": recent_rows(c, time.time())}
 
 
 # ---------------------------------------------------------------- containers and updates

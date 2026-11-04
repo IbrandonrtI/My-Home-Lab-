@@ -269,8 +269,11 @@ commands() {
   cmd "homelab bookmark list"          "the bookmarks, by category, with their numbers"
   cmd "homelab bookmark move NAME CATEGORY" "another category (add a NUMBER for its place)"
   cmd "homelab bookmark remove NAME [CATEGORY]" "take one away (CATEGORY if the name is in two)"
+  cmd "homelab calendar add NAME ADDRESS" "show an online calendar (Google, school ...)"
+  cmd "homelab calendar list"          "your online calendars (also: remove N, sync)"
   cmd "homelab event add DATE \"text\" [yearly]" "your own event in the calendar"
   cmd "homelab event list"             "your events, numbered (remove: event remove NUMBER)"
+  cmd "homelab simple on|off"          "hide the small text under card names (default: off)"
   cmd "homelab theme"                  "show the look and how to change it (no sudo)"
   cmd "homelab theme background [BLUR] URL" "new picture; optional BLUR: none sm md lg xl 2xl 3xl"
   cmd "homelab theme cards COLOR NUMBER" "ALL cards: colour, how solid (NUMBER 0 to 100)"
@@ -1227,11 +1230,44 @@ For example:  homelab bookmark add YouTube youtube.com Entertainment
               homelab bookmark add Netflix netflix.com Entertainment si-netflix 2"""
 
 
+SIMPLE_BEGIN = "/* >>> homelab simple >>>"
+SIMPLE_END = "/* <<< homelab simple <<< */"
+SIMPLE_BLOCK = (SIMPLE_BEGIN + " written by: homelab simple on. Remove it with: homelab simple off */\n"
+                ".service-description { display: none !important; }\n" + SIMPLE_END + "\n")
+
+
+def simple_css(css, on):
+    """custom.css with the 'less busy cards' rule put in (on) or taken out (off). Everything else in the file is left alone."""
+    css = re.sub(r"\n*" + re.escape(SIMPLE_BEGIN) + r".*?" + re.escape(SIMPLE_END) + r"\n?", "\n", css, flags=re.S)
+    css = css.rstrip("\n") + "\n" if css.strip() else ""
+    return css + ("\n" if css else "") + SIMPLE_BLOCK if on else css
+
+
+def simple_cmd(args):
+    need_dir()
+    css = read(CSS)
+    now = SIMPLE_BEGIN in css
+    word = args[0].lower() if args else "status"
+    if len(args) > 1 or word not in ("on", "off", "status"):
+        raise Fail("Usage: homelab simple on | off | status")
+    if word == "status":
+        print("Less busy cards are %s. %s" % ("ON (the small text under card names is hidden)" if now else "OFF (the shipped look)",
+                                              "Turn them off with:  homelab simple off" if now else "Turn them on with:  homelab simple on"))
+        return
+    if (word == "on") == now:
+        print("Less busy cards are already %s." % word)
+        return
+    write(CSS, simple_css(css, word == "on"))
+    print("Less busy cards are now %s. %s" % (word.upper(), REFRESH))
+
+
 def main(a):
     try:
         if not a:
             raise Fail("nothing to do")
-        if a[0] == "theme":
+        if a[0] == "simple":
+            simple_cmd(a[1:])
+        elif a[0] == "theme":
             a = a[1:]
             c = a[0] if a else ""
             if c == "":
@@ -1792,8 +1828,10 @@ did_you_mean() {   # a word that is not a homelab option: point to the command t
 case "${1:-}" in
   backup|update|upgrade|setup|drives|drive|cards|selftest) forward "$@" ;;
   theme)  homepage_edit theme "${@:2}" ;;
+  simple) homepage_edit simple "${@:2}" ;;
   bookmark|bookmarks) homepage_edit bookmark "${@:2}" ;;
   event|events) calendar_cmd "${@:2}" ;;
+  calendar|calendars) calendar_cmd feed "${@:2}" ;;
   docs)   show_docs ;;
   secrets) secrets ;;
   -h|--help|help)
