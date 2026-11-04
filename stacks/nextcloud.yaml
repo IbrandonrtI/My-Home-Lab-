@@ -1,12 +1,3 @@
-# Nextcloud: personal cloud (files, calendar, contacts). Four containers: app, database, redis, cron.
-# Stack name in Portainer: nextcloud
-# Port:    8082 (web interface, plain http on the local network). The 1005 below must match the Tailscale Serve port you gave Nextcloud.
-# Addresses: both http://192.168.X.X:8082 (local) and https://pc.your-tailnet.ts.net:1005 (Tailscale) work. Nextcloud takes the
-#   Tailscale address and https from the headers that Tailscale Serve adds, and only from the proxies in TRUSTED_PROXIES.
-#   Do NOT add OVERWRITEHOST or OVERWRITEPROTOCOL: they would force every request, local ones included, to the Tailscale address.
-# Folders: /home/your-username/nextcloud/{db,html} (boot drive) and /mnt/storage/nextcloud (main pool, owned by uid 33).
-# Variables: set them in Portainer BEFORE the first start; Nextcloud reads them only once. The list is at the end.
-# The tag 35-apache keeps the major version fixed: Nextcloud cannot skip a major version, so update one at a time.
 services:
   db:
     image: postgres:16-alpine
