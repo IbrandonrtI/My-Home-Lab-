@@ -517,7 +517,7 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
 /* The Navidrome player inside its card: the scroll bar of the player is pushed out of sight (scrolling still works). The frame is made
    a little wider than the card and the extra width is cut off. */
 #navidrome-card div:has(> iframe) { overflow: hidden !important; border-radius: 10px; }
-#navidrome-card iframe { width: calc(100% + 18px) !important; max-width: none !important; }
+#navidrome-card iframe { width: calc(100% + 32px) !important; max-width: none !important; border: 0 !important; }
 
 @media (prefers-reduced-motion: reduce) {
   .bookmark > a { transition: none; }
