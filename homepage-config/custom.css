@@ -372,7 +372,7 @@ div[id$="-card"] > div {
 
 /* >>> homelab tabs >>> managed by the installer: an upgrade replaces everything between this line and the closing marker,
    so put your own rules above it. Frosted tab buttons in the same glass as the cards. */
-#tabs { margin: 6px 0 14px !important; }
+#tabs { margin-top: 6px !important; margin-bottom: 14px !important; }      /* only up and down: the sides keep Homepage's own margin, so the tabs line up with the cards */
 
 #myTab {
   display: flex !important;
