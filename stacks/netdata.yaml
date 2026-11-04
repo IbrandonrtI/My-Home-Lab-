@@ -1,14 +1,8 @@
-# Netdata: live, second-by-second system metrics.
-# Stack name in Portainer: netdata (the container is then called netdata-netdata-1).
-# Port:    19999 (web interface).
-# Variables: none.
-# Security note: SYS_PTRACE and apparmor:unconfined are what Netdata's own Docker instructions ask for, so it can
-# read process and network details. Keep the port off the internet.
 services:
   netdata:
     image: netdata/netdata:stable
     restart: unless-stopped
-    init: true   # a tiny init program inside the container collects finished child programs, so no "zombie" processes pile up
+    init: true   
     ports:
       - "19999:19999"
     cap_add:
