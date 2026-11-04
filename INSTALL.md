@@ -13,7 +13,7 @@ It takes about 30 to 60 minutes, mostly downloads (around 10 GB). It asks a few 
 | A password manager | The installer makes several passwords and shows them once. |
 | The machine's own screen and keyboard | Run the installer there, not over SSH through Tailscale. It frees port 53 for AdGuard Home, and that cuts a Tailscale SSH session. SSH on your home network is fine. |
 
-A drive for photos and backups is optional and can be added later. The installer never formats or changes a drive.
+A drive for photos and backups is optional and can be added later. The installer never formats or erases a drive. The one change it can make: on Ubuntu Server with LVM it offers to give the unused space of the drive to the system volume (it only grows, and it asks first).
 
 ## Install
 
@@ -113,7 +113,7 @@ The installer is one Python file with no dependencies, so it works on a machine 
 **Rules I gave it.**
 
 - A Homepage widget key is written only after a live request with that key works. That way a wrong key can't lock anything out.
-- It never formats or changes a drive. `sudo drives` does that, separately, and asks you to type `ERASE`.
+- It never formats or erases a drive. `sudo drives` does that, separately, and asks you to type `ERASE`. The only drive change it offers is growing an LVM system volume into unused space (Ubuntu Server's installer leaves most of the drive unused), and it asks first.
 - It never saves the admin password. The generated passwords live in `/root/.homelab-setup/secrets.env` (readable only by root) and are shown once.
 - Every command that changes the machine goes through one function, so `--dry-run` can just print it.
 - Restoring never overwrites existing data, and the Nextcloud database restore needs you to type `RESTORE`.
