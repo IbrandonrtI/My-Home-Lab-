@@ -45,7 +45,7 @@ ok "S1 typed password NOT in the install log" '! grep -q $PW $HLS_ROOT/var/log/h
 ok "S1 typed password only in the three Homepage logins" '[ "$(grep -rl $PW $HLS_ROOT | grep -v "/proc" | sort | tr "\n" " ")" = "$HLS_ROOT/home/testuser/homepage-config/services.yaml " ]'
 ok "S1 services.yaml has no placeholders left" '! grep -q "your-own-key\|192.168.X.X\|your-tailnet\|your-email" $HLS_ROOT/home/testuser/homepage-config/services.yaml || grep -B3 -A3 "your-own-key" $HLS_ROOT/home/testuser/homepage-config/services.yaml | grep -q tailscale'
 ok "S1 progress file written" '[ -s $HLS_ROOT/var/lib/homelab/setup-progress ]'
-ok "S1 cron has 5 lines, no backup line (no data drive)" '[ "$(grep -c . $SIM_DIR/crontab)" = 5 ] && ! grep -q homelab-backup $SIM_DIR/crontab'
+ok "S1 cron has 6 lines (with the service cards), no backup line (no data drive)" '[ "$(grep -c . $SIM_DIR/crontab)" = 6 ] && ! grep -q homelab-backup $SIM_DIR/crontab'
 ok "S1 login hook added to .bashrc once" '[ "$(grep -c "homelab login display >>>" $HLS_ROOT/home/testuser/.bashrc)" = 1 ]'
 ok "S1 a clean machine gets no notice about drives left by an earlier install" '! grep -q "sudo drives release" $SIM_DIR/s1.out'
 ok "S1 scripts installed with this machine's user pinned in them (no lookup left, nobody else's name)" 'grep -q "HOMELAB_USER:-testuser" $HLS_ROOT/usr/local/sbin/homelab-backup && grep -q "SUDO_USER:-testuser" $HLS_ROOT/usr/local/sbin/drives && ! grep -q "getent passwd 1000" $HLS_ROOT/usr/local/sbin/homelab-backup $HLS_ROOT/usr/local/sbin/drives && ! grep -rq "otheruser" $HLS_ROOT/usr/local'
@@ -66,7 +66,7 @@ H0=$(sha256sum $HLS_ROOT/home/testuser/homepage-config/services.yaml | cut -d' '
 ok "S1 fill does not tell the user to start the walk-through while inside it" '! grep -q "start the walk-through" $SIM_DIR/s1c.out && grep -q "then paste it below" $SIM_DIR/s1c.out'
 ok "S1 with no backup drive FileBrowser shows no drive folder (no boot drive, no main storage)" '! wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv"'
 ok "S1 the FileBrowser card on Homepage no longer names a 750GB drive" '! grep -q "750GB HDD" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "View and edit the backups" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
-ok "S1 the first Homepage resources pill is named after this machine, not the original server" '! grep -q "label: Server" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml && grep -q "label: vm" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml'
+ok "S1 the first Homepage resources pill is the shipped HomeLab label, not the original server" '! grep -q "label: Server" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml && grep -q "label: HomeLab" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml'
 ok "S1 the Next step section is the last thing printed after the passwords" '[ "$(grep -n "── Next step" $SIM_DIR/s1.out | tail -1 | cut -d: -f1)" -gt "$(grep -n "Generated passwords and keys" $SIM_DIR/s1.out | head -1 | cut -d: -f1)" ] && tail -8 $SIM_DIR/s1.out | grep -q "sudo homelab-setup"'
 ok "S1 the Next step section names the HTTPS step (the first thing that waits for a person)" 'sed -n "/── Next step/,\$p" $SIM_DIR/s1.out | grep -q "MagicDNS and HTTPS" && sed -n "/── Next step/,\$p" $SIM_DIR/s1.out | grep -q "sudo homelab-setup refresh"'
 ok "S1 a plain checklist run ends with the Next step section too" 'hls 2>&1 | tail -12 | grep -q "Next step\|After each step"'
@@ -392,9 +392,9 @@ echo "### S18 weather city lookup unreachable: install continues, weather step s
 fresh; approve_in 3
 HLS_GEOCODE_API=http://127.0.0.1:9 bash -c "$(declare -f install_in hls); PW=$PW; install_in '' y" 2>/dev/null | HLS_GEOCODE_API=http://127.0.0.1:9 hls install > $SIM_DIR/s18.out 2>&1
 ok "S18 install finished with a plain warning about the lookup" 'grep -q "city lookup" $SIM_DIR/s18.out && [ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
-ok "S18 widgets.yaml keeps the default coordinates" 'grep -q "latitude: 40.7128" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml'
+ok "S18 widgets.yaml keeps the default coordinates" 'grep -q "latitude: 40.7143" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml'
 ok "S18 the weather step is still on the list" 'hls 2>&1 | grep -q "○ Homepage weather location"'
-sed -i 's/latitude: 40.7128/latitude: 40.67/; s/longitude: -74.0060/longitude: -73.80/' $HLS_ROOT/home/testuser/homepage-config/widgets.yaml
+sed -i 's/latitude: 40.7143/latitude: 40.67/; s/longitude: -74.0060/longitude: -73.80/' $HLS_ROOT/home/testuser/homepage-config/widgets.yaml
 ok "S18 editing the coordinates by hand ticks the step" '[ "$(hls 2>&1 | grep -c "○ Homepage weather location")" = 0 ]'
 fi
 
