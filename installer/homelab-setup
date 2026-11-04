@@ -1832,20 +1832,6 @@ def card_widget_type(text, card_id):
     return m.group(1) if m else ""
 
 
-def services_with_widget(text, card_id, widget_lines):
-    """services.yaml with a widget added to the card (at the end of the card). A card that has a widget already, or a file without that
-    card, is returned as it was."""
-    lines = text.split("\n")
-    r = card_range(lines, card_id)
-    if not r or any(re.match(r"^\s+widget:\s*$", l) for l in lines[r[0]:r[1]]):
-        return text
-    ind = len(lines[r[0] + 1]) - len(lines[r[0] + 1].lstrip()) if r[0] + 1 < len(lines) else 8
-    pad = " " * ind
-    new = [pad + "widget:"] + [pad + "  " + l for l in widget_lines]
-    lines[r[1]:r[1]] = new
-    return "\n".join(lines)
-
-
 def card_to_top(text, card_id):
     """services.yaml with the card moved to the top of its group (a card that is first already, or a file without it, is returned as it was)."""
     lines = text.split("\n")
@@ -1866,43 +1852,54 @@ def card_to_top(text, card_id):
     return "\n".join(lines)
 
 
-PLAYER_ID = "navidrome-player"
+PLAYER_ID = "navidrome-player"      # the separate player card of zip 33; the player now lives inside the Navidrome card and this card is taken out
 
 
-def navidrome_player_card(lan, ind=4):
-    """The lines of the Navidrome Player card: Navidrome's own web player shown inside the dashboard (an iframe widget)."""
-    pad = " " * ind
-    return [pad + "- Navidrome Player:", pad + "    id: " + PLAYER_ID, pad + "    icon: navidrome.svg",
-            pad + "    description: Play, pause, next, shuffle and repeat",
-            pad + "    widget:", pad + "      type: iframe", pad + "      name: navidrome-player",
-            pad + "      src: http://%s:%d" % (lan, PORTS["navidrome"]),
-            pad + "      classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96",
-            pad + "      allowPolicy: autoplay; fullscreen",
-            pad + "      loadingStrategy: lazy"]
+def navidrome_iframe_widget(lan):
+    """The lines of the widget that shows Navidrome's own web player inside its card (an iframe widget)."""
+    return ["type: iframe", "name: navidrome-player", "src: http://%s:%d" % (lan, PORTS["navidrome"]),
+            "classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96", "allowPolicy: autoplay; fullscreen", "loadingStrategy: lazy"]
 
 
-def services_with_player(text, after_id, lan):
-    """services.yaml with the Navidrome Player card right under the card `after_id` (nothing changes when it is there or the card is missing)."""
+def services_with_iframe_widget(text, card_id, lan):
+    """services.yaml with the player (an iframe widget) as the widget of the card. A widget the card has already (the live numbers of an
+    earlier version) is replaced; a card that shows the player already, or a file without that card, is returned as it was."""
     lines = text.split("\n")
-    if card_range(lines, PLAYER_ID):
+    r = card_range(lines, card_id)
+    if not r or card_widget_type(text, card_id) == "iframe":
         return text
-    r = card_range(lines, after_id)
+    w = next((i for i in range(*r) if re.match(r"^\s+widget:\s*$", lines[i])), None)
+    if w is not None:
+        wind = len(lines[w]) - len(lines[w].lstrip())
+        end = w + 1
+        while end < len(lines) and (not lines[end].strip() or len(lines[end]) - len(lines[end].lstrip()) > wind):
+            end += 1
+        while end > w + 1 and not lines[end - 1].strip():
+            end -= 1
+        del lines[w:end]
+        r = card_range(lines, card_id)
+    ind = len(lines[r[0] + 1]) - len(lines[r[0] + 1].lstrip()) if r[0] + 1 < len(lines) else 8
+    pad = " " * ind
+    lines[r[1]:r[1]] = [pad + "widget:"] + [pad + "  " + l for l in navidrome_iframe_widget(lan)]
+    return "\n".join(lines)
+
+
+def services_without_card(text, card_id):
+    """services.yaml without the card (and the blank line in front of it). A file without that card is returned as it was."""
+    lines = text.split("\n")
+    r = card_range(lines, card_id)
     if not r:
         return text
-    ind = len(lines[r[0]]) - len(lines[r[0]].lstrip())
-    lines[r[1]:r[1]] = [""] + navidrome_player_card(lan, ind)
+    s = r[0]
+    while s > 0 and not lines[s - 1].strip():
+        s -= 1
+    del lines[s:r[1]]
     return "\n".join(lines)
 
 
 def navidrome_card_first(text):
     """True when the Navidrome card is the first card of its group (or there is no such card)."""
     return card_to_top(text, "navidrome-card") == text
-
-
-def navidrome_widget(lan, user, password, salt):
-    """The lines of the Navidrome widget (the key is md5(password + salt), as the Subsonic protocol wants it)."""
-    token = hashlib.md5((password + salt).encode()).hexdigest()
-    return ["type: navidrome", "url: http://%s:%d" % (lan, PORTS["navidrome"]), "user: %s" % user, "token: %s" % token, "salt: %s" % salt]
 
 
 def stack_env(name):
@@ -3602,7 +3599,7 @@ register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome mu
 @step
 class NavidromeCard(Step):
     id, group = "navidrome-card", "Homepage"
-    title = "Navidrome login, its dashboard card with live numbers (first in its group) and the Navidrome Player card"
+    title = "Navidrome login and its dashboard card (first in its group) with Navidrome's own player inside"
     needs = ("stack-navidrome", "homepage-files")
 
     def applies(self):
@@ -3610,18 +3607,17 @@ class NavidromeCard(Step):
 
     def probe(self):
         svc = read_file(hp_path("services.yaml"))
-        if card_widget_type(svc, "navidrome-card") != "navidrome":
+        if card_widget_type(svc, "navidrome-card") != "iframe":
             return "todo"
-        return "done" if card_widget_type(svc, PLAYER_ID) == "iframe" and navidrome_card_first(svc) else "todo"
+        return "done" if card_range(svc.split("\n"), PLAYER_ID) is None and navidrome_card_first(svc) else "todo"
 
     def run(self):
         if Opt.dry:
-            out("      would create the Navidrome login (%s), then add its card with the live numbers and the player card to the dashboard, "
-                "with the Navidrome card first in its group" % Ctx.admin)
+            out("      would create the Navidrome login (%s), then put Navidrome's player inside its dashboard card, first in its group" % Ctx.admin)
             return
         old = read_file(hp_path("services.yaml"))
         new = old
-        if card_widget_type(old, "navidrome-card") != "navidrome":          # first time: the login and the live numbers
+        if card_widget_type(old, "navidrome-card") not in ("navidrome", "iframe"):          # first time: the login
             pw = need_password("to create the Navidrome login")
             if not wait_for(lambda: http("GET", url("navidrome", "/"), raw=True, timeout=10)[0] == 200, "Navidrome to answer", 120):
                 raise Abort("Navidrome does not answer on port %d. Look at its log:  docker logs navidrome" % PORTS["navidrome"])
@@ -3630,25 +3626,26 @@ class NavidromeCard(Step):
             if st != 200:                                    # 403: it has a login already. Is it ours?
                 st, _, _ = http("POST", url("navidrome", "/auth/login"), body=creds, timeout=30)
                 if st != 200:
-                    warn("Navidrome already has a login that is not %s with the shared admin password, so the dashboard cannot show its numbers. "
-                         "Open it, add that user or change its password, then run:  sudo homelab-setup upgrade" % Ctx.admin)
-                    return
+                    warn("Navidrome already has a login that is not %s with the shared admin password. Open it and log in with the login it has. "
+                         "(The player card of the dashboard works with any login.)" % Ctx.admin)
+            else:
+                out("      Navidrome is at %s. Log in as %s with the shared admin password." % (url("navidrome"), Ctx.admin))
             if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
                 run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)        # makes the card (and its Tailscale address) now
             old = read_file(hp_path("services.yaml"))
-            new = services_with_widget(old, "navidrome-card", navidrome_widget(Ctx.lan or svc_host(), Ctx.admin, pw, rand_alnum(12)))
-            if new == old:
+            if card_widget_type(old, "navidrome-card") is None:
                 warn("The dashboard has no Navidrome card yet. homelab-cards makes it within 5 minutes; run `sudo homelab-setup upgrade` after that "
-                     "to add its live numbers and the player.")
+                     "to put the player in it.")
                 return
-            out("      Navidrome is at %s. Log in as %s with the shared admin password; the dashboard card shows its numbers." % (url("navidrome"), Ctx.admin))
+        new = services_without_card(old, PLAYER_ID)                    # zip 33 had a second card for the player: it is one card now
+        new = services_with_iframe_widget(new, "navidrome-card", Ctx.lan or svc_host())
         new = card_to_top(new, "navidrome-card")
-        new = services_with_player(new, "navidrome-card", Ctx.lan or svc_host())
         if new != old:
             if not os.path.exists(hp_path("services.yaml") + ".before-navidrome"):
                 write_file(hp_path("services.yaml") + ".before-navidrome", old, 0o644, (Ctx.uid, Ctx.gid))
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
-            out("      The Navidrome card is first in its group, with the Navidrome Player card under it (Navidrome's own player: previous, next, shuffle, repeat).")
+            out("      The Navidrome card is first in its group and has Navidrome's own player inside (previous, next, shuffle, repeat). "
+                "Clicking its title opens the full Navidrome page.")
 
 
 def run_calendar_build():
