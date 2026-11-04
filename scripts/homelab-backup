@@ -11,6 +11,22 @@
 # Settings can be overridden in /etc/homelab-backup.conf (see the guide).
 # The result of each run is saved in /var/lib/homelab-backup/last-run as
 #   date|result|destination|seconds|bytes   (bytes = size of the whole backup folder)
+#
+# Usage:
+#   sudo homelab-backup           run the backup now (about a minute, longer after many new files)
+#   homelab-backup help           this text (nothing is started)
+#   homelab-backup version
+# It takes no other options: anything else is refused, so a typo can never start a backup by accident.
+# Watch a backup while it runs:  sudo tail -f /var/log/homelab-backup.log
+
+VERSION="1.1"
+case "${1:-}" in
+  "") ;;
+  -h | --help | help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
+  version | --version) echo "homelab-backup $VERSION"; exit 0 ;;
+  *) echo "homelab-backup: unknown option '$1'. Nothing was started." >&2
+     echo "To run the backup now:  sudo homelab-backup      For help:  homelab-backup help" >&2; exit 2 ;;
+esac
 
 set -u
 set -o pipefail

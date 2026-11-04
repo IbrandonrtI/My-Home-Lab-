@@ -5,9 +5,10 @@
 #   homelab commands  every command I use, in groups
 #                     (the login screen also shows "Suggested Commands": up to six that fit the current state)
 #   homelab status    only the status block
-#   homelab docs    list the sections of the README and of the guides in docs/
-#   homelab secrets rebuild check: what must be in your password manager, and what the
-#                   server can confirm (values are never shown; sudo gives a fuller check)
+#   homelab docs      list the sections of the README and of the guides in docs/
+#   homelab secrets   rebuild check: what must be in your password manager, and what the
+#                     server can confirm (values are never shown; sudo gives a fuller check)
+#   homelab version   the version of this command
 #
 #   homelab theme     change the Homepage dashboard's background, and the colour of all cards or of one card (homelab theme shows how)
 #   homelab bookmark  add, list, move or remove bookmarks, by category; logos come from Brandfetch as SVG files
@@ -121,6 +122,27 @@ suggestions() {
   echo
 }
 
+lan_address() {   # this machine's address on the home network
+  local ip="${HOMELAB_LAN_IP:-}"
+  [ -n "$ip" ] || ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") {print $(i + 1); exit}}')
+  [ -n "$ip" ] || ip=$(hostname -I 2>/dev/null | awk '{print $1}')
+  echo "$ip"
+}
+
+open_section() {   # where to click: the dashboard on the home network, and from anywhere through Tailscale
+  [ -d "$HOMEPAGE_DIR" ] || return 0
+  local ip ts=""
+  ip=$(lan_address)
+  [ -n "$ip" ] || return 0
+  if command -v tailscale >/dev/null 2>&1; then
+    ts=$(timeout 3 tailscale serve status 2>/dev/null | awk '/^https:\/\// {u = $1} /proxy .*:3000[[:space:]]*$/ && u {print u; exit}')
+  fi
+  rule "Open in your browser"
+  printf '   %-30s %s%s%s\n' "Dashboard, at home" "$B" "http://$ip:3000" "$N"
+  [ -z "$ts" ] || printf '   %-30s %s%s%s\n' "Dashboard, from anywhere" "$B" "$ts" "$N"
+  [ -z "$ts" ] || printf '   %s%-30s needs the Tailscale app on that device, signed in to your account%s\n' "$D" "" "$N"
+}
+
 show_docs() {
   local f
   if [ ! -d "$DOCS_DIR" ]; then
@@ -162,7 +184,8 @@ setup_line() {   # shown only while homelab-setup still has steps left (it remov
   IFS='|' read -r d t _e <"$f"
   [[ "$d" =~ ^[0-9]+$ && "$t" =~ ^[0-9]+$ ]] || return 0
   [ "$d" -lt "$t" ] || return 0
-  printf '   %s%s%s  Setup: %d of %d steps done.  Run  %ssudo homelab-setup%s  to see what is left.\n' "$Y" "$S_WARN" "$N" "$d" "$t" "$B" "$N"
+  printf '   %s%s%s  Setup is not finished: %d of %d steps done. Some warnings below are normal until it is.\n' "$Y" "$S_WARN" "$N" "$d" "$t"
+  printf '       Next: run  %ssudo homelab-setup%s  to see what is left.\n' "$B" "$N"
   suggest 2 "sudo homelab-setup refresh" "carry on with setup ($(( t - d )) steps left)"
   suggest 2 "sudo homelab-setup" "see the checklist and the next step"
 }
@@ -257,8 +280,7 @@ commands() {
   cmd "homelab secrets"                "rebuild check: passwords you must have, and what is backed up"
   cmd "homelab-check ~/My-Home-Lab-"   "look for mistakes in the repository files before upload"
   section "This screen and the guides"
-  cmd "sudo bash ~/My-Home-Lab-/setup.sh install" "after the pull: put the new scripts on this server"
-  cmd "git -C ~/My-Home-Lab- pull"     "download the newest guides and scripts from GitHub"
+  cmd "sudo homelab-setup upgrade"     "update the lab: new files from GitHub, new scripts here"
   cmd "homelab commands"               "this list"
   cmd "homelab docs"                   "sections of the README and the guides in docs/"
   cmd "homelab status"                 "only the status block"
@@ -1213,7 +1235,7 @@ temps_line() {
   [ -n "$oldest" ] && age=$(sample_age_min "$oldest")
   if [ "$max" -ge "$TEMP_BAD" ]; then bad "Drive temps" "$parts -> too hot, check the airflow"
   elif [ "$max" -ge "$TEMP_WARN" ]; then warn "Drive temps" "$parts -> getting warm"
-  elif [ -n "$age" ] && [ "$age" -ge "$SAMPLE_STALE_MIN" ]; then warn "Drive temps" "$parts (readings are $age min old: is the cron line there?)"
+  elif [ -n "$age" ] && [ "$age" -ge "$SAMPLE_STALE_MIN" ]; then warn "Drive temps" "$parts (readings are $age min old; take new ones: sudo homelab-sample)"
   else ok "Drive temps" "$parts"; fi
 }
 
@@ -1236,7 +1258,10 @@ updates_line() {
     [[ "$line" =~ ^[0-9]+$ ]] && text="$text (checked $(( ( $(date +%s) - line ) / 86400 )) d ago)"
   fi
   if [ "${n:-0}" -gt 0 ] || [ "$img_n" -gt 0 ]; then
-    warn "Updates" "$text"
+    local fix=""
+    [ "${n:-0}" -gt 0 ] && fix="install the system ones: sudo apt upgrade"
+    [ "$img_n" -gt 0 ] && fix="${fix:+$fix; }update the containers: sudo homelab-update"
+    warn "Updates" "$text ($fix)"
     [ "$img_n" -gt 0 ] && suggest 4 "sudo homelab-update" "newer container versions are waiting: it downloads and updates them"
     [ "${n:-0}" -gt 0 ] && suggest 5 "sudo apt update && sudo apt upgrade" "install the waiting system updates"
   else ok "Updates" "$text"; fi
@@ -1267,13 +1292,13 @@ pool_lines() {
   # backup pool
   if pool_mounted "$BACKUP_POOL"; then
     if only_boot_section BACKUP; then
-      warn "Backup pool" "mounted, but only on a section of the boot drive (it does not survive a boot drive failure)"
+      warn "Backup pool" "mounted, but only on a section of the boot drive (lost if that drive dies; fix: sudo drives connect)"
       suggest 4 "sudo drives" "connect a real backup drive: the backup is on the boot drive now"
     else
       ok "Backup pool" "mounted"
     fi
   else
-    warn "Backup pool" "not connected (the backup goes to the boot drive)"
+    warn "Backup pool" "not connected, so the backup goes to the boot drive (connect a drive: sudo drives connect)"
     suggest 5 "sudo drives" "connect a backup drive (or use part of the boot drive: sudo drives bootsection)"
   fi
 }
@@ -1291,7 +1316,7 @@ last_backup_line() {
       bad "Last backup" "$line -> read: sudo tail -20 /var/log/homelab-backup.log"
       suggest 1 "sudo tail -20 /var/log/homelab-backup.log" "the last backup failed: read why"
     elif [ -n "$age_h" ] && [ "$age_h" -ge "$STALE_HOURS" ]; then
-      warn "Last backup" "$line -> older than ${STALE_HOURS} h"
+      warn "Last backup" "$line -> older than ${STALE_HOURS} h (run one now: sudo homelab-backup)"
       suggest 3 "sudo homelab-backup" "the last backup is old: run one now"
     else
       ok "Last backup" "$line"
@@ -1300,7 +1325,7 @@ last_backup_line() {
     warn "Last backup" "no result found (check: sudo drives status)"
     suggest 3 "sudo drives status" "no backup result was found: check the backup"
   else
-    warn "Last backup" "no backup has run yet"
+    warn "Last backup" "no backup has run yet (run the first one: sudo homelab-backup)"
     suggest 4 "sudo homelab-backup" "no backup has run yet: run the first one now"
   fi
 }
@@ -1328,15 +1353,15 @@ containers_line() {
     done < <(timeout 10 docker ps -aq 2>/dev/null | xargs -r timeout 10 docker inspect --format '{{.Name}} {{.State.Status}} {{.HostConfig.RestartPolicy.Name}} {{.RestartCount}} {{.State.StartedAt}}' 2>/dev/null)
     unhealthy=$(timeout 5 docker ps --filter health=unhealthy --format '{{.Names}}' 2>/dev/null | tr '\n' ' ')
     if [ -n "$down" ]; then
-      bad "Containers" "${n_run} of ${n_all} running; not running: ${down% }"
+      bad "Containers" "${n_run} of ${n_all} running; not running: ${down% } (see: docker ps -a)"
       suggest 1 "docker ps -a" "a container is not running: see which one"
     elif [ -n "$unhealthy" ]; then
-      warn "Containers" "${n_run} of ${n_all} running; unhealthy: ${unhealthy% }"
+      warn "Containers" "${n_run} of ${n_all} running; unhealthy: ${unhealthy% } (read: docker logs --tail 50 NAME)"
       suggest 2 "docker logs --tail 50 NAME" "a container is unhealthy: read what it printed"
     else
       ok "Containers" "${n_run} of ${n_all} running"
     fi
-    [ -n "$restarted" ] && warn "Restarts" "Docker restarted in the last 24 h: ${restarted%, }"
+    [ -n "$restarted" ] && warn "Restarts" "Docker restarted in the last 24 h: ${restarted%, } (why: docker logs --tail 50 NAME)"
   else
     case "$(systemctl is-active docker 2>/dev/null)" in
       activating) warn "Containers" "Docker is still starting after the restart. Wait a minute, then run  homelab  again" ;;
@@ -1546,6 +1571,7 @@ screen() {   # the full login screen, checked live
   BUFFERING=1; status; BUFFERING=0
   header; summary_line; setup_line
   rule "Status"; printf '%s\n' "$STATUS_BUF"
+  open_section
   suggestions
   hint_line
 }
@@ -1578,6 +1604,26 @@ login_screen() {
   fi
 }
 
+did_you_mean() {   # a word that is not a homelab option: point to the command the person most likely meant
+  local w="${1:-}" c="" why=""
+  case "$w" in
+    backup|backups)                    c="sudo homelab-backup";                why="run the backup now" ;;
+    update|updates|upgrade-images)     c="sudo homelab-update";                why="check for newer container versions and update them (the lab's own files: sudo homelab-setup upgrade)" ;;
+    upgrade|pull|install)              c="sudo homelab-setup upgrade";         why="download the newest lab files from GitHub and put them on this server" ;;
+    drives|drive|disk|disks|storage|pool|pools) c="sudo drives";               why="the drive menu: look at, connect, remove or fix drives" ;;
+    cards|card|services)               c="sudo homelab-cards";                 why="give new services their dashboard cards" ;;
+    setup)                             c="sudo homelab-setup";                 why="the setup checklist" ;;
+    selftest|test|check|health|verify) c="sudo homelab-selftest";              why="check everything for problems (drive health: sudo drives health)" ;;
+    restore)                           c="sudo homelab-restore-configs check"; why="preview restoring the saved settings after a rebuild" ;;
+    recover|remount|mount)             c="sudo drives recover";                why="after an unplug or power cut: remount the drives and start the containers" ;;
+    logs|log)                          c="docker logs --tail 50 NAME";         why="the last lines a container printed" ;;
+    help-me|-?|\?)                    c="homelab help";                       why="what this command can do" ;;
+  esac
+  echo "homelab does not have an option called '$w'."
+  [ -z "$c" ] || printf 'Did you mean:  %s\n    (%s)\n' "$c" "$why"
+  echo "Options of this command:  homelab help      Every command, in groups:  homelab commands"
+}
+
 case "${1:-}" in
   theme)  homepage_edit theme "${@:2}" ;;
   bookmark|bookmarks) homepage_edit bookmark "${@:2}" ;;
@@ -1592,6 +1638,6 @@ case "${1:-}" in
           echo; printf '  %sType%s %shomelab%s %sto see the status.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N" ;;
   login)  login_screen ;;
   "")     screen ;;
-  *)      echo "Unknown option '$1'. Try: homelab, homelab commands, homelab status, homelab docs, homelab secrets, homelab theme, homelab bookmark" >&2; exit 1 ;;
+  *)      did_you_mean "$1" >&2; exit 1 ;;
 esac
 
