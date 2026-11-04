@@ -230,6 +230,7 @@ try:
         container("plainapp", "nobody/plainapp", lab.web(), project="stackname"),
         container("mydb", "postgres:16", p_db),
         container("stopped-thing", "lscr.io/linuxserver/sonarr", p_stopped, status="exited"),
+        container("navidrome", "ghcr.io/navidrome/navidrome:0.61.0", lab.web()),
     ])
     before_svc, before_css = lab.svc(), lab.css()
     rc, out = lab.run("sync", "--dry-run")
@@ -248,9 +249,10 @@ try:
     check("a stopped container gets no card", "stopped-thing-card" not in svc)
     check("the lab's own containers get no card", "filebrowser-card" in svc and svc.count("id: filebrowser-card") == 1)
     check("the hand written Metube card is not touched", svc.count("id: metube-card") == 1 and "icon: metube.svg" in svc)
-    check("the new cards keep the section order of the file", g.get("Media & Entertainment", [])[:3] == ["metube-card", "downtify-card", "jellyfin-card"], g)
+    check("the new cards keep the section order of the file", g.get("Media & Entertainment", [])[:4] == ["navidrome-card", "metube-card", "downtify-card", "jellyfin-card"], g)
+    check("the Navidrome card is put first in its section, the others at the end", g.get("Media & Entertainment", [])[0] == "navidrome-card", g)
     ports = sorted(int(k.split(":")[1]) for k in json.load(open(lab.ts))["Web"])
-    check("each new service got its own Tailscale port from 1009 on", ports == [1009, 1010, 1011, 1012, 1013, 1014, 1015], ports)
+    check("each new service got its own Tailscale port from 1009 on", ports == [1009, 1010, 1011, 1012, 1013, 1014, 1015, 1016], ports)
     jelly = svc.split("id: jellyfin-card")[1].split("\n\n")[0]
     check("the card links the Tailscale address and watches the local one", re.search(r"href: https://homelab\.example\.ts\.net:101\d", jelly)
           and "siteMonitor: http://192.168.1.198:%d" % p_jelly in jelly, jelly)
@@ -274,10 +276,10 @@ try:
     check("the old files are saved once", os.path.exists(os.path.join(lab.hp, "services.yaml.before-cards")) and os.path.exists(os.path.join(lab.hp, "custom.css.before-cards")))
     check("the hand written lists stay valid", css.count("{") == css.count("}"))
     st = lab.state()
-    check("the state knows the six cards", sorted(st["managed"]) == ["ghapp", "jellyfin", "labelapp", "paperless", "plainapp", "zzzapp"], st)
+    check("the state knows the seven cards", sorted(st["managed"]) == ["ghapp", "jellyfin", "labelapp", "navidrome", "paperless", "plainapp", "zzzapp"], st)
     check("the unsure one is flagged", st["managed"]["zzzapp"]["unsure"] and not st["managed"]["jellyfin"]["unsure"])
     summ = open(os.path.join(lab.d, "state", "cards-summary")).read()
-    check("the login screen can read the summary", summ.count("managed|") == 6 and "managed|zzzapp|zzzapp-card|Monitoring & Management|1|" in summ, summ)
+    check("the login screen can read the summary", summ.count("managed|") == 7 and "managed|zzzapp|zzzapp-card|Monitoring & Management|1|" in summ, summ)
     check("it said it was not sure and how to move the card", "sudo homelab-cards move zzzapp" in out)
 
     # ---- idempotence

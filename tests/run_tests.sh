@@ -3,7 +3,7 @@
 # Simulation tests for homelab-setup. Everything runs against a FAKE machine (fake apt, docker, Tailscale and web services).
 SIMDIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export HLS_BOOT_ID=boot-A; ORIG_PATH="$PATH"; PASS=0; FAIL=0; ONLY="${1:-}"
-ok(){ if ( eval "$2" ) >/dev/null 2>&1; then echo "PASS  $1"; PASS=$((PASS+1)); else echo "FAIL  $1"; FAIL=$((FAIL+1)); fi; }
+ok(){ if ( eval "$2" ) >/dev/null 2>${OKERR:-/dev/null}; then echo "PASS  $1"; PASS=$((PASS+1)); else echo "FAIL  $1"; FAIL=$((FAIL+1)); fi; }
 wj(){ python3 -c "import json;w=json.load(open('$SIM_DIR/world.json'));print($1)"; }
 scen(){ [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 PW=CorrectHorse1234
@@ -947,7 +947,7 @@ PY
 hls refresh > $SIM_DIR/s40e.out 2>&1
 ok "S40 a Quick Launch that was taken out is not put back" '! grep -q "^quicklaunch:" $HP40/settings.yaml'
 mkdir -p $HLS_ROOT/mnt/storage/music; echo song > "$HLS_ROOT/mnt/storage/music/Artist - Song.mp3"
-printf '\n- Media & Entertainment:\n    - Navidrome:\n        id: navidrome-card\n        href: https://pc.example.ts.net:1011\n        siteMonitor: http://192.168.50.23:4533\n        icon: navidrome.svg\n        description: Music streaming server\n' >> $HP40/services.yaml
+printf '\n- Media & Entertainment:\n    - Metube:\n        id: metube-card\n        href: http://192.168.50.23:8086\n        icon: metube.svg\n        description: Video downloader\n\n    - Navidrome:\n        id: navidrome-card\n        href: https://pc.example.ts.net:1011\n        siteMonitor: http://192.168.50.23:4533\n        icon: navidrome.svg\n        description: Music streaming server\n' >> $HP40/services.yaml
 printf 'y\n%s\n' $PW | hls refresh > $SIM_DIR/s40f.out 2>&1
 ok "S40 with a music folder Navidrome is installed and running, with its music folder mounted read-only" '[ "$(wj "w[\"containers\"][\"navidrome\"][\"running\"]")" = True ] && [ -d $HLS_ROOT/home/testuser/navidrome ]'
 ok "S40 its login was made with the admin name and the shared password" '[ "$(wj "w[\"navidrome\"][\"user\"]")" = Tester ] && [ "$(wj "w[\"navidrome\"][\"pw\"]")" = $PW ]'
@@ -960,6 +960,15 @@ salt=re.search(r"salt: (\w+)", card).group(1); tok=re.search(r"token: (\w+)", ca
 assert tok == hashlib.md5(("CorrectHorse1234"+salt).encode()).hexdigest()
 assert "CorrectHorse1234" not in card
 PY'
+ok "S40 the Navidrome card moved to the top of its group, with the player card (an iframe of Navidrome) under it" 'python3 - <<PY
+import os,re
+t=open(os.environ["HP40"]+"/services.yaml").read()
+g=t[t.index("- Media & Entertainment:"):]
+names=re.findall(r"(?m)^    - (.+):$", g)
+assert names[:3]==["Navidrome","Navidrome Player","Metube"], names
+assert "id: navidrome-player" in g and "type: iframe" in g and "src: http://192.168.50.23:4533" in g, g
+PY'
+ok "S40 Navidrome's stack file has the Spotify-ish theme and the frame setting, and the installer remembers it deployed it" 'grep -q "ND_DEFAULTTHEME: \"Spotify-ish\"" $SIMDIR/../stacks/navidrome.yaml && grep -q "ND_HTTPHEADERS_FRAMEOPTIONS" $SIMDIR/../stacks/navidrome.yaml && grep -q navidrome_stack $HLS_ROOT/var/lib/homelab-setup/state.json'
 ok "S40 the old services.yaml was kept" '[ -f $HP40/services.yaml.before-navidrome ] && ! grep -q "type: navidrome" $HP40/services.yaml.before-navidrome'
 cp $HP40/services.yaml $SIM_DIR/s40svc.keep
 hls refresh > $SIM_DIR/s40g.out 2>&1
