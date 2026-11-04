@@ -201,6 +201,20 @@
             - field: music.size
               label: Size
 
+    - Recently Saved Songs:
+        id: stat-songs
+        icon: mdi-playlist-music
+        description: The newest songs Downtify saved
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          display: dynamic-list
+          mappings:
+            items: music.recent
+            name: name
+            label: label
+
 - Library Totals:
 
     - Immich:
@@ -355,6 +369,7 @@
 # The Calendar at the bottom of the Home tab: US federal holidays (and Lincoln's Birthday and Election Day), a few more days
 # (Valentine's Day, Lunar New Year, Diwali ...) and your own events. The calendar files are made by the command homelab-calendar
 # (the installer runs it, and a weekly job keeps the years coming). Add your own events with:  homelab event add 2026-12-25 "Family dinner"
+# and an online calendar (Google, school ...) with:  homelab calendar add NAME ADDRESS
 # This block is brought up to date by the installer. To remove the calendar: delete everything between the two marker lines, then delete
 # the Calendar entry from the layout: block of settings.yaml.
 - Calendar:
@@ -380,6 +395,10 @@
               name: My Events
               url: http://192.168.X.X:3001/images/events.ics
               color: sky
+            - type: ical
+              name: My Calendars
+              url: http://192.168.X.X:3001/images/mycalendars.ics
+              color: emerald
 
     - Coming Up:
         id: cal-agenda
@@ -401,5 +420,9 @@
               name: My Events
               url: http://192.168.X.X:3001/images/events.ics
               color: sky
+            - type: ical
+              name: My Calendars
+              url: http://192.168.X.X:3001/images/mycalendars.ics
+              color: emerald
 
 # <<< homelab calendar <<<
