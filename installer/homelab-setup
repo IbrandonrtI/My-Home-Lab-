@@ -4644,6 +4644,53 @@ def cmd_cards(rest):
     return subprocess.call([prog] + list(rest) + (["--dry-run"] if Opt.dry else []))
 
 
+def cmd_upgrade():
+    """`upgrade`: download the newest files from GitHub, then run the NEW installer's refresh, so every changed script,
+    the installer itself and every new step are put on this machine in one go (no `sudo install` by hand)."""
+    load_all()
+    repo = Ctx.repo
+    if not os.path.isdir(os.path.join(repo, ".git")):
+        raise Abort("%s is not a copy downloaded with git, so it cannot be updated from GitHub.\n"
+                    "Download the lab again:  git clone https://github.com/IbrandonrtI/My-Home-Lab-.git  and run  sudo bash setup.sh refresh  inside it." % repo)
+    prefix = []
+    if not FAKE and os.geteuid() == 0 and have("sudo"):
+        try:     # git must run as the folder's owner: a root-owned .git folder would block your own git pull later
+            owner = pwd.getpwuid(os.stat(repo).st_uid).pw_name
+        except (KeyError, OSError):
+            owner = ""
+        if owner and owner != "root":
+            prefix = ["sudo", "-u", owner]
+    new_installer = repo_file("installer", "homelab-setup")
+    if Opt.dry:
+        say("Would download the newest files:  git -C %s pull --ff-only" % repo)
+        say("Then would run the new installer:  homelab-setup refresh")
+        return 0
+    rule("Downloading the newest files from GitHub")
+    rc, before = run(prefix + ["git", "-C", repo, "rev-parse", "HEAD"], timeout=30)
+    before = before.strip() if rc == 0 else ""
+    rc, text = run(prefix + ["git", "-C", repo, "pull", "--ff-only"], timeout=180)
+    if rc != 0:
+        tail = "\n".join(text.strip().splitlines()[-6:])
+        raise Abort("The download from GitHub failed:\n%s\n"
+                    "Is the machine online? Did you change files in %s by hand? (look:  git -C %s status)" % (tail, repo, repo))
+    rc, after = run(prefix + ["git", "-C", repo, "rev-parse", "HEAD"], timeout=30)
+    after = after.strip() if rc == 0 else ""
+    if before and after and before == after:
+        good("Already the newest version of the files.")
+    elif before and after:
+        rc, log_text = run(prefix + ["git", "-C", repo, "log", "--oneline", "-n", "8", "%s..%s" % (before, after)], timeout=30)
+        good("New files downloaded:")
+        for line in (log_text.strip().splitlines() if rc == 0 else []):
+            out("      " + line)
+    else:
+        good("Files downloaded.")
+    if not os.path.exists(new_installer):
+        raise Abort("The downloaded files have no installer/homelab-setup. Look in %s." % repo)
+    out("")
+    say("Now putting the new scripts on this machine (with the new installer):")
+    return subprocess.call([sys.executable, new_installer, "refresh"] + (["--repo", Opt.repo] if Opt.repo else []))
+
+
 def cmd_filebrowser():
     """Update FileBrowser's drive folders after a drive was connected or removed (sudo drives calls this by itself)."""
     load_all()
@@ -4891,6 +4938,7 @@ Commands:
   install                  set everything up (asks first; safe to run again)
   install --dry-run        show the plan and change nothing
   refresh                  re-check and continue every step that is now possible
+  upgrade                  download the newest files from GitHub and put the new scripts on this machine (one step)
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
@@ -4909,7 +4957,7 @@ The installer never formats or modifies a drive and never saves the admin passwo
 # every command that needs no more than its name (done STEP and skip STEP also take the step)
 COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
             "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
-            "homepage": cmd_homepage, "adguard": cmd_adguard}
+            "homepage": cmd_homepage, "adguard": cmd_adguard, "upgrade": cmd_upgrade}
 
 
 def main(argv):
