@@ -1561,8 +1561,10 @@ def js_groups_block(live, shipped):
 
 STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"      # the block of STATS groups in the shipped services.yaml
 # The STATS groups: name -> (icon, columns). layout_complete puts them on the Stats tab (never on Home).
-STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Library Totals": ("mdi-image-multiple", 2), "Storage": ("mdi-harddisk", 2),
-                "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
+STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 1), "Library Totals": ("mdi-image-multiple", 2),
+                "Storage": ("mdi-harddisk", 3), "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
+STATS_AFTER = {"Music Library": "At a Glance"}          # a STATS group that is added later goes right under this one, not at the end
+STORAGE_WIDE = "~storage-3-columns"                     # in the groups-seen list: the Storage row was widened to three cards (done once)
 # Names and tab names used before they were capitalised: layout_renamed() renames them in a layout: block that has them.
 OLD_NAMES = {"At a glance": "At a Glance", "Library totals": "Library Totals", "Backup & updates": "Backup & Updates", "Folder sizes": "Folder Sizes"}
 OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
@@ -1677,9 +1679,37 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
             new = ["  %s:" % yaml_key(g), "    tab: Home", "    icon: %s" % CALENDAR_GROUPS[g][0], "    style: row", "    columns: %d" % CALENDAR_GROUPS[g][1]]
         else:
             new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
-        lines[end:end] = new
+        at = end
+        after = STATS_AFTER.get(g)
+        if tab == "Stats" and after:
+            for i in range(start + 1, end):
+                if re.match(r"^  '?%s'?:\s*$" % re.escape(after), lines[i]):
+                    at = i + 1
+                    while at < end and lines[at].startswith("    "):
+                        at += 1
+                    break
+        lines[at:at] = new
         end += len(new)
     return "\n".join(lines), sorted(set(seen) | set(present))
+
+
+def layout_storage_wide(settings, seen):
+    """The Storage row holds three cards since the drive temperatures were added: `columns: 2` of that group becomes 3, once (a later
+    change by the owner is left alone). Returns (settings, seen)."""
+    if STORAGE_WIDE in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {STORAGE_WIDE})
+    lines = settings.split("\n")
+    for i, l in enumerate(lines):
+        if re.match(r"^  Storage:\s*$", l):
+            for j in range(i + 1, len(lines)):
+                if lines[j] and not lines[j].startswith("    "):
+                    break
+                if re.match(r"^    columns:\s*2\s*$", lines[j]):
+                    lines[j] = "    columns: 3"
+                    break
+            break
+    return "\n".join(lines), seen
 
 
 def stack_text(name):
@@ -3242,6 +3272,8 @@ class HomepageTabs(Step):
                 svc = services_calendar_block(svc, shipped_svc)
         sett = layout_renamed(sett)
         sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
+        if re.search(r"(?m)^layout:", sett):
+            sett, seen = layout_storage_wide(sett, seen)
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))
         return sett, new_css, seen, new_js, svc
