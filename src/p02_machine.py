@@ -728,6 +728,26 @@ def css_tabs_block(live, shipped):
     return live.rstrip("\n") + "\n\n\n" + block + "\n"
 
 
+JS_BEGIN, JS_END = "/* >>> homelab groups >>>", "/* <<< homelab groups <<< */"      # the block in the shipped custom.js
+
+
+def js_groups_block(live, shipped):
+    """This machine's custom.js with the managed block (it tags every bookmark group with its name so custom.css can colour each one)
+    put in, or brought up to date. Anything else in the file is left alone. A missing file becomes the shipped file."""
+    a = shipped.find(JS_BEGIN)
+    z = shipped.find(JS_END, a) if a >= 0 else -1
+    if a < 0 or z < 0:
+        return live
+    block = shipped[a:z + len(JS_END)]
+    la = live.find(JS_BEGIN)
+    lz = live.find(JS_END, la) if la >= 0 else -1
+    if la >= 0 and lz >= 0:
+        return live[:la] + block + live[lz + len(JS_END):]
+    if not live.strip():
+        return block + "\n"
+    return live.rstrip("\n") + "\n\n" + block + "\n"
+
+
 def settings_with_layout(live, shipped):
     """This machine's settings.yaml with the tabs and group icons (the layout: block) and the small settings (hideVersion, language)
     added when they are missing. Nothing that is already there is changed."""
