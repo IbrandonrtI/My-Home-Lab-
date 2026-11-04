@@ -70,6 +70,19 @@ hasnt "homelab status alone has no browser block" "$SCREEN2" "Open in your brows
 rm -rf "$T/hp"
 SCREEN3=$(PATH="$T/bin:$PATH" $H 2>&1)
 hasnt "without the Homepage folder there is no browser block" "$SCREEN3" "Open in your browser"
+# the saved update count is counted again when apt ran after it was saved
+OLD=$(( $(date +%s) - 3000 ))
+printf '5|%s\n' "$OLD" >"$T/st/apt"; : >"$T/fakestatus"; touch -d "@$(( OLD - 500 ))" "$T/fakestatus"; mkdir -p "$T/fakelists"; touch -d "@$(( OLD - 500 ))" "$T/fakelists"
+printf '#!/bin/sh\nprintf "Inst a [1] (2)\\nInst b [1] (2)\\n"\n' >"$T/bin/apt-get"; chmod +x "$T/bin/apt-get"
+export HOMELAB_DPKG_STATUS="$T/fakestatus" HOMELAB_APT_LISTS="$T/fakelists"
+has "apt has not run since the reading: the saved count is shown" "$(PATH="$T/bin:$PATH" $H status 2>&1)" "5 system update(s)"
+touch "$T/fakestatus"
+OUT=$(PATH="$T/bin:$PATH" $H status 2>&1)
+has "after an apt run the count is taken again" "$OUT" "2 system update(s)"
+hasnt "the old saved count is no longer shown" "$OUT" "5 system update(s)"
+printf '#!/bin/sh\nexit 0\n' >"$T/bin/apt-get"
+has "after an upgrade that left nothing the line says up to date" "$(PATH="$T/bin:$PATH" $H status 2>&1)" "system is up to date"
+unset HOMELAB_DPKG_STATUS HOMELAB_APT_LISTS; rm -f "$T/bin/apt-get" "$T/st/apt"
 rm -f "$T/st/setup-progress"; mkdir -p "$T/hp"
 SCREEN4=$(PATH="$T/bin:$PATH" $H 2>&1)
 hasnt "when setup is finished the unfinished message is gone" "$SCREEN4" "Setup is not finished"
