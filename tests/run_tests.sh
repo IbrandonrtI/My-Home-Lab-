@@ -720,4 +720,52 @@ mkdir -p $U/plain; hls upgrade --repo $U/plain > $SIM_DIR/s37e.out 2>&1; RC=$?
 ok "S37 a folder that is not a git copy is explained" '[ $RC -ne 0 ] && grep -q "not a copy downloaded with git" $SIM_DIR/s37e.out'
 fi
 
+# ------------------------------------------------------------------ S38: an LVM system volume with unused space is grown (asked first)
+if scen S38; then
+echo "### S38 the installer offers to use the unused space of an LVM system volume"
+fresh
+B=$SIM_DIR/bin-always
+cat > $B/lvs <<'X'
+#!/bin/sh
+[ -f "$SIM_DIR/lv.fail" ] && exit 5
+IFS='|' read -r size free < "$SIM_DIR/lv.state"
+echo "  $size|$free"
+X
+cat > $B/lvextend <<'X'
+#!/bin/sh
+echo "$*" >> "$SIM_DIR/lvextend.log"
+[ -f "$SIM_DIR/lvextend.fail" ] && { echo "  Insufficient free space"; exit 5; }
+IFS='|' read -r size free < "$SIM_DIR/lv.state"
+echo "$((size + free))|0" > "$SIM_DIR/lv.state"
+X
+cat > $B/findmnt.new <<X
+#!/bin/sh
+case "\$*" in *SOURCE,FSTYPE*) echo "/dev/mapper/ubuntu--vg-ubuntu--lv ext4"; exit 0 ;; esac
+exec -a findmnt bash $SIMDIR/fakedisks.sh "\$@"
+X
+rm -f $B/findmnt; mv $B/findmnt.new $B/findmnt; chmod +x $B/lvs $B/lvextend $B/findmnt
+echo "107374182400|639000000000" > $SIM_DIR/lv.state
+printf 'n\n' | hls growdisk > $SIM_DIR/s38a.out 2>&1
+ok "S38 growdisk says what it found" 'grep -q "has another" $SIM_DIR/s38a.out && grep -q "Nothing is erased" $SIM_DIR/s38a.out'
+ok "S38 answering no changes nothing" '[ ! -e $SIM_DIR/lvextend.log ] && grep -q "nothing was changed" $SIM_DIR/s38a.out'
+printf 'y\n' | hls growdisk > $SIM_DIR/s38b.out 2>&1
+ok "S38 answering yes grows the volume into all the unused space (and the file system with it)" 'grep -q "^-r -l +100%FREE /dev/mapper/ubuntu--vg-ubuntu--lv$" $SIM_DIR/lvextend.log && grep -q "now bigger" $SIM_DIR/s38b.out'
+hls growdisk > $SIM_DIR/s38c.out 2>&1
+ok "S38 with nothing left to grow it says so and asks nothing" 'grep -q "Nothing to do" $SIM_DIR/s38c.out'
+echo "107374182400|10000000000" > $SIM_DIR/lv.state
+hls growdisk > $SIM_DIR/s38d.out 2>&1
+ok "S38 a small leftover (under 20 GB) is not worth a question" 'grep -q "Nothing to do" $SIM_DIR/s38d.out'
+echo "107374182400|639000000000" > $SIM_DIR/lv.state; touch $SIM_DIR/lvextend.fail; rm -f $SIM_DIR/lvextend.log
+printf 'y\n' | hls growdisk > $SIM_DIR/s38e.out 2>&1
+ok "S38 a failure is explained, says nothing was changed and how to retry" 'grep -q "could not be made bigger" $SIM_DIR/s38e.out && grep -q "Insufficient free space" $SIM_DIR/s38e.out && grep -q "growdisk" $SIM_DIR/s38e.out'
+rm -f $SIM_DIR/lvextend.fail $SIM_DIR/lvextend.log
+hls install --dry-run > $SIM_DIR/s38f.out 2>&1
+ok "S38 a dry run only says what it would offer" 'grep -q "Would offer" $SIM_DIR/s38f.out && [ ! -e $SIM_DIR/lvextend.log ]'
+approve_in 3
+printf '%s\n' Tester tester@example.com "" "" "" "" $PW $PW y yes "" y | hls install > $SIM_DIR/s38g.out 2>&1; RC=$?
+ok "S38 the install asks the question after the password and grows the volume" '[ $RC -eq 0 ] && grep -q "Give the unused space to the system volume" $SIM_DIR/s38g.out && grep -q "^-r -l +100%FREE" $SIM_DIR/lvextend.log'
+ok "S38 the answer is kept so a second install does not ask again" 'grep -q "\"lvm_grow\": \"done\"" $HLS_ROOT/var/lib/homelab-setup/state.json'
+ok "S38 the install still finishes with all 16 containers" '[ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
+fi
+
 echo; echo "TOTAL pass=$PASS fail=$FAIL"

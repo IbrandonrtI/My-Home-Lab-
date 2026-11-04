@@ -141,6 +141,16 @@ $D release >/dev/null 2>&1 <<<"y"; rm -f "$S/boot-sections/"*.img
 # a boot drive of 128 GB or less cannot lend a section: it says so at once and asks nothing
 OUT=$(DRIVES_BOOT_SMALL=900000000000000 $D bootsection 2>&1 </dev/null)
 case "$OUT" in *"is only"*"no part of it can be used"*"Nothing was changed"*) r=yes ;; *) r=no ;; esac; yes_ "a small boot drive: warns and leaves the option" "$r"
+# the same, on a system volume that is LVM with a lot of unused drive space: it names the command that gives that space to the system
+mkdir -p "$S/lvmbin"
+printf '#!/bin/sh\necho "  /dev/mapper/fake-root"\n' >"$S/lvmbin/findmnt"
+printf '#!/bin/sh\necho "  639000000000"\n' >"$S/lvmbin/lvs"
+chmod +x "$S/lvmbin/findmnt" "$S/lvmbin/lvs"
+OUT=$(HOMELAB_EXTRA_PATH="$S/lvmbin" DRIVES_BOOT_SMALL=900000000000000 $D bootsection 2>&1 </dev/null)
+case "$OUT" in *"system volume is LVM"*"sudo homelab-setup growdisk"*) r=yes ;; *) r=no ;; esac; yes_ "a small LVM boot drive with unused space points to growdisk" "$r"
+printf '#!/bin/sh\necho "  1000000000"\n' >"$S/lvmbin/lvs"
+OUT=$(HOMELAB_EXTRA_PATH="$S/lvmbin" DRIVES_BOOT_SMALL=900000000000000 $D bootsection 2>&1 </dev/null)
+case "$OUT" in *"growdisk"*) r=no ;; *"Connect a separate drive instead"*) r=yes ;; *) r=no ;; esac; yes_ "with little unused space it says to connect a drive instead" "$r"
 case "$OUT" in *"Add a boot drive section to which storage"*) r=no ;; *) r=yes ;; esac; yes_ "a small boot drive: it does not even ask which storage" "$r"
 [ ! -e "$S/boot-sections/main.img" ] && r=yes || r=no; yes_ "a small boot drive: no file is made" "$r"
 
