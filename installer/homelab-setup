@@ -1852,6 +1852,31 @@ def card_to_top(text, card_id):
     return "\n".join(lines)
 
 
+def card_retitled(text, card_id, old_title, new_title, old_desc, new_desc):
+    """services.yaml with the name and the description of a card changed, but only where they are still the old words (a name or a
+    description you wrote yourself is left alone)."""
+    lines = text.split("\n")
+    r = card_range(lines, card_id)
+    if not r:
+        return text
+    m = re.match(r"^(\s+- )(.+?):\s*$", lines[r[0]])
+    if m and m.group(2) == old_title:
+        lines[r[0]] = "%s%s:" % (m.group(1), new_title)
+    for i in range(*r):
+        m = re.match(r"^(\s+description:\s*)(.*?)\s*$", lines[i])
+        if m and m.group(2).strip("\"'") == old_desc:
+            lines[i] = m.group(1) + new_desc
+    return "\n".join(lines)
+
+
+NAVIDROME_TITLE, NAVIDROME_DESC = "Navidrome", "Spotify Music Player"
+
+
+def navidrome_card_named(text):
+    """The Navidrome card with the name Navidrome (not navidrome) and the description Spotify Music Player."""
+    return card_retitled(text, "navidrome-card", "navidrome", NAVIDROME_TITLE, "Music streaming server", NAVIDROME_DESC)
+
+
 PLAYER_ID = "navidrome-player"      # the separate player card of zip 33; the player now lives inside the Navidrome card and this card is taken out
 
 
@@ -3609,7 +3634,7 @@ class NavidromeCard(Step):
         svc = read_file(hp_path("services.yaml"))
         if card_widget_type(svc, "navidrome-card") != "iframe":
             return "todo"
-        return "done" if card_range(svc.split("\n"), PLAYER_ID) is None and navidrome_card_first(svc) else "todo"
+        return "done" if card_range(svc.split("\n"), PLAYER_ID) is None and navidrome_card_first(svc) and navidrome_card_named(svc) == svc else "todo"
 
     def run(self):
         if Opt.dry:
@@ -3640,12 +3665,13 @@ class NavidromeCard(Step):
         new = services_without_card(old, PLAYER_ID)                    # zip 33 had a second card for the player: it is one card now
         new = services_with_iframe_widget(new, "navidrome-card", Ctx.lan or svc_host())
         new = card_to_top(new, "navidrome-card")
+        new = navidrome_card_named(new)
         if new != old:
             if not os.path.exists(hp_path("services.yaml") + ".before-navidrome"):
                 write_file(hp_path("services.yaml") + ".before-navidrome", old, 0o644, (Ctx.uid, Ctx.gid))
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
-            out("      The Navidrome card is first in its group and has Navidrome's own player inside (previous, next, shuffle, repeat). "
-                "Clicking its title opens the full Navidrome page.")
+            out("      The Navidrome card is first in its group, called Navidrome (\"Spotify Music Player\"), and has Navidrome's own player inside "
+                "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
 
 
 def run_calendar_build():
