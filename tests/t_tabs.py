@@ -3,8 +3,11 @@
 Run: python3 tests/t_tabs.py   (last line is OK or FAIL)"""
 import importlib.machinery
 import importlib.util
+import json
 import os
 import re
+import shutil
+import subprocess
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROG = os.path.join(HERE, "..", "installer", "homelab-setup")
@@ -98,5 +101,30 @@ check("the group goes inside the layout block, before the keys that follow it", 
 check("a name with a colon is quoted", m.yaml_key("A: b") == "'A: b'" and m.yaml_key("Plain & Name") == "Plain & Name")
 check("group_names reads the top level groups", m.group_names("- Net & DNS:\n\n    - Card:\n        id: x\n- Files:\n  - A:\n") == ["Net & DNS", "Files"])
 check("group_names skips comments", m.group_names("# - Not:\n- Real:  # note\n") == ["Real"])
+
+# ---- custom.js (tags every bookmark group with its name) and the bookmark card styles
+J = rd("custom.js")
+check("the shipped custom.js has the managed block", m.JS_BEGIN in J and m.JS_END in J)
+check("no file yet: the shipped block becomes the file", m.js_groups_block("", J).strip() == J.strip())
+check("a shipped file is already up to date", m.js_groups_block(J, J) == J)
+own = "console.log('mine');\n"
+r = m.js_groups_block(own, J)
+check("an own script is kept and the block is added after it", r.startswith(own.rstrip("\n")) and r.count(m.JS_BEGIN) == 1)
+check("running it again changes nothing", m.js_groups_block(r, J) == r)
+stale = own + "\n/* >>> homelab groups >>> old\nvar old = 1;\n/* <<< homelab groups <<< */\nconsole.log('after');\n"
+r = m.js_groups_block(stale, J)
+check("an older block is replaced and the code around it is kept", "var old" not in r and "console.log('mine')" in r and "console.log('after')" in r and r.count(m.JS_BEGIN) == 1)
+check("no shipped block: the file is left alone", m.js_groups_block(own, "") == own)
+check("the css colours the groups by their name tag", all('.bookmark-group[data-group="%s"]' % g in C for g in ("entertainment", "online-shopping", "productivity")))
+check("the css gives every bookmark the glass, glow and edge of a service card", all(x in C for x in (".bookmark > a {", ".bookmark > a::before", ".bookmark > a::after", "var(--accent)")))
+check("the bookmark styles are inside the managed block", C.index(".bookmark > a {") > C.index(m.TABS_BEGIN) and C.index(".bookmark > a {") < C.index(m.TABS_END))
+if shutil.which("node"):
+    names = ["Entertainment", "Online Shopping", "Productivity", "Others", "Work & Play!", "  Spaces  ", "A--B", "Caf\u00e9 1"]
+    code = J[J.index("function slug"):J.index("function label")] + "console.log(JSON.stringify(%s.map(slug)))" % json.dumps(names)
+    got = json.loads(subprocess.run(["node", "-e", code], capture_output=True, text=True).stdout or "[]")
+    want = [re.sub(r"[^a-z0-9]+", "-", n.lower()).strip("-") for n in names]
+    check("the script and the theme command make the same name tag for every name", got == want, "%s vs %s" % (got, want))
+else:
+    print("skip  (no node here) the script and the theme command make the same name tag")
 
 print("OK" if not bad else "FAIL (%d)" % bad)

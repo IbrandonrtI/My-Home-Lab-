@@ -4,6 +4,7 @@ Run: python3 tests/t_homevol.py   (last line is OK or FAIL)"""
 import importlib.machinery
 import importlib.util
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROG = os.path.join(HERE, "..", "installer", "homelab-setup")
@@ -70,7 +71,7 @@ check("the shipped custom.css carries the layout mark", m.CSS_LAYOUT_MARK in shi
 check("the shipped custom.css sets each knob in one place", all(shipped_css.count(k + ":") == 1 for k in
       ("--d-pill-height", "--d-search-top", "--d-search-space", "--m-gap", "--m-search-top", "--m-search-bottom", "--m-search-pad")))
 check("the shipped custom.css has one :root block and no pill-layout patch block", shipped_css.count(":root {") == 1 and "pill layout" not in shipped_css)
-check("every card has its accent line", shipped_css.count("{ --accent:") == 9)
+check("every card has its accent line", len(re.findall(r"(?m)^#[\w-]+-card\s*\{ --accent:", shipped_css)) == 9)
 
 THEME = m.THEME_BEGIN + " written by: homelab theme. Remove it with: homelab theme reset */\n.service-card { background: rgba(10, 10, 10, 0.9) !important; }\n" + m.THEME_END + "\n"
 live = (shipped_css.replace("How this file is organised", "xx")

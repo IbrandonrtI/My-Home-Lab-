@@ -775,6 +775,7 @@ fresh; approve_in 3
 install_in "" y | hls install > $SIM_DIR/s39a.out 2>&1
 HP39=$HLS_ROOT/home/testuser/homepage-config
 ok "S39 a fresh install already has the layout, the small settings and the tab styles" 'grep -q "^layout:" $HP39/settings.yaml && grep -q "^hideVersion: true" $HP39/settings.yaml && grep -q "homelab tabs >>>" $HP39/custom.css'
+ok "S39 a fresh install has custom.js with the group tags" 'grep -q "homelab groups >>>" $HP39/custom.js'
 ok "S39 a fresh install did not make any backup copy" '[ ! -e $HP39/settings.yaml.before-tabs ] && [ ! -e $HP39/custom.css.before-tabs ]'
 export HP39
 python3 - <<PY
@@ -787,6 +788,7 @@ open(hp+"/settings.yaml","w").write(s)
 c=open(hp+"/custom.css").read()
 c=c[:c.index("/* >>> homelab tabs >>>")]+"/* mine */\n"
 open(hp+"/custom.css","w").write(c)
+os.remove(hp+"/custom.js")
 sp=os.environ["HLS_ROOT"]+"/var/lib/homelab-setup/state.json"
 st=json.load(open(sp)); st["ran"].pop("homepage-tabs",None); json.dump(st,open(sp,"w"))
 PY
@@ -795,6 +797,7 @@ hls refresh > $SIM_DIR/s39b.out 2>&1
 ok "S39 refresh adds the layout with both tabs and the small settings" 'grep -q "^layout:" $HP39/settings.yaml && grep -q "tab: LINKS" $HP39/settings.yaml && grep -q "tab: HOME" $HP39/settings.yaml && grep -q "^hideVersion: true" $HP39/settings.yaml && grep -q "^language: en" $HP39/settings.yaml'
 ok "S39 it keeps this machine's own title and own css rule" 'grep -q "title: My Own Title" $HP39/settings.yaml && grep -q "/\* mine \*/" $HP39/custom.css && grep -q "homelab tabs >>>" $HP39/custom.css'
 ok "S39 the old files were saved first" '[ -f $HP39/settings.yaml.before-tabs ] && ! grep -q "^layout:" $HP39/settings.yaml.before-tabs && [ -f $HP39/custom.css.before-tabs ] && ! grep -q "homelab tabs" $HP39/custom.css.before-tabs'
+ok "S39 custom.js is back, and the bookmark card styles are in custom.css" 'grep -q "homelab groups >>>" $HP39/custom.js && grep -q "bookmark > a::before" $HP39/custom.css'
 ok "S39 it says to reload the dashboard" 'grep -q "Ctrl+Shift+R" $SIM_DIR/s39b.out'
 cp $HP39/settings.yaml $SIM_DIR/s39.keep
 hls refresh > $SIM_DIR/s39c.out 2>&1
