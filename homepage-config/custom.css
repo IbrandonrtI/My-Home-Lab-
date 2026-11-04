@@ -1,3 +1,19 @@
+/* Homepage custom.css: frosted-glass cards, per-service accent colours and responsive scaling.
+   Tested with Homepage 2.6. Many rules use !important and match Homepage's internal class names
+   ([class*=...] and :has()), so a Homepage update can change the look. If that happens, rename this file to
+   custom.css.off and restart Homepage to get the default look back.
+
+   How this file is organised: every setting lives in ONE place. To change something, change the number or the
+   line where it is set; do not add a second rule further down to override it.
+     1. Settings         the numbers you are most likely to change
+     2. Cards            the service cards: glass, accent colours, text
+     3. Top pills        the row of pills (Server, pools, Network, date, weather) and the search bar
+     4. Screen sizes     zoom steps for big screens, and the phone / small window layout
+   The theme command of the server (type: homelab, then see its commands list) changes the accent colour lines in
+   section 2 and writes its own marked block at the very end of the file. */
+
+
+/* ================================================================ 1. Settings */
 :root {
   
   --d-pill-height: 80px;    

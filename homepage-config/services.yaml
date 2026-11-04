@@ -1,6 +1,6 @@
 - Network & DNS:
 
-- Tailscale:
+    - Tailscale:
         id: tailscale-card
         href: https://console.tailscale.com/admin/machines
         siteMonitor: https://console.tailscale.com/admin/machines
@@ -75,7 +75,7 @@
 
 - Files & Photos:
 
-     - Immich:
+    - Immich:
         id: immich-card
         href: https://pc.your-tailnet.ts.net:1002/photos
         siteMonitor: http://192.168.X.X:2283
@@ -87,7 +87,7 @@
           key: your-own-key
           version: 2
 
-     - Nextcloud:
+    - Nextcloud:
         id: nextcloud-card
         href: https://pc.your-tailnet.ts.net:1005
         siteMonitor: http://192.168.X.X:8082/status.php
@@ -101,10 +101,10 @@
           
     - FileBrowser:
         id: filebrowser-card
-        href: https://pc.your-tailnet.ts.net:1006/files/750GB_HDD
+        href: https://pc.your-tailnet.ts.net:1006
         siteMonitor: http://192.168.X.X:8081
         icon: filebrowser.svg
-        description: Browse and manage files on the 750GB HDD
+        description: View and edit the backups
         widget:
           type: filebrowser
           url: http://192.168.X.X:8081
