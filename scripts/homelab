@@ -273,6 +273,7 @@ commands() {
   cmd "homelab theme background [BLUR] URL" "new picture; optional BLUR: none sm md lg xl 2xl 3xl"
   cmd "homelab theme cards COLOR NUMBER" "ALL cards: colour, how solid (NUMBER 0 to 100)"
   cmd "homelab theme cards SERVICE COLOR" "ONE card, e.g. AdGuard Home blue"
+  cmd "homelab theme links GROUP COLOR" "colour of one bookmark group, e.g. Productivity green"
   cmd "homelab theme reset"            "the shipped look again"
   cmd "sudo homelab-cards"             "give new services (containers with a web page) a card"
   cmd "sudo homelab-cards ignore NAME" "never make a card for this container"
@@ -475,8 +476,10 @@ def fmt_alpha(a):
 
 
 def css_state(block):
-    """cards = the colour of every card (the only thing the marked block holds)"""
-    st = {"cards": None}
+    """cards = the colour of every card; links = {group name tag: (r, g, b)}, the colour of a bookmark group (what the marked block holds)"""
+    st = {"cards": None, "links": {}}
+    for m in re.finditer(r'(?m)^\.bookmark-group\[data-group="([a-z0-9-]+)"\]\s*\{\s*--accent:\s*(\d+),\s*(\d+),\s*(\d+);', block):
+        st["links"][m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
     m = re.search(r"(?m)^\.service-card\s*\{\s*background:\s*rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)", block)
     if m:
         st["cards"] = (int(m.group(1)), int(m.group(2)), int(m.group(3)), float(m.group(4)))
@@ -484,10 +487,16 @@ def css_state(block):
 
 
 def css_build(st):
-    if not st["cards"]:
+    if not st["cards"] and not st.get("links"):
         return ""
-    out = [B1 + " written by: homelab theme. Remove it with: homelab theme reset */",
-           ".service-card { background: rgba(%d, %d, %d, %s) !important; }" % (st["cards"][:3] + (fmt_alpha(st["cards"][3]),)), B2]
+    out = [B1 + " written by: homelab theme. Remove it with: homelab theme reset */"]
+    if st["cards"]:
+        c = st["cards"][:3] + (fmt_alpha(st["cards"][3]),)
+        out.append(".service-card { background: rgba(%d, %d, %d, %s) !important; }" % c)
+        out.append(".bookmark > a { background: rgba(%d, %d, %d, %s) !important; }" % c)
+    for tag, rgb in sorted(st.get("links", {}).items()):
+        out.append('.bookmark-group[data-group="%s"] { --accent: %d, %d, %d; }' % ((tag,) + tuple(rgb)))
+    out.append(B2)
     return "\n".join(out) + "\n"
 
 
@@ -554,6 +563,9 @@ def theme_show():
     now, was = accent_get(split_head()), accent_get(shipped_css())
     changed = ["%s rgb(%d, %d, %d)" % ((names.get(k, k),) + v) for k, v in sorted(now.items()) if k in was and was[k] != v]
     print("  Card colours  " + (", ".join(changed) if changed else "the shipped colours"))
+    mine = {tag: "rgb(%d, %d, %d)" % rgb for tag, rgb in st["links"].items()}
+    names = {group_tag(g[0]): g[0] for g in marks_groups(read(MARKS))[0]}
+    print("  Link colours  " + (", ".join("%s %s" % (names.get(t, t), c) for t, c in sorted(mine.items())) if mine else "the shipped colours"))
     print()
     print("  Change it with:")
     print("    homelab theme background [BLUR] URL-or-FILE   a picture from the web, or one on this machine, with an optional BLUR")
@@ -563,9 +575,12 @@ def theme_show():
     print("    homelab theme cards COLOR NUMBER         ALL cards: the colour, and how solid (NUMBER 0-100)")
     print("    homelab theme cards SERVICE COLOR        ONE card, for example:  homelab theme cards AdGuard Home blue")
     print("    homelab theme cards SERVICE default      that card goes back to its shipped colour")
+    print("    homelab theme links GROUP COLOR          the colour of one bookmark group on the LINKS tab, e.g.  homelab theme links Productivity green")
+    print("    homelab theme links GROUP default        that group goes back to its shipped colour")
     print("    homelab theme reset                      the shipped look again, everywhere")
     print("  Colour names: " + ", ".join(sorted(CARD_TABLE)) + "  (or a hex code such as #1e3a8a)")
     print("  Services: " + ", ".join(n for n, i in known_services() if i))
+    print("  Link groups: " + ", ".join(g[0] for g in marks_groups(read(MARKS))[0]))
 
 
 def images_mounted():
@@ -758,6 +773,57 @@ def theme_accent_cmd(words):
             theme_service_color(service, words[-1])
 
 
+def group_tag(name):
+    """The name tag custom.js puts on a bookmark group (the same letters and digits as in the group's name, joined by dashes)."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def find_link_group(words):
+    """The name of the bookmark group the words point at: not case sensitive, spaces optional, a small typo is forgiven."""
+    names = [g[0] for g in marks_groups(read(MARKS))[0]]
+    t = norm(words)
+    if not names:
+        raise Fail("There are no bookmark groups yet. Add a bookmark first:  homelab bookmark add NAME URL CATEGORY")
+    if not t:
+        raise Fail("Which group? One of: %s." % ", ".join(names))
+    keys = {}
+    for n in names:
+        keys.setdefault(norm(n), n)
+    if t in keys:
+        return keys[t]
+    hits = sorted({keys[k] for k in keys if k.startswith(t)}) or sorted({keys[k] for k in keys if len(t) >= 3 and t in k})
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise Fail("'%s' could mean %s. Type a little more of the name." % (words, " or ".join(hits)))
+    close = difflib.get_close_matches(t, list(keys), n=1, cutoff=0.75)
+    if close:
+        return keys[close[0]]
+    raise Fail("I don't know a bookmark group called '%s'. The groups are: %s." % (words, ", ".join(names)))
+
+
+def theme_links_cmd(words):
+    """homelab theme links GROUP COLOR  |  homelab theme links GROUP default  (the group name may have spaces and needs no quotes)"""
+    need_dir()
+    words = list(words)
+    if len(words) < 2:
+        raise Fail("Which group and which colour? For example:  homelab theme links Productivity green   (groups: %s)"
+                   % ", ".join(g[0] for g in marks_groups(read(MARKS))[0]))
+    color = words.pop()
+    group = find_link_group(" ".join(words))
+    tag = group_tag(group)
+    st = cur_css()
+    if color.lower() in DEFAULT_WORDS:
+        st["links"].pop(tag, None)
+        css_save(st)
+        print("The %s group is back to its shipped colour. %s" % (group, REFRESH))
+        return
+    rgb = parse_color(color, CARD_TABLE, "link")
+    st["links"][tag] = rgb
+    css_save(st)
+    print("The %s group is now %s: --accent: %d, %d, %d in the marked block at the end of custom.css. %s" % (group, color, rgb[0], rgb[1], rgb[2], REFRESH))
+
+
 def theme_reset():
     need_dir()
     def restore(head):   # every colour line goes back to the shipped line (the rest of the file is not touched)
@@ -766,7 +832,7 @@ def theme_reset():
             if m:
                 head = re.sub(r"(?m)^#%s-card\s*\{\s*--accent:.*$" % re.escape(m.group(1)), lambda _m, keep=line: keep, head, count=1)
         return head
-    css_save({"cards": None}, restore)
+    css_save({"cards": None, "links": {}}, restore)
     sb = bg_get(shipped_copy("settings.yaml", SETTINGS))
     text = read(SETTINGS)
     for k in ("image", "blur", "saturate", "brightness", "opacity"):
@@ -1172,6 +1238,8 @@ def main(a):
                 theme_cards_cmd(a[1:])
             elif c == "accent" and len(a) >= 3:
                 theme_accent_cmd(a[1:])
+            elif c == "links":
+                theme_links_cmd(a[1:])
             elif c == "reset" and len(a) == 1:
                 theme_reset()
             else:
