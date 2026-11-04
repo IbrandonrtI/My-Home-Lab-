@@ -690,4 +690,34 @@ ok "S36 install finishes with all 16 containers" '[ $RC -eq 0 ] && [ "$(wj "len(
 ok "S36 the dashboard has the AdGuard card" 'grep -q "adguard-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
 fi
 
+# ------------------------------------------------------------------ S37: `homelab-setup upgrade` (git pull, then the NEW installer's refresh)
+if scen S37; then
+echo "### S37 upgrade downloads the newest files and runs the new installer"
+fresh
+ln -sf /usr/bin/git $SIM_DIR/sys-bin/git
+git() { /usr/bin/git "$@"; }
+U=$SIM_DIR/up; rm -rf $U; mkdir -p $U; git init -q --bare $U/remote.git
+git clone -q $U/remote.git $U/work 2>/dev/null; git -C $U/work config user.email t@example.com; git -C $U/work config user.name T
+mkdir -p $U/work/installer
+printf '#!/usr/bin/env python3\nimport sys\nprint("STUB-REFRESH " + " ".join(sys.argv[1:]))\n' > $U/work/installer/homelab-setup
+git -C $U/work add -A; git -C $U/work commit -q -m "first"; git -C $U/work push -q origin HEAD 2>/dev/null
+git clone -q $U/remote.git $U/machine 2>/dev/null
+echo two > $U/work/two.txt; git -C $U/work add -A; git -C $U/work commit -q -m "second change"; git -C $U/work push -q origin HEAD 2>/dev/null
+hls upgrade --dry-run --repo $U/machine > $SIM_DIR/s37a.out 2>&1; RC=$?
+ok "S37 --dry-run changes nothing and says what it would do" '[ $RC -eq 0 ] && [ ! -e $U/machine/two.txt ] && grep -q "Would download" $SIM_DIR/s37a.out'
+hls upgrade --repo $U/machine > $SIM_DIR/s37b.out 2>&1; RC=$?
+ok "S37 upgrade exits 0" '[ $RC -eq 0 ]'
+ok "S37 the new file arrived" '[ -e $U/machine/two.txt ]'
+ok "S37 it lists what is new" 'grep -q "second change" $SIM_DIR/s37b.out'
+ok "S37 the installer from the downloaded files is run with refresh" 'grep -q "^STUB-REFRESH refresh" $SIM_DIR/s37b.out'
+hls upgrade --repo $U/machine > $SIM_DIR/s37c.out 2>&1; RC=$?
+ok "S37 a second upgrade says it is already the newest" '[ $RC -eq 0 ] && grep -q "Already the newest" $SIM_DIR/s37c.out'
+echo three > $U/machine/local.txt; git -C $U/machine add -A; git -C $U/machine -c user.email=a@b -c user.name=A commit -q -m "local only"
+echo four > $U/work/four.txt; git -C $U/work add -A; git -C $U/work commit -q -m "third change"; git -C $U/work push -q origin HEAD 2>/dev/null
+hls upgrade --repo $U/machine > $SIM_DIR/s37d.out 2>&1; RC=$?
+ok "S37 a download that cannot be applied stops with a plain message and no refresh" '[ $RC -ne 0 ] && grep -q "download from GitHub failed" $SIM_DIR/s37d.out && ! grep -q STUB-REFRESH $SIM_DIR/s37d.out'
+mkdir -p $U/plain; hls upgrade --repo $U/plain > $SIM_DIR/s37e.out 2>&1; RC=$?
+ok "S37 a folder that is not a git copy is explained" '[ $RC -ne 0 ] && grep -q "not a copy downloaded with git" $SIM_DIR/s37e.out'
+fi
+
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
