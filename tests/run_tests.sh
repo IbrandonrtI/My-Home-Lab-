@@ -768,4 +768,47 @@ ok "S38 the answer is kept so a second install does not ask again" 'grep -q "\"l
 ok "S38 the install still finishes with all 16 containers" '[ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ]'
 fi
 
+# ------------------------------------------------------------------ S39: Homepage tabs reach an older machine once, and taking them out is respected
+if scen S39; then
+echo "### S39 an older machine gets the Homepage tabs (HOME, LINKS), group icons and tab styles with one refresh, once"
+fresh; approve_in 3
+install_in "" y | hls install > $SIM_DIR/s39a.out 2>&1
+HP39=$HLS_ROOT/home/testuser/homepage-config
+ok "S39 a fresh install already has the layout, the small settings and the tab styles" 'grep -q "^layout:" $HP39/settings.yaml && grep -q "^hideVersion: true" $HP39/settings.yaml && grep -q "homelab tabs >>>" $HP39/custom.css'
+ok "S39 a fresh install did not make any backup copy" '[ ! -e $HP39/settings.yaml.before-tabs ] && [ ! -e $HP39/custom.css.before-tabs ]'
+export HP39
+python3 - <<PY
+import os,re,json
+hp=os.environ["HP39"]
+s=open(hp+"/settings.yaml").read()
+s=s[:s.index("# Tabs and group icons")].replace("hideVersion: true\n","").replace("language: en\n","")
+s=s.replace("title: Home Lab","title: My Own Title")
+open(hp+"/settings.yaml","w").write(s)
+c=open(hp+"/custom.css").read()
+c=c[:c.index("/* >>> homelab tabs >>>")]+"/* mine */\n"
+open(hp+"/custom.css","w").write(c)
+sp=os.environ["HLS_ROOT"]+"/var/lib/homelab-setup/state.json"
+st=json.load(open(sp)); st["ran"].pop("homepage-tabs",None); json.dump(st,open(sp,"w"))
+PY
+ok "S39 (set up) an older machine: no layout, no tab styles" '! grep -q "^layout:" $HP39/settings.yaml && ! grep -q "homelab tabs" $HP39/custom.css'
+hls refresh > $SIM_DIR/s39b.out 2>&1
+ok "S39 refresh adds the layout with both tabs and the small settings" 'grep -q "^layout:" $HP39/settings.yaml && grep -q "tab: LINKS" $HP39/settings.yaml && grep -q "tab: HOME" $HP39/settings.yaml && grep -q "^hideVersion: true" $HP39/settings.yaml && grep -q "^language: en" $HP39/settings.yaml'
+ok "S39 it keeps this machine's own title and own css rule" 'grep -q "title: My Own Title" $HP39/settings.yaml && grep -q "/\* mine \*/" $HP39/custom.css && grep -q "homelab tabs >>>" $HP39/custom.css'
+ok "S39 the old files were saved first" '[ -f $HP39/settings.yaml.before-tabs ] && ! grep -q "^layout:" $HP39/settings.yaml.before-tabs && [ -f $HP39/custom.css.before-tabs ] && ! grep -q "homelab tabs" $HP39/custom.css.before-tabs'
+ok "S39 it says to reload the dashboard" 'grep -q "Ctrl+Shift+R" $SIM_DIR/s39b.out'
+cp $HP39/settings.yaml $SIM_DIR/s39.keep
+hls refresh > $SIM_DIR/s39c.out 2>&1
+ok "S39 a second refresh changes nothing" 'cmp -s $HP39/settings.yaml $SIM_DIR/s39.keep && ! grep -q "Ctrl+Shift+R" $SIM_DIR/s39c.out'
+python3 - <<PY
+import os
+hp=os.environ["HP39"]
+s=open(hp+"/settings.yaml").read()
+open(hp+"/settings.yaml","w").write(s[:s.index("# Tabs and group icons")])
+PY
+hls refresh > $SIM_DIR/s39d.out 2>&1
+ok "S39 taking the layout out is respected (it is not put back)" '! grep -q "^layout:" $HP39/settings.yaml'
+hls refresh --dry-run > $SIM_DIR/s39e.out 2>&1
+ok "S39 a dry run changes no file" '! grep -q "^layout:" $HP39/settings.yaml'
+fi
+
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
