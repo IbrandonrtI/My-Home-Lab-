@@ -110,7 +110,7 @@ rm_ /root/.homelab-setup /var/lib/homelab-setup /var/lib/homelab /var/lib/homela
 
 step "6. The homelab commands"
 for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-stats homelab-selftest homelab-cards homelab-setup; do rm_ "/usr/local/sbin/$f"; done
-for f in hdd-recover homelab homelab-check; do rm_ "/usr/local/bin/$f"; done
+for f in hdd-recover homelab homelab-check homelab-calendar; do rm_ "/usr/local/bin/$f"; done
 
 step "7. The schedule (root's crontab) and the login screen"
 if crontab -l >/dev/null 2>&1; then
