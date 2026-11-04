@@ -112,3 +112,205 @@
           password: your-own-key
 
     #- Media & Entertainment
+
+# >>> homelab stats >>>
+# The STATS tab. Every number comes from one small file, stats.json, that the command homelab-stats rewrites every 15 minutes
+# (sudo homelab-stats does it now). The Immich and Nextcloud numbers use the keys of the Immich and Nextcloud cards above.
+# This block is brought up to date by the installer. To remove the tab: delete everything between the two marker lines, then
+# delete the five STATS groups from the layout: block of settings.yaml.
+
+- At a glance:
+
+    - Library:
+        id: stat-library
+        icon: mdi-image-multiple
+        description: Photos, videos and files
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: glance.photos
+              label: Photos
+            - field: glance.videos
+              label: Videos
+            - field: glance.files
+              label: Files
+
+    - Storage used:
+        id: stat-storage
+        icon: mdi-harddisk
+        description: How full the pools are
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: glance.main_pct
+              label: Main pool
+            - field: glance.backup_pct
+              label: Backup pool
+
+    - Last backup:
+        id: stat-lastbackup
+        icon: mdi-backup-restore
+        description: When it ran and how big it is
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: glance.backup_when
+              label: Ran
+            - field: glance.backup_size
+              label: Size
+
+    - Containers:
+        id: stat-containers
+        icon: mdi-docker
+        description: Running now and updates waiting
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: glance.containers
+              label: Running
+            - field: glance.updates
+              label: Updates
+
+- Library totals:
+
+    - Immich:
+        id: stat-immich
+        icon: immich.svg
+        description: Photos and videos
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: immich.photos
+              label: Photos
+            - field: immich.videos
+              label: Videos
+            - field: immich.users
+              label: Users
+            - field: immich.storage
+              label: Size
+
+    - Nextcloud:
+        id: stat-nextcloud
+        icon: nextcloud.svg
+        description: Files and shares
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: nextcloud.files
+              label: Files
+            - field: nextcloud.users
+              label: Active 24h
+            - field: nextcloud.shares
+              label: Shares
+            - field: nextcloud.free
+              label: Free
+
+- Storage:
+
+    - Main pool:
+        id: stat-mainpool
+        icon: mdi-harddisk
+        description: Your files and photos
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: main.used
+              label: Used
+            - field: main.free
+              label: Free
+            - field: main.total
+              label: Size
+            - field: main.health
+              label: Health
+
+    - Backup pool:
+        id: stat-backuppool
+        icon: mdi-database-check
+        description: The copy of the main pool
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: backup.used
+              label: Used
+            - field: backup.free
+              label: Free
+            - field: backup.total
+              label: Size
+            - field: backup.health
+              label: Health
+
+- Backup & updates:
+
+    - Last backup:
+        id: stat-backup
+        icon: mdi-backup-restore
+        description: When it ran and how it went
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: last_backup.when
+              label: Ran
+            - field: last_backup.result
+              label: Result
+            - field: last_backup.size
+              label: Size
+            - field: last_backup.took
+              label: Took
+
+    - Containers & updates:
+        id: stat-updates
+        icon: mdi-docker
+        description: Checked by homelab-update
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: containers.running
+              label: Running
+            - field: containers.problems
+              label: Problems
+            - field: updates.images
+              label: Images
+            - field: updates.system
+              label: System
+
+- Folder sizes:
+
+    - Folder sizes:
+        id: stat-folders
+        icon: mdi-folder-multiple
+        description: Counted again only when something changed
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: folders.backup
+              label: Backup pool
+            - field: folders.main
+              label: Main pool
+            - field: folders.nextcloud
+              label: Nextcloud
+            - field: folders.immich
+              label: Immich
+
+# <<< homelab stats <<<

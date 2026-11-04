@@ -44,3 +44,28 @@ layout:
   Productivity:
     tab: LINKS
     icon: mdi-briefcase
+  At a glance:
+    tab: STATS
+    icon: mdi-view-dashboard
+    style: row
+    columns: 4
+  Library totals:
+    tab: STATS
+    icon: mdi-image-multiple
+    style: row
+    columns: 2
+  Storage:
+    tab: STATS
+    icon: mdi-harddisk
+    style: row
+    columns: 2
+  Backup & updates:
+    tab: STATS
+    icon: mdi-backup-restore
+    style: row
+    columns: 2
+  Folder sizes:
+    tab: STATS
+    icon: mdi-folder-multiple
+    style: row
+    columns: 1
