@@ -285,6 +285,7 @@ commands() {
     cmd "sudo homelab-setup adguard"     "add AdGuard Home, if you skipped it during the install"
     cmd "sudo homelab-setup done STEP"   "mark a step you did by hand as done (see the checklist)"
     cmd "sudo homelab-setup fill"        "walk through the logins and keys that need you"
+    cmd "sudo homelab-setup growdisk"    "use the drive's unused space for the system (LVM; asks first)"
     cmd "sudo homelab-setup install"     "set everything up, or carry on after a failure (safe to repeat)"
     cmd "sudo homelab-setup refresh"     "re-check, and continue every step that is now possible"
     cmd "sudo homelab-setup secrets"     "show the generated passwords and keys once more"

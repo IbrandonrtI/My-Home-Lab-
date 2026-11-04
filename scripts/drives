@@ -2046,6 +2046,13 @@ timeshift_flow() {
   fi
 }
 
+lvm_unused_bytes() {   # unused space of the drive's LVM volume group (when the system volume is LVM), in bytes; nothing otherwise
+  command -v lvs >/dev/null 2>&1 || return 0
+  local src; src=$(findmnt -no SOURCE / 2>/dev/null) || return 0
+  [ -n "$src" ] || return 0
+  lvs --noheadings --nosuffix --units b -o vg_free "$src" 2>/dev/null | awk 'NF {printf "%d", $1; exit}'
+}
+
 bootsection_flow() {
   array_guard || return 1
   need_tools || return 1
@@ -2054,7 +2061,13 @@ bootsection_flow() {
   total=$(boot_total_bytes)
   if [ -n "$total" ] && [ "$total" -le "$BOOT_SMALL_BYTES" ]; then
     note "The boot drive is only $(pretty_size "$total"). The system and your apps need $(pretty_size "$BOOT_KEEP_FREE_BYTES") of it, so no part of it can be used for a storage pool."
-    note "Connect a separate drive instead (sudo drives). Nothing was changed."
+    local lvm; lvm=$(lvm_unused_bytes)
+    if [[ "${lvm:-0}" =~ ^[0-9]+$ ]] && [ "${lvm:-0}" -ge 21474836480 ]; then
+      note "But the system volume is LVM and the drive has $(pretty_size "$lvm") that nothing uses (the installer made the volume small)."
+      note "Give it to the system first:  sudo homelab-setup growdisk   (it asks first, and erases nothing). Then run this again."
+    else
+      note "Connect a separate drive instead (sudo drives). Nothing was changed."
+    fi
     return 1
   fi
   idx=$(choose "Add a boot drive section to which storage? " "Main storage (photos and files used by your services)" "Backup storage (daily copy of main)") || return 1
