@@ -1559,6 +1559,27 @@ def js_groups_block(live, shipped):
     return live.rstrip("\n") + "\n\n" + block + "\n"
 
 
+STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"      # the block of STATS groups in the shipped services.yaml
+# The STATS groups: name -> (icon, columns). layout_complete puts them on the STATS tab (never on HOME).
+STATS_GROUPS = {"At a glance": ("mdi-view-dashboard", 4), "Library totals": ("mdi-image-multiple", 2), "Storage": ("mdi-harddisk", 2),
+                "Backup & updates": ("mdi-backup-restore", 2), "Folder sizes": ("mdi-folder-multiple", 1)}
+
+
+def services_stats_block(live, shipped):
+    """This machine's services.yaml with the STATS groups (the block between the two marker lines) put in at the end, or brought up to
+    date. Everything outside the block is left alone. `shipped` already has this machine's address filled in."""
+    a = shipped.find(STATS_BEGIN)
+    z = shipped.find(STATS_END, a) if a >= 0 else -1
+    if a < 0 or z < 0:
+        return live
+    block = shipped[a:z + len(STATS_END)]
+    la = live.find(STATS_BEGIN)
+    lz = live.find(STATS_END, la) if la >= 0 else -1
+    if la >= 0 and lz >= 0:
+        return live[:la] + block + live[lz + len(STATS_END):]
+    return live.rstrip("\n") + "\n\n" + block + "\n"
+
+
 def settings_with_layout(live, shipped):
     """This machine's settings.yaml with the tabs and group icons (the layout: block) and the small settings (hideVersion, language)
     added when they are missing. Nothing that is already there is changed."""
@@ -1611,10 +1632,14 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
     for tab, icon, groups in (("HOME", "mdi-apps", service_groups), ("LINKS", "mdi-bookmark-multiple", bookmark_groups)):
         for g in groups:
             if g and g not in known and g not in seen and g not in [a[0] for a in add]:
-                add.append((g, tab, icon))
+                add.append((g, "STATS" if g in STATS_GROUPS and tab == "HOME" else tab, icon))
     for g, tab, icon in add:
-        lines[end:end] = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
-        end += 3
+        if tab == "STATS":
+            new = ["  %s:" % yaml_key(g), "    tab: STATS", "    icon: %s" % STATS_GROUPS[g][0], "    style: row", "    columns: %d" % STATS_GROUPS[g][1]]
+        else:
+            new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
+        lines[end:end] = new
+        end += len(new)
     return "\n".join(lines), sorted(set(seen) | set(present))
 
 
@@ -3156,23 +3181,26 @@ class HomepageFiles(Step):
 
 @step
 class HomepageTabs(Step):
-    id, group, title = "homepage-tabs", "Homepage", "Homepage tabs (HOME, LINKS), group icons, bookmark cards and their styles"
-    needs = ("homepage-files",)
+    id, group, title = "homepage-tabs", "Homepage", "Homepage tabs (HOME, LINKS, STATS), group icons, bookmark cards, the STATS cards and their styles"
+    needs = ("homepage-files", "scripts")
 
     def applies(self):
         return not Mode.existing and os.path.exists(hp_path("settings.yaml")) and os.path.exists(hp_path("custom.css")) and bool(read_file(repo_file("homepage-config", "settings.yaml")))
 
     def wanted(self):
-        """(new settings.yaml, new custom.css, groups now known, new custom.js) for this machine. The tabs are offered once: after that,
-        taking the layout: block out of settings.yaml is respected. A group of this machine that no tab knows yet is put on one."""
+        """(new settings.yaml, new custom.css, groups now known, new custom.js, new services.yaml) for this machine. The tabs are offered
+        once: after that, taking the layout: block out of settings.yaml is respected. A group of this machine that no tab knows yet is put
+        on one. The STATS groups are added to services.yaml (also offered once) when the tabs are on."""
         sett, css = read_file(hp_path("settings.yaml")), read_file(hp_path("custom.css"))
         if not State.ran("homepage-tabs"):
             sett = settings_with_layout(sett, read_file(repo_file("homepage-config", "settings.yaml")))
-        sett, seen = layout_complete(sett, group_names(read_file(hp_path("services.yaml"))), group_names(read_file(hp_path("bookmarks.yaml"))),
-                                     State.data.get("layout_seen", []))
+        svc = read_file(hp_path("services.yaml"))
+        if re.search(r"(?m)^layout:", sett) and (not State.ran("homepage-stats") or STATS_BEGIN in svc):
+            svc = services_stats_block(svc, subst(read_file(repo_file("homepage-config", "services.yaml"))))
+        sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))
-        return sett, new_css, seen, new_js
+        return sett, new_css, seen, new_js, svc
 
     def remember(self, seen):
         if seen != State.data.get("layout_seen", []):
@@ -3180,23 +3208,25 @@ class HomepageTabs(Step):
             State.save()
 
     def probe(self):
-        sett, css, seen, js = self.wanted()
-        if sett != read_file(hp_path("settings.yaml")) or css != read_file(hp_path("custom.css")) or js != read_file(hp_path("custom.js")):
+        sett, css, seen, js, svc = self.wanted()
+        if (sett != read_file(hp_path("settings.yaml")) or css != read_file(hp_path("custom.css")) or js != read_file(hp_path("custom.js"))
+                or svc != read_file(hp_path("services.yaml"))):
             return "todo"
         if not Opt.dry:
             self.remember(seen)                  # already in place (a new machine): a later removal of a group or of the tabs is respected
-            if not State.ran("homepage-tabs"):
-                State.mark("homepage-tabs")
+            for k in ("homepage-tabs", "homepage-stats"):
+                if not State.ran(k):
+                    State.mark(k)
         return "done"
 
     def run(self):
-        old_sett, old_css, old_js = read_file(hp_path("settings.yaml")), read_file(hp_path("custom.css")), read_file(hp_path("custom.js"))
-        sett, css, seen, js = self.wanted()
+        old_sett, old_css, old_js, old_svc = (read_file(hp_path(n)) for n in ("settings.yaml", "custom.css", "custom.js", "services.yaml"))
+        sett, css, seen, js, svc = self.wanted()
         own = (Ctx.uid, Ctx.gid)
         if Opt.dry:
-            out("      would add the tabs (HOME, LINKS), the group icons, the bookmark cards and their styles to the Homepage files")
+            out("      would add the tabs (HOME, LINKS, STATS), the group icons, the bookmark cards, the STATS cards and their styles to the Homepage files")
             return
-        for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js)):
+        for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js), ("services.yaml", old_svc, svc)):
             if new == old:
                 continue
             if old and not os.path.exists(hp_path(name) + ".before-tabs"):          # the first copy is the one worth keeping
@@ -3204,9 +3234,22 @@ class HomepageTabs(Step):
             write_file(hp_path(name), new, 0o644, own)
         self.remember(seen)
         State.mark("homepage-tabs")
+        State.mark("homepage-stats")
+        stats_file = hp_path("images/stats.json")
+        if not FAKE and not os.path.exists(stats_file) and os.path.exists(P("/usr/local/sbin/homelab-stats")):
+            # Homepage only serves a file that was there when it started, so the first stats.json is made now, before the restart below
+            os.makedirs(os.path.dirname(stats_file), exist_ok=True)
+            run_as_root_stats(stats_file)
         if not FAKE and "homepage" in containers_all():
             act(["docker", "restart", "homepage"], timeout=120)
-        out("      Reload the dashboard (Ctrl+Shift+R). The old files are saved as settings.yaml.before-tabs, custom.css.before-tabs and custom.js.before-tabs")
+        out("      Reload the dashboard (Ctrl+Shift+R). The old files are saved as settings.yaml.before-tabs, custom.css.before-tabs, custom.js.before-tabs and services.yaml.before-tabs")
+        if STATS_BEGIN in svc:
+            out("      The STATS tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
+
+
+def run_as_root_stats(stats_file):
+    """Make the first stats.json (without counting folder sizes, which takes minutes)."""
+    run([P("/usr/local/sbin/homelab-stats"), "quick"], env=dict(os.environ, HOMELAB_STATS_OUT=stats_file), timeout=180)
 
 
 # ================================================================ AdGuard Home
@@ -3875,7 +3918,7 @@ _register_widgets()
 
 # ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
-           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-cards", "/usr/local/sbin"),
+           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"), ("homelab-cards", "/usr/local/sbin"),
            ("homelab-selftest", "/usr/local/sbin"), ("hdd-recover", "/usr/local/bin"), ("homelab", "/usr/local/bin"), ("homelab-check", "/usr/local/bin")]
 
 
@@ -3946,6 +3989,7 @@ class BackupConf(Step):
 
 CRON_LINES = [
     ("homelab-sample", "*/15 * * * * /usr/local/sbin/homelab-sample >/dev/null 2>&1"),
+    ("homelab-stats", "5,20,35,50 * * * * /usr/local/sbin/homelab-stats >/dev/null 2>&1"),
     ("homelab-update", "17 * * * * /usr/local/sbin/homelab-update auto >/dev/null 2>&1"),
     ("homelab-cards", "*/5 * * * * /usr/local/sbin/homelab-cards auto >/dev/null 2>&1"),
     ("drives power", "@reboot sleep 60 && /usr/local/sbin/drives power >/dev/null 2>&1"),
