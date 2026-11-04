@@ -90,16 +90,22 @@ check("a file without a background block is left alone", m.settings_with_backgro
 SV = ("- Media & Entertainment:\n\n    - Metube:\n        id: metube-card\n        href: x\n\n"
       "    - Navidrome:\n        id: navidrome-card\n        href: https://h.ts.net:1011\n        siteMonitor: http://192.168.1.5:4533\n        icon: navidrome.svg\n"
       "        description: Music streaming server\n\n    - Other:\n        id: other-card\n        href: y\n\n- Files & Photos:\n    - Nextcloud:\n        id: nextcloud-card\n")
-wl = m.navidrome_widget("192.168.1.5", "Brandon", "pw", "abc")
-check("the widget lines: type, url with the port, user, key = md5(password + salt), salt", wl == ["type: navidrome", "url: http://192.168.1.5:4533", "user: Brandon",
-      "token: 3aea0e5b7b0cf1a2e0d4a1d3f1b53f9b".replace("3aea0e5b7b0cf1a2e0d4a1d3f1b53f9b", __import__("hashlib").md5(b"pwabc").hexdigest()), "salt: abc"], wl)
-nv = m.services_with_widget(SV, "navidrome-card", wl)
-check("the widget is added at the end of its own card, nowhere else", "        description: Music streaming server\n        widget:\n          type: navidrome\n          url: http://192.168.1.5:4533\n"
-      "          user: Brandon\n          token: " in nv and nv.count("widget:") == 1 and "          salt: abc\n\n    - Other:" in nv and "id: other-card\n        href: y" in nv, nv)
-check("a card that has a widget already is not changed", m.services_with_widget(nv, "navidrome-card", wl) == nv)
-check("a file without that card is not changed", m.services_with_widget(SV, "nothing-card", wl) == SV)
-check("the widget type of a card is read", m.card_widget_type(nv, "navidrome-card") == "navidrome" and m.card_widget_type(SV, "navidrome-card") == "" and m.card_widget_type(SV, "zzz-card") is None)
-check("a card at the very end of the file gets its widget", m.services_with_widget(SV, "nextcloud-card", ["type: nextcloud"]).rstrip("\n").endswith("widget:\n          type: nextcloud"))
+nv = m.services_with_iframe_widget(SV, "navidrome-card", "192.168.1.5")
+check("the player is put at the end of its own card, nowhere else", "        description: Music streaming server\n        widget:\n          type: iframe\n          name: navidrome-player\n"
+      "          src: http://192.168.1.5:4533\n" in nv and nv.count("widget:") == 1 and "\n\n    - Other:" in nv and "id: other-card\n        href: y" in nv, nv)
+check("a card that shows the player already is not changed", m.services_with_iframe_widget(nv, "navidrome-card", "192.168.1.5") == nv)
+check("a file without that card is not changed", m.services_with_iframe_widget(SV, "nothing-card", "192.168.1.5") == SV)
+check("the widget type of a card is read", m.card_widget_type(nv, "navidrome-card") == "iframe" and m.card_widget_type(SV, "navidrome-card") == "" and m.card_widget_type(SV, "zzz-card") is None)
+old33 = SV.replace("        description: Music streaming server\n", "        description: Music streaming server\n        widget:\n          type: navidrome\n          url: http://192.168.1.5:4533\n          user: B\n          token: t\n          salt: s\n")
+old33 = old33.replace("    - Other:", "    - Navidrome Player:\n        id: navidrome-player\n        icon: navidrome.svg\n        widget:\n          type: iframe\n          src: x\n\n    - Other:")
+mig = m.services_without_card(m.services_with_iframe_widget(old33, "navidrome-card", "192.168.1.5"), "navidrome-player")
+check("the live numbers of zip 33 are replaced by the player, in the same card", m.card_widget_type(mig, "navidrome-card") == "iframe" and "type: navidrome\n" not in mig and "token:" not in mig, mig)
+check("the separate player card of zip 33 is taken out, the other cards stay", "navidrome-player\n        icon" not in mig and "id: navidrome-player" not in mig.replace("name: navidrome-player", "") and "id: other-card" in mig and "id: metube-card" in mig, mig)
+check("taking out a card that is not there changes nothing", m.services_without_card(SV, "navidrome-player") == SV)
+first = m.card_to_top(SV, "navidrome-card")
+check("the Navidrome card moves to the top of its group", re.findall(r"(?m)^    - (.+):$", first.split("- Files")[0]) == ["Navidrome", "Metube", "Other"] and m.card_to_top(first, "navidrome-card") == first and m.navidrome_card_first(first) and not m.navidrome_card_first(SV), first)
+check("the player card of the first version is no more", not hasattr(m, "navidrome_player_card"))
+check("a card at the very end of the file gets the player", m.services_with_iframe_widget(SV, "nextcloud-card", "h").rstrip("\n").endswith("loadingStrategy: lazy"))
 check("the shipped navidrome.yaml: pinned image, music folder read-only, its own port", re.search(r"image: ghcr\.io/navidrome/navidrome:\d+\.\d+\.\d+", open(os.path.join(HERE, "..", "stacks", "navidrome.yaml")).read())
       and ":/music:ro" in open(os.path.join(HERE, "..", "stacks", "navidrome.yaml")).read() and '"4533:4533"' in open(os.path.join(HERE, "..", "stacks", "navidrome.yaml")).read())
 

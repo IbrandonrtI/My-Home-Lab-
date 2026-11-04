@@ -951,28 +951,40 @@ printf '\n- Media & Entertainment:\n    - Metube:\n        id: metube-card\n    
 printf 'y\n%s\n' $PW | hls refresh > $SIM_DIR/s40f.out 2>&1
 ok "S40 with a music folder Navidrome is installed and running, with its music folder mounted read-only" '[ "$(wj "w[\"containers\"][\"navidrome\"][\"running\"]")" = True ] && [ -d $HLS_ROOT/home/testuser/navidrome ]'
 ok "S40 its login was made with the admin name and the shared password" '[ "$(wj "w[\"navidrome\"][\"user\"]")" = Tester ] && [ "$(wj "w[\"navidrome\"][\"pw\"]")" = $PW ]'
-ok "S40 its card got the widget with this machine address and the key (not the password)" 'python3 - <<PY
-import os,re,hashlib
-t=open(os.environ["HP40"]+"/services.yaml").read()
-i=t.index("id: navidrome-card"); card=t[i:i+700]
-assert "widget:\n          type: navidrome\n          url: http://192.168.50.23:4533\n          user: Tester\n" in card, card
-salt=re.search(r"salt: (\w+)", card).group(1); tok=re.search(r"token: (\w+)", card).group(1)
-assert tok == hashlib.md5(("CorrectHorse1234"+salt).encode()).hexdigest()
-assert "CorrectHorse1234" not in card
-PY'
-ok "S40 the Navidrome card moved to the top of its group, with the player card (an iframe of Navidrome) under it" 'python3 - <<PY
+ok "S40 its card shows the Navidrome player (an iframe of this machine address), no password in it, and there is only one card" 'python3 - <<PY
 import os,re
 t=open(os.environ["HP40"]+"/services.yaml").read()
 g=t[t.index("- Media & Entertainment:"):]
 names=re.findall(r"(?m)^    - (.+):$", g)
-assert names[:3]==["Navidrome","Navidrome Player","Metube"], names
-assert "id: navidrome-player" in g and "type: iframe" in g and "src: http://192.168.50.23:4533" in g, g
+assert names[:2]==["Navidrome","Metube"], names
+assert "navidrome-player" not in g.replace("name: navidrome-player",""), g
+card=g[g.index("id: navidrome-card"):g.index("id: metube-card")]
+assert "widget:\n          type: iframe\n" in card and "src: http://192.168.50.23:4533" in card and "href: https://pc.example.ts.net:1011" in card, card
+assert "CorrectHorse1234" not in card and "token:" not in card
 PY'
 ok "S40 Navidrome's stack file has the Spotify-ish theme and the frame setting, and the installer remembers it deployed it" 'grep -q "ND_DEFAULTTHEME: \"Spotify-ish\"" $SIMDIR/../stacks/navidrome.yaml && grep -q "ND_HTTPHEADERS_FRAMEOPTIONS" $SIMDIR/../stacks/navidrome.yaml && grep -q navidrome_stack $HLS_ROOT/var/lib/homelab-setup/state.json'
 ok "S40 the old services.yaml was kept" '[ -f $HP40/services.yaml.before-navidrome ] && ! grep -q "type: navidrome" $HP40/services.yaml.before-navidrome'
 cp $HP40/services.yaml $SIM_DIR/s40svc.keep
 hls refresh > $SIM_DIR/s40g.out 2>&1
 ok "S40 a second refresh changes nothing and asks for no password" 'cmp -s $HP40/services.yaml $SIM_DIR/s40svc.keep && ! grep -qi "admin password" $SIM_DIR/s40g.out'
+python3 - <<PY
+import os,re
+p=os.environ["HP40"]+"/services.yaml"
+t=open(p).read()
+# the dashboard of zip 33: live numbers in the Navidrome card and a second card for the player
+t=re.sub(r"(id: navidrome-card.*?description: Music streaming server\n)        widget:\n(?:          [^\n]*\n)+", r"\1        widget:\n          type: navidrome\n          url: http://192.168.50.23:4533\n          user: Tester\n          token: abc\n          salt: xyz\n", t, count=1, flags=re.S)
+t=t.rstrip("\n")+"\n\n    - Navidrome Player:\n        id: navidrome-player\n        icon: navidrome.svg\n        widget:\n          type: iframe\n          name: navidrome-player\n          src: http://192.168.50.23:4533\n"
+open(p,"w").write(t)
+PY
+hls refresh > $SIM_DIR/s40h.out 2>&1
+ok "S40 a dashboard of the first version (live numbers + a second player card) becomes one card with the player, and asks for no password" 'python3 - <<PY
+import os,re
+t=open(os.environ["HP40"]+"/services.yaml").read()
+assert t.count("id: navidrome-player")==0 and t.count("id: navidrome-card")==1, t
+card=t[t.index("id: navidrome-card"):t.index("id: metube-card")]
+assert "type: iframe" in card and "type: navidrome" not in card and "token:" not in card, card
+PY
+[ $? = 0 ] && ! grep -qi "admin password" $SIM_DIR/s40h.out'
 fi
 
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
