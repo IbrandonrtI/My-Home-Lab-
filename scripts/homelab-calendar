@@ -1,0 +1,349 @@
+#!/usr/bin/env python3
+"""homelab-calendar - the holidays and your own events for the Calendar on the Homepage dashboard.
+
+It writes three small calendar files into the images folder of Homepage (~/homepage-config/images/), which the Calendar on the
+Home tab reads:
+  holidays.ics       US federal holidays, plus Lincoln's Birthday and Election Day (New York State)
+  observances.ics    Valentine's Day, Mother's Day, Father's Day, Halloween, Lunar New Year and Diwali
+  events.ics         your own events (kept in ~/homepage-config/events.txt, one per line, you may edit that file by hand)
+The holiday dates are worked out by rule (for example "third Monday of January"), so they are always right. Lunar New Year and Diwali
+come from a fixed list of dates (2026 to 2035).
+
+Usage (type  homelab event ...  instead of  homelab-calendar ...):
+  homelab event add DATE "text" [yearly]    add an event. DATE: 2026-12-25, 12/25/2026, or 12/25 (the next 12/25).
+                                            Add the word yearly for a birthday or anniversary that comes back every year.
+  homelab event list                        your events, numbered
+  homelab event remove NUMBER               take one away (the number from the list)
+  homelab event holidays                    the next holidays
+  homelab-calendar build                    rewrite the calendar files (the installer and a weekly job do this)
+  homelab-calendar version
+"""
+
+import datetime
+import hashlib
+import os
+import pwd
+import re
+import sys
+
+VERSION = "1.0"
+STATE_DIR = os.environ.get("HOMELAB_STATE_DIR", "/var/lib/homelab")
+YEARS_BACK, YEARS_AHEAD = 1, 5
+STAMP = "20260101T000000Z"                     # a fixed time stamp, so a file only changes when its events change
+LUNAR_NEW_YEAR = {2026: (2, 17), 2027: (2, 6), 2028: (1, 26), 2029: (2, 13), 2030: (2, 3), 2031: (1, 23), 2032: (2, 11), 2033: (1, 31),
+                  2034: (2, 19), 2035: (2, 8)}
+DIWALI = {2026: (11, 8), 2027: (10, 29), 2028: (10, 17), 2029: (11, 5), 2030: (10, 26), 2031: (11, 14), 2032: (11, 2), 2033: (10, 22),
+          2034: (11, 10), 2035: (10, 30)}
+EVENTS_HEADER = ("# Your own events for the Calendar on the Homepage dashboard. One per line:  DATE | once or yearly | text\n"
+                 "# Add one with:  homelab event add 2026-12-25 \"Family dinner\"   (you may also edit this file by hand)\n")
+
+
+class Fail(Exception):
+    pass
+
+
+# ---------------------------------------------------------------- the holidays
+def nth_weekday(year, month, weekday, n):
+    """The n-th weekday (0 = Monday ... 6 = Sunday) of a month."""
+    first = datetime.date(year, month, 1)
+    return first + datetime.timedelta(days=(weekday - first.weekday()) % 7 + 7 * (n - 1))
+
+
+def last_weekday(year, month, weekday):
+    nxt = datetime.date(year + (month == 12), month % 12 + 1, 1)
+    last = nxt - datetime.timedelta(days=1)
+    return last - datetime.timedelta(days=(last.weekday() - weekday) % 7)
+
+
+def official(y):
+    """US federal holidays and the New York State extras: [(date, name)]."""
+    d = datetime.date
+    return [
+        (d(y, 1, 1), "New Year's Day"),
+        (nth_weekday(y, 1, 0, 3), "Martin Luther King Jr. Day"),
+        (d(y, 2, 12), "Lincoln's Birthday (NY)"),
+        (nth_weekday(y, 2, 0, 3), "Presidents' Day"),
+        (last_weekday(y, 5, 0), "Memorial Day"),
+        (d(y, 6, 19), "Juneteenth"),
+        (d(y, 7, 4), "Independence Day"),
+        (nth_weekday(y, 9, 0, 1), "Labor Day"),
+        (nth_weekday(y, 10, 0, 2), "Columbus Day / Indigenous Peoples' Day"),
+        (nth_weekday(y, 11, 0, 1) + datetime.timedelta(days=1), "Election Day (NY)"),
+        (d(y, 11, 11), "Veterans Day"),
+        (nth_weekday(y, 11, 3, 4), "Thanksgiving"),
+        (d(y, 12, 25), "Christmas Day"),
+    ]
+
+
+def observances(y):
+    """Days that are not official holidays: [(date, name)]."""
+    d = datetime.date
+    out = [(d(y, 2, 14), "Valentine's Day"), (nth_weekday(y, 5, 6, 2), "Mother's Day"), (nth_weekday(y, 6, 6, 3), "Father's Day"),
+           (d(y, 10, 31), "Halloween")]
+    if y in LUNAR_NEW_YEAR:
+        out.append((d(y, *LUNAR_NEW_YEAR[y]), "Lunar New Year"))
+    if y in DIWALI:
+        out.append((d(y, *DIWALI[y]), "Diwali"))
+    return out
+
+
+def years(today=None):
+    y = (today or datetime.date.today()).year
+    return range(y - YEARS_BACK, y + YEARS_AHEAD + 1)
+
+
+# ---------------------------------------------------------------- calendar files (iCalendar)
+def esc(text):
+    return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", " ")
+
+
+def fold(line):
+    """Lines of an .ics file are at most 75 characters; a longer one continues on the next line after a space."""
+    out, b = [], line.encode("utf-8")
+    while len(b) > 74:
+        cut = 74
+        while cut > 0 and (b[cut] & 0xC0) == 0x80:      # never cut inside a character
+            cut -= 1
+        out.append(b[:cut].decode("utf-8"))
+        b = b[cut:]
+    out.append(b.decode("utf-8"))
+    return "\r\n ".join(out)
+
+
+def vevent(day, name, yearly=False):
+    uid = hashlib.sha1(("%s|%s|%s" % (day, name, yearly)).encode("utf-8")).hexdigest()[:20]
+    nxt = day + datetime.timedelta(days=1)
+    lines = ["BEGIN:VEVENT", "UID:%s@homelab" % uid, "DTSTAMP:" + STAMP, "DTSTART;VALUE=DATE:" + day.strftime("%Y%m%d"),
+             "DTEND;VALUE=DATE:" + nxt.strftime("%Y%m%d")]
+    if yearly:
+        lines.append("RRULE:FREQ=YEARLY")
+    lines += ["SUMMARY:" + esc(name), "TRANSP:TRANSPARENT", "END:VEVENT"]
+    return lines
+
+
+def ics(name, events):
+    """events: [(date, text, yearly)]. A calendar without any event shows an error on the dashboard, so an empty one gets a note in
+    the year 2000 (far outside what the calendar shows)."""
+    body = []
+    for day, text, yearly in events:
+        body += vevent(day, text, yearly)
+    if not body:
+        body = vevent(datetime.date(2000, 1, 1), "No events yet", False)
+    lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//homelab//calendar//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:" + esc(name)] + body + ["END:VCALENDAR"]
+    return "\r\n".join(fold(l) for l in lines) + "\r\n"
+
+
+# ---------------------------------------------------------------- where the files are
+def lab_user():
+    name = os.environ.get("HOMELAB_USER") or os.environ.get("SUDO_USER")
+    if name and name != "root":
+        return name
+    try:
+        return pwd.getpwuid(1000).pw_name
+    except KeyError:
+        return ""
+
+
+def homepage_dir():
+    forced = os.environ.get("HP_DIR")
+    if forced:
+        return forced
+    try:
+        with open(os.path.join(STATE_DIR, "homepage-dir")) as f:
+            saved = f.read().strip()
+        if saved and os.path.isdir(saved):
+            return saved
+    except OSError:
+        pass
+    u = lab_user()
+    try:
+        home = pwd.getpwnam(u).pw_dir if u else os.path.expanduser("~")
+    except KeyError:
+        home = os.path.expanduser("~")
+    return os.path.join(home, "homepage-config")
+
+
+def read(path):
+    try:
+        with open(path, newline="") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def write_if_changed(path, text, owner_of):
+    """Write a file only when its text changed. When run by root the file is handed to the owner of `owner_of`, so the user can change it."""
+    if read(path) == text:
+        return False
+    tmp = path + ".tmp"
+    with open(tmp, "w", newline="") as f:
+        f.write(text)
+    os.chmod(tmp, 0o644)
+    if os.geteuid() == 0:
+        st = os.stat(owner_of)
+        os.chown(tmp, st.st_uid, st.st_gid)
+    os.replace(tmp, path)
+    return True
+
+
+# ---------------------------------------------------------------- your events
+def parse_date(text, today=None):
+    today = today or datetime.date.today()
+    t = text.strip()
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", t)
+    try:
+        if m:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{2}|\d{4})", t)
+        if m:
+            y = int(m.group(3))
+            return datetime.date(y + 2000 if y < 100 else y, int(m.group(1)), int(m.group(2)))
+        m = re.fullmatch(r"(\d{1,2})/(\d{1,2})", t)
+        if m:
+            for y in (today.year, today.year + 1, today.year + 2, today.year + 3, today.year + 4):     # 2/29 waits for a leap year
+                try:
+                    day = datetime.date(y, int(m.group(1)), int(m.group(2)))
+                except ValueError:
+                    continue
+                if day >= today:
+                    return day
+    except ValueError:
+        pass
+    raise Fail("'%s' is not a date I can read. Use 2026-12-25, 12/25/2026 or 12/25 (the next 12/25), and a real day of the month." % text)
+
+
+def load_events(hp):
+    """[(date, text, yearly)] from events.txt, sorted. Lines that cannot be read are skipped."""
+    out = []
+    for line in read(os.path.join(hp, "events.txt")).splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = [p.strip() for p in line.split("|", 2)]
+        if len(parts) != 3 or not parts[2]:
+            continue
+        try:
+            day = parse_date(parts[0])
+        except Fail:
+            continue
+        out.append((day, parts[2], parts[1].lower() == "yearly"))
+    return sorted(set(out), key=lambda e: (e[0], e[1].lower(), e[2]))
+
+
+def save_events(hp, events):
+    text = EVENTS_HEADER + "".join("%s | %s | %s\n" % (d.isoformat(), "yearly" if y else "once", t) for d, t, y in events)
+    write_if_changed(os.path.join(hp, "events.txt"), text, hp)
+
+
+def build(hp):
+    """Write the three calendar files. Returns the list of files that changed."""
+    img = os.path.join(hp, "images")
+    os.makedirs(img, exist_ok=True)
+    if os.geteuid() == 0:
+        st = os.stat(hp)
+        os.chown(img, st.st_uid, st.st_gid)
+    ys = list(years())
+    hol = sorted(e for y in ys for e in official(y))
+    obs = sorted(e for y in ys for e in observances(y))
+    files = [("holidays.ics", ics("Holidays", [(d, n, False) for d, n in hol])),
+             ("observances.ics", ics("Observances", [(d, n, False) for d, n in obs])),
+             ("events.ics", ics("My Events", load_events(hp)))]
+    return [n for n, text in files if write_if_changed(os.path.join(img, n), text, hp)]
+
+
+def next_day(day, yearly, today):
+    """The next date an event happens on (None for a one-time event in the past)."""
+    if not yearly:
+        return day if day >= today else None
+    for y in range(today.year, today.year + 9):
+        try:
+            c = datetime.date(y, day.month, day.day)
+        except ValueError:
+            continue
+        if c >= today:
+            return c
+    return None
+
+
+def say_events(events):
+    today = datetime.date.today()
+    if not events:
+        print("You have no events yet. Add one:  homelab event add 2026-12-25 \"Family dinner\"")
+        return
+    for i, (d, t, y) in enumerate(events, 1):
+        when = d.strftime("%a %b %d") + " (every year)" if y else d.strftime("%a %b %d, %Y") + ("" if d >= today else " (past)")
+        print("%3d  %s  %s" % (i, when, t))
+
+
+def run(argv):
+    hp = homepage_dir()
+    cmd = argv[0] if argv else ""
+    if cmd in ("version", "--version"):
+        print("homelab-calendar %s" % VERSION)
+        return 0
+    if cmd in ("", "help", "--help", "-h"):
+        print(__doc__.strip())
+        return 0
+    if cmd == "holidays":
+        today = datetime.date.today()
+        rows = sorted((d, n, "") for y in (today.year, today.year + 1) for d, n in official(y) + observances(y) if d >= today)[:12]
+        for d, n, _ in rows:
+            print("  %s  %s" % (d.strftime("%a %b %d, %Y"), n))
+        return 0
+    if not os.path.isdir(hp):
+        raise Fail("The Homepage folder %s does not exist. Set up the dashboard first (sudo homelab-setup)." % hp)
+    if cmd == "build":
+        changed = build(hp)
+        if sys.stdout.isatty():
+            print("Calendar files up to date%s." % (" (changed: %s)" % ", ".join(changed) if changed else ""))
+        return 0
+    if cmd == "list":
+        say_events(load_events(hp))
+        return 0
+    if cmd == "add":
+        words = argv[1:]
+        yearly = bool(words) and words[-1].lower() == "yearly"
+        if yearly:
+            words = words[:-1]
+        if len(words) < 2:
+            raise Fail("Usage:  homelab event add DATE \"text\" [yearly]     for example:  homelab event add 2026-12-25 \"Family dinner\"")
+        day = parse_date(words[0])
+        text = " ".join(words[1:]).replace("|", "/").strip()
+        events = load_events(hp)
+        if (day, text, yearly) in events:
+            print("That event is already in the calendar.")
+            return 0
+        events.append((day, text, yearly))
+        events.sort(key=lambda e: (e[0], e[1].lower(), e[2]))
+        save_events(hp, events)
+        build(hp)
+        print("Added: %s  %s%s" % (day.strftime("%a %b %d, %Y"), text, "  (every year)" if yearly else ""))
+        print("It shows on the dashboard's Calendar within 5 minutes (or reload the page).")
+        return 0
+    if cmd in ("remove", "rm", "delete"):
+        if len(argv) != 2 or not argv[1].isdigit():
+            raise Fail("Usage:  homelab event remove NUMBER     (the number from  homelab event list)")
+        events = load_events(hp)
+        n = int(argv[1])
+        if not 1 <= n <= len(events):
+            raise Fail("There is no event number %d. See the numbers with:  homelab event list" % n)
+        d, t, y = events.pop(n - 1)
+        save_events(hp, events)
+        build(hp)
+        print("Removed: %s  %s" % (d.strftime("%a %b %d, %Y"), t))
+        return 0
+    raise Fail("I do not know '%s'. Try:  homelab event add | list | remove | holidays" % cmd)
+
+
+def main(argv):
+    try:
+        return run(argv)
+    except Fail as e:
+        print("homelab-calendar: %s" % e, file=sys.stderr)
+        return 1
+    except OSError as e:
+        print("homelab-calendar: %s" % e, file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

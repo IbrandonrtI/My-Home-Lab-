@@ -269,6 +269,8 @@ commands() {
   cmd "homelab bookmark list"          "the bookmarks, by category, with their numbers"
   cmd "homelab bookmark move NAME CATEGORY" "another category (add a NUMBER for its place)"
   cmd "homelab bookmark remove NAME [CATEGORY]" "take one away (CATEGORY if the name is in two)"
+  cmd "homelab event add DATE \"text\" [yearly]" "your own event in the calendar"
+  cmd "homelab event list"             "your events, numbered (remove: event remove NUMBER)"
   cmd "homelab theme"                  "show the look and how to change it (no sudo)"
   cmd "homelab theme background [BLUR] URL" "new picture; optional BLUR: none sm md lg xl 2xl 3xl"
   cmd "homelab theme cards COLOR NUMBER" "ALL cards: colour, how solid (NUMBER 0 to 100)"
@@ -315,6 +317,14 @@ commands() {
 
 # ---- homelab theme / homelab bookmark: edit the Homepage files in your own home folder (never needs sudo) ----
 HOMEPAGE_DIR="${HOMELAB_HOMEPAGE_DIR:-$HOME/homepage-config}"
+calendar_cmd() {   # homelab event add|list|remove|holidays: the holidays and your own events in the dashboard calendar
+  if ! command -v homelab-calendar >/dev/null 2>&1; then
+    echo "homelab-calendar is not installed yet. Run:  homelab upgrade" >&2
+    return 1
+  fi
+  HP_DIR="$HOMEPAGE_DIR" homelab-calendar "$@"
+}
+
 homepage_edit() {
   if [ "$(id -u)" -eq 0 ] && [ -z "${HOMELAB_ALLOW_ROOT:-}" ]; then
     echo "Run this without sudo, as the user who owns $HOMEPAGE_DIR (sudo would make the files belong to root)." >&2
@@ -575,7 +585,7 @@ def theme_show():
     print("    homelab theme cards COLOR NUMBER         ALL cards: the colour, and how solid (NUMBER 0-100)")
     print("    homelab theme cards SERVICE COLOR        ONE card, for example:  homelab theme cards AdGuard Home blue")
     print("    homelab theme cards SERVICE default      that card goes back to its shipped colour")
-    print("    homelab theme links GROUP COLOR          the colour of one bookmark group on the LINKS tab, e.g.  homelab theme links Productivity green")
+    print("    homelab theme links GROUP COLOR          the colour of one bookmark group on the Links tab, e.g.  homelab theme links Productivity green")
     print("    homelab theme links GROUP default        that group goes back to its shipped colour")
     print("    homelab theme reset                      the shipped look again, everywhere")
     print("  Colour names: " + ", ".join(sorted(CARD_TABLE)) + "  (or a hex code such as #1e3a8a)")
@@ -1783,6 +1793,7 @@ case "${1:-}" in
   backup|update|upgrade|setup|drives|drive|cards|selftest) forward "$@" ;;
   theme)  homepage_edit theme "${@:2}" ;;
   bookmark|bookmarks) homepage_edit bookmark "${@:2}" ;;
+  event|events) calendar_cmd "${@:2}" ;;
   docs)   show_docs ;;
   secrets) secrets ;;
   -h|--help|help)
