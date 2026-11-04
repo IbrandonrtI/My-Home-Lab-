@@ -947,7 +947,7 @@ PY
 hls refresh > $SIM_DIR/s40e.out 2>&1
 ok "S40 a Quick Launch that was taken out is not put back" '! grep -q "^quicklaunch:" $HP40/settings.yaml'
 mkdir -p $HLS_ROOT/mnt/storage/music; echo song > "$HLS_ROOT/mnt/storage/music/Artist - Song.mp3"
-printf '\n- Media & Entertainment:\n    - Metube:\n        id: metube-card\n        href: http://192.168.50.23:8086\n        icon: metube.svg\n        description: Video downloader\n\n    - Navidrome:\n        id: navidrome-card\n        href: https://pc.example.ts.net:1011\n        siteMonitor: http://192.168.50.23:4533\n        icon: navidrome.svg\n        description: Music streaming server\n' >> $HP40/services.yaml
+printf '\n- Media & Entertainment:\n    - Metube:\n        id: metube-card\n        href: http://192.168.50.23:8086\n        icon: metube.svg\n        description: Video downloader\n\n    - navidrome:\n        id: navidrome-card\n        href: https://pc.example.ts.net:1011\n        siteMonitor: http://192.168.50.23:4533\n        icon: navidrome.svg\n        description: Music streaming server\n' >> $HP40/services.yaml
 printf 'y\n%s\n' $PW | hls refresh > $SIM_DIR/s40f.out 2>&1
 ok "S40 with a music folder Navidrome is installed and running, with its music folder mounted read-only" '[ "$(wj "w[\"containers\"][\"navidrome\"][\"running\"]")" = True ] && [ -d $HLS_ROOT/home/testuser/navidrome ]'
 ok "S40 its login was made with the admin name and the shared password" '[ "$(wj "w[\"navidrome\"][\"user\"]")" = Tester ] && [ "$(wj "w[\"navidrome\"][\"pw\"]")" = $PW ]'
@@ -959,6 +959,7 @@ names=re.findall(r"(?m)^    - (.+):$", g)
 assert names[:2]==["Navidrome","Metube"], names
 assert "navidrome-player" not in g.replace("name: navidrome-player",""), g
 card=g[g.index("id: navidrome-card"):g.index("id: metube-card")]
+assert "description: Spotify Music Player\n" in card and "Music streaming server" not in card, card
 assert "widget:\n          type: iframe\n" in card and "src: http://192.168.50.23:4533" in card and "href: https://pc.example.ts.net:1011" in card, card
 assert "CorrectHorse1234" not in card and "token:" not in card
 PY'
@@ -972,7 +973,7 @@ import os,re
 p=os.environ["HP40"]+"/services.yaml"
 t=open(p).read()
 # the dashboard of zip 33: live numbers in the Navidrome card and a second card for the player
-t=re.sub(r"(id: navidrome-card.*?description: Music streaming server\n)        widget:\n(?:          [^\n]*\n)+", r"\1        widget:\n          type: navidrome\n          url: http://192.168.50.23:4533\n          user: Tester\n          token: abc\n          salt: xyz\n", t, count=1, flags=re.S)
+t=re.sub(r"(id: navidrome-card.*?description: Spotify Music Player\n)        widget:\n(?:          [^\n]*\n)+", r"\1        widget:\n          type: navidrome\n          url: http://192.168.50.23:4533\n          user: Tester\n          token: abc\n          salt: xyz\n", t, count=1, flags=re.S)
 t=t.rstrip("\n")+"\n\n    - Navidrome Player:\n        id: navidrome-player\n        icon: navidrome.svg\n        widget:\n          type: iframe\n          name: navidrome-player\n          src: http://192.168.50.23:4533\n"
 open(p,"w").write(t)
 PY
