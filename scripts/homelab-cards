@@ -83,6 +83,31 @@ KNOWN_COLORS = {"jellyfin": (170, 92, 195), "plex": (229, 160, 13), "emby": (82,
 PALETTE = [(255, 171, 0), (0, 188, 212), (156, 39, 176), (255, 87, 34), (233, 30, 99), (76, 175, 80), (3, 169, 244),
            (205, 220, 57), (121, 85, 72), (96, 125, 139), (255, 235, 59), (0, 150, 136), (63, 81, 181), (244, 67, 54)]
 
+# short texts for well known apps (the key is a word of the image or container name)
+KNOWN_DESCRIPTIONS = {
+    "metube": "YouTube video downloader", "downtify": "Spotify music downloader", "jellyfin": "Movies, shows and music server",
+    "plex": "Movies, shows and music server", "emby": "Movies, shows and music server", "sonarr": "TV show manager",
+    "radarr": "Movie manager", "lidarr": "Music manager", "readarr": "Book manager", "prowlarr": "Search indexer manager",
+    "bazarr": "Subtitle manager", "jackett": "Torrent search indexer", "qbittorrent": "Torrent downloader",
+    "transmission": "Torrent downloader", "deluge": "Torrent downloader", "sabnzbd": "Usenet downloader",
+    "navidrome": "Music streaming server", "audiobookshelf": "Audiobooks and podcasts", "kavita": "Book and comic reader",
+    "komga": "Comic and book server", "calibreweb": "Ebook library", "overseerr": "Media requests", "jellyseerr": "Media requests",
+    "tautulli": "Plex statistics", "tubearchivist": "YouTube archive", "stash": "Media organiser", "tdarr": "Video converter",
+    "grafana": "Dashboards and graphs", "prometheus": "Metrics database", "uptimekuma": "Uptime monitor", "glances": "System monitor",
+    "dozzle": "Live container logs", "watchtower": "Automatic image updates", "homeassistant": "Home automation",
+    "pihole": "DNS ad blocking", "wireguard": "VPN server", "wgeasy": "WireGuard VPN manager", "traefik": "Reverse proxy",
+    "nginxproxymanager": "Reverse proxy manager", "cloudflared": "Cloudflare tunnel", "syncthing": "File sync between devices",
+    "photoprism": "Photo library", "paperless": "Document archive", "paperlessngx": "Document archive", "stirlingpdf": "PDF tools",
+    "vaultwarden": "Password manager", "gotify": "Push notifications", "ntfy": "Push notifications", "dockge": "Docker stack manager",
+    "yacht": "Docker manager", "heimdall": "Application dashboard", "dashy": "Application dashboard", "homarr": "Application dashboard",
+    "seafile": "File sync and share", "owncloud": "Personal cloud", "minio": "File storage (S3)", "duplicati": "Backup tool",
+    "joplin": "Notes", "bookstack": "Wiki and notes", "linkding": "Bookmarks", "mealie": "Recipes", "scrutiny": "Drive health",
+}
+DESC_MAX = 60
+DESC_RETRY_SECS = int(os.environ.get("HOMELAB_DESC_RETRY_SECS", "21600"))     # a failed look-up is repeated after 6 hours
+HUB_API = os.environ.get("HOMELAB_DESC_HUB", "https://hub.docker.com").rstrip("/")
+GITHUB_API = os.environ.get("HOMELAB_DESC_GITHUB", "https://api.github.com").rstrip("/")
+
 ICON_CDN = os.environ.get("HOMELAB_ICON_CDN", "https://cdn.jsdelivr.net").rstrip("/")
 GENERIC_ICON = "mdi-docker"
 
@@ -285,17 +310,84 @@ def guess_section(c):
 
 
 def display_name(c):
-    t = c["labels"].get("org.opencontainers.image.title", "").strip()
+    t = re.sub(r"[:#\[\]{},&*!|>'\"%@`]", "", c["labels"].get("org.opencontainers.image.title", "")).strip()
     if t and len(t) <= 30:
         return t
     return " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_.\s]+", c["name"]) if w)
 
 
-def description_of(c):
-    d = c["labels"].get("org.opencontainers.image.description", "").strip().replace("\n", " ")
-    if d and len(d) <= 60:
-        return d
+def tidy_description(d):
+    """One short line from a longer text (cut at a word, no trailing punctuation); '' when there is nothing useful."""
+    d = re.sub(r"\s+", " ", re.sub(r"[`*_#>]|\[([^\]]*)\]\([^)]*\)", lambda m: m.group(1) or "", d or "")).strip()
+    if len(d) > DESC_MAX:
+        d = d[:DESC_MAX + 1].rsplit(" ", 1)[0] if " " in d[:DESC_MAX + 1] else d[:DESC_MAX]
+    return d.strip(" ,;:-.") if len(d) >= 3 else ""
+
+
+def fetch_json(url):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "homelab-cards/" + VERSION, "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=6) as r:
+            return json.loads(r.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        return {}
+
+
+def online_description(c):
+    """The short text of the image on Docker Hub, or of its GitHub project (images from ghcr.io). '' when there is none."""
+    if os.environ.get("HOMELAB_CARDS_OFFLINE"):
+        return ""
+    repo = c["image"].split("@")[0]
+    if ":" in repo.rsplit("/", 1)[-1]:
+        repo = repo.rsplit(":", 1)[0]
+    parts = repo.split("/")
+    if parts[0] in ("docker.io", "registry-1.docker.io", "index.docker.io"):
+        parts = parts[1:]
+    elif "." in parts[0] or ":" in parts[0]:
+        if parts[0] == "ghcr.io" and len(parts) >= 3:
+            return tidy_description(fetch_json("%s/repos/%s/%s" % (GITHUB_API, parts[1], parts[2])).get("description"))
+        if parts[0] == "lscr.io" and len(parts) >= 3:
+            parts = parts[1:]                                   # lscr.io/linuxserver/x is linuxserver/x on Docker Hub
+        else:
+            return ""
+    if len(parts) == 1:
+        parts = ["library"] + parts
+    if len(parts) != 2:
+        return ""
+    return tidy_description(fetch_json("%s/v2/repositories/%s/%s" % (HUB_API, parts[0], parts[1])).get("description"))
+
+
+def fallback_description(c):
     return "Added automatically (%s)" % (c["project"] or c["name"])
+
+
+def description_of(c, online=True):
+    """Short text for the card: a known app, the image's own label, Docker Hub or GitHub; else a plain note (which is replaced later
+    when a better one is found)."""
+    toks, _ = tokens_of(c)
+    for w, d in KNOWN_DESCRIPTIONS.items():
+        if w in toks:
+            return d
+    d = tidy_description(c["labels"].get("org.opencontainers.image.description", ""))
+    if d:
+        return d
+    if online:
+        d = online_description(c)
+        if d:
+            return d
+    return fallback_description(c)
+
+
+def yaml_text(s):
+    """A value for services.yaml: quoted when plain text would not be read back as the same text."""
+    if (re.search(r": |:$| #", s) or re.match(r"[-?:,\[\]{}#&*!|>'\"%@`\s]", s) or s != s.strip()
+            or s.lower() in ("yes", "no", "true", "false", "null", "~", "on", "off")):
+        return '"%s"' % s.replace("\\", "\\\\").replace('"', '\\"')
+    return s
+
+
+def is_auto_description(text):
+    return (text or "").strip("\"' ").startswith("Added automatically")
 
 
 def icon_slugs(c):
@@ -454,7 +546,7 @@ def existing_ids_and_ports(lines):
 
 def card_block(name, card_id, href, monitor, icon, desc):
     return ["    - %s:" % name, "        id: %s" % card_id, "        href: %s" % href, "        siteMonitor: %s" % monitor,
-            "        icon: %s" % icon, "        description: %s" % desc]
+            "        icon: %s" % icon, "        description: %s" % yaml_text(desc)]
 
 
 def insert_card(lines, section, block):
@@ -667,6 +759,12 @@ def sync():
                 note("Updated the %s of the card %s: %s" % (key, m["name"], val))
         if not css_has(f.css, m["card"]):
             f.css = css_add(f.css, m["card"], tuple(m.get("rgb") or PALETTE[0]), m["name"])
+        cur = card_line(f.lines, m["card"], "description")
+        if cur is not None and is_auto_description(cur) and time.time() - m.get("desc_tried", 0) >= DESC_RETRY_SECS:
+            better = description_of(c)
+            m["desc_tried"] = int(time.time())
+            if not is_auto_description(better) and set_card_line(f.lines, m["card"], "description", yaml_text(better)):
+                note("Updated the text of the card %s: %s" % (m["name"], better))
         here = card_section(f.lines, m["card"])
         if here and here != m["section"]:                  # moved by hand in the file: it stays where the person put it
             m["section"], m["unsure"] = here, False
