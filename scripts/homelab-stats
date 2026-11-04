@@ -9,6 +9,8 @@ What it collects:
   Main pool and Backup pool     space used / free, and drive health (smartctl; a sleeping drive is never woken)
   Last backup                   when it ran, how it ended, how big the backup is (from homelab-backup)
   Containers and updates        running / stopped, waiting container and system updates (from homelab-update)
+  Music library                 the songs Downtify saved: how many, how many artists, how much space (see music_dir())
+  Drive temperatures            every drive homelab-sample read (boot, main, backup); "Resting" for a sleeping drive
   Folder sizes                  Backup pool, Main pool, the Nextcloud and the Immich data folders. Counting a big folder
                                 takes minutes, so it is done at the lowest priority and only when the pool's used space
                                 changed since the last count (and at most once an hour; every 7 days anyway).
@@ -271,10 +273,48 @@ def temps():
     return out
 
 
+def drive_name(label):
+    """'boot' -> 'Boot Drive', 'MAIN1' -> 'Main 1', 'BACKUP2' -> 'Backup 2'; anything else (a model name) with spaces."""
+    if label.lower() == "boot":
+        return "Boot Drive"
+    m = re.match(r"^(MAIN|BACKUP)(\d*)$", label, re.I)
+    if m:
+        return (m.group(1).capitalize() + " " + m.group(2)).strip()
+    return label.replace("_", " ")
+
+
+def temp_text(t, warn, bad):
+    """What the temperature card says for one reading: 'Resting', '34 °C', '52 °C, Warm', '62 °C, Hot'."""
+    if t == "standby":
+        return "Resting"
+    n = int(t)
+    return "%d °C" % n + (", Hot" if n >= bad else ", Warm" if n >= warn else "")
+
+
+def temp_rows():
+    """[{'name', 'label'}] for the Drive Temperatures card: every drive homelab-sample read (boot, main, backup), boot first."""
+    try:
+        warn = int(os.environ.get("HOMELAB_TEMP_WARN", "50"))
+        bad = int(os.environ.get("HOMELAB_TEMP_BAD", "60"))
+    except ValueError:
+        warn, bad = 50, 60
+    rows = []
+    for line in read(os.path.join(STATE_DIR, "temps")).splitlines():
+        f = line.split("|")
+        if len(f) < 3 or not (f[2] == "standby" or f[2].isdigit()):
+            continue
+        rank = 0 if f[0].lower() == "boot" else 1 if f[0].upper().startswith("MAIN") else 2 if f[0].upper().startswith("BACKUP") else 3
+        rows.append((rank, f[0], {"name": drive_name(f[0]), "label": temp_text(f[2], warn, bad)}))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    return [r[2] for r in rows] or [{"name": "No readings yet", "label": "-"}]
+
+
 def pool_block(path, role, roles, old_drives, new_drives):
     sp = pool_space(path)
+    if role == "backup" and not roles.get(role):
+        sp = None                          # a folder is there, but no backup drive: the numbers would only be those of the boot drive
     if sp is None:
-        return {"used": "-", "free": "-", "total": "-", "percent": "-", "health": "Not connected", "drives": "-"}, None
+        return {"used": "-", "free": "-", "total": "-", "percent": "Not connected", "health": "Not connected", "drives": "-"}, None
     total, used, free = sp
     pct = int(round(100.0 * used / total)) if total else 0
     states = []
@@ -306,9 +346,9 @@ def pool_block(path, role, roles, old_drives, new_drives):
 def backup_info(now):
     line = read(BACKUP_STATUS).strip().splitlines()
     if not line:
-        return {"when": "Never", "ago": "-", "result": "No backup yet", "size": "-", "took": "-", "short": "Never"}
+        return {"when": "Never", "ago": "-", "result": "No backup yet", "size": "-", "took": "-", "short": "Never", "saved_to": "-", "saved_note": "-"}
     f = (line[0].split("|") + ["", "", "", "", ""])[:5]
-    when, result, secs, size = f[0], f[1], f[3], f[4]
+    when, result, dest, secs, size = f[0], f[1], f[2].strip(), f[3], f[4]
     ago, nice_when, short = "-", when, when
     try:
         t = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M"))
@@ -326,8 +366,94 @@ def backup_info(now):
     except ValueError:
         pass
     ok = result.strip().upper() == "OK"
-    return {"when": nice_when, "ago": ago, "result": "OK" if ok else "Failed: see the log" if result else "-",
-            "size": human(size) if size.isdigit() else "-", "took": took(secs) if secs else "-", "short": short}
+    res_text = "OK" if ok else "Failed: see the log" if result else "-"
+    took_text = took(secs) if secs else "-"
+    if not dest or dest == "none":
+        saved, note = "-", "-"
+    elif dest.rstrip("/") == BACKUP_POOL.rstrip("/") or dest.startswith(BACKUP_POOL.rstrip("/") + "/"):
+        saved, note = "Backup pool", "Backup pool"
+    else:
+        saved, note = "Boot drive", "Boot drive (no backup drive connected)"
+    return {"when": nice_when, "ago": ago, "result": res_text, "size": human(size) if size.isdigit() else "-", "took": took_text, "short": short,
+            "saved_to": saved, "saved_note": note}
+
+
+# ---------------------------------------------------------------- the music library (Downtify)
+AUDIO = (".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac", ".wma")
+MUSIC_CACHE = os.path.join(STATE_DIR, "stats-music.json")
+MUSIC_NAMES = ("music", "Music", "downtify", "Downtify", "Downtify/music", "downtify/music", "media/music", "Media/Music", "downloads/music")
+
+
+def music_dir():
+    """The folder with the songs, or ''. In this order: HOMELAB_MUSIC_DIR, the one line in /var/lib/homelab/music-dir (put the folder there
+    to choose it yourself), the music folder of the Downtify container, a few usual folder names in the main pool."""
+    forced = os.environ.get("HOMELAB_MUSIC_DIR") or read(os.path.join(STATE_DIR, "music-dir")).strip()
+    if forced:
+        return forced if os.path.isdir(forced) else ""
+    rc, out = run(["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}"], timeout=20)
+    for line in out.splitlines():
+        f = line.split("|")
+        if rc == 0 and len(f) == 2 and "downtify" in line.lower():
+            rc2, mounts = run(["docker", "inspect", f[0], "--format", "{{range .Mounts}}{{.Destination}}|{{.Source}}{{println}}{{end}}"], timeout=10)
+            for m in mounts.splitlines():
+                d = m.split("|", 1)
+                if len(d) == 2 and re.search(r"music|download", d[0], re.I) and os.path.isdir(d[1]):
+                    return d[1]
+    for name in MUSIC_NAMES:
+        path = os.path.join(MAIN_POOL, name)
+        if os.path.isdir(path):
+            return path
+    return ""
+
+
+def first_artist(name):
+    """'Artist, Other - Title.mp3' -> 'Artist'. A name without ' - ' has no artist."""
+    if " - " not in name:
+        return ""
+    return re.split(r",|;| & | feat\.?| ft\.?", name.split(" - ", 1)[0].strip(), maxsplit=1, flags=re.I)[0].strip()
+
+
+def count_music(root):
+    """(songs, artists, bytes): the audio files below root. An artist is a folder directly in root, or the name before ' - ' in a file name."""
+    songs = size = 0
+    artists = set()
+    for here, _dirs, files in os.walk(root):
+        top = os.path.relpath(here, root).split(os.sep)[0] if here != root else ""
+        for fn in files:
+            if not fn.lower().endswith(AUDIO):
+                continue
+            try:
+                size += os.stat(os.path.join(here, fn)).st_size
+            except OSError:
+                continue
+            songs += 1
+            who = top or first_artist(fn)
+            if who and who != ".":
+                artists.add(who.casefold())
+    return songs, len(artists), size
+
+
+def music_block(quick):
+    none = {"songs": "Not found", "artists": "-", "size": "-", "folder": "Not found"}
+    root = music_dir()
+    if not root:
+        return none
+    cache = load_json(MUSIC_CACHE)
+    if cache.get("path") == root and (quick or time.time() - cache.get("at", 0) < 600):
+        c = cache
+    elif quick:
+        return {"songs": "Counting...", "artists": "-", "size": "-", "folder": root}
+    else:
+        try:
+            n, a, b = count_music(root)
+        except OSError:
+            return none
+        c = {"path": root, "at": int(time.time()), "songs": n, "artists": a, "bytes": b}
+        try:
+            write_atomic(MUSIC_CACHE, json.dumps(c))
+        except OSError:
+            pass
+    return {"songs": num(c.get("songs", 0)), "artists": num(c.get("artists", 0)), "size": human(c.get("bytes", 0)), "folder": root}
 
 
 # ---------------------------------------------------------------- containers and updates
@@ -430,6 +556,8 @@ def collect(quick):
     res["main"], sp_main = pool_block(MAIN_POOL, "main", roles, old_drives, new_drives)
     res["backup"], sp_backup = pool_block(BACKUP_POOL, "backup", roles, old_drives, new_drives)
     res["drives"] = new_drives
+    res["temps"] = temp_rows()
+    res["music"] = music_block(quick)
     res["last_backup"] = backup_info(now)
     res["containers"] = container_info()
     res["updates"] = update_info()
@@ -440,7 +568,7 @@ def collect(quick):
     res["glance"] = {
         "photos": im["photos"], "videos": im["videos"], "files": nc["files"],
         "main_pct": res["main"]["percent"], "backup_pct": res["backup"]["percent"],
-        "backup_when": res["last_backup"]["short"], "backup_size": res["last_backup"]["size"],
+        "backup_when": res["last_backup"]["short"], "backup_size": res["last_backup"]["size"], "backup_saved": res["last_backup"]["saved_to"],
         "containers": res["containers"]["running"], "updates": res["updates"]["total"],
     }
     return res, out_path, spaces, pending
@@ -501,6 +629,10 @@ def main(argv):
         print("  Main pool %s used (%s), Backup pool %s used (%s)" % (g["main_pct"], res["main"]["health"], g["backup_pct"], res["backup"]["health"]))
         print("  Last backup: %s, %s, %s" % (res["last_backup"]["when"], res["last_backup"]["result"], res["last_backup"]["size"]))
         print("  Containers running: %s; updates waiting: %s" % (g["containers"], g["updates"]))
+        m = res["music"]
+        print("  Music: %s songs, %s artists, %s (%s)" % (m["songs"], m["artists"], m["size"], m["folder"]))
+        print("  Drive temperatures: " + ", ".join("%s %s" % (t["name"], t["label"]) for t in res["temps"]))
+        print("  Saved to: %s" % res["last_backup"]["saved_note"])
         f = res["folders"]
         print("  Folders: backup %s, main %s, nextcloud %s, immich %s" % (f["backup"], f["main"], f["nextcloud"], f["immich"]))
     return 0
