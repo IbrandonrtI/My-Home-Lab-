@@ -10,7 +10,7 @@
 #   sudo homelab-setup secrets         show the generated passwords (once, then keep them in a password manager)
 #   homelab-setup progress | version | help
 #
-# It never formats or changes a drive. It never stores the password you type.
+# It never formats or erases a drive (the one exception: it can grow an LVM system volume into unused space, after asking). It never stores the password you type.
 # Python 3 standard library only.
 
 import atexit
@@ -1180,6 +1180,34 @@ def pretty_size(nbytes):
     if nbytes >= 1e9:
         return "%d GB" % round(nbytes / 1e9)
     return "%d MB" % round(nbytes / 1e6)
+
+
+LVM_MIN_FREE = 20 * 1024 ** 3     # less unused space than this is not worth a question
+
+
+def root_lvm_info():
+    """When / is a logical volume (LVM) on a file system lvextend can grow: {"src", "size", "free"} in bytes, where free is the
+    unused space of its volume group. None for everything else (a plain partition, no LVM tools, an unreadable answer)."""
+    if not (have("lvs") and have("lvextend")):
+        return None
+    rc, text = run(["findmnt", "-no", "SOURCE,FSTYPE", "/"], timeout=10)
+    parts = text.split()
+    if rc != 0 or not parts or not parts[0].startswith("/dev/"):
+        return None
+    src, fstype = parts[0], (parts[1] if len(parts) > 1 else "")
+    if fstype and fstype not in ("ext2", "ext3", "ext4", "xfs"):
+        return None
+    rc, text = run(["lvs", "--noheadings", "--nosuffix", "--units", "b", "--separator", "|", "-o", "lv_size,vg_free", src], timeout=20)
+    if rc != 0:
+        return None
+    for line in text.splitlines():
+        f = [x.strip() for x in line.split("|")]
+        if len(f) == 2:
+            try:
+                return {"src": src, "size": int(float(f[0])), "free": int(float(f[1]))}
+            except ValueError:
+                return None
+    return None
 
 
 def clean_folder_name(text):
@@ -4157,6 +4185,65 @@ def ask_weather(a):
     warn("No weather city was chosen. The card keeps its default location (New York).")
 
 
+LVM_EXPLAIN = ("Ubuntu Server's installer makes the system volume small (about 100 GB) and leaves the rest of the drive unused. "
+               "Using that space makes the system volume bigger. Nothing is erased and nothing moves: your files stay as they "
+               "are, and it is done while the machine runs. It is needed if you want to use part of this drive as a storage "
+               "pool later (sudo drives bootsection). A volume grows easily but only shrinks with effort.")
+
+
+def lvm_question(info):
+    """The question about unused space in the system volume's drive."""
+    out("")
+    say("This machine's system volume is %s, but its drive has another %s that nothing uses." %
+        (pretty_size(info["size"]), pretty_size(info["free"])))
+    say(LVM_EXPLAIN)
+    return yesno("Give the unused space to the system volume?", True)
+
+
+def ask_grow_boot_volume(a):
+    """Install question: offer to use the unused space of an LVM system volume (asked once; the answer is kept)."""
+    if "lvm_grow" in a:
+        return
+    info = root_lvm_info()
+    if not info or info["free"] < LVM_MIN_FREE:
+        return
+    a["lvm_grow"] = "yes" if lvm_question(info) else "no"
+    State.save()
+
+
+def grow_boot_volume():
+    """Make the system volume use all the unused space of its volume group. Returns True when it grew."""
+    info = root_lvm_info()
+    if not info or info["free"] < LVM_MIN_FREE:
+        return False
+    out("")
+    rule("Using the unused space of the drive")
+    say("Growing the system volume from %s by %s ..." % (pretty_size(info["size"]), pretty_size(info["free"])))
+    rc, text = act(["lvextend", "-r", "-l", "+100%FREE", info["src"]], timeout=900)
+    if rc != 0:
+        warn("The system volume could not be made bigger, so nothing was changed. The reason:\n      %s\n"
+             "      You can try again later:  sudo homelab-setup growdisk" % "\n      ".join(text.strip().splitlines()[-4:]))
+        return False
+    if not Opt.dry:
+        good("The system volume is now bigger.")
+        State.data["answers"]["lvm_grow"] = "done"
+        State.save()
+    return True
+
+
+def cmd_growdisk():
+    """`growdisk`: give the unused space of the drive to the system volume (LVM only), after asking."""
+    info = root_lvm_info()
+    if not info or info["free"] < LVM_MIN_FREE:
+        out("")
+        say("Nothing to do: the system volume already uses its whole drive, or it is not an LVM volume with room to grow.")
+        return
+    if not lvm_question(info):
+        say("Okay, nothing was changed.")
+        return
+    grow_boot_volume()
+
+
 def is_ipv4(text):
     """Four numbers from 0 to 255 with dots, like 192.168.1.20."""
     return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", text)) and all(int(x) <= 255 for x in text.split("."))
@@ -4501,12 +4588,17 @@ def cmd_install():
             Ctx.detect()
         State.data["repo"] = Ctx.repo
         State.save()
+        ask_grow_boot_volume(State.data["answers"])
         ask_restore_plan()
     else:
         if not Ctx.admin:
             Ctx.admin = Ctx.user.capitalize()
         if not Ctx.email:
             Ctx.email = "you@example.com"
+        info = root_lvm_info()
+        if info and info["free"] >= LVM_MIN_FREE:
+            say("Would offer: give the %s the drive has left over to the system volume (now %s). It only grows the volume; nothing is erased." %
+                (pretty_size(info["free"]), pretty_size(info["size"])))
     if State.ran("install-started"):
         wait_for_apps()
     res = evaluate()
@@ -4525,6 +4617,8 @@ def cmd_install():
             raise Abort("Stopped. Nothing was changed.")
     if not Opt.dry:
         State.mark("install-started")
+        if State.data["answers"].get("lvm_grow") == "yes":
+            grow_boot_volume()
     Live.begin_run(len(todo) + len(during))
     run_install(res)
     res = evaluate()
@@ -4939,6 +5033,7 @@ Commands:
   install --dry-run        show the plan and change nothing
   refresh                  re-check and continue every step that is now possible
   upgrade                  download the newest files from GitHub and put the new scripts on this machine (one step)
+  growdisk                 give the unused space of the drive to the system volume (LVM, Ubuntu Server); it asks first
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
@@ -4950,14 +5045,15 @@ Commands:
   progress | version | help
 
 Options for install:  --yes  --backup FOLDER  --no-restore  --repo FOLDER  --force-existing
-The installer never formats or modifies a drive and never saves the admin password.
+The installer never formats or erases a drive and never saves the admin password. The one change it can make to the drive layout
+is growing an LVM system volume into unused space of its drive, and only after you say yes.
 """
 
 
 # every command that needs no more than its name (done STEP and skip STEP also take the step)
 COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
             "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
-            "homepage": cmd_homepage, "adguard": cmd_adguard, "upgrade": cmd_upgrade}
+            "homepage": cmd_homepage, "adguard": cmd_adguard, "upgrade": cmd_upgrade, "growdisk": cmd_growdisk}
 
 
 def main(argv):
