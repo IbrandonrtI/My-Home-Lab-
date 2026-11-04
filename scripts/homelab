@@ -236,6 +236,10 @@ commands() {
   cmd "homelab theme cards COLOR NUMBER" "ALL cards: colour, how solid (NUMBER 0 to 100)"
   cmd "homelab theme cards SERVICE COLOR" "ONE card, e.g. AdGuard Home blue"
   cmd "homelab theme reset"            "the shipped look again"
+  cmd "sudo homelab-cards"             "give new services (containers with a web page) a card"
+  cmd "sudo homelab-cards ignore NAME" "never make a card for this container"
+  cmd "sudo homelab-cards list"        "the cards it made, and what it waits for"
+  cmd "sudo homelab-cards move NAME SECTION" "put a card in another section"
   if command -v homelab-setup >/dev/null 2>&1; then
     section "Setup checklist"
     cmd "sudo homelab-setup"             "the checklist: what is done and what is left"
@@ -1363,6 +1367,23 @@ boot_drive_line() {
   return 0
 }
 
+cards_line() {   # the cards homelab-cards made for new services (it writes the summary; a section it was unsure about is asked for)
+  local f="$STATE_DIR/cards-summary" names="" unsure="" kind name _c _s uns _a n=0
+  [ -r "$f" ] || return 0
+  while IFS='|' read -r kind name _c _s uns _a; do
+    [ "$kind" = managed ] || continue
+    n=$((n + 1)); names="$names$name, "
+    [ "$uns" = 1 ] && unsure="$unsure$name "
+  done <"$f"
+  [ "$n" -gt 0 ] || return 0
+  if [ -n "$unsure" ]; then
+    warn "Service cards" "$n added by themselves (${names%, }); not sure of the section for: ${unsure% }"
+    suggest 3 "sudo homelab-cards move ${unsure%% *} SECTION" "put its dashboard card in the right section"
+  else
+    ok "Service cards" "$n added by themselves: ${names%, }"
+  fi
+}
+
 status() {
   pool_lines
   last_backup_line
@@ -1370,6 +1391,7 @@ status() {
   temps_line
   updates_line
   containers_line
+  cards_line
   boot_drive_line
 }
 

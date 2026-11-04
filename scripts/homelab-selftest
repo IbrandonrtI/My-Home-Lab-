@@ -21,7 +21,7 @@
 # The full report is saved in your home folder as homelab-selftest-<date>.txt. Known secret formats
 # (tokens, keys, passwords) are hidden in it, but read it before you share it.
 
-VERSION="1.5"
+VERSION="1.6"
 case "${1:-}" in
   version|--version) echo "homelab-selftest $VERSION"; exit 0 ;;
   -h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
@@ -121,6 +121,10 @@ part_commands() {
   run_cmd "homelab-update version"   20  root "0" -- homelab-update version
   run_cmd "homelab-update list"      30  user "0 1" -- homelab-update list
   run_cmd "homelab-sample version"   20  root "0" -- homelab-sample version
+  if command -v homelab-cards >/dev/null 2>&1; then
+    run_cmd "homelab-cards version"  20  root "0" -- homelab-cards version
+    run_cmd "homelab-cards list"     60  root "0" -- homelab-cards list
+  fi
   if [ "$ONLINE" = 1 ]; then
     run_cmd "homelab-update check (internet)" 300 root "0" -- homelab-update check
   else
@@ -161,7 +165,7 @@ same_as_repo() {   # same_as_repo REPO_COPY INSTALLED_COPY: true when they are t
 check_scripts_vs_repo() {
   local f installed repo; repo=$(repo_dir)
   if [ -z "$repo" ]; then info "no repository folder in $REAL_HOME, so the installed scripts were not compared with it"; return; fi
-  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample hdd-recover homelab homelab-check; do
+  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-cards hdd-recover homelab homelab-check; do
     installed=$(command -v "$f" 2>/dev/null) || continue
     # the installer puts this machine's user name into its copy, so a plain byte comparison is not enough
     if same_as_repo "$repo/scripts/$f" "$installed"; then continue; fi
@@ -298,6 +302,19 @@ PY
     esac
   done
 
+  # ---- the cards homelab-cards made for new services (read only)
+  if command -v homelab-cards >/dev/null 2>&1; then
+    local cline
+    while IFS= read -r cline; do
+      case "$cline" in
+        ok:*)   ok "${cline#ok: }" ;;
+        warn:*) warn "${cline#warn: }" ;;
+        fail:*) fail "${cline#fail: }" ;;
+        info:*) info "${cline#info: }" ;;
+      esac
+    done < <(timeout 60 homelab-cards check 2>/dev/null)
+  fi
+
   # ---- network
   if command -v tailscale >/dev/null 2>&1; then
     if timeout 15 tailscale status >/dev/null 2>&1; then ok "Tailscale is connected"; else fail "Tailscale is not connected (sudo tailscale up)"; fi
@@ -316,7 +333,7 @@ PY
   # ---- the schedule and the login screen
   local cron
   cron=$(crontab -l 2>/dev/null | grep -v '^[[:space:]]*#')
-  for n in homelab-sample homelab-update "drives power"; do
+  for n in homelab-sample homelab-update homelab-cards "drives power"; do
     local cnt; cnt=$(printf '%s\n' "$cron" | grep -c -- "$n")
     if [ "$cnt" = 0 ]; then warn "root's crontab has no line for: $n"
     elif [ "$cnt" -gt 1 ]; then warn "root's crontab has $cnt lines for: $n (duplicates)"
@@ -335,7 +352,7 @@ PY
     info "no secrets file (this machine was not built by the installer)"
   fi
   if [ -f "$REAL_HOME/homepage-config/services.yaml" ] && [ "$(stat -c %U "$REAL_HOME/homepage-config/services.yaml")" != "$REAL_USER" ]; then warn "the Homepage config files are not owned by $REAL_USER"; fi
-  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-setup hdd-recover homelab; do
+  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-cards homelab-setup hdd-recover homelab; do
     p=$(command -v "$f" 2>/dev/null) || continue
     [ -x "$p" ] || fail "$p is not executable"
     if grep -q $'\r' "$p" 2>/dev/null; then fail "$p has Windows line endings"; fi
