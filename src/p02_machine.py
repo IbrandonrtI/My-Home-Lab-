@@ -748,6 +748,27 @@ def js_groups_block(live, shipped):
     return live.rstrip("\n") + "\n\n" + block + "\n"
 
 
+STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"      # the block of STATS groups in the shipped services.yaml
+# The STATS groups: name -> (icon, columns). layout_complete puts them on the STATS tab (never on HOME).
+STATS_GROUPS = {"At a glance": ("mdi-view-dashboard", 4), "Library totals": ("mdi-image-multiple", 2), "Storage": ("mdi-harddisk", 2),
+                "Backup & updates": ("mdi-backup-restore", 2), "Folder sizes": ("mdi-folder-multiple", 1)}
+
+
+def services_stats_block(live, shipped):
+    """This machine's services.yaml with the STATS groups (the block between the two marker lines) put in at the end, or brought up to
+    date. Everything outside the block is left alone. `shipped` already has this machine's address filled in."""
+    a = shipped.find(STATS_BEGIN)
+    z = shipped.find(STATS_END, a) if a >= 0 else -1
+    if a < 0 or z < 0:
+        return live
+    block = shipped[a:z + len(STATS_END)]
+    la = live.find(STATS_BEGIN)
+    lz = live.find(STATS_END, la) if la >= 0 else -1
+    if la >= 0 and lz >= 0:
+        return live[:la] + block + live[lz + len(STATS_END):]
+    return live.rstrip("\n") + "\n\n" + block + "\n"
+
+
 def settings_with_layout(live, shipped):
     """This machine's settings.yaml with the tabs and group icons (the layout: block) and the small settings (hideVersion, language)
     added when they are missing. Nothing that is already there is changed."""
@@ -800,10 +821,14 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
     for tab, icon, groups in (("HOME", "mdi-apps", service_groups), ("LINKS", "mdi-bookmark-multiple", bookmark_groups)):
         for g in groups:
             if g and g not in known and g not in seen and g not in [a[0] for a in add]:
-                add.append((g, tab, icon))
+                add.append((g, "STATS" if g in STATS_GROUPS and tab == "HOME" else tab, icon))
     for g, tab, icon in add:
-        lines[end:end] = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
-        end += 3
+        if tab == "STATS":
+            new = ["  %s:" % yaml_key(g), "    tab: STATS", "    icon: %s" % STATS_GROUPS[g][0], "    style: row", "    columns: %d" % STATS_GROUPS[g][1]]
+        else:
+            new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
+        lines[end:end] = new
+        end += len(new)
     return "\n".join(lines), sorted(set(seen) | set(present))
 
 

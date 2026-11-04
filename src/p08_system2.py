@@ -2,7 +2,7 @@
 
 # ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
-           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-cards", "/usr/local/sbin"),
+           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"), ("homelab-cards", "/usr/local/sbin"),
            ("homelab-selftest", "/usr/local/sbin"), ("hdd-recover", "/usr/local/bin"), ("homelab", "/usr/local/bin"), ("homelab-check", "/usr/local/bin")]
 
 
@@ -73,6 +73,7 @@ class BackupConf(Step):
 
 CRON_LINES = [
     ("homelab-sample", "*/15 * * * * /usr/local/sbin/homelab-sample >/dev/null 2>&1"),
+    ("homelab-stats", "5,20,35,50 * * * * /usr/local/sbin/homelab-stats >/dev/null 2>&1"),
     ("homelab-update", "17 * * * * /usr/local/sbin/homelab-update auto >/dev/null 2>&1"),
     ("homelab-cards", "*/5 * * * * /usr/local/sbin/homelab-cards auto >/dev/null 2>&1"),
     ("drives power", "@reboot sleep 60 && /usr/local/sbin/drives power >/dev/null 2>&1"),

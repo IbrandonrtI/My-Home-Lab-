@@ -200,23 +200,26 @@ class HomepageFiles(Step):
 
 @step
 class HomepageTabs(Step):
-    id, group, title = "homepage-tabs", "Homepage", "Homepage tabs (HOME, LINKS), group icons, bookmark cards and their styles"
-    needs = ("homepage-files",)
+    id, group, title = "homepage-tabs", "Homepage", "Homepage tabs (HOME, LINKS, STATS), group icons, bookmark cards, the STATS cards and their styles"
+    needs = ("homepage-files", "scripts")
 
     def applies(self):
         return not Mode.existing and os.path.exists(hp_path("settings.yaml")) and os.path.exists(hp_path("custom.css")) and bool(read_file(repo_file("homepage-config", "settings.yaml")))
 
     def wanted(self):
-        """(new settings.yaml, new custom.css, groups now known, new custom.js) for this machine. The tabs are offered once: after that,
-        taking the layout: block out of settings.yaml is respected. A group of this machine that no tab knows yet is put on one."""
+        """(new settings.yaml, new custom.css, groups now known, new custom.js, new services.yaml) for this machine. The tabs are offered
+        once: after that, taking the layout: block out of settings.yaml is respected. A group of this machine that no tab knows yet is put
+        on one. The STATS groups are added to services.yaml (also offered once) when the tabs are on."""
         sett, css = read_file(hp_path("settings.yaml")), read_file(hp_path("custom.css"))
         if not State.ran("homepage-tabs"):
             sett = settings_with_layout(sett, read_file(repo_file("homepage-config", "settings.yaml")))
-        sett, seen = layout_complete(sett, group_names(read_file(hp_path("services.yaml"))), group_names(read_file(hp_path("bookmarks.yaml"))),
-                                     State.data.get("layout_seen", []))
+        svc = read_file(hp_path("services.yaml"))
+        if re.search(r"(?m)^layout:", sett) and (not State.ran("homepage-stats") or STATS_BEGIN in svc):
+            svc = services_stats_block(svc, subst(read_file(repo_file("homepage-config", "services.yaml"))))
+        sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))
-        return sett, new_css, seen, new_js
+        return sett, new_css, seen, new_js, svc
 
     def remember(self, seen):
         if seen != State.data.get("layout_seen", []):
@@ -224,23 +227,25 @@ class HomepageTabs(Step):
             State.save()
 
     def probe(self):
-        sett, css, seen, js = self.wanted()
-        if sett != read_file(hp_path("settings.yaml")) or css != read_file(hp_path("custom.css")) or js != read_file(hp_path("custom.js")):
+        sett, css, seen, js, svc = self.wanted()
+        if (sett != read_file(hp_path("settings.yaml")) or css != read_file(hp_path("custom.css")) or js != read_file(hp_path("custom.js"))
+                or svc != read_file(hp_path("services.yaml"))):
             return "todo"
         if not Opt.dry:
             self.remember(seen)                  # already in place (a new machine): a later removal of a group or of the tabs is respected
-            if not State.ran("homepage-tabs"):
-                State.mark("homepage-tabs")
+            for k in ("homepage-tabs", "homepage-stats"):
+                if not State.ran(k):
+                    State.mark(k)
         return "done"
 
     def run(self):
-        old_sett, old_css, old_js = read_file(hp_path("settings.yaml")), read_file(hp_path("custom.css")), read_file(hp_path("custom.js"))
-        sett, css, seen, js = self.wanted()
+        old_sett, old_css, old_js, old_svc = (read_file(hp_path(n)) for n in ("settings.yaml", "custom.css", "custom.js", "services.yaml"))
+        sett, css, seen, js, svc = self.wanted()
         own = (Ctx.uid, Ctx.gid)
         if Opt.dry:
-            out("      would add the tabs (HOME, LINKS), the group icons, the bookmark cards and their styles to the Homepage files")
+            out("      would add the tabs (HOME, LINKS, STATS), the group icons, the bookmark cards, the STATS cards and their styles to the Homepage files")
             return
-        for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js)):
+        for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js), ("services.yaml", old_svc, svc)):
             if new == old:
                 continue
             if old and not os.path.exists(hp_path(name) + ".before-tabs"):          # the first copy is the one worth keeping
@@ -248,9 +253,22 @@ class HomepageTabs(Step):
             write_file(hp_path(name), new, 0o644, own)
         self.remember(seen)
         State.mark("homepage-tabs")
+        State.mark("homepage-stats")
+        stats_file = hp_path("images/stats.json")
+        if not FAKE and not os.path.exists(stats_file) and os.path.exists(P("/usr/local/sbin/homelab-stats")):
+            # Homepage only serves a file that was there when it started, so the first stats.json is made now, before the restart below
+            os.makedirs(os.path.dirname(stats_file), exist_ok=True)
+            run_as_root_stats(stats_file)
         if not FAKE and "homepage" in containers_all():
             act(["docker", "restart", "homepage"], timeout=120)
-        out("      Reload the dashboard (Ctrl+Shift+R). The old files are saved as settings.yaml.before-tabs, custom.css.before-tabs and custom.js.before-tabs")
+        out("      Reload the dashboard (Ctrl+Shift+R). The old files are saved as settings.yaml.before-tabs, custom.css.before-tabs, custom.js.before-tabs and services.yaml.before-tabs")
+        if STATS_BEGIN in svc:
+            out("      The STATS tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
+
+
+def run_as_root_stats(stats_file):
+    """Make the first stats.json (without counting folder sizes, which takes minutes)."""
+    run([P("/usr/local/sbin/homelab-stats"), "quick"], env=dict(os.environ, HOMELAB_STATS_OUT=stats_file), timeout=180)
 
 
 # ================================================================ AdGuard Home
