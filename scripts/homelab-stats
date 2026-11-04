@@ -1,0 +1,510 @@
+#!/usr/bin/env python3
+"""homelab-stats - collects the numbers for the STATS tab of the Homepage dashboard.
+
+Runs from root's crontab every 15 minutes and writes ONE small file, stats.json, into the images folder of Homepage
+(~/homepage-config/images/stats.json). The STATS tab reads that file; nothing else is changed.
+
+What it collects:
+  Immich and Nextcloud totals   asked from the two programs, with the keys already in the Homepage cards
+  Main pool and Backup pool     space used / free, and drive health (smartctl; a sleeping drive is never woken)
+  Last backup                   when it ran, how it ended, how big the backup is (from homelab-backup)
+  Containers and updates        running / stopped, waiting container and system updates (from homelab-update)
+  Folder sizes                  Backup pool, Main pool, the Nextcloud and the Immich data folders. Counting a big folder
+                                takes minutes, so it is done at the lowest priority and only when the pool's used space
+                                changed since the last count (and at most once an hour; every 7 days anyway).
+
+Usage:
+  sudo homelab-stats           collect everything now and print a short summary
+  sudo homelab-stats quick     the same without counting folder sizes (the installer uses this)
+  homelab-stats show           print the saved file
+  homelab-stats version
+"""
+
+import datetime
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+VERSION = "1.0"
+STATE_DIR = os.environ.get("HOMELAB_STATE_DIR", "/var/lib/homelab")
+MAIN_POOL = os.environ.get("HOMELAB_MAIN_POOL", "/mnt/storage")
+BACKUP_POOL = os.environ.get("HOMELAB_BACKUP_POOL", "/mnt/backup")
+BACKUP_STATUS = os.environ.get("HLU_BACKUP_STATUS", "/var/lib/homelab-backup/last-run")
+LOCKFILE = os.environ.get("HOMELAB_STATS_LOCK", "/run/homelab-stats.lock")
+FOLDER_CACHE = os.path.join(STATE_DIR, "stats-folders.json")
+RECOUNT_MIN_SECONDS = 3600          # a folder is counted again at most once an hour ...
+RECOUNT_MAX_SECONDS = 7 * 86400     # ... and at least once a week
+DU_TIMEOUT = 3600
+HTTP_TIMEOUT = 15
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def run(cmd, timeout=30):
+    """(exit code, output) of a program; a missing program or a timeout is (127, '')."""
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, universal_newlines=True)
+        return p.returncode, p.stdout
+    except (OSError, subprocess.SubprocessError):
+        return 127, ""
+
+
+def read(path):
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def load_json(path):
+    try:
+        with open(path) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_atomic(path, text, mode=0o644):
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------- number and time text
+def human(n):
+    """1536 -> '1.5 KB'. Binary units (the same ones the Homepage disk pills use)."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "-"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            if unit == "B":
+                return "%d B" % n
+            return ("%.1f %s" % (n, unit)) if n < 100 else ("%d %s" % (round(n), unit))
+        n /= 1024.0
+    return "-"
+
+
+def num(n):
+    try:
+        return "{:,}".format(int(n))
+    except (TypeError, ValueError):
+        return "-"
+
+
+def took(seconds):
+    try:
+        s = int(float(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    if s < 60:
+        return "%d s" % s
+    if s < 3600:
+        return "%d min %02d s" % (s // 60, s % 60)
+    return "%d h %02d min" % (s // 3600, (s % 3600) // 60)
+
+
+def clock(t):
+    return time.strftime("%I:%M %p", time.localtime(t)).lstrip("0")
+
+
+# ---------------------------------------------------------------- where Homepage keeps its files
+def homepage_dir():
+    saved = read(os.path.join(STATE_DIR, "homepage-dir")).strip()
+    if saved and os.path.isdir(saved):
+        return saved
+    rc, out = run(["docker", "inspect", "homepage", "--format",
+                   '{{range .Mounts}}{{if eq .Destination "/app/config"}}{{.Source}}{{end}}{{end}}'], timeout=10)
+    out = out.strip()
+    if rc == 0 and out and os.path.isdir(out):
+        return out
+    for line in read("/etc/passwd").splitlines():          # the first normal user's folder
+        f = line.split(":")
+        if len(f) > 5 and f[2] == "1000" and os.path.isdir(os.path.join(f[5], "homepage-config")):
+            return os.path.join(f[5], "homepage-config")
+    return ""
+
+
+def output_path():
+    forced = os.environ.get("HOMELAB_STATS_OUT")
+    if forced:
+        return forced
+    hp = homepage_dir()
+    if not hp:
+        return ""
+    return os.path.join(hp, "images", "stats.json")
+
+
+# ---------------------------------------------------------------- keys from the Homepage cards
+def widgets_from_services(hp):
+    """{'immich': {'url':..., 'key':...}, 'nextcloud': {...}} from the cards in services.yaml."""
+    found = {}
+    text = read(os.path.join(hp, "services.yaml")) if hp else ""
+    if not text:
+        return found
+    try:
+        import yaml
+        data = yaml.safe_load(text) or []
+        for group in data if isinstance(data, list) else []:
+            for items in (group.values() if isinstance(group, dict) else []):
+                for item in items if isinstance(items, list) else []:
+                    for card in (item.values() if isinstance(item, dict) else []):
+                        w = card.get("widget") if isinstance(card, dict) else None
+                        if isinstance(w, dict) and w.get("type") in ("immich", "nextcloud") and w.get("url") and w.get("key"):
+                            found.setdefault(w["type"], {"url": str(w["url"]).rstrip("/"), "key": str(w["key"])})
+        return found
+    except Exception:       # no PyYAML, or an odd file: read the lines instead
+        pass
+    kind = url = key = None
+    for line in text.splitlines() + ["- end:"]:
+        m = re.match(r"^\s+type:\s*(\S+)", line)
+        if m:
+            kind, url, key = m.group(1), None, None
+            continue
+        m = re.match(r"^\s+url:\s*(\S+)", line)
+        if m and kind:
+            url = m.group(1).strip("\"'")
+        m = re.match(r"^\s+key:\s*(\S+)", line)
+        if m and kind:
+            key = m.group(1).strip("\"'")
+        if kind in ("immich", "nextcloud") and url and key:
+            found.setdefault(kind, {"url": url.rstrip("/"), "key": key})
+            kind = None
+    return found
+
+
+def http_json(url, headers):
+    req = urllib.request.Request(url, headers=dict(headers, Accept="application/json"))
+    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as r:
+        return json.loads(r.read().decode("utf-8", "replace"))
+
+
+def get_immich(w):
+    d = http_json(w["url"] + "/api/server/statistics", {"x-api-key": w["key"]})
+    usage = d.get("usage")
+    return {"photos": num(d.get("photos")), "videos": num(d.get("videos")),
+            "users": num(len(d.get("usageByUser") or [])), "storage": human(usage),
+            "photos_raw": d.get("photos"), "videos_raw": d.get("videos")}
+
+
+def get_nextcloud(w):
+    d = http_json(w["url"] + "/ocs/v2.php/apps/serverinfo/api/v1/info?format=json", {"NC-Token": w["key"], "OCS-APIRequest": "true"})
+    data = d["ocs"]["data"]
+    nc = data["nextcloud"]
+    return {"files": num(nc["storage"]["num_files"]), "users": num((data.get("activeUsers") or {}).get("last24hours")),
+            "shares": num(nc["shares"]["num_shares"]), "free": human(nc["system"]["freespace"]),
+            "files_raw": nc["storage"]["num_files"]}
+
+
+# ---------------------------------------------------------------- pools and drive health
+def pool_space(path):
+    """(total, used, free) in bytes, or None when the pool is not mounted."""
+    if not (os.path.ismount(path) or (os.environ.get("HOMELAB_STATS_NOMOUNT") == "1" and os.path.isdir(path))):   # NOMOUNT: for the tests
+        return None
+    try:
+        s = os.statvfs(path)
+    except OSError:
+        return None
+    total = s.f_blocks * s.f_frsize
+    free = s.f_bavail * s.f_frsize
+    return total, max(total - s.f_bfree * s.f_frsize, 0), free
+
+
+def drive_roles():
+    """{'main': [(label, device)], 'backup': [...]} from the drive labels (MAIN1, BACKUP1 ...)."""
+    roles = {"main": [], "backup": []}
+    rc, out = run(["lsblk", "-dno", "NAME,TYPE"])
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) < 2 or f[1] != "disk" or re.match(r"(loop|ram|zram|sr)", f[0]):
+            continue
+        rc2, o2 = run(["lsblk", "-P", "-o", "LABEL,MOUNTPOINT", "/dev/" + f[0]])
+        for l2 in o2.splitlines():
+            lab = re.search(r'LABEL="([^"]*)"', l2)
+            mnt = re.search(r'MOUNTPOINT="([^"]*)"', l2)
+            if not lab or not mnt or not mnt.group(1).startswith("/mnt/disks/"):
+                continue
+            name = lab.group(1).upper()
+            if name.endswith("BOOT"):
+                continue
+            for role, prefix in (("main", "MAIN"), ("backup", "BACKUP")):
+                if name.startswith(prefix) and ("/dev/" + f[0], name) not in [(d, n) for n, d in roles[role]]:
+                    roles[role].append((name, "/dev/" + f[0]))
+    return roles
+
+
+def smart_state(dev):
+    """'passed', 'failed', 'asleep' or 'unknown'. -n standby: a sleeping drive is left asleep."""
+    if rc_missing("smartctl"):
+        return "nosmart"
+    for opts in ([], ["-d", "sat"]):
+        rc, out = run(["smartctl", "-n", "standby", "-H"] + opts + [dev], timeout=40)
+        if re.search(r"STANDBY", out, re.I):
+            return "asleep"
+        if re.search(r"PASSED|: OK", out):
+            return "passed"
+        if "FAILED" in out:
+            return "failed"
+    return "unknown"
+
+
+def rc_missing(prog):
+    return not any(os.access(os.path.join(p, prog), os.X_OK) for p in os.environ.get("PATH", "").split(":"))
+
+
+def temps():
+    """{device: degrees} from the readings homelab-sample saved."""
+    out = {}
+    for line in read(os.path.join(STATE_DIR, "temps")).splitlines():
+        f = line.split("|")
+        if len(f) >= 3 and f[2].isdigit():
+            out[f[1]] = int(f[2])
+    return out
+
+
+def pool_block(path, role, roles, old_drives, new_drives):
+    sp = pool_space(path)
+    if sp is None:
+        return {"used": "-", "free": "-", "total": "-", "percent": "-", "health": "Not connected", "drives": "-"}, None
+    total, used, free = sp
+    pct = int(round(100.0 * used / total)) if total else 0
+    states = []
+    hot = temps()
+    for label, dev in roles.get(role, []):
+        st = smart_state(dev)
+        prev = next((d for d in old_drives if d.get("device") == dev), {})
+        if st in ("asleep", "unknown") and prev.get("health") in ("passed", "failed"):
+            st = prev["health"]          # asleep: keep what the last reading said
+        new_drives.append({"label": label, "device": dev, "health": st, "temp": hot.get(dev)})
+        states.append(st)
+    if not states:
+        health = "No drives found"
+    elif "failed" in states:
+        health = "PROBLEM: check drives"
+    elif "nosmart" in states:
+        health = "smartctl missing"
+    elif all(s == "passed" for s in states):
+        health = "Healthy"
+    elif "passed" in states:
+        health = "Healthy, %d not checked" % (len(states) - states.count("passed"))
+    else:
+        health = "Not checked yet"
+    return {"used": human(used), "free": human(free), "total": human(total), "percent": "%d%%" % pct,
+            "health": health, "drives": "%d" % len(states) if states else "-"}, (total, used)
+
+
+# ---------------------------------------------------------------- the last backup
+def backup_info(now):
+    line = read(BACKUP_STATUS).strip().splitlines()
+    if not line:
+        return {"when": "Never", "ago": "-", "result": "No backup yet", "size": "-", "took": "-", "short": "Never"}
+    f = (line[0].split("|") + ["", "", "", "", ""])[:5]
+    when, result, secs, size = f[0], f[1], f[3], f[4]
+    ago, nice_when, short = "-", when, when
+    try:
+        t = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M"))
+        days = (datetime.date.fromtimestamp(now) - datetime.date.fromtimestamp(t)).days
+        hm = time.strftime("%H:%M", time.localtime(t))
+        if days == 0:
+            nice_when = short = "Today %s" % hm
+        elif days == 1:
+            nice_when = short = "Yesterday %s" % hm
+        else:
+            nice_when = "%s %d, %s" % (MONTHS[time.localtime(t).tm_mon - 1], time.localtime(t).tm_mday, hm)
+            short = "%d days ago" % days
+        age = int(now - t)
+        ago = "%d min ago" % (age // 60) if age < 3600 else "%d h ago" % (age // 3600) if age < 86400 else "%d days ago" % (age // 86400)
+    except ValueError:
+        pass
+    ok = result.strip().upper() == "OK"
+    return {"when": nice_when, "ago": ago, "result": "OK" if ok else "Failed: see the log" if result else "-",
+            "size": human(size) if size.isdigit() else "-", "took": took(secs) if secs else "-", "short": short}
+
+
+# ---------------------------------------------------------------- containers and updates
+def container_info():
+    rc, out = run(["docker", "ps", "-a", "--format", "{{.Names}}|{{.State}}|{{.Status}}"], timeout=20)
+    if rc != 0:
+        return {"running": "-", "total": "-", "problems": "-", "text": "Docker not answering", "n": None}
+    running = total = bad = 0
+    for line in out.splitlines():
+        f = line.split("|")
+        if len(f) < 3:
+            continue
+        total += 1
+        if f[1] == "running":
+            running += 1
+        if "(unhealthy)" in f[2] or f[1] in ("restarting", "dead"):
+            bad += 1
+    stopped = total - running
+    return {"running": "%d of %d" % (running, total), "total": str(total),
+            "problems": "None" if bad == 0 and stopped == 0 else "%d stopped, %d unhealthy" % (stopped, bad) if bad else "%d stopped" % stopped,
+            "text": "", "n": running}
+
+
+def update_info():
+    images = [l for l in read(os.path.join(STATE_DIR, "image-updates")).splitlines()[1:] if l.strip()]
+    first = read(os.path.join(STATE_DIR, "image-updates")).splitlines()[:1]
+    apt = read(os.path.join(STATE_DIR, "apt")).strip().split("|")
+    sysn = int(apt[0]) if apt and apt[0].isdigit() else None
+    checked = "-"
+    if first and first[0].strip().isdigit():
+        d = int((time.time() - int(first[0])) // 86400)
+        checked = "today" if d <= 0 else "%d day%s ago" % (d, "" if d == 1 else "s")
+    n_img = len(images)
+    total = n_img + (sysn or 0)
+    return {"images": "%d waiting" % n_img if n_img else "Up to date",
+            "system": "-" if sysn is None else "%d waiting" % sysn if sysn else "Up to date",
+            "total": str(total) if (first or sysn is not None) else "-", "checked": checked}
+
+
+# ---------------------------------------------------------------- folder sizes (counted only when something changed)
+def du_bytes(path):
+    rc, out = run(["nice", "-n", "19", "ionice", "-c3", "du", "-sb", path], timeout=DU_TIMEOUT)
+    m = re.match(r"(\d+)\s", out)
+    return int(m.group(1)) if m else None
+
+
+def folder_sizes(now, spaces, quick):
+    """{'main','backup','nextcloud','immich': text} and whether anything was counted. Uses the cache when nothing changed."""
+    cache = load_json(FOLDER_CACHE)
+    want = [("main", MAIN_POOL, MAIN_POOL), ("backup", BACKUP_POOL, BACKUP_POOL),
+            ("nextcloud", os.path.join(MAIN_POOL, "nextcloud"), MAIN_POOL), ("immich", os.path.join(MAIN_POOL, "immich"), MAIN_POOL)]
+    texts, counted, pending = {}, False, False
+    for key, path, pool in want:
+        sp = spaces.get(pool)
+        if sp is None or not os.path.isdir(path):
+            texts[key] = "Not connected" if sp is None else "No folder"
+            continue
+        fp = int(sp[1]) >> 26                      # used space in 64 MB steps
+        c = cache.get(key) or {}
+        age = now - c.get("at", 0)
+        due = ("bytes" not in c) or (c.get("path") != path) or age > RECOUNT_MAX_SECONDS or (c.get("fp") != fp and age >= RECOUNT_MIN_SECONDS)
+        if due and not quick:
+            b = du_bytes(path)
+            if b is not None:
+                cache[key] = c = {"bytes": b, "fp": fp, "at": int(time.time()), "path": path}
+                counted = True
+        elif due:
+            pending = True
+        texts[key] = human(c["bytes"]) if "bytes" in c else "Counting..."
+    if counted:
+        try:
+            write_atomic(FOLDER_CACHE, json.dumps(cache))
+        except OSError:
+            pass
+    return texts, pending
+
+
+# ---------------------------------------------------------------- put it together
+def collect(quick):
+    now = time.time()
+    out_path = output_path()
+    old = load_json(out_path) if out_path else {}
+    hp = homepage_dir()
+    keys = widgets_from_services(hp)
+
+    res = {"version": 1, "updated": int(now), "updated_text": clock(now)}
+    for name, fn in (("immich", get_immich), ("nextcloud", get_nextcloud)):
+        try:
+            if name not in keys:
+                raise KeyError(name)
+            res[name] = fn(keys[name])
+        except (OSError, ValueError, KeyError, TypeError, urllib.error.URLError):
+            prev = old.get(name) if isinstance(old.get(name), dict) else None
+            res[name] = prev or ({"photos": "-", "videos": "-", "users": "-", "storage": "-", "photos_raw": None, "videos_raw": None}
+                                 if name == "immich" else {"files": "-", "users": "-", "shares": "-", "free": "-", "files_raw": None})
+
+    roles = drive_roles()
+    old_drives = old.get("drives") if isinstance(old.get("drives"), list) else []
+    new_drives = []
+    res["main"], sp_main = pool_block(MAIN_POOL, "main", roles, old_drives, new_drives)
+    res["backup"], sp_backup = pool_block(BACKUP_POOL, "backup", roles, old_drives, new_drives)
+    res["drives"] = new_drives
+    res["last_backup"] = backup_info(now)
+    res["containers"] = container_info()
+    res["updates"] = update_info()
+    spaces = {MAIN_POOL: sp_main, BACKUP_POOL: sp_backup}
+    res["folders"], pending = folder_sizes(now, spaces, True)         # the cached sizes first: the file is written at once
+
+    im, nc = res["immich"], res["nextcloud"]
+    res["glance"] = {
+        "photos": im["photos"], "videos": im["videos"], "files": nc["files"],
+        "main_pct": res["main"]["percent"], "backup_pct": res["backup"]["percent"],
+        "backup_when": res["last_backup"]["short"], "backup_size": res["last_backup"]["size"],
+        "containers": res["containers"]["running"], "updates": res["updates"]["total"],
+    }
+    return res, out_path, spaces, pending
+
+
+def save(res, out_path):
+    if not out_path:
+        return False
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    write_atomic(out_path, json.dumps(res, indent=1))
+    return True
+
+
+def main(argv):
+    arg = argv[1] if len(argv) > 1 else ""
+    if arg in ("version", "--version"):
+        print("homelab-stats %s" % VERSION)
+        return 0
+    if arg in ("help", "--help", "-h"):
+        print(__doc__.strip())
+        return 0
+    if arg == "show":
+        p = output_path()
+        print(read(p) or "No stats file yet. Run: sudo homelab-stats")
+        return 0
+    if arg not in ("", "quick"):
+        print("Usage: sudo homelab-stats [quick]    (or: homelab-stats show | version)", file=sys.stderr)
+        return 1
+    if os.geteuid() != 0 and not os.environ.get("HOMELAB_STATS_OUT"):
+        print("Run it with sudo.", file=sys.stderr)
+        return 1
+    try:
+        os.nice(19)
+    except OSError:
+        pass
+    try:
+        import fcntl
+        lock = open(LOCKFILE, "w")
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, ImportError):
+        return 0                       # another run is busy counting folders
+    os.makedirs(STATE_DIR, exist_ok=True)
+    res, out_path, spaces, pending = collect(arg == "quick")
+    if not save(res, out_path):
+        print("homelab-stats: could not find the Homepage folder, so nothing was saved.", file=sys.stderr)
+        return 1
+    if arg != "quick":
+        texts, _ = folder_sizes(time.time(), spaces, False)           # counts what changed (slow, lowest priority)
+        if texts != res["folders"]:
+            res["folders"] = texts
+            res["updated"] = int(time.time())
+            res["updated_text"] = clock(res["updated"])
+            save(res, out_path)
+    if sys.stdout.isatty():
+        print("Saved %s" % out_path)
+        g = res["glance"]
+        print("  Photos %s, videos %s, files %s" % (g["photos"], g["videos"], g["files"]))
+        print("  Main pool %s used (%s), Backup pool %s used (%s)" % (g["main_pct"], res["main"]["health"], g["backup_pct"], res["backup"]["health"]))
+        print("  Last backup: %s, %s, %s" % (res["last_backup"]["when"], res["last_backup"]["result"], res["last_backup"]["size"]))
+        print("  Containers running: %s; updates waiting: %s" % (g["containers"], g["updates"]))
+        f = res["folders"]
+        print("  Folders: backup %s, main %s, nextcloud %s, immich %s" % (f["backup"], f["main"], f["nextcloud"], f["immich"]))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
