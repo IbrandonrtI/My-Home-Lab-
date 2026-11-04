@@ -744,6 +744,49 @@ def settings_with_layout(live, shipped):
     return out
 
 
+def group_names(text):
+    """The names of the top level groups of a services.yaml or bookmarks.yaml (the lines that start with '- Name:')."""
+    return [m.group(1).strip().strip("'\"") for m in re.finditer(r"(?m)^- ([^\n#]+?):\s*(?:#.*)?$", text)]
+
+
+def yaml_key(name):
+    """A group name as a YAML key (quoted when it has a character YAML would misread)."""
+    if re.search(r"[:#\[\]{},*!|>'\"%@`]|^[&?-]|^\s|\s$", name):
+        return "'%s'" % name.replace("'", "''")
+    return name
+
+
+def layout_complete(settings, service_groups, bookmark_groups, seen):
+    """Put the groups of this machine that the layout: block does not know yet on a tab (a service group on HOME, a bookmark group on
+    LINKS), so they do not show up on every tab. Only groups that were never offered before (not in `seen`) are added, so a group
+    that was taken out of the layout on purpose stays out. Returns (settings, seen)."""
+    m = re.search(r"(?m)^layout:[ \t]*(?:#.*)?$", settings)
+    present = [g for g in service_groups + bookmark_groups if g]
+    if not m:
+        return settings, sorted(set(seen) | set(present))
+    lines = settings.split("\n")
+    start = settings[:m.start()].count("\n")
+    end = start + 1
+    while end < len(lines) and (lines[end].strip() == "" or lines[end][0] in " \t#"):
+        end += 1
+    while end > start + 1 and lines[end - 1].strip() == "":
+        end -= 1
+    known = set()
+    for l in lines[start + 1:end]:
+        k = re.match(r"^  ([^\s#][^:]*?):\s*$", l) or re.match(r"^  '([^']+)':\s*$", l)
+        if k:
+            known.add(k.group(1).strip())
+    add = []
+    for tab, icon, groups in (("HOME", "mdi-apps", service_groups), ("LINKS", "mdi-bookmark-multiple", bookmark_groups)):
+        for g in groups:
+            if g and g not in known and g not in seen and g not in [a[0] for a in add]:
+                add.append((g, tab, icon))
+    for g, tab, icon in add:
+        lines[end:end] = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
+        end += 3
+    return "\n".join(lines), sorted(set(seen) | set(present))
+
+
 def stack_text(name):
     """The stack file for `name` with this machine's values filled in."""
     fn = STACKS[name][0]
