@@ -799,6 +799,23 @@ ok "S39 it says to reload the dashboard" 'grep -q "Ctrl+Shift+R" $SIM_DIR/s39b.o
 cp $HP39/settings.yaml $SIM_DIR/s39.keep
 hls refresh > $SIM_DIR/s39c.out 2>&1
 ok "S39 a second refresh changes nothing" 'cmp -s $HP39/settings.yaml $SIM_DIR/s39.keep && ! grep -q "Ctrl+Shift+R" $SIM_DIR/s39c.out'
+printf '\n- Others:\n    - Indeed:\n        - abbr: IN\n          href: https://www.indeed.com/\n' >> $HP39/bookmarks.yaml
+hls refresh > $SIM_DIR/s39f.out 2>&1
+ok "S39 a bookmark group of this machine that no tab knew is put on LINKS (so it does not show on every tab)" 'python3 - <<PY
+import re,os
+t=open(os.environ["HP39"]+"/settings.yaml").read()
+assert re.search(r"(?m)^  Others:\n    tab: LINKS\n    icon: mdi-dots-horizontal-circle", t), t
+PY'
+ok "S39 the first backup copy was kept as it was" '! grep -q "Others" $HP39/settings.yaml.before-tabs && ! grep -q "^layout:" $HP39/settings.yaml.before-tabs'
+python3 - <<PY
+import os
+hp=os.environ["HP39"]
+t=open(hp+"/settings.yaml").read()
+open(hp+"/settings.yaml","w").write(t.replace("  Others:\n    tab: LINKS\n    icon: mdi-dots-horizontal-circle\n",""))
+PY
+hls refresh > $SIM_DIR/s39g.out 2>&1
+ok "S39 an entry taken out by hand is not put back" '! grep -q "^  Others:" $HP39/settings.yaml'
+cp $HP39/settings.yaml $SIM_DIR/s39.keep
 python3 - <<PY
 import os
 hp=os.environ["HP39"]

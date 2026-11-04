@@ -75,4 +75,28 @@ check("an older tabs block is replaced by the new one", "color: pink" not in r3 
 check("rules after the block are kept", "/* mine */\n.x { y: z; }" in r3)
 check("no shipped block: the file is left alone", m.css_tabs_block(BASE, "") == BASE)
 
+# ---- groups of this machine that the layout does not know yet
+check("the tabs css keeps the side margins of the tab bar", re.search(r"#tabs\s*\{[^}]*margin:\s*[\d.]+px 0", C) is None and "margin-top: 6px" in C)
+base = "title: X\nlayout:\n  Network & DNS:\n    tab: HOME\n    icon: mdi-lan\n  Productivity:\n    tab: LINKS\n"
+r, seen = m.layout_complete(base, ["Network & DNS", "My Apps"], ["Productivity", "Others"], [])
+check("a new service group goes on HOME and a new bookmark group on LINKS",
+      "  My Apps:\n    tab: HOME\n    icon: mdi-apps" in r and "  Others:\n    tab: LINKS\n    icon: mdi-dots-horizontal-circle" in r)
+check("groups already in the layout are not added twice", r.count("Network & DNS:") == 1 and r.count("Productivity:") == 1)
+check("every group is now remembered", seen == ["My Apps", "Network & DNS", "Others", "Productivity"], str(seen))
+check("the file before the layout is kept", r.startswith("title: X\nlayout:"))
+r2, seen2 = m.layout_complete(r, ["Network & DNS", "My Apps"], ["Productivity", "Others"], seen)
+check("a second run changes nothing", r2 == r and seen2 == seen)
+gone = r.replace("  Others:\n    tab: LINKS\n    icon: mdi-dots-horizontal-circle\n", "")
+r3, _ = m.layout_complete(gone, ["Network & DNS", "My Apps"], ["Productivity", "Others"], seen)
+check("a group that was taken out on purpose is not put back", "Others" not in r3)
+r4, _ = m.layout_complete(r, ["Network & DNS", "My Apps", "Third"], ["Productivity", "Others"], seen)
+check("a group that is new later is added once", r4.count("  Third:\n    tab: HOME") == 1)
+check("no layout block: nothing is added, the groups are still remembered", m.layout_complete("title: X\n", ["A"], ["B"], [])[0] == "title: X\n" and m.layout_complete("title: X\n", ["A"], ["B"], [])[1] == ["A", "B"])
+tail = base + "\n# comment\nhideVersion: true\n"
+r5, _ = m.layout_complete(tail, ["Z"], [], [])
+check("the group goes inside the layout block, before the keys that follow it", r5.index("  Z:") < r5.index("hideVersion") and r5.index("  Z:") > r5.index("Productivity"))
+check("a name with a colon is quoted", m.yaml_key("A: b") == "'A: b'" and m.yaml_key("Plain & Name") == "Plain & Name")
+check("group_names reads the top level groups", m.group_names("- Net & DNS:\n\n    - Card:\n        id: x\n- Files:\n  - A:\n") == ["Net & DNS", "Files"])
+check("group_names skips comments", m.group_names("# - Not:\n- Real:  # note\n") == ["Real"])
+
 print("OK" if not bad else "FAIL (%d)" % bad)
