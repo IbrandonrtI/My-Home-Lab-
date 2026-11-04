@@ -72,6 +72,24 @@ class Icons(http.server.BaseHTTPRequestHandler):
 icons = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Icons)
 threading.Thread(target=icons.serve_forever, daemon=True).start()
 
+class Api(http.server.BaseHTTPRequestHandler):
+    """Docker Hub and GitHub in miniature: the short text of an image or project."""
+    DATA = {"/v2/repositories/someone/zzzapp": {"description": "A tiny: test app, with a colon #1"},
+            "/repos/someone/gh-app": {"description": "Self-hosted gallery for [your photos](http://x) and videos, with many more words than fit"}}
+
+    def do_GET(self):
+        body = self.DATA.get(self.path)
+        self.send_response(200 if body is not None else 404)
+        self.end_headers()
+        self.wfile.write(json.dumps(body or {}).encode())
+
+    def log_message(self, *a):
+        pass
+
+
+api = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Api)
+threading.Thread(target=api.serve_forever, daemon=True).start()
+
 FAKE_TS = '''#!%s
 import json, os, sys
 a = sys.argv[1:]
@@ -149,7 +167,9 @@ class Lab:
                  HOMELAB_TAILSCALE=os.path.join(self.d, "bin", "tailscale"), FAKE_DOCKER_JSON=self.dj, TS_STATE=self.ts,
                  TS_NAME=self.name, TS_DOWN=self.down, HOMELAB_LAN_IP=self.lan, HOMELAB_CARDS_NOROOT="1",
                  HOMELAB_ICON_CDN="http://127.0.0.1:%d" % icons.server_address[1], HOMELAB_CARDS_LOG=os.path.join(self.d, "cards.log"),
-                 HOMELAB_CARDS_LOCK=os.path.join(self.d, "lock"), HOMELAB_PROBE_HOST="127.0.0.1")
+                 HOMELAB_CARDS_LOCK=os.path.join(self.d, "lock"), HOMELAB_PROBE_HOST="127.0.0.1",
+                 HOMELAB_DESC_HUB="http://127.0.0.1:%d" % api.server_address[1], HOMELAB_DESC_GITHUB="http://127.0.0.1:%d" % api.server_address[1],
+                 HOMELAB_DESC_RETRY_SECS="0")
         return e
 
     def run(self, *args):
@@ -203,9 +223,11 @@ try:
         container("filebrowser", "filebrowser/filebrowser", lab.web(), project="filebrowser"),
         container("immich_postgres", "postgres:14", p_db, project="immich"),
         container("jellyfin", "lscr.io/linuxserver/jellyfin:latest", p_jelly, project="media"),
-        container("paperless", "ghcr.io/paperless-ngx/paperless-ngx:latest", p_paper, project="docs",
-                  labels={"org.opencontainers.image.description": "Scan and index documents"}),
+        container("paperless", "ghcr.io/paperless-ngx/paperless-ngx:latest", p_paper, project="docs"),
         container("zzzapp", "someone/zzzapp", p_weird),
+        container("ghapp", "ghcr.io/someone/gh-app:latest", lab.web()),
+        container("labelapp", "x/labelapp", lab.web(), labels={"org.opencontainers.image.description": "Scan and index documents"}),
+        container("plainapp", "nobody/plainapp", lab.web(), project="stackname"),
         container("mydb", "postgres:16", p_db),
         container("stopped-thing", "lscr.io/linuxserver/sonarr", p_stopped, status="exited"),
     ])
@@ -228,14 +250,19 @@ try:
     check("the hand written Metube card is not touched", svc.count("id: metube-card") == 1 and "icon: metube.svg" in svc)
     check("the new cards keep the section order of the file", g.get("Media & Entertainment", [])[:3] == ["metube-card", "downtify-card", "jellyfin-card"], g)
     ports = sorted(int(k.split(":")[1]) for k in json.load(open(lab.ts))["Web"])
-    check("each new service got its own Tailscale port from 1009 on", ports == [1009, 1010, 1011, 1012], ports)
+    check("each new service got its own Tailscale port from 1009 on", ports == [1009, 1010, 1011, 1012, 1013, 1014, 1015], ports)
     jelly = svc.split("id: jellyfin-card")[1].split("\n\n")[0]
     check("the card links the Tailscale address and watches the local one", re.search(r"href: https://homelab\.example\.ts\.net:101\d", jelly)
           and "siteMonitor: http://192.168.1.198:%d" % p_jelly in jelly, jelly)
     check("the icon comes from the icon library", "icon: jellyfin.svg" in jelly, jelly)
     check("the second choice is Simple Icons", "icon: si-paperlessngx" in svc.split("id: paperless-card")[1].split("\n\n")[0])
     check("without an icon anywhere it is a Docker icon", "icon: mdi-docker" in svc.split("id: zzzapp-card")[1].split("\n\n")[0])
-    check("a description from the image is used", "description: Scan and index documents" in svc)
+    check("a description from the image itself is used", "description: Scan and index documents" in svc)
+    check("a known app's text wins over the web look-up", "description: Document archive" in svc)
+    check("a known app gets its own text", "description: Movies, shows and music server" in svc)
+    check("the text of the image on Docker Hub is used, quoted when needed", 'description: "A tiny: test app, with a colon 1"' in svc, svc)
+    check("the text of a GitHub project is used, cut at a word", "description: Self-hosted gallery for your photos and videos, with many" in svc, svc)
+    check("with no information the note names the stack", "description: Added automatically (stackname)" in svc)
     check("the card is named after the container", "- Jellyfin:" in svc and "- Zzzapp:" in svc)
     for cid in ("jellyfin-card", "paperless-card", "zzzapp-card"):
         for suf in ("", "::before", "::after"):
@@ -247,10 +274,10 @@ try:
     check("the old files are saved once", os.path.exists(os.path.join(lab.hp, "services.yaml.before-cards")) and os.path.exists(os.path.join(lab.hp, "custom.css.before-cards")))
     check("the hand written lists stay valid", css.count("{") == css.count("}"))
     st = lab.state()
-    check("the state knows the three cards", sorted(st["managed"]) == ["jellyfin", "paperless", "zzzapp"], st)
+    check("the state knows the six cards", sorted(st["managed"]) == ["ghapp", "jellyfin", "labelapp", "paperless", "plainapp", "zzzapp"], st)
     check("the unsure one is flagged", st["managed"]["zzzapp"]["unsure"] and not st["managed"]["jellyfin"]["unsure"])
     summ = open(os.path.join(lab.d, "state", "cards-summary")).read()
-    check("the login screen can read the summary", summ.count("managed|") == 3 and "managed|zzzapp|zzzapp-card|Monitoring & Management|1|" in summ, summ)
+    check("the login screen can read the summary", summ.count("managed|") == 6 and "managed|zzzapp|zzzapp-card|Monitoring & Management|1|" in summ, summ)
     check("it said it was not sure and how to move the card", "sudo homelab-cards move zzzapp" in out)
 
     # ---- idempotence
@@ -259,6 +286,14 @@ try:
     check("a second look changes nothing", rc == 0 and (lab.svc(), lab.css()) == snap and "Nothing to do" in out, out)
     rc, out = lab.run("auto")
     check("auto is quiet when nothing changes", rc == 0 and out.strip() == "", out)
+
+    # ---- the text is improved later when it can be found; a text the person wrote is never touched
+    Api.DATA["/v2/repositories/nobody/plainapp"] = {"description": "Finally found"}
+    t = lab.svc().replace("description: Movies, shows and music server", "description: My own words")
+    open(os.path.join(lab.hp, "services.yaml"), "w").write(t)
+    rc, out = lab.run("auto")
+    check("a plain note is replaced once a better text exists", "description: Finally found" in lab.svc() and "Added automatically (stackname)" not in lab.svc(), lab.svc())
+    check("a text written by the person stays", "description: My own words" in lab.svc())
 
     # ---- the address changes
     lab.lan = "10.0.0.5"
