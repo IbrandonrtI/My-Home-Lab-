@@ -1,0 +1,22 @@
+# Navidrome: a music server. It plays the songs Downtify saved, on your phone or in a web page.
+# Stack name in Portainer: navidrome
+# Port:    4533 (web interface and the apps that speak the Subsonic protocol).
+# Folders: /home/your-username/navidrome holds its database and settings (owned by the user with uid 1000).
+#          The music folder is mounted read-only, so Navidrome can never change or delete a song.
+#          The installer replaces the music folder below with the real one (the folder Downtify saves into).
+# First login: the installer creates the login (your admin name and the shared admin password).
+services:
+  navidrome:
+    image: ghcr.io/navidrome/navidrome:0.61.0
+    container_name: navidrome
+    user: "1000:1000"
+    restart: unless-stopped
+    ports:
+      - "4533:4533"
+    environment:
+      ND_SCANSCHEDULE: 1h
+      ND_LOGLEVEL: info
+      ND_SESSIONTIMEOUT: 24h
+    volumes:
+      - /home/your-username/navidrome:/data
+      - /mnt/storage/music:/music:ro
