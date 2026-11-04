@@ -1,1 +1,53 @@
+/* ================================================================ 2. Cards */
+/* Outer wrapper and inner card share one radius so the corners clip cleanly. */
+.service-card,
+.group-header,
+div[id$="-card"],
+div[id$="-card"] > div {
+  border-radius: 16px !important;
+  overflow: hidden !important;
+  isolation: isolate !important;
+}
 
+#adguard-card, #tailscale-card, #beszel-card, #portainer-card, 
+#filebrowser-card, #speedtest-card, #immich-card, #nextcloud-card,
+#netdata-card, #metube-card, #downtify-card {
+  position: relative !important;
+  background-color: transparent !important;
+}
+
+/* Frosted glass on the visible card */
+.service-card {
+  background: rgba(14, 19, 31, 0.58) !important;
+}
+
+/* accent colors (R, G, B) */
+#adguard-card     { --accent: 104, 186, 72;   }   /* AdGuard green */
+#tailscale-card   { --accent: 36,  140, 255;  }   /* Tailscale blue */
+#beszel-card      { --accent: 0,   197, 253;  }   /* Beszel Light Blue */
+#portainer-card   { --accent: 23,  21,  20;   }   /* Portainer dark */
+#filebrowser-card { --accent: 107, 97,  223;  }   /* FileBrowser blue */
+#speedtest-card   { --accent: 214, 90,  22;   }   /* Speedtest orange */
+#immich-card      { --accent: 209, 18,  18;   }   /* Immich red */
+#nextcloud-card   { --accent: 23,  10,  191;  }   /* Nextcloud blue */
+#netdata-card     { --accent: 0,   171, 68;   }   /* Netdata Green */
+#metube-card      { --accent: 255, 0,   0;    }   /* Metube red */
+#downtify-card    { --accent: 0,   255,   0;  }   /* Downtify Green */
+
+/* Soft corner glow */
+#adguard-card::before, #tailscale-card::before, #beszel-card::before,
+#portainer-card::before, #filebrowser-card::before, #speedtest-card::before, 
+#immich-card::before, #nextcloud-card::before, #netdata-card::before, 
+#metube-card::before, #downtify-card::before {
+  content: "";
+  position: absolute;
+}
+
+/* Thin accent rail on the left edge */
+#adguard-card::after, #tailscale-card::after, #beszel-card::after,
+#portainer-card::after, #filebrowser-card::after, #speedtest-card::after, 
+#immich-card::after, #nextcloud-card::after, #netdata-card::after, 
+#metube-card::after, #downtify-card::after {
+  content: "";
+  position: absolute;
+}
