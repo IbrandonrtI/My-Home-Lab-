@@ -963,6 +963,45 @@ def split_extras(extra, what):
     return group, icon, order
 
 
+def layout_add_group(group, others):
+    """A new bookmark category is put on the tab of the other bookmark categories (settings.yaml layout:), so it is not shown on every
+    tab. Does nothing without a layout block, or when no tab is known. 'others' are the names of the categories that existed."""
+    try:
+        text = read(SETTINGS)
+    except OSError:
+        return
+    lines = text.split("\n")
+    start = next((i for i, l in enumerate(lines) if re.match(r"^layout:\s*(#.*)?$", l)), None)
+    if start is None:
+        return
+    end = start + 1
+    while end < len(lines) and (lines[end].strip() == "" or lines[end][0] in " \t#"):
+        end += 1
+    while end > start + 1 and lines[end - 1].strip() == "":
+        end -= 1
+    tab, cur = None, None
+    for l in lines[start + 1:end]:
+        m = re.match(r"^  ('?)([^\s#'][^:]*?)\1:\s*$", l)
+        if m:
+            cur = m.group(2).strip()
+            if cur.lower() == group.lower():
+                return
+            continue
+        t = re.match(r"^    tab:\s*(\S+)", l)
+        if t and cur in others and tab is None:
+            tab = t.group(1)
+    if not tab:
+        return
+    key = "'%s'" % group.replace("'", "''") if re.search(r"[:#\[\]{},*!|>'\"%@`]|^[&?-]|^\s|\s$", group) else group
+    icon = "mdi-dots-horizontal-circle" if group.lower() == "others" else "mdi-bookmark-multiple"
+    lines[end:end] = ["  %s:" % key, "    tab: %s" % tab, "    icon: %s" % icon]
+    tmp = SETTINGS + ".tmp"          # written directly: this is not a theme change, so no .before-theme copy is made
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    shutil.copymode(SETTINGS, tmp)
+    os.replace(tmp, SETTINGS)
+
+
 def marks_add(name, url, extra):
     need_dir()
     group, icon, order = split_extras(extra, "add")
@@ -1000,6 +1039,8 @@ def marks_add(name, url, extra):
     where, _ = marks_groups("\n".join(new))
     spot = next((i + 1 for g in where if g[0] == group for i, (n, _s, _e) in enumerate(g[1]) if n == name), 1)
     print("Added '%s' to '%s' as number %d (%s). %s" % (name, group, spot, url, msg))
+    if not existed:
+        layout_add_group(group, [g[0] for g in groups])
     if not existed and groups:
         print("'%s' is a new category (it did not exist yet). The ones before: %s." % (group, ", ".join(g[0] for g in groups)))
     print("Refresh the Homepage page in the browser to see it.")
