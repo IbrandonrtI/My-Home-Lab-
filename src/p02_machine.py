@@ -706,6 +706,44 @@ def css_new_layout(live, shipped):
     return out
 
 
+TABS_BEGIN, TABS_END = "/* >>> homelab tabs >>>", "/* <<< homelab tabs <<< */"      # the block of tab styles in the shipped custom.css
+LAYOUT_MARK = "# Tabs and group icons"      # the comment above the layout: block at the end of the shipped settings.yaml
+
+
+def css_tabs_block(live, shipped):
+    """This machine's custom.css with the managed tab-style block put in, or brought up to date. Everything outside the block
+    is left alone. The block goes in front of the block `homelab theme` writes, or at the end."""
+    a = shipped.find(TABS_BEGIN)
+    z = shipped.find(TABS_END, a) if a >= 0 else -1
+    if a < 0 or z < 0:
+        return live
+    block = shipped[a:z + len(TABS_END)]
+    la = live.find(TABS_BEGIN)
+    lz = live.find(TABS_END, la) if la >= 0 else -1
+    if la >= 0 and lz >= 0:
+        return live[:la] + block + live[lz + len(TABS_END):]
+    t = live.find(THEME_BEGIN)
+    if t >= 0:
+        return live[:t].rstrip("\n") + "\n\n\n" + block + "\n\n" + live[t:]
+    return live.rstrip("\n") + "\n\n\n" + block + "\n"
+
+
+def settings_with_layout(live, shipped):
+    """This machine's settings.yaml with the tabs and group icons (the layout: block) and the small settings (hideVersion, language)
+    added when they are missing. Nothing that is already there is changed."""
+    out = live
+    if not re.search(r"(?m)^layout:", out):
+        a = shipped.find(LAYOUT_MARK)
+        if a >= 0:
+            out = out.rstrip("\n") + "\n\n" + shipped[a:].rstrip("\n") + "\n"
+    for key, val in (("hideVersion", "true"), ("language", "en")):
+        if not re.search(r"(?m)^%s:" % key, out):
+            m = re.search(r"(?m)^(theme|title):.*\n", out)
+            line = "%s: %s\n" % (key, val)
+            out = out[:m.end()] + line + out[m.end():] if m else line + out
+    return out
+
+
 def stack_text(name):
     """The stack file for `name` with this machine's values filled in."""
     fn = STACKS[name][0]

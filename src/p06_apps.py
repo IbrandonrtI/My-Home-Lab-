@@ -198,6 +198,49 @@ class HomepageFiles(Step):
                     write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
 
 
+@step
+class HomepageTabs(Step):
+    id, group, title = "homepage-tabs", "Homepage", "Homepage tabs (HOME, LINKS), group icons and the tab styles"
+    needs = ("homepage-files",)
+
+    def applies(self):
+        return not Mode.existing and os.path.exists(hp_path("settings.yaml")) and os.path.exists(hp_path("custom.css")) and bool(read_file(repo_file("homepage-config", "settings.yaml")))
+
+    def wanted(self):
+        """(new settings.yaml, new custom.css) for this machine. The tabs are offered once: after that, taking the layout: block out
+        of settings.yaml is respected."""
+        sett, css = read_file(hp_path("settings.yaml")), read_file(hp_path("custom.css"))
+        new_sett = sett if State.ran("homepage-tabs") else settings_with_layout(sett, read_file(repo_file("homepage-config", "settings.yaml")))
+        new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
+        return new_sett, new_css
+
+    def probe(self):
+        sett, css = self.wanted()
+        if sett != read_file(hp_path("settings.yaml")) or css != read_file(hp_path("custom.css")):
+            return "todo"
+        if not Opt.dry and not State.ran("homepage-tabs"):
+            State.mark("homepage-tabs")          # already in place (a new machine): a later removal of the tabs is respected
+        return "done"
+
+    def run(self):
+        old_sett, old_css = read_file(hp_path("settings.yaml")), read_file(hp_path("custom.css"))
+        sett, css = self.wanted()
+        own = (Ctx.uid, Ctx.gid)
+        if Opt.dry:
+            out("      would add the tabs (HOME, LINKS), the group icons and the tab styles to the Homepage files")
+            return
+        if sett != old_sett:
+            write_file(hp_path("settings.yaml") + ".before-tabs", old_sett, 0o644, own)
+            write_file(hp_path("settings.yaml"), sett, 0o644, own)
+        if css != old_css:
+            write_file(hp_path("custom.css") + ".before-tabs", old_css, 0o644, own)
+            write_file(hp_path("custom.css"), css, 0o644, own)
+        State.mark("homepage-tabs")
+        if not FAKE and "homepage" in containers_all():
+            act(["docker", "restart", "homepage"], timeout=120)
+        out("      Reload the dashboard (Ctrl+Shift+R). The old files are saved as settings.yaml.before-tabs and custom.css.before-tabs")
+
+
 # ================================================================ AdGuard Home
 def adguard_yaml():
     """Contents of AdGuard Home's settings file."""
