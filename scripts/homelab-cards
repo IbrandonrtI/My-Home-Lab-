@@ -90,7 +90,7 @@ KNOWN_DESCRIPTIONS = {
     "radarr": "Movie manager", "lidarr": "Music manager", "readarr": "Book manager", "prowlarr": "Search indexer manager",
     "bazarr": "Subtitle manager", "jackett": "Torrent search indexer", "qbittorrent": "Torrent downloader",
     "transmission": "Torrent downloader", "deluge": "Torrent downloader", "sabnzbd": "Usenet downloader",
-    "navidrome": "Music streaming server", "audiobookshelf": "Audiobooks and podcasts", "kavita": "Book and comic reader",
+    "navidrome": "Spotify Music Player", "audiobookshelf": "Audiobooks and podcasts", "kavita": "Book and comic reader",
     "komga": "Comic and book server", "calibreweb": "Ebook library", "overseerr": "Media requests", "jellyseerr": "Media requests",
     "tautulli": "Plex statistics", "tubearchivist": "YouTube archive", "stash": "Media organiser", "tdarr": "Video converter",
     "grafana": "Dashboards and graphs", "prometheus": "Metrics database", "uptimekuma": "Uptime monitor", "glances": "System monitor",
@@ -312,7 +312,7 @@ def guess_section(c):
 def display_name(c):
     t = re.sub(r"[:#\[\]{},&*!|>'\"%@`]", "", c["labels"].get("org.opencontainers.image.title", "")).strip()
     if t and len(t) <= 30:
-        return t
+        return t[:1].upper() + t[1:]                    # an image that calls itself "navidrome" gets the card "Navidrome"
     return " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_.\s]+", c["name"]) if w)
 
 
