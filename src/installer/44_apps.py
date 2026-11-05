@@ -219,7 +219,7 @@ class AudioMusePlugin(Step):
                                   ("switch it on", ("plugin", "enable", AUDIOMUSE_PLUGIN_ID), {})):
             rc, txt = navidrome_cli(*args, timeout=120, **extra)
             if rc != 0:
-                raise Abort("Navidrome could not %s: %s\nThis plugin is made for a newer Navidrome than the one this lab runs. "
+                raise Abort("Navidrome could not %s: %s\nThe plugin and this Navidrome do not fit each other (the plugin is made for Navidrome 0.64). "
                             "`sudo homelab-setup audiomuse remove` takes it out again." % (what, txt.strip()[-300:]))
         docker("restart", "navidrome", timeout=120)
         wait_for(lambda: http("GET", url("navidrome", "/"), raw=True, timeout=10)[0] == 200, "Navidrome to answer", 120)
