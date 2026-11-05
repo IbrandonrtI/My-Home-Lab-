@@ -230,7 +230,7 @@ try:
         container("plainapp", "nobody/plainapp", lab.web(), project="stackname"),
         container("mydb", "postgres:16", p_db),
         container("stopped-thing", "lscr.io/linuxserver/sonarr", p_stopped, status="exited"),
-        container("navidrome", "ghcr.io/navidrome/navidrome:0.61.0", lab.web(), labels={"org.opencontainers.image.title": "navidrome"}),
+        container("navidrome", "ghcr.io/navidrome/navidrome:0.64.2", lab.web(), labels={"org.opencontainers.image.title": "navidrome"}),
     ])
     before_svc, before_css = lab.svc(), lab.css()
     rc, out = lab.run("sync", "--dry-run")
