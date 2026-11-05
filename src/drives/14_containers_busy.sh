@@ -1,0 +1,159 @@
+# ---------- containers ----------
+docker_ok() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
+
+containers_using() {   # containers_using PATH...  -> names of containers with a mount under any PATH
+  docker_ok || return 0
+  local name srcs src p
+  {
+    while IFS='|' read -r name srcs; do
+      for src in $srcs; do
+        for p in "$@"; do
+          case "$src" in
+            "$p"|"$p"/*) echo "${name#/}"; continue 3 ;;
+          esac
+        done
+      done
+    done < <(docker ps -aq | xargs -r docker inspect --format '{{.Name}}|{{range .Mounts}}{{.Source}} {{end}}' 2>/dev/null)
+  } | sort -u
+}
+
+stop_containers() {   # stop_containers PATH...
+  local list
+  list=$(containers_using "$@" | tr '\n' ' ')
+  [ -n "${list// /}" ] || { STOPPED=""; return 0; }
+  note "Stopping containers that use this storage: $list"
+  # shellcheck disable=SC2086
+  docker stop $list >/dev/null || warn "Some containers did not stop cleanly"
+  STOPPED=$list
+}
+
+sync_fs() {   # write out the data of just these drives (sync -f); a plain `sync` waits for every write on the whole computer and can take minutes on a busy one
+  sync -f "$@" 2>/dev/null || sync
+}
+
+# ---------- before anything is changed: is a backup or an upload running? is this only a dry run? ----------
+pool_devices() {   # the whole drives behind the pools (not the boot drive), one name per line
+  local src dsk
+  while read -r src; do
+    [[ "$src" == /dev/* ]] || continue
+    dsk=$(lsblk -no pkname "$src" 2>/dev/null | head -n 1)
+    printf '%s\n' "${dsk:-${src#/dev/}}"
+  done < <(findmnt -rn -o SOURCE,TARGET 2>/dev/null | awk -v d="$DISKS_DIR" 'index($2, d "/") == 1 {print $1}') | sort -u
+}
+
+sectors_written() {   # sectors written to the pool drives so far (field 7 of /sys/block/DEV/stat)
+  local d t=0 w
+  while read -r d; do
+    [ -n "$d" ] || continue
+    w=$(awk '{print $7}' "/sys/block/$d/stat" 2>/dev/null)
+    [[ "$w" =~ ^[0-9]+$ ]] && t=$((t + w))
+  done < <(pool_devices)
+  echo "$t"
+}
+
+busy_reason() {   # prints why it is a bad moment to stop the containers, or nothing
+  if [ "$TEST_MODE" = 1 ]; then   # test hooks: a fixed reason, or a file whose text is the reason while it exists
+    if [ -n "${DRIVES_BUSY:-}" ]; then [ "$DRIVES_BUSY" = none ] || echo "$DRIVES_BUSY"; return 0; fi
+    if [ -n "${DRIVES_BUSY_FILE:-}" ] && [ -s "$DRIVES_BUSY_FILE" ]; then cat "$DRIVES_BUSY_FILE"; return 0; fi
+    if [ -n "${DRIVES_BUSY_COUNT_FILE:-}" ] && [ -s "$DRIVES_BUSY_COUNT_FILE" ]; then   # busy for the next N checks, then free (no timing involved)
+      local left; left=$(cat "$DRIVES_BUSY_COUNT_FILE"); echo $(( left - 1 )) > "$DRIVES_BUSY_COUNT_FILE"
+      [ "$left" -gt 0 ] && { echo "a backup is running right now"; return 0; }
+    fi
+  fi
+  if [ -e "$BACKUP_LOCK" ] && ! ( exec 7<"$BACKUP_LOCK" && flock -n 7 ) 2>/dev/null; then
+    echo "a backup is running right now"; return 0
+  fi
+  [ "$TEST_MODE" = 1 ] && return 0
+  local a b secs=5
+  a=$(sectors_written); sleep "$secs"; b=$(sectors_written)
+  # more than about 300 KB per second written to the pool drives: files are coming in
+  if [ $(( (b - a) * 512 / secs )) -gt 300000 ]; then echo "files are being written to a storage pool (an upload?)"; fi
+  return 0
+}
+
+wait_text() {   # 21600 -> "6 hours", 90 -> "90 seconds"
+  if [ "$1" -ge 3600 ]; then echo "$(( $1 / 3600 )) hours"; else echo "$1 seconds"; fi
+}
+
+busy_gate() {   # called before the first change: when a backup or an upload runs, say so and wait for it (or stop)
+  local why waited=0
+  [ "$NOW" = 1 ] && return 0
+  why=$(busy_reason)
+  [ -n "$why" ] || return 0
+  if [ "$DRY_RUN" = 1 ]; then
+    note "Note: $why. A real run would wait for it to finish first (add --now to go on anyway)."
+    return 0
+  fi
+  warn "Not a good moment: $why. Stopping the containers now could cut it short."
+  yn "Wait until it finishes, then go on?" || die "Stopped because $why. Nothing was changed. (To go on anyway, add --now.)"
+  note "Waiting, checking every ${BUSY_POLL_SECS}s for up to $(wait_text "$BUSY_MAX_WAIT_SECS"). Nothing has been changed yet; Ctrl+C cancels."
+  while [ -n "$why" ]; do
+    [ "$waited" -lt "$BUSY_MAX_WAIT_SECS" ] || die "Still busy after $(wait_text "$BUSY_MAX_WAIT_SECS") ($why). Nothing was changed."
+    sleep "$BUSY_POLL_SECS"; waited=$((waited + BUSY_POLL_SECS))
+    why=$(busy_reason)
+    if [ -n "$why" ] && [ $((waited % 300)) -lt "$BUSY_POLL_SECS" ]; then note "  still waiting: $why"; fi
+  done
+  note "It finished. Going on."
+}
+
+dry_gate() {   # dry_gate STEP...: with --dry-run, list the steps, change nothing and return 0 (the caller then returns)
+  [ "$DRY_RUN" = 1 ] || return 1
+  local st i=1
+  say ""
+  say "DRY RUN: this is what would happen now."
+  for st in "$@"; do say "  $i. $st"; i=$((i + 1)); done
+  say "Nothing was changed. Run the same command without --dry-run to do it."
+  return 0
+}
+
+pre_change() {   # pre_change STEP...: the last stop before the first change. 0 = this was a dry run, so the caller returns
+  busy_gate
+  dry_gate "$@"
+}
+
+start_containers() {
+  [ -n "${STOPPED// /}" ] || return 0
+  local n failed=""
+  note "Starting containers: $STOPPED"
+  for n in $STOPPED; do docker start "$n" >/dev/null || failed="$failed $n"; done
+  STOPPED=""
+  if [ -n "${failed// /}" ]; then
+    START_FAILED="$START_FAILED$failed"
+    warn "These containers did not start:$failed"
+    note "Start them again with:  sudo docker start$failed"
+  fi
+}
+
+main_pool_ok() {   # true when the main storage is mounted the way fstab says (or it is not set up at all)
+  [ -n "$(branches_of main)" ] || pool_in_fstab "$MAIN_POOL" || return 0
+  mountpoint -q "$MAIN_POOL"
+}
+
+restore_services() {   # a step failed after the containers were stopped: when the old setup is back, mount it and start them again
+  [ -n "${STOPPED// /}" ] && [ "$ROLLED_BACK" = 1 ] || return 0
+  local role mp
+  for role in main backup; do
+    [ -n "$(branches_of "$role")" ] || continue
+    for mp in $(branches_of "$role"); do mountpoint -q "$mp" || mount_fstab "$mp" 2>/dev/null; done
+    mountpoint -q "$(role_pool "$role")" || mount_fstab "$(role_pool "$role")" 2>/dev/null
+  done
+  if main_pool_ok; then
+    note "The old setup is back in place. Starting the containers again."
+    start_containers
+  fi
+}
+
+on_exit() {
+  if [ -n "${STOPPED// /}" ]; then
+    note ""
+    note "The containers ($STOPPED) are still STOPPED because something went wrong."
+    note "${HOLD_HINT:-Fix the problem, then run:  sudo hdd-recover}"
+  fi
+  if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
+  [ -n "${BALANCE_TMP:-}" ] && rm -rf "$BALANCE_TMP"
+  [ -n "${SETTINGS_SNAP:-}" ] && rm -f "$SETTINGS_SNAP"
+  [ -n "${NAME_CACHE:-}" ] && rm -rf "$NAME_CACHE"
+  return 0
+}
+trap on_exit EXIT
+
