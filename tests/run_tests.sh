@@ -1033,6 +1033,16 @@ hls refresh > $SIM_DIR/s40j.out 2>&1
 ok "S40 a second refresh leaves the tab order alone" 'cmp -s $HP40/settings.yaml $SIM_DIR/s40set.keep'
 hls verify > $SIM_DIR/s40sys.out 2>&1
 ok "S40 the System check counts Navidrome as a container and lists it under the other services" 'grep -Eq "Containers: ([0-9]+) of \1 running" $SIM_DIR/s40sys.out && grep -q "Other services" $SIM_DIR/s40sys.out && grep -Eq "Navidrome +http://[^ ]+:4533" $SIM_DIR/s40sys.out'
+# Last.fm key: `homelab-setup lastfm` saves it root-only and deploys Navidrome again with it; a wrong key saves nothing; `lastfm remove` takes it out
+LFK=0123456789abcdef0123456789abcdef; LFS=fedcba9876543210fedcba9876543210
+printf '%s\n' "not-a-key" "also-not" | hls lastfm > $SIM_DIR/s40lf1.out 2>&1
+ok "S40 a wrong Last.fm key is refused and nothing is saved" 'grep -q "does not look like a Last.fm key" $SIM_DIR/s40lf1.out && ! grep -q LASTFM $HLS_ROOT/root/.homelab-setup/secrets.env'
+printf '%s\n' "$LFK" "$LFS" | hls lastfm > $SIM_DIR/s40lf2.out 2>&1
+ok "S40 the Last.fm key is saved in the root-only secrets file" 'grep -q "^LASTFM_APIKEY=$LFK" $HLS_ROOT/root/.homelab-setup/secrets.env && grep -q "^LASTFM_SECRET=$LFS" $HLS_ROOT/root/.homelab-setup/secrets.env && [ "$(stat -c %a $HLS_ROOT/root/.homelab-setup/secrets.env)" = 600 ]'
+ok "S40 Navidrome was deployed again with the key, and the secret is not printed" '[ "$(wj "w[\"stack_env\"][\"navidrome\"][\"LASTFM_APIKEY\"]")" = "$LFK" ] && [ "$(wj "w[\"stack_env\"][\"navidrome\"][\"LASTFM_SECRET\"]")" = "$LFS" ] && ! grep -q "$LFS" $SIM_DIR/s40lf2.out'
+ok "S40 the Navidrome stack file passes the two Last.fm settings on" 'grep -q "ND_LASTFM_APIKEY: \"\${LASTFM_APIKEY:-}\"" $SIMDIR/../stacks/navidrome.yaml && grep -q "ND_LASTFM_SECRET" $SIMDIR/../stacks/navidrome.yaml'
+hls lastfm remove > $SIM_DIR/s40lf3.out 2>&1
+ok "S40 lastfm remove takes the key out and deploys Navidrome without it" '! grep -q LASTFM $HLS_ROOT/root/.homelab-setup/secrets.env && [ -z "$(wj "w[\"stack_env\"][\"navidrome\"][\"LASTFM_APIKEY\"]")" ]'
 # renamed commands: copies of the old names left by an earlier install are removed, the new names are installed
 ok "S40 the repository check is installed as homelab-repocheck and no retired command is on the machine" '[ -x $HLS_ROOT/usr/local/bin/homelab-repocheck ] && [ ! -e $HLS_ROOT/usr/local/bin/homelab-check ] && [ ! -e $HLS_ROOT/usr/local/bin/hdd-recover ]'
 printf '#!/bin/sh\n' > $HLS_ROOT/usr/local/bin/hdd-recover; printf '#!/bin/sh\n' > $HLS_ROOT/usr/local/bin/homelab-check

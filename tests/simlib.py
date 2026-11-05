@@ -85,6 +85,7 @@ def deploy_stack(w, name, text, env):
     """Pretend to be docker compose behind Portainer. Returns (ok, message)."""
     import yaml
     envd = {e["name"]: e["value"] for e in env}
+    w.setdefault("stack_env", {})[name] = envd
     for old in OLD_VALUES:
         if old in text:
             return False, "the stack file still contains a value from the original server: %s" % old
