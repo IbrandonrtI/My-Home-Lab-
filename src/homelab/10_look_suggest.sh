@@ -1,4 +1,5 @@
-term_cols() { local c; c=$(stty size 2>/dev/null </dev/tty | cut -d" " -f2); [[ "$c" =~ ^[0-9]+$ ]] || c=$(tput cols 2>/dev/null); [[ "$c" =~ ^[0-9]+$ ]] || c=${COLUMNS:-80}; [[ "$c" =~ ^[0-9]+$ ]] || c=80; [ "$c" -lt 40 ] && c=40; echo "$c"; }
+# The terminal is only asked when one is there (stdin or stderr is a terminal): inside a script or a self-test it can hang.
+term_cols() { local c=""; if [ -t 0 ] || [ -t 2 ]; then c=$(stty size 2>/dev/null </dev/tty | cut -d" " -f2); [[ "$c" =~ ^[0-9]+$ ]] || c=$(tput cols 2>/dev/null); fi; [[ "$c" =~ ^[0-9]+$ ]] || c=${COLUMNS:-80}; [[ "$c" =~ ^[0-9]+$ ]] || c=80; [ "$c" -lt 40 ] && c=40; echo "$c"; }
 
 rule() {   # rule "Title": a spaced section heading with a thin line
   local cols w t="$1" n pad
