@@ -8,6 +8,8 @@
 # Look:    the Spotify-ish theme is the default for a browser that has not chosen one (each person can still pick another in Navidrome's settings).
 # Frame:   the frame header is relaxed so the dashboard can show the player in a card (see the Navidrome Player card of the dashboard).
 #          Navidrome is only on your own network (and your Tailscale), so this is safe. To undo it, set it back to DENY and delete the player card.
+# Last.fm: the two LASTFM variables hold your own free Last.fm key (sudo homelab-setup lastfm saves them). With them Navidrome suggests
+#          similar songs and artists (Instant Mix); empty means Last.fm is not used.
 services:
   navidrome:
     image: ghcr.io/navidrome/navidrome:0.61.0
@@ -22,6 +24,8 @@ services:
       ND_SESSIONTIMEOUT: 24h
       ND_DEFAULTTHEME: "Spotify-ish"
       ND_HTTPHEADERS_FRAMEOPTIONS: "ALLOWALL"
+      ND_LASTFM_APIKEY: "${LASTFM_APIKEY:-}"
+      ND_LASTFM_SECRET: "${LASTFM_SECRET:-}"
     volumes:
       - /home/your-username/navidrome:/data
       - /mnt/storage/music:/music:ro
