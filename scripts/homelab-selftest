@@ -65,8 +65,6 @@ info() { N_INFO=$((N_INFO + 1)); emit "  info  $*"; }
 warn() { N_WARN=$((N_WARN + 1)); emit "  WARN  $*"; ISSUES+=("WARN  $*"); }
 fail() { N_FAIL=$((N_FAIL + 1)); emit "  FAIL  $*"; ISSUES+=("FAIL  $*"); }
 
-as_user() { sudo -u "$REAL_USER" -H "$@"; }
-
 # ---------------------------------------------------------------- part 1: every command
 run_cmd() {   # run_cmd LABEL SECONDS user|root ALLOWED_EXIT_CODES -- command...
   local label=$1 secs=$2 who=$3 allowed=$4 out rc start elapsed errwords

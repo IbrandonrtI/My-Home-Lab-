@@ -12,7 +12,7 @@ It only reads files. It never changes anything and needs no sudo.
 What it checks:
   - line endings: Windows line endings (CRLF) in scripts, YAML, Markdown and text files
   - scripts (scripts/): syntax (bash -n) and shellcheck if it is installed
-  - the installer: installer/homelab-setup compiles, and (with src/ present) is the exact join of src/p0*.py
+  - the installer: installer/homelab-setup compiles, and (with src/ present) is the exact join of its pieces in src/installer/
   - YAML: every .yaml/.yml file, and every yaml code block in the Markdown files
   - Markdown (README.md, INSTALL.md and docs/**): balanced code fences, links to headings (#...),
     links to files and images (relative to the file that contains them), links between the guides, bash code blocks (bash -n)
@@ -320,15 +320,41 @@ def check_installer(root, r):
         r.error("installer", "installer/homelab-setup does not compile: %s" % (res.stderr.strip().splitlines() or ["error"])[-1])
         return
     r.ok("installer", "installer/homelab-setup compiles")
-    parts = sorted(f for f in os.listdir(os.path.join(root, "src"))) if os.path.isdir(os.path.join(root, "src")) else []
-    parts = [f for f in parts if re.match(r"^p\d\d_.*\.py$", f)]
-    if not parts:
-        return
-    joined = b"".join(read_text(os.path.join(root, "src", f)) for f in parts)
-    if joined != read_text(prog):
-        r.error("installer", "installer/homelab-setup is not the join of src/p*.py. Rebuild it with: bash tools/build.sh")
-    else:
-        r.ok("installer", "installer/homelab-setup is exactly the join of the %d files in src/" % len(parts))
+    check_built_files(root, r)
+
+
+# built file -> (folder of its pieces in src/, extension of the pieces): the same list as TARGETS in tools/build.py
+BUILT_FILES = [("installer/homelab-setup", "src/installer", "py"), ("scripts/drives", "src/drives", "sh"),
+               ("scripts/homelab", "src/homelab", "sh"), ("scripts/homelab-update", "src/homelab-update", "sh")]
+
+
+def joined_pieces(folder, ext):
+    """The pieces of a src/ folder joined in file-name order, with the `@@include NAME@@` lines filled in (what tools/build.py makes)."""
+    names = sorted(f for f in os.listdir(folder) if re.match(r"^\d\d_.*\.%s$" % ext, f))
+    out = b""
+    for n in names:
+        part = read_text(os.path.join(folder, n))
+        out += re.sub(rb"(?m)^@@include (\S+)@@\n", lambda m: read_text(os.path.join(folder, m.group(1).decode())), part)
+    return out, len(names)
+
+
+def check_built_files(root, r):
+    """Every built file (installer and big scripts) must be exactly the join of its pieces in src/, so nobody edited only one side."""
+    src_dir = os.path.join(root, "src")
+    old = sorted(f for f in os.listdir(src_dir) if re.match(r"^p\d\d_.*\.py$", f)) if os.path.isdir(src_dir) else []
+    if old:
+        r.warn("installer", "src/ still holds the old installer pieces (%s ...). The pieces are in src/installer/ now: delete the old ones." % old[0])
+    for built, folder, ext in BUILT_FILES:
+        path, src = os.path.join(root, built), os.path.join(root, folder)
+        if not os.path.isfile(path) or not os.path.isdir(src):
+            continue
+        joined, n = joined_pieces(src, ext)
+        if not n:
+            continue
+        if joined != read_text(path):
+            r.error("installer", "%s is not the join of the files in %s. Rebuild it with: bash tools/build.sh" % (built, folder))
+        else:
+            r.ok("installer", "%s is exactly the join of the %d files in %s" % (built, n, folder))
 
 
 def check_secrets(root, files, r):

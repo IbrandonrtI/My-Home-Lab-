@@ -467,7 +467,7 @@ def number(s, what, lo=0, hi=100):
     try:
         n = int(s)
     except ValueError:
-        raise Fail("%s must be a whole number from %d to %d." % (what, lo, hi))
+        raise Fail("%s must be a whole number from %d to %d." % (what, lo, hi)) from None
     if not lo <= n <= hi:
         raise Fail("%s must be from %d to %d." % (what, lo, hi))
     return n
@@ -763,7 +763,7 @@ def theme_cards_cmd(words):
                 parse_color(color, COLORS, "card")
             except Fail:
                 if find_service(color, quiet=True):
-                    raise Fail("Which colour? For example:  homelab theme cards %s blue" % color)
+                    raise Fail("Which colour? For example:  homelab theme cards %s blue" % color) from None
                 raise
         if color.lower() in DEFAULT_WORDS:
             raise Fail("To put every card back to the shipped look, use:  homelab theme reset")
@@ -1103,7 +1103,7 @@ def marks_add(name, url, extra):
     if target:
         group = target[0]
     for g in groups:
-        for n, s, e in g[1]:
+        for n, _s, _e in g[1]:
             if n.lower() == name.lower() and g is target:
                 raise Fail("A bookmark named '%s' is already in '%s'. Remove it first:  homelab bookmark remove \"%s\" \"%s\"" % (n, g[0], n, g[0]))
     if icon is None:
