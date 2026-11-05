@@ -263,11 +263,14 @@ def added_services():
         managed = json.loads(read_file(PROGRESS_DIR + "/cards.json") or "{}").get("managed", {})
         for container, m in managed.items():
             if m.get("hostport"):
-                found[container] = (m.get("name") or container, container, int(m["hostport"]), int(m.get("serve") or 0))
+                label = NAVIDROME_TITLE if container == "navidrome" else (m.get("name") or container)
+                found[container] = (label, container, int(m["hostport"]), int(m.get("serve") or 0))
     except (ValueError, AttributeError, TypeError):
         pass                                                  # an unreadable list only means "nothing added"
     if navidrome_wanted() and "navidrome" not in found:
         found["navidrome"] = ("Navidrome", "navidrome", PORTS["navidrome"], 0)
+    if "navidrome" in found:                                  # the card is called Navidrome, whatever the saved list says
+        found["navidrome"] = ("Navidrome",) + found["navidrome"][1:]
     return sorted(found.values(), key=lambda x: x[0].lower())
 
 
