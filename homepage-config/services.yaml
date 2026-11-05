@@ -10,7 +10,7 @@
           type: tailscale
           deviceid: your-own-key
           key: your-own-key
-          
+
     - AdGuard Home:
         id: adguard-card
         href: https://pc.your-tailnet.ts.net:1004
@@ -35,7 +35,7 @@
           version: 2
           key: your-own-key
           bitratePrecision: 2
-          
+
 - Monitoring & Management:
 
     - Portainer:
@@ -49,7 +49,7 @@
           url: http://192.168.X.X:9000
           env: 3
           key: your-own-key
-          
+
     - Beszel:
         id: beszel-card
         href: https://pc.your-tailnet.ts.net:1003
@@ -98,7 +98,7 @@
           url: http://192.168.X.X:8082
           key: your-own-key
           fields: ["freespace", "activeusers", "numfiles", "numshares"]
-          
+
     - FileBrowser:
         id: filebrowser-card
         href: https://pc.your-tailnet.ts.net:1006
@@ -111,7 +111,6 @@
           username: Brandon
           password: your-own-key
 
-    #- Media & Entertainment
 
 # >>> homelab stats >>>
 # The STATS tab. Every number comes from one small file, stats.json, that the command homelab-stats rewrites every 15 minutes

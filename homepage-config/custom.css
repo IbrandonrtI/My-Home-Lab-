@@ -15,14 +15,14 @@
 
 /* ================================================================ 1. Settings */
 :root {
-  
-  --d-pill-height: 80px;    
-  --d-pool-width: 200px;    
-  --d-search-top: 100px;    
-  --d-search-space: 110px;  
 
-  --m-gap: 12px;           
-  --m-search-top: 12px;     
+  --d-pill-height: 80px;
+  --d-pool-width: 200px;
+  --d-search-top: 100px;
+  --d-search-space: 110px;
+
+  --m-gap: 12px;
+  --m-search-top: 12px;
   --m-search-bottom: 8px;
   --m-search-pad: 10px;
 
@@ -45,7 +45,7 @@ div[id$="-card"] > div {
   isolation: isolate !important;
 }
 
-#adguard-card, #tailscale-card, #beszel-card, #portainer-card, 
+#adguard-card, #tailscale-card, #beszel-card, #portainer-card,
 #filebrowser-card, #speedtest-card, #immich-card, #nextcloud-card,
 #netdata-card {
   position: relative !important;
@@ -84,7 +84,7 @@ div[id$="-card"] > div {
 #netdata-card     { --accent: 0,   171, 68;   }   /* Netdata Green */
 /* Soft corner glow */
 #adguard-card::before, #tailscale-card::before, #beszel-card::before,
-#portainer-card::before, #filebrowser-card::before, #speedtest-card::before, 
+#portainer-card::before, #filebrowser-card::before, #speedtest-card::before,
 #immich-card::before, #nextcloud-card::before, #netdata-card::before {
   content: "";
   position: absolute;
@@ -97,7 +97,7 @@ div[id$="-card"] > div {
 
 /* Thin accent rail on the left edge */
 #adguard-card::after, #tailscale-card::after, #beszel-card::after,
-#portainer-card::after, #filebrowser-card::after, #speedtest-card::after, 
+#portainer-card::after, #filebrowser-card::after, #speedtest-card::after,
 #immich-card::after, #nextcloud-card::after, #netdata-card::after {
   content: "";
   position: absolute;
