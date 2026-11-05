@@ -6,7 +6,7 @@
 #   sudo homelab-selftest --builds    also build every ready-made setup on FAKE drives (about 10 minutes, Part 4)
 #   homelab-selftest version
 #
-# It only reads. It never starts, stops or changes anything: hdd-recover, homelab-backup, drives release,
+# It only reads. It never starts, stops or changes anything: drives remount, homelab-backup, drives release,
 # restores and every other command that changes the machine are NOT run. Part 1 runs each command and notes
 # the exit code, the time it took and error words in its output. Part 2 checks the state of the machine:
 # the pools, Docker, the containers, the web pages, the schedule, leftovers from an earlier install, and so on.
@@ -129,13 +129,13 @@ part_commands() {
     info "homelab-update check was not run (it uses the internet). Add --online to include it."
   fi
   local repo; repo=$(repo_dir)
-  if [ -n "$repo" ] && command -v homelab-check >/dev/null 2>&1; then
-    run_cmd "homelab-check (the repo copy)" 120 user "0" -- homelab-check "$repo"
+  if [ -n "$repo" ] && command -v homelab-repocheck >/dev/null 2>&1; then
+    run_cmd "homelab-repocheck (the repo copy)" 120 user "0" -- homelab-repocheck "$repo"
   else
-    info "homelab-check was not run (no repository folder in $REAL_HOME)"
+    info "homelab-repocheck was not run (no repository folder in $REAL_HOME)"
   fi
   local f
-  for f in hdd-recover homelab-backup homelab-restore-configs; do
+  for f in homelab-backup homelab-restore-configs; do
     if command -v "$f" >/dev/null 2>&1; then
       if bash -n "$(command -v "$f")" 2>/dev/null; then ok "$f is installed and has no syntax errors (not run: it changes things)"
       else fail "$f has a syntax error"; fi
@@ -163,7 +163,7 @@ same_as_repo() {   # same_as_repo REPO_COPY INSTALLED_COPY: true when they are t
 check_scripts_vs_repo() {
   local f installed repo; repo=$(repo_dir)
   if [ -z "$repo" ]; then info "no repository folder in $REAL_HOME, so the installed scripts were not compared with it"; return; fi
-  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-cards hdd-recover homelab homelab-check; do
+  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-cards homelab homelab-repocheck; do
     installed=$(command -v "$f" 2>/dev/null) || continue
     # the installer puts this machine's user name into its copy, so a plain byte comparison is not enough
     if same_as_repo "$repo/scripts/$f" "$installed"; then continue; fi
@@ -350,7 +350,7 @@ PY
     info "no secrets file (this machine was not built by the installer)"
   fi
   if [ -f "$REAL_HOME/homepage-config/services.yaml" ] && [ "$(stat -c %U "$REAL_HOME/homepage-config/services.yaml")" != "$REAL_USER" ]; then warn "the Homepage config files are not owned by $REAL_USER"; fi
-  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-cards homelab-setup hdd-recover homelab; do
+  for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-cards homelab-setup homelab; do
     p=$(command -v "$f" 2>/dev/null) || continue
     [ -x "$p" ] || fail "$p is not executable"
     if grep -q $'\r' "$p" 2>/dev/null; then fail "$p has Windows line endings"; fi

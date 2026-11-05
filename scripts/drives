@@ -831,7 +831,7 @@ on_exit() {
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
-    note "${HOLD_HINT:-Fix the problem, then run:  sudo hdd-recover}"
+    note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
   [ -n "${BALANCE_TMP:-}" ] && rm -rf "$BALANCE_TMP"
@@ -1210,7 +1210,7 @@ adopt_flow() {
   array_guard || return 1
   need_tools || return 1
   [ -z "$(branches_of main)" ] || { note "A main pool already exists. Nothing to convert."; return 1; }
-  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Plug the drive in, run sudo hdd-recover, then try again."; return 1; }
+  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Plug the drive in, run sudo drives remount, then try again."; return 1; }
   local src fst uuid part label cur before after pool="$MAIN_POOL" mp
   src=$(findmnt -no SOURCE "$pool"); fst=$(findmnt -no FSTYPE "$pool")
   [ "$fst" = ext4 ] || { note "$pool is $fst, not a plain ext4 drive. Cannot convert."; return 1; }
@@ -1312,14 +1312,14 @@ status_flow() {
         printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" \
           "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "-" "connected (used last)"
       else
-        printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" "-" "-" "-" "NOT MOUNTED (try: sudo hdd-recover)"
+        printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" "-" "-" "-" "NOT MOUNTED (try: sudo drives remount)"
       fi
     elif [ -n "$p" ] && mountpoint -q "$mp"; then
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "$p" \
         "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" \
         "$(smart_health "$(disk_of_part "$p")")" "connected"
     else
-      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)"
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo drives remount. Dead? sudo drives replace)"
     fi
   done
   for mp in $(parity_mounts); do
@@ -1328,7 +1328,7 @@ status_flow() {
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "$p" \
         "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "$(smart_health "$(disk_of_part "$p")")" "connected (SnapRAID protection)"
     else
-      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover)"
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "-" "-" "-" "-" "MISSING (cable? then: sudo drives remount)"
     fi
   done
   if array_active; then
@@ -1376,12 +1376,12 @@ status_flow() {
   say ""
 }
 
-# ---------- recover ----------
-recover_flow() {
+# ---------- remount (after an unplug or a power cut) ----------
+remount_flow() {
   array_guard || return 1
   local mp fail=0
   if [ -z "$(all_branches)" ] && ! pool_in_fstab "$MAIN_POOL" && ! pool_in_fstab "$BACKUP_POOL"; then
-    note "No drive is assigned to a pool, so there is nothing to recover."
+    note "No drive is assigned to a pool, so there is nothing to remount."
     note "Choose the drives first:  sudo drives"
     return 1
   fi
@@ -1411,7 +1411,7 @@ recover_flow() {
     mount_fstab "$BACKUP_POOL" || warn "The backup pool did not mount."
   fi
   if [ "$fail" = 1 ]; then
-    HOLD_HINT="They stay stopped on purpose: with a main drive missing they would write to an incomplete storage. Plug the drive in and run  sudo hdd-recover  again. If it is dead:  sudo drives replace"
+    HOLD_HINT="They stay stopped on purpose: with a main drive missing they would write to an incomplete storage. Plug the drive in and run  sudo drives remount  again. If it is dead:  sudo drives replace"
     return 1
   fi
   # main storage: the pool, or the plain drive before it is converted
@@ -1514,7 +1514,7 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
                "Copy the $n missing files ($(human "$bytes")) from the backup into the main storage. Files already there are never overwritten." \
                "Check that every file is there, then start the containers again." && return 0
     stop_containers "$MAIN_POOL"
-    HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo hdd-recover  to start them without restoring."
+    HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo drives remount  to start them without restoring."
   fi
   say "Copying (the services stay stopped)..."
   local prog=--info=stats1
@@ -1550,7 +1550,7 @@ after_restore_hints() {
 
 restore_flow() {   # restore only the missing files from the backup into the main pool
   need_tools || return 1
-  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive and run sudo hdd-recover first."; return 1; }
+  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive and run sudo drives remount first."; return 1; }
   local src
   src=$(find_backup_source) || { note "No backup copy of the main storage was found, so there is nothing to restore from."; return 1; }
   show_backup_source "$src" || { say "Cancelled."; return 1; }
@@ -1572,7 +1572,7 @@ replace_flow() {
   done
   if [ ${#miss[@]} -eq 0 ]; then
     say "No pool drive is missing, so there is nothing to replace."
-    say "  - A drive that was only unplugged: plug it in and run  sudo hdd-recover"
+    say "  - A drive that was only unplugged: plug it in and run  sudo drives remount"
     say "  - A working drive you want to swap: use  sudo drives  > Add or remove drives > Disconnect, then Connect"
     return 1
   fi
@@ -1801,7 +1801,7 @@ pool_reconfigure() {   # pool_reconfigure main|backup: the saved policy, order o
     return 1
   fi
   fstab_set_pool "$role"; sd_reload
-  say "The change is saved. It takes effect after the next restart (or: sudo hdd-recover)."
+  say "The change is saved. It takes effect after the next restart (or: sudo drives remount)."
   return 0
 }
 
@@ -1923,7 +1923,7 @@ limit_flow() {   # how much free space a pool drive keeps before the pool uses t
   local mp role label size cur new parsed
   mp=$(pick_branch "Which drive do you want to set the free-space limit for? ") || return 1
   role=$(branch_role "$mp"); label=$(basename "$mp")
-  if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo hdd-recover). Nothing was changed."; return 1; fi
+  if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo drives remount). Nothing was changed."; return 1; fi
   size=$(total_bytes "$mp")
   say ""
   say "$(branch_name "$mp") is $(human "$size"). It keeps this much free before the $role storage uses the next drive: $(limit_text "$mp")"
@@ -2211,7 +2211,7 @@ balance_main() {
   pool=$(role_pool "$role")
   for mp in $(branches_of "$role"); do
     is_boot_section "$mp" && continue
-    if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo hdd-recover). Nothing was changed."; return 1; fi
+    if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo drives remount). Nothing was changed."; return 1; fi
     mps+=("$mp")
   done
   say ""
@@ -2340,7 +2340,7 @@ resize_flow() {
   fi
   if [ ${#roles[@]} -eq 1 ]; then role=${roles[0]}; else idx=$(choose "Which boot drive section? " "${items[@]}") || return 1; role=${roles[$idx]}; fi
   mp=$(boot_section_of "$role"); img=$(boot_image_of "$mp"); pool=$(role_pool "$role")
-  if [ ! -f "$img" ] || ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not mounted. Run  sudo hdd-recover  first. Nothing was changed."; return 1; fi
+  if [ ! -f "$img" ] || ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not mounted. Run  sudo drives remount  first. Nothing was changed."; return 1; fi
   cur=$(stat -c %s "$img"); used=$(used_bytes "$mp")
   keep=$BOOT_KEEP_FREE_BYTES; min=$BOOT_MIN_BYTES
   free=$(( $(boot_free_bytes) + cur ))
@@ -2403,8 +2403,8 @@ resize_flow() {
     if ! resize2fs "$img" >/dev/null 2>&1; then truncate -s "$cur" "$img"; back; die "Growing the file system failed. The section has its old size again."; fi
   fi
   e2fsck -fn "$img" >/dev/null 2>&1 || warn "The check after the change reports problems. Run: sudo drives check --full"
-  if ! mount_fstab "$mp"; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not mount the section again. Run  sudo hdd-recover"; fi
-  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role storage again. Run  sudo hdd-recover"; fi
+  if ! mount_fstab "$mp"; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not mount the section again. Run  sudo drives remount"; fi
+  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role storage again. Run  sudo drives remount"; fi
   after_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l)
   start_containers
   name_store_put "$(basename "$mp")" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
@@ -2721,7 +2721,7 @@ sync_filebrowser() {
 # The first screen has three groups so it stays short; each group opens its own small menu.
 #   1) Show status
 #   2) Add or remove drives      connect, disconnect, move, boot drive section, take all out
-#   3) Fix a problem             recover after an unplug, replace a dead drive, copy back missing files
+#   3) Fix a problem             remount after an unplug, replace a dead drive, copy back missing files
 #   4) Settings and upgrades     power settings, fill order, convert the old single data drive
 ask_choice() { ask "Type a number and press Enter: "; }
 
@@ -2791,16 +2791,16 @@ problem_menu() {
   while :; do
     say ""
     say "Fix a problem"
-    say "  1) Recover after an unplug or power cut (same as hdd-recover)"
+    say "  1) Mount the drives again after an unplug or power cut"
     say "  2) Replace a dead drive (restores the missing files from the backup)"
     say "  3) Copy back only the files that are missing from the backup"
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
-      1) intro_ask "Recover after an unplug or power cut" \
+      1) intro_ask "Mount the drives again after an unplug or power cut" \
            "The services that use the storage are stopped, the drives are mounted again and the services start again." \
            "No files are changed. It takes about a minute." &&
-         { recover_flow && sync_filebrowser; } ;;
+         { remount_flow && sync_filebrowser; } ;;
       2) intro "Replace a dead drive" \
            "Next I list the pool drives that cannot be found and you pick the dead one." \
            "Then you pick the new drive. The missing files are copied back from the backup." \
@@ -4099,7 +4099,7 @@ health_flow() {
 
 check_findings() {   # check_findings MOUNTPOINT -> lines "LEVEL US text" (OK, WARN or PROBLEM) about one pool drive
   local mp=$1 part dev opts info st errs first sd h pe re base n total used
-  if ! mountpoint -q "$mp"; then printf '%s\n' "PROBLEM${US}it is not connected or not mounted (check the cable, then: sudo hdd-recover)"; return 0; fi
+  if ! mountpoint -q "$mp"; then printf '%s\n' "PROBLEM${US}it is not connected or not mounted (check the cable, then: sudo drives remount)"; return 0; fi
   part=$(branch_part "$mp")
   opts=$(findmnt -no OPTIONS "$mp" 2>/dev/null)
   if [[ ",$opts," == *,ro,* ]]; then printf '%s\n' "PROBLEM${US}it is mounted read-only: it hit an error and the system stopped writing to it"; fi
@@ -4204,8 +4204,8 @@ check_full_flow() {   # a full read-only scan of one drive: it is taken offline 
   fi
   say "Scanning $part (read-only)..."
   e2fsck -fn "$part" || rc=$?
-  mount_fstab "$mp" || die "Could not mount $name again. Run  sudo hdd-recover"
-  mount_fstab "$pool" || die "Could not mount the $role storage again. Run  sudo hdd-recover"
+  mount_fstab "$mp" || die "Could not mount $name again. Run  sudo drives remount"
+  mount_fstab "$pool" || die "Could not mount the $role storage again. Run  sudo drives remount"
   start_containers
   say ""
   if [ "$rc" = 0 ]; then
@@ -4267,7 +4267,7 @@ Change the drives:
   spare         add a hot spare drive to a ZFS or RAID array (it takes over by itself when a drive dies)
   cache         add an SSD read cache to a ZFS array
   release       take every drive out of the pools (the files stay on the drives)
-  recover       after an unplug or a power cut: mount the drives and start the containers again
+  remount       after an unplug or a power cut: mount the drives and start the containers again
   replace       a drive died: put a new one in its place and copy the files back from the backup
   restore       copy only the missing files back from the backup
   fillorder     how a pool picks a drive for a new file (one at a time or spread) and which drive goes first
@@ -4388,8 +4388,8 @@ sudo drives release [--dry-run] [--yes] [--now]
   Try it first with --dry-run.
 EOF
     ;;
-    recover) cat <<'EOF'
-sudo drives recover [--dry-run] [--now]      (the same as sudo hdd-recover)
+    remount) cat <<'EOF'
+sudo drives remount [--dry-run] [--now]
   After an unplug or a power cut: stops the containers, mounts every drive and pool again, applies the power settings
   and starts the containers. When a main drive is missing the containers stay stopped on purpose.
 EOF
@@ -4628,7 +4628,7 @@ main() {
     move)         run_changing move_flow ;;
     adopt)        run_changing adopt_flow ;;
     power)        power_all ;;
-    recover)      run_changing recover_flow ;;
+    remount)      run_changing remount_flow ;;
     replace)      run_changing replace_flow ;;
     fillorder|reorder|priority) fillorder_flow ;;
     balance|rebalance) run_changing balance_flow ;;
@@ -4651,6 +4651,7 @@ main() {
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;
+    recover) note "'recover' is now called:  sudo drives remount"; exit 1 ;;
     *) note "Unknown command: $1"; note ""; usage_text >&2; exit 1 ;;
   esac
 }

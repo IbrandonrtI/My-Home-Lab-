@@ -215,7 +215,7 @@ commands() {
   cmd "sudo drives check"              "scan the pool drives for file system errors (changes nothing)"
   cmd "sudo drives health"             "SMART health, temperature and wear of every drive"
   cmd "homelab status"                 "a quick look at everything (the login screen, live)"
-  cmd "homelab-check ~/My-Home-Lab-"   "the repository files only, before an upload (not the server)"
+  cmd "homelab-repocheck ~/My-Home-Lab-" "the repository files only, before an upload (not the server)"
   cmd "sudo homelab-selftest"          "the big check of the whole lab (report saved in ~)"
   cmd "sudo homelab-setup verify"      "does every container and service answer?"
   section "Drives: the main ones"
@@ -224,7 +224,7 @@ commands() {
   cmd "sudo drives connect"            "add a new drive to the main or backup storage (asks before erasing)"
   cmd "sudo drives disconnect"         "take a drive out of a storage, copying its files to the others first"
   cmd "sudo drives list"               "one line per drive: name, size, pool, state"
-  cmd "sudo drives recover"            "after an unplug or power cut: remount, restart containers"
+  cmd "sudo drives remount"            "after an unplug or power cut: remount, restart containers"
   cmd "sudo drives replace"            "a drive died: swap it, restore the files from the backup"
   cmd "sudo drives usage"              "space used and free, per drive and per pool"
   cmd "sudo drives wizard"             "suggest a ready-made setup (drives with files too)"
@@ -1473,8 +1473,8 @@ pool_lines() {
     warn "Main pool" "no data drive set up yet (when you have one: sudo drives)"
     suggest 5 "sudo drives" "connect a data drive (a menu; it asks before erasing anything)"
   else
-    bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo hdd-recover (drive dead? sudo drives replace)"
-    suggest 1 "sudo hdd-recover" "the data drive is not mounted: remount it and restart the containers"
+    bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo drives remount (drive dead? sudo drives replace)"
+    suggest 1 "sudo drives remount" "the data drive is not mounted: remount it and restart the containers"
   fi
 
   # backup pool
@@ -1816,7 +1816,7 @@ did_you_mean() {   # a word that is not a homelab option: point to the command t
     pull|install)                      c="homelab upgrade";                    why="download the newest lab files from GitHub and put them on this server" ;;
     check|test|health|verify)          c="sudo homelab-selftest";              why="the big check of the whole lab. Which check fits? see: homelab commands" ;;
     restore)                           c="sudo homelab-restore-configs check"; why="preview restoring the saved settings after a rebuild" ;;
-    recover|remount|mount)             c="sudo drives recover";                why="after an unplug or power cut: remount the drives and start the containers" ;;
+    recover|remount|mount)             c="sudo drives remount";                why="after an unplug or power cut: remount the drives and start the containers" ;;
     logs|log)                          c="docker logs --tail 50 NAME";         why="the last lines a container printed" ;;
     help-me|-?|\?)                    c="homelab help";                       why="what this command can do" ;;
   esac

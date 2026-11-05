@@ -55,7 +55,6 @@ CONFIG_PATHS=(
   /var/lib/docker/volumes/filebrowser_filebrowser_data
   /etc/fstab
   /etc/systemd/system/docker.service.d
-  /usr/local/bin/hdd-recover
   /usr/local/sbin/drives
   /usr/local/sbin/homelab-backup
 )

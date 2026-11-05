@@ -711,26 +711,8 @@ class Files:
             write_text(CSS, self.css)
 
 
-def sync():
-    """The whole job. Returns 0, or 1 when it could not run (Docker or the Homepage files missing)."""
-    if not os.path.exists(SERVICES):
-        say("There is no %s, so there is no dashboard to put cards on." % SERVICES)
-        return 1
-    if not valid_yaml(read_text(SERVICES)):
-        note("%s is not valid YAML now (maybe a half finished edit), so no card was changed. Fix it, then run: sudo homelab-cards" % SERVICES)
-        return 1
-    cs = containers()
-    if cs is None:
-        say("Docker does not answer, so nothing was looked at.")
-        return 1
-    st = load_state()
-    f = Files()
-    lan = lan_ip()
-    fq = tailscale_name()
-    serve = serve_map()
-    by_name = {c["name"]: c for c in cs}
-
-    # 1. the cards made earlier: keep them right, drop them when the container is gone for good
+def update_managed_cards(st, f, by_name, lan, fq, serve):
+    """Cards made earlier: keep their links, colour, text and section right; drop a card when its container is gone for good."""
     for name, m in sorted(st["managed"].items()):
         c = by_name.get(name)
         if c is None:
@@ -774,7 +756,9 @@ def sync():
         if here and here != m["section"]:                  # moved by hand in the file: it stays where the person put it
             m["section"], m["unsure"] = here, False
 
-    # 2. new services
+
+def add_new_cards(st, f, cs, lan, fq, serve):
+    """A card for every running container that answers like a web page and has no card yet."""
     ids, ports = existing_ids_and_ports(f.lines)
     for c in cs:
         name = c["name"]
@@ -806,6 +790,27 @@ def sync():
         if not sp:
             note("  No Tailscale HTTPS address yet (Tailscale is not ready): the card uses the local address for now and gets the HTTPS one on a later look.")
 
+
+def sync():
+    """The whole job. Returns 0, or 1 when it could not run (Docker or the Homepage files missing)."""
+    if not os.path.exists(SERVICES):
+        say("There is no %s, so there is no dashboard to put cards on." % SERVICES)
+        return 1
+    if not valid_yaml(read_text(SERVICES)):
+        note("%s is not valid YAML now (maybe a half finished edit), so no card was changed. Fix it, then run: sudo homelab-cards" % SERVICES)
+        return 1
+    cs = containers()
+    if cs is None:
+        say("Docker does not answer, so nothing was looked at.")
+        return 1
+    st = load_state()
+    f = Files()
+    lan = lan_ip()
+    fq = tailscale_name()
+    serve = serve_map()
+    by_name = {c["name"]: c for c in cs}
+    update_managed_cards(st, f, by_name, lan, fq, serve)
+    add_new_cards(st, f, cs, lan, fq, serve)
     f.save()
     save_state(st)
     if not CHANGES:
