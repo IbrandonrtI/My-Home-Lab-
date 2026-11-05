@@ -2,6 +2,7 @@
 # End-to-end test of the boot drive section in scripts/drives, with fake drives (loop files) and real mergerfs.
 # Needs root, losetup, mergerfs and mkfs.ext4; where they are missing the test says so and passes (the CI machine has no loop devices).
 # Run: bash tests/t_bootsection.sh   (last line is OK or FAIL)
+# shellcheck disable=SC2010  # test code: the checks read these variables as strings, and the file names are plain
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DRIVES="$HERE/../scripts/drives"
 bad=0
@@ -35,7 +36,8 @@ if [ "$(id -u)" != 0 ] || ! command -v losetup >/dev/null || ! command -v merger
   echo "skipped: needs root, loop devices, mergerfs and mkfs.ext4 (not available here)"; echo OK; exit 0
 fi
 
-export DRIVES_TEST=1 DRIVES_STATE_DIR="$(mktemp -d)" DRAIN_SPARE_BYTES=1000000
+DRIVES_STATE_DIR="$(mktemp -d)"
+export DRIVES_TEST=1 DRIVES_STATE_DIR DRAIN_SPARE_BYTES=1000000
 S="$DRIVES_STATE_DIR"
 cleanup() { bash "$DRIVES" test-cleanup >/dev/null 2>&1; rm -rf "$S"; rm -rf /mnt/test-main /mnt/test-backup /mnt/test-disks 2>/dev/null; }
 trap cleanup EXIT

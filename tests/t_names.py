@@ -107,7 +107,7 @@ for model, out, want, why in [("Samsung SSD 860", "", "SSD", "SSD in the model t
     check("HDD or SSD: " + why, m2.drive_kind("/x", model), want)
 # FileBrowser shows only Backup-Pool, one folder per backup drive; main drives are numbered with them but not shown
 m.pool_drives = lambda role: {"main": ["/mnt/disks/MAIN1"], "backup": ["/mnt/disks/BACKUP1", "/mnt/disks/BACKUP2"]}[role]
-m.drive_name = lambda mp, fb, prefer_label=False: "1 TB Samsung HDD"
+m.drive_name = lambda mp, *_, **__: "1 TB Samsung HDD"
 check("FileBrowser: only backup drives, in Backup-Pool, numbered against all pool drives", m.filebrowser_mounts(),
       [("/mnt/disks/BACKUP1", "/srv/Backup-Pool/1 TB Samsung HDD 2"), ("/mnt/disks/BACKUP2", "/srv/Backup-Pool/1 TB Samsung HDD 3")])
 m.pool_drives = lambda role: {"main": ["/mnt/disks/MAIN1"], "backup": []}[role]

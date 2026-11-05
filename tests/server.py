@@ -141,7 +141,7 @@ class H(BaseHTTPRequestHandler):
                 return self.send(400, {"message": "bad endpoint"})
             if any(s["Name"] == b.get("name") for s in P["stacks"]):
                 return self.send(409, {"message": "A stack with this name already exists"})
-            ok, msg = deploy_stack(w, b["name"], b["stackFileContent"], b.get("env") or [], [])
+            ok, msg = deploy_stack(w, b["name"], b["stackFileContent"], b.get("env") or [])
             if not ok:
                 return self.send(500, {"message": "Unable to deploy", "details": msg})
             P["stacks"].append({"Id": len(P["stacks"]) + 1, "Name": b["name"], "EndpointId": int(q["endpointId"]), "Status": 1,
@@ -153,7 +153,7 @@ class H(BaseHTTPRequestHandler):
             st = next((s for s in P["stacks"] if s["Id"] == int(mm.group(1))), None)
             if not st:
                 return self.send(404)
-            ok, msg = deploy_stack(w, st["Name"], b["stackFileContent"], b.get("env") or [], [])
+            ok, msg = deploy_stack(w, st["Name"], b["stackFileContent"], b.get("env") or [])
             if not ok:
                 return self.send(500, {"message": "Unable to deploy", "details": msg})
             st["Text"] = b["stackFileContent"]

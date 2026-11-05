@@ -81,7 +81,7 @@ def interpolate_check(text, env):
     return missing
 
 
-def deploy_stack(w, name, text, env, user_msgs):
+def deploy_stack(w, name, text, env):
     """Pretend to be docker compose behind Portainer. Returns (ok, message)."""
     import yaml
     envd = {e["name"]: e["value"] for e in env}

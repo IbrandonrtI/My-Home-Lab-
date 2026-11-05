@@ -220,7 +220,7 @@ SAMPLE="$REPO/scripts/homelab-sample"
 sample(){ APT_LOG="$T/apt.log" HOMELAB_EXTRA_PATH="$T/fb" HOMELAB_STATE_DIR="$T/ss" "$@" bash "$SAMPLE" </dev/null 2>&1; }
 rm -rf "$T/ss" "$T/apt.log"
 if [ "$(id -u)" -eq 0 ]; then
-  sample env HOMELAB_UPTIME=100000 >/dev/null >"$T/s1.out"; check "sample: the first scheduled run looks up updates" '[ "$(wc -l <$T/apt.log)" = 1 ] && grep -q "^2|" $T/ss/apt'
+  sample env HOMELAB_UPTIME=100000 >"$T/s1.out"; check "sample: the first scheduled run looks up updates" '[ "$(wc -l <$T/apt.log)" = 1 ] && grep -q "^2|" $T/ss/apt'
   sample env HOMELAB_UPTIME=100000 >"$T/s2.out"; check "sample: a second scheduled run soon after does not" '[ "$(wc -l <$T/apt.log)" = 1 ]'
   printf '2|%s\n' "$(( $(date +%s) - 7 * 3600 ))" >"$T/ss/apt"
   sample env HOMELAB_UPTIME=100000 >"$T/s3.out"; check "sample: after 6 hours it looks again" '[ "$(wc -l <$T/apt.log)" = 2 ]'

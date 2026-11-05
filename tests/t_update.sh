@@ -2,6 +2,7 @@
 # Test: homelab-update with a fake Docker, a fake registry and a fake Portainer (tests/fakeupd.py).
 # Checks the version lookup (v2.6.0 -> v2.7.0), the upload check, the database dump, the update through Portainer
 # and the guards. Nothing on this machine is touched. Last line: OK or FAIL.
+# shellcheck disable=SC2034  # test code: the checks read these variables as strings, and the file names are plain
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UPD="$HERE/../scripts/homelab-update"
 T="$(mktemp -d)"; PASS=0; FAIL=0
@@ -73,7 +74,6 @@ wait $W
 # ---- the full run: no full backup, database dump, update through Portainer
 newstate
 out=$(up --yes --now); r=$?
-# shellcheck disable=SC2034
 check "run: it succeeds" '[ $r -eq 0 ]' "$out"
 check "run: the newer version is downloaded by its version tag" 'echo "$out" | grep -q "homepage:v2.7.0"' "$out"
 check "run: no full backup is made (no backup step)" '! echo "$out" | grep -qi "Back up everything first" && ! grep -q homelab-backup "$T/docker.log"' "$out"

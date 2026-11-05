@@ -8,7 +8,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-from simlib import ROOT, SIM, World, event, hostpath, running  # noqa
+from simlib import ROOT, SIM, World, event, running  # noqa
 
 name = os.path.basename(sys.argv[0])
 args = sys.argv[1:]
