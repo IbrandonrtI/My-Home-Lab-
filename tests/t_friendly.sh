@@ -19,6 +19,18 @@ OUT=$(bash "$REPO/scripts/homelab-backup" --dry-run 2>&1); RC=$?
 has "an unknown option is refused with a plain message" "$OUT" "Nothing was started"; check "an unknown option exits 2" "$RC" "2"
 hasnt "a refused option does not start a backup" "$OUT" "Run as root"
 
+# homelab's terminal width: with no terminal on stdin or stderr (a script, the self-test) the terminal is never asked
+# (a stuck "stty size" once froze homelab-selftest); a stand-in stty that would hang proves it
+mkdir -p "$T/ttybin"; printf '#!/bin/sh\nsleep 30\n' >"$T/ttybin/stty"; chmod +x "$T/ttybin/stty"
+TC=$(grep '^term_cols()' "$REPO/scripts/homelab")
+# (run under "script" so that a controlling terminal exists, as it does for a real session)
+RUN="env -u COLUMNS PATH=$T/ttybin:$PATH bash -c '$TC; term_cols' </dev/null 2>/dev/null"
+t0=$(date +%s)
+if command -v script >/dev/null 2>&1; then COLS=$(script -qec "$RUN" /dev/null | tr -d '\r'); else COLS=$(eval "$RUN"); fi
+t1=$(date +%s)
+check "term_cols does not ask a terminal that is not there" "$(( t1 - t0 < 5 ? 1 : 0 ))" "1"
+check "term_cols falls back to a plain width" "$COLS" "80"
+
 # homelab: short forms run the real command (with sudo when not root) and say which one; other wrong guesses get "Did you mean"
 export HOMELAB_COLOR=0 HOMELAB_STATE_DIR="$T/st" HOMELAB_HOMEPAGE_DIR="$T/hp" HOMELAB_LAN_IP=192.168.1.50 HOMELAB_MAIN_POOL="$T/main" HOMELAB_BACKUP_POOL="$T/backup"
 export HOMELAB_LAST_RUN_FILE="$T/nolog/last-run" HOME="$T/home"; mkdir -p "$T/st" "$T/hp" "$T/home" "$T/bin"
