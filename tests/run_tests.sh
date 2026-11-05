@@ -107,6 +107,16 @@ hls secrets > $SIM_DIR/s1sec.out 2>&1
 ok "S1 auto: showing the passwords with the secrets command ticks the password step" '[ "$(hls 2>&1 | grep -c "○ Generated passwords copied")" = 0 ]'
 hls skip data-drive >/dev/null 2>&1
 ok "S1 when complete, the checklist ends with a System check that says everything is up" 'hls 2>&1 | grep -q "System check" && hls 2>&1 | grep -q "Containers: 16 of 16 running" && hls 2>&1 | grep -q "Everything is up and running"'
+# services added after the install (cards made by homelab-cards) show up in the System check; a silent one is a warning, not a problem
+mkdir -p $HLS_ROOT/var/lib/homelab
+cat > $HLS_ROOT/var/lib/homelab/cards.json <<'JSON'
+{"managed": {"metube": {"card": "metube-card", "name": "MeTube", "hostport": 8081, "serve": 1010},
+             "ghostapp": {"card": "ghostapp-card", "name": "Ghost App", "hostport": 7777, "serve": 0}}, "ignore": []}
+JSON
+hls > $SIM_DIR/s1extra.out 2>&1
+ok "S1 the System check lists a service added later, with its local and Tailscale address" 'grep -q "Other services" $SIM_DIR/s1extra.out && grep -Eq "MeTube +http://[^ ]+:8081" $SIM_DIR/s1extra.out && grep -Eq "MeTube +https://[^ ]+:1010" $SIM_DIR/s1extra.out'
+ok "S1 an added service that does not answer is a warning and not a problem" 'grep -q "Ghost App.*no answer: is the container running" $SIM_DIR/s1extra.out && grep -q "Everything is up and running" $SIM_DIR/s1extra.out'
+rm -f $HLS_ROOT/var/lib/homelab/cards.json
 ok "S1 after done/skip: everything on the list is done" 'hls 2>&1 | grep -q "All steps are complete"'
 ok "S1 progress file removed when complete" '[ ! -e $HLS_ROOT/var/lib/homelab/setup-progress ]'
 # ---- S2: running install again changes nothing
@@ -1021,6 +1031,8 @@ PY'
 cp $HP40/settings.yaml $SIM_DIR/s40set.keep
 hls refresh > $SIM_DIR/s40j.out 2>&1
 ok "S40 a second refresh leaves the tab order alone" 'cmp -s $HP40/settings.yaml $SIM_DIR/s40set.keep'
+hls verify > $SIM_DIR/s40sys.out 2>&1
+ok "S40 the System check counts Navidrome as a container and lists it under the other services" 'grep -Eq "Containers: ([0-9]+) of \1 running" $SIM_DIR/s40sys.out && grep -q "Other services" $SIM_DIR/s40sys.out && grep -Eq "Navidrome +http://[^ ]+:4533" $SIM_DIR/s40sys.out'
 # renamed commands: copies of the old names left by an earlier install are removed, the new names are installed
 ok "S40 the repository check is installed as homelab-repocheck and no retired command is on the machine" '[ -x $HLS_ROOT/usr/local/bin/homelab-repocheck ] && [ ! -e $HLS_ROOT/usr/local/bin/homelab-check ] && [ ! -e $HLS_ROOT/usr/local/bin/hdd-recover ]'
 printf '#!/bin/sh\n' > $HLS_ROOT/usr/local/bin/hdd-recover; printf '#!/bin/sh\n' > $HLS_ROOT/usr/local/bin/homelab-check
