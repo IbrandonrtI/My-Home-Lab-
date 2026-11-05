@@ -2,7 +2,7 @@ services:
   netdata:
     image: netdata/netdata:stable
     restart: unless-stopped
-    init: true   
+    init: true
     ports:
       - "19999:19999"
     cap_add:

@@ -3,14 +3,14 @@ services:
     image: ghcr.io/gethomepage/homepage:v2.6.0
     container_name: homepage
     restart: unless-stopped
-    init: true   
+    init: true
     ports:
       - 3001:3000
     environment:
       HOMEPAGE_ALLOWED_HOSTS: 192.168.X.X:3001,pc.your-tailnet.ts.net:1000,localhost:3001
     volumes:
       - /home/your-username/homepage-config:/app/config
-      - /home/your-username/homepage-config/images:/app/public/images   
+      - /home/your-username/homepage-config/images:/app/public/images
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /:/host:ro
-      - /mnt:/mnt:ro,rslave   
+      - /mnt:/mnt:ro,rslave
