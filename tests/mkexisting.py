@@ -75,7 +75,7 @@ for f in ["settings.yaml", "widgets.yaml", "bookmarks.yaml", "custom.css"]:
 # scripts as installed
 sys.argv = ["x"]
 for n, d in [("drives", "sbin"), ("homelab-backup", "sbin"), ("homelab-update", "sbin"), ("homelab-restore-configs", "sbin"),
-             ("homelab-sample", "sbin"), ("homelab-stats", "sbin"), ("homelab-cards", "sbin"), ("homelab-selftest", "sbin"), ("hdd-recover", "bin"), ("homelab", "bin"), ("homelab-check", "bin"), ("homelab-calendar", "bin")]:
+             ("homelab-sample", "sbin"), ("homelab-stats", "sbin"), ("homelab-cards", "sbin"), ("homelab-selftest", "sbin"), ("homelab", "bin"), ("homelab-repocheck", "bin"), ("homelab-calendar", "bin")]:
     t = open(repo + "/scripts/" + n).read().replace("$(getent passwd 1000 | cut -d: -f1)", "testuser")
     put(R + "/usr/local/%s/%s" % (d, n), t, 0o755)
 put(R + "/usr/local/sbin/homelab-setup", open(repo + "/installer/homelab-setup").read(), 0o755)

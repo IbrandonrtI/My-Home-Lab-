@@ -23,7 +23,7 @@ if [ "$(id -u)" = 0 ]; then
   OUT=$(printf '2\n1\nn\n2\n\n3\nn\n0\n3\n1\nn\n0\n4\n1\nn\n2\nn\n0\n0\n' | DRIVES_TEST=1 DRIVES_STATE_DIR="$MS" bash "$DRIVES" menu 2>&1)
   rm -rf "$MS"
   for want in "You chose: Connect a new drive" "You chose: Disconnect a drive" "You chose: Move a drive between main and backup" \
-              "You chose: Recover after an unplug or power cut" "You chose: Apply the drive power settings" "You chose: Fill order" \
+              "You chose: Mount the drives again after an unplug or power cut" "You chose: Apply the drive power settings" "You chose: Fill order" \
               "Do you want to go on? [y/N]:" "Okay. Nothing was changed."; do
     case "$OUT" in *"$want"*) echo "ok   after a choice the menu shows: $want" ;; *) echo "FAIL after a choice the menu is missing: $want"; bad=$((bad + 1)) ;; esac
   done

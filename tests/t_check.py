@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for scripts/homelab-check's secret scan: real-looking values are reported, placeholders are not.
+"""Tests for scripts/homelab-repocheck's secret scan: real-looking values are reported, placeholders are not.
 Run: python3 tests/t_check.py   (last line is OK or FAIL; nothing outside a temp folder is touched)"""
 import os
 import subprocess
@@ -7,7 +7,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CHECK = os.path.join(HERE, "..", "scripts", "homelab-check")
+CHECK = os.path.join(HERE, "..", "scripts", "homelab-repocheck")
 
 
 def run(body):
@@ -26,7 +26,7 @@ CASES = [
     ("placeholder password is fine", "DB_PASSWORD=your-password-here", False),
     ("changeme is fine", "ADMIN_PASSWORD=changeme-please-now", False),
     ("variable reference is fine", "DB_PASSWORD=${DB_PASSWORD_VALUE}", False),
-    ("ignore marker is respected", "DB_PASSWORD=Zq8xK2mVb9Lp4Rt7  <!-- homelab-check: ignore -->", False),
+    ("ignore marker is respected", "DB_PASSWORD=Zq8xK2mVb9Lp4Rt7  <!-- homelab-repocheck: ignore -->", False),
 ]
 
 bad = 0
@@ -38,7 +38,7 @@ for name, body, should_flag in CASES:
     print(("ok   " if ok else "FAIL ") + name)
 
 def installer_case(name, edit):
-    """homelab-check compares installer/homelab-setup with the join of src/installer/NN_*.py: a copy that differs must be reported."""
+    """homelab-repocheck compares installer/homelab-setup with the join of src/installer/NN_*.py: a copy that differs must be reported."""
     global bad
     with tempfile.TemporaryDirectory() as d:
         for sub in ("scripts", "stacks", os.path.join("src", "installer"), "installer"):

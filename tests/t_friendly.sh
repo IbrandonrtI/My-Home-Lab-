@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Test: the newcomer-friendly parts: help and refused options on homelab-backup and hdd-recover, "Did you mean" in homelab,
+# Test: the newcomer-friendly parts: help and refused options on homelab-backup, "Did you mean" in homelab,
 # the "Open in your browser" block, a fix command on every warning, and the calmer message while setup is not finished.
 # Nothing real is touched (fake state folder, fake tailscale). Last line: OK or FAIL.
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,11 +18,6 @@ OUT=$(bash "$REPO/scripts/homelab-backup" version 2>&1); has "backup version" "$
 OUT=$(bash "$REPO/scripts/homelab-backup" --dry-run 2>&1); RC=$?
 has "an unknown option is refused with a plain message" "$OUT" "Nothing was started"; check "an unknown option exits 2" "$RC" "2"
 hasnt "a refused option does not start a backup" "$OUT" "Run as root"
-
-# hdd-recover: help does not run the recovery
-OUT=$(bash "$REPO/scripts/hdd-recover" --help 2>&1); RC=$?
-has "hdd-recover --help explains itself" "$OUT" "remount the drives"; check "hdd-recover --help exits 0" "$RC" "0"
-hasnt "hdd-recover --help does not call drives" "$OUT" "No such file"
 
 # homelab: short forms run the real command (with sudo when not root) and say which one; other wrong guesses get "Did you mean"
 export HOMELAB_COLOR=0 HOMELAB_STATE_DIR="$T/st" HOMELAB_HOMEPAGE_DIR="$T/hp" HOMELAB_LAN_IP=192.168.1.50 HOMELAB_MAIN_POOL="$T/main" HOMELAB_BACKUP_POOL="$T/backup"

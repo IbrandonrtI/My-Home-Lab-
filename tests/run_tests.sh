@@ -1021,6 +1021,11 @@ PY'
 cp $HP40/settings.yaml $SIM_DIR/s40set.keep
 hls refresh > $SIM_DIR/s40j.out 2>&1
 ok "S40 a second refresh leaves the tab order alone" 'cmp -s $HP40/settings.yaml $SIM_DIR/s40set.keep'
+# renamed commands: copies of the old names left by an earlier install are removed, the new names are installed
+ok "S40 the repository check is installed as homelab-repocheck and no retired command is on the machine" '[ -x $HLS_ROOT/usr/local/bin/homelab-repocheck ] && [ ! -e $HLS_ROOT/usr/local/bin/homelab-check ] && [ ! -e $HLS_ROOT/usr/local/bin/hdd-recover ]'
+printf '#!/bin/sh\n' > $HLS_ROOT/usr/local/bin/hdd-recover; printf '#!/bin/sh\n' > $HLS_ROOT/usr/local/bin/homelab-check
+hls refresh > $SIM_DIR/s40k.out 2>&1
+ok "S40 a refresh removes the retired hdd-recover and homelab-check" '[ ! -e $HLS_ROOT/usr/local/bin/hdd-recover ] && [ ! -e $HLS_ROOT/usr/local/bin/homelab-check ] && [ -x $HLS_ROOT/usr/local/bin/homelab-repocheck ]'
 fi
 
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
