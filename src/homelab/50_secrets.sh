@@ -46,6 +46,7 @@ secrets() {
   [ ] Homepage widget keys (Tailscale token, Immich key, Nextcloud token, logins)
   [ ] Tailscale account, AnyDesk unattended password, GitHub account and its recovery codes
   [ ] Router admin login and the Wi-Fi password
+  [ ] Last.fm and ListenBrainz accounts, and the Last.fm API key and shared secret
 LIST
   rule "What this server can confirm"
 
