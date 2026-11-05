@@ -256,9 +256,13 @@ def docker():
             return
         if sub == "ps":
             allc = "-a" in args
+            ports = any("Ports" in a for a in args)
+            busy = os.environ.get("SIM_PORT_BUSY", "")             # "8100:downtify": a container that already publishes that port
             for n, c in w["containers"].items():
                 if allc or c["running"]:
                     out(n)
+            if ports and busy:
+                out("%s|0.0.0.0:%s->%s/tcp, :::%s->%s/tcp" % (busy.split(":")[1], busy.split(":")[0], busy.split(":")[0], busy.split(":")[0], busy.split(":")[0]))
             return
         if sub == "pull":
             img = args[-1]
@@ -312,6 +316,10 @@ def docker():
             return
         if sub == "exec":
             return docker_exec(w)
+        if sub == "stats":
+            for n in [a for a in args if a in w["containers"] and running(w, a)]:
+                out("%s|%s" % (n, "812MiB / 3GiB" if n == "audiomuse-worker" else "190MiB / 1GiB"))
+            return
         die("fake docker: unsupported " + " ".join(args))
 
 
@@ -356,6 +364,24 @@ def docker_exec(w):
         elif sub == "config:app:set":
             N["token"] = next(c.split("=", 1)[1] for c in cmd if c.startswith("--value="))
             N["seen"] = 0
+        return
+    if cont == "navidrome" and cmd[:2] == ["/app/navidrome", "plugin"]:
+        plugins = w.setdefault("nd_plugins", {})
+        sub = cmd[2]
+        if os.environ.get("SIM_PLUGIN_FAIL") and sub == "enable":
+            out("Failed to enable plugin id=audiomuseai error=manifest: unsupported permission")
+            sys.exit(1)
+        if sub == "rescan":
+            plugins.setdefault("audiomuseai", {"enabled": False, "config": {}})
+        elif sub == "edit":
+            data = json.loads(sys.stdin.read()) if stdin_flag else {}
+            if "audiomuseai" not in plugins or not data.get("apiUrl"):
+                die("Plugin not found or config invalid", 1)
+            plugins["audiomuseai"]["config"] = data
+        elif sub in ("enable", "disable"):
+            if cmd[3] not in plugins:
+                die("Plugin not found", 1)
+            plugins[cmd[3]]["enabled"] = sub == "enable"
         return
     if cont == "beszel" and cmd[:3] == ["/beszel", "superuser", "upsert"]:
         w["beszel"]["superusers"][cmd[3]] = cmd[4]

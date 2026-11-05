@@ -73,7 +73,7 @@ class H(BaseHTTPRequestHandler):
         with World() as w:
             names = {"portainer": ["portainer"], "adguard": ["adguardhome"], "immich": ["immich_server"],
                      "beszel": ["beszel"], "nextcloud": ["nextcloud"], "speedtest": ["speedtest-tracker"],
-                     "filebrowser": ["filebrowser-filebrowser-1"], "netdata": ["netdata-netdata-1"], "navidrome": ["navidrome"],
+                     "filebrowser": ["filebrowser-filebrowser-1"], "netdata": ["netdata-netdata-1"], "navidrome": ["navidrome"], "audiomuse": ["audiomuse-flask"],
                      "tsapi": [], "homepage": ["homepage"]}[self.svc]
             if names and not all(running(w, n) for n in names):
                 return self.send(502, "not running")
@@ -83,6 +83,7 @@ class H(BaseHTTPRequestHandler):
     do_GET = lambda self: self.handle_any("GET")
     do_POST = lambda self: self.handle_any("POST")
     do_PUT = lambda self: self.handle_any("PUT")
+    do_DELETE = lambda self: self.handle_any("DELETE")
 
     # --- Portainer
     def s_portainer(self, w, m, path, q, b):
@@ -159,6 +160,16 @@ class H(BaseHTTPRequestHandler):
             st["Text"] = b["stackFileContent"]
             event(w, "stack updated: " + st["Name"])
             return self.send(200, st)
+        mm = re.fullmatch(r"/api/stacks/(\d+)", path)
+        if mm and m == "DELETE":
+            st = next((s for s in P["stacks"] if s["Id"] == int(mm.group(1))), None)
+            if not st:
+                return self.send(404)
+            for cn in [c for c, v in w["containers"].items() if v.get("stack") == st["Name"]]:
+                del w["containers"][cn]
+            P["stacks"].remove(st)
+            event(w, "stack deleted: " + st["Name"])
+            return self.send(204)
         mm = re.fullmatch(r"/api/stacks/(\d+)/file", path)
         if mm and m == "GET":
             st = next((s for s in P["stacks"] if s["Id"] == int(mm.group(1))), None)
@@ -358,9 +369,27 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"username": N["user"], "isAdmin": True})
         if path == "/auth/login" and m == "POST":
             if N["user"] and b.get("username") == N["user"] and b.get("password") == N["pw"]:
-                return self.send(200, {"username": N["user"], "isAdmin": True})
+                return self.send(200, {"username": N["user"], "isAdmin": True, "token": "ndtoken-admin"})
+            if N.get("users", {}).get(b.get("username")) == b.get("password") and b.get("password"):
+                return self.send(200, {"username": b["username"], "isAdmin": False, "token": "ndtoken-user"})
             return self.send(401, {"error": "Invalid username or password"})
+        if path == "/api/user" and m == "POST":
+            if self.headers.get("X-ND-Authorization") != "Bearer ndtoken-admin":
+                return self.send(401, {"error": "not logged in as admin"})
+            if b.get("userName") in N.setdefault("users", {}) or b.get("userName") == N["user"]:
+                return self.send(400, {"errors": {"userName": "ra.validation.unique"}})
+            N["users"][b["userName"]] = b.get("password")
+            return self.send(200, {"id": "u-" + b["userName"]})
         return self.send(404)
+
+    # --- AudioMuse-AI: /api/health is open, the rest wants the bearer token the installer saved
+    def s_audiomuse(self, w, m, path, q, b):
+        if path == "/api/health":
+            return self.send(200, {"status": "ok"})
+        want = (w.get("stack_env", {}).get("audiomuse") or {}).get("AUDIOMUSE_TOKEN", "")
+        if path == "/api/last_task":
+            return self.send(200, {"status": "NO_PREVIOUS_MAIN_TASK"}) if want and self.headers.get("Authorization") == "Bearer " + want else self.send(401)
+        return self.send(200, "<html>AudioMuse-AI</html>", "text/html") if path == "/" else self.send(404)
 
     def s_netdata(self, w, m, path, q, b):
         if w.get("netdata_fail", 0) > 0:
@@ -384,7 +413,7 @@ class H(BaseHTTPRequestHandler):
 
 
 PORTS = {"portainer": 9000, "adguard": 3000, "immich": 2283, "beszel": 8090, "nextcloud": 8082,
-         "speedtest": 8088, "filebrowser": 8081, "netdata": 19999, "tsapi": 9999, "homepage": 3001, "navidrome": 4533}
+         "speedtest": 8088, "filebrowser": 8081, "netdata": 19999, "tsapi": 9999, "homepage": 3001, "navidrome": 4533, "audiomuse": 8100}
 
 
 def main():

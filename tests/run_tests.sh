@@ -1048,6 +1048,58 @@ ok "S40 the repository check is installed as homelab-repocheck and no retired co
 printf '#!/bin/sh\n' > $HLS_ROOT/usr/local/bin/hdd-recover; printf '#!/bin/sh\n' > $HLS_ROOT/usr/local/bin/homelab-check
 hls refresh > $SIM_DIR/s40k.out 2>&1
 ok "S40 a refresh removes the retired hdd-recover and homelab-check" '[ ! -e $HLS_ROOT/usr/local/bin/hdd-recover ] && [ ! -e $HLS_ROOT/usr/local/bin/homelab-check ] && [ -x $HLS_ROOT/usr/local/bin/homelab-repocheck ]'
+# AudioMuse-AI: asked for with `homelab-setup audiomuse`; its own Navidrome login, the plugin, a memory cap you can change, pause and remove
+export HLS_RAM_KB=7400000 HLS_CPUS=4                       # this machine has 7.1 GB and 4 cores, like Brandon's
+AMEV(){ wj "len([e for e in w[\"events\"] if \"stack updated: audiomuse\" in e or \"stack created: audiomuse\" in e])"; }
+hls audiomuse --dry-run > $SIM_DIR/s40am0.out 2>&1
+ok "S40 audiomuse --dry-run changes nothing" '[ "$(wj "len([c for c in w[\"containers\"] if c.startswith(\"audiomuse\")])")" = 0 ] && ! grep -q audiomuse $HLS_ROOT/var/lib/homelab-setup/state.json && grep -q "dry run" $SIM_DIR/s40am0.out'
+HLS_NO_AVX2=1 hls audiomuse > $SIM_DIR/s40am1.out 2>&1
+ok "S40 a processor without AVX2 is refused and nothing is changed" 'grep -q "no AVX2" $SIM_DIR/s40am1.out && [ "$(wj "len([c for c in w[\"containers\"] if c.startswith(\"audiomuse\")])")" = 0 ]'
+( export SIM_PORT_BUSY=8100:downtify; printf '%s\n' y | hls audiomuse ) > $SIM_DIR/s40am1b.out 2>&1
+ok "S40 a port that another container already uses is refused with that container's name and nothing is changed" 'grep -q "Port 8100 is already used by the container downtify" $SIM_DIR/s40am1b.out && [ "$(wj "len([c for c in w[\"containers\"] if c.startswith(\"audiomuse\")])")" = 0 ]'
+printf '%s\n' n | hls audiomuse > $SIM_DIR/s40am2.out 2>&1
+ok "S40 answering no to the question changes nothing" '[ "$(wj "len([c for c in w[\"containers\"] if c.startswith(\"audiomuse\")])")" = 0 ] && ! grep -q audiomuse $HLS_ROOT/var/lib/homelab-setup/state.json'
+ok "S40 the question explains the memory limit and the first analysis in plain words" 'grep -q "3 GB of memory" $SIM_DIR/s40am2.out && grep -q "a little under the 8 GB" $SIM_DIR/s40am2.out && grep -q "takes hours" $SIM_DIR/s40am2.out'
+printf '%s\n' y $PW | hls audiomuse > $SIM_DIR/s40am3.out 2>&1
+ok "S40 AudioMuse-AI runs: database, web page and worker" '[ "$(wj "len([c for c in w[\"containers\"] if c.startswith(\"audiomuse\") and w[\"containers\"][c][\"running\"]])")" = 3 ]'
+ok "S40 its five generated secrets are saved root-only and none is printed" 'for k in AUDIOMUSE_DB_PASSWORD AUDIOMUSE_ND_PASSWORD AUDIOMUSE_PASSWORD AUDIOMUSE_TOKEN AUDIOMUSE_JWT_SECRET; do v=$(grep "^$k=" $HLS_ROOT/root/.homelab-setup/secrets.env | cut -d= -f2); [ -n "$v" ] && ! grep -q "$v" $SIM_DIR/s40am3.out || exit 1; done; [ "$(stat -c %a $HLS_ROOT/root/.homelab-setup/secrets.env)" = 600 ]'
+ok "S40 AudioMuse-AI has its own small Navidrome login and the admin password is not in its stack" '[ "$(wj "len(w[\"navidrome\"][\"users\"])")" = 1 ] && wj "list(w[\"navidrome\"][\"users\"])" | grep -q audiomuse && [ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_NAVIDROME_USER\"]")" = audiomuse ] && [ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_NAVIDROME_PASSWORD\"]")" = "$(wj "w[\"navidrome\"][\"users\"][\"audiomuse\"]")" ] && ! wj "w[\"stack_env\"][\"audiomuse\"]" | grep -q "$PW"'
+ok "S40 the worker is limited to 3g and 3 of the 4 cores" '[ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_MEM\"]")" = 3g ] && [ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_CPUS\"]")" = 3 ]'
+ok "S40 the plugin file is in the Navidrome plugins folder and the plugin is on, pointed at AudioMuse-AI with the saved token" '[ -s $HLS_ROOT/home/testuser/navidrome/plugins/audiomuseai.ndp ] && [ "$(wj "w[\"nd_plugins\"][\"audiomuseai\"][\"enabled\"]")" = True ] && [ "$(wj "w[\"nd_plugins\"][\"audiomuseai\"][\"config\"][\"apiToken\"]")" = "$(grep ^AUDIOMUSE_TOKEN= $HLS_ROOT/root/.homelab-setup/secrets.env | cut -d= -f2)" ] && wj "w[\"nd_plugins\"][\"audiomuseai\"][\"config\"][\"apiUrl\"]" | grep -Eq "^http://[0-9.]+:8100$"'
+ok "S40 Navidrome was deployed again with audiomuseai first in its agents" '[ "$(wj "w[\"stack_env\"][\"navidrome\"][\"NAVIDROME_AGENTS\"]")" = "audiomuseai,deezer,lastfm,listenbrainz" ]'
+ok "S40 the setup tells how to start the analysis" 'grep -q "Start Analysis" $SIM_DIR/s40am3.out && grep -q "AUDIOMUSE_PASSWORD" $SIM_DIR/s40am3.out'
+ok "S40 the AudioMuse stack file has no database port on the host and caps the worker with the variables" '! grep -q "5432:5432" $SIMDIR/../stacks/audiomuse.yaml && grep -q "AUDIOMUSE_MEM:-3g" $SIMDIR/../stacks/audiomuse.yaml && grep -q "AUDIOMUSE_CPUS" $SIMDIR/../stacks/audiomuse.yaml'
+N0=$(AMEV); hls refresh > $SIM_DIR/s40am4.out 2>&1
+ok "S40 a refresh leaves a finished AudioMuse-AI alone (no new deploy)" '[ "$(AMEV)" = "$N0" ]'
+hls verify > $SIM_DIR/s40am5.out 2>&1
+ok "S40 the System check counts the three AudioMuse containers and lists AudioMuse-AI" 'grep -Eq "Containers: ([0-9]+) of \1 running" $SIM_DIR/s40am5.out && grep -Eq "AudioMuse-AI +http://[^ ]+:8100" $SIM_DIR/s40am5.out'
+hls audiomuse memory > $SIM_DIR/s40am6.out 2>&1 < /dev/null
+ok "S40 audiomuse memory shows the suggestions for 8 GB and 16 GB machines and what it uses now" 'grep -q "8 GB machine   3 GB" $SIM_DIR/s40am6.out && grep -q "16 GB machine   6 GB" $SIM_DIR/s40am6.out && grep -q "right now: audiomuse-worker" $SIM_DIR/s40am6.out'
+hls audiomuse memory 4g > $SIM_DIR/s40am7.out 2>&1
+ok "S40 audiomuse memory 4g deploys again with a 4 GB cap" '[ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_MEM\"]")" = 4096m ] && grep -q "now 4 GB" $SIM_DIR/s40am7.out'
+for bad in banana 512m 20g; do hls audiomuse memory $bad > $SIM_DIR/s40am8.out 2>&1; done
+ok "S40 a word, a size under 1g or one the machine cannot spare is refused and the cap stays" '[ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_MEM\"]")" = 4096m ] && grep -q "more than this machine can spare" $SIM_DIR/s40am8.out'
+hls audiomuse memory auto > $SIM_DIR/s40am9.out 2>&1
+ok "S40 audiomuse memory auto goes back to the suggestion for this machine" '[ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_MEM\"]")" = 3g ]'
+HLS_RAM_KB=16000000 hls audiomuse memory auto > $SIM_DIR/s40am10.out 2>&1
+ok "S40 on a 16 GB machine the suggestion is 6g" '[ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_MEM\"]")" = 6g ]'
+hls audiomuse memory auto > /dev/null 2>&1
+hls audiomuse pause > $SIM_DIR/s40am11.out 2>&1
+ok "S40 pause stops only the worker" '[ "$(wj "w[\"containers\"][\"audiomuse-worker\"][\"running\"]")" = False ] && [ "$(wj "w[\"containers\"][\"audiomuse-flask\"][\"running\"]")" = True ]'
+N1=$(AMEV); hls refresh > $SIM_DIR/s40am12.out 2>&1; hls verify > $SIM_DIR/s40am13.out 2>&1
+ok "S40 a paused worker is wanted: refresh does not start it and the System check does not call it a fault" '[ "$(AMEV)" = "$N1" ] && [ "$(wj "w[\"containers\"][\"audiomuse-worker\"][\"running\"]")" = False ] && grep -Eq "Containers: ([0-9]+) of \1 running" $SIM_DIR/s40am13.out'
+hls audiomuse status > $SIM_DIR/s40am14.out 2>&1
+ok "S40 status says the worker is paused on purpose" 'grep -q "paused on purpose" $SIM_DIR/s40am14.out'
+hls audiomuse resume > $SIM_DIR/s40am15.out 2>&1
+ok "S40 resume starts the worker again" '[ "$(wj "w[\"containers\"][\"audiomuse-worker\"][\"running\"]")" = True ]'
+printf '%s\n' y | hls audiomuse remove > $SIM_DIR/s40am16.out 2>&1
+ok "S40 remove takes the three containers and the plugin out and puts Navidrome back to its own agents" '[ "$(wj "len([c for c in w[\"containers\"] if c.startswith(\"audiomuse\")])")" = 0 ] && [ ! -e $HLS_ROOT/home/testuser/navidrome/plugins/audiomuseai.ndp ] && [ "$(wj "w[\"nd_plugins\"][\"audiomuseai\"][\"enabled\"]")" = False ] && [ -z "$(wj "w[\"stack_env\"][\"navidrome\"][\"NAVIDROME_AGENTS\"]")" ] && ! grep -q "\"audiomuse\": true" $HLS_ROOT/var/lib/homelab-setup/state.json'
+ok "S40 remove keeps the analysis data and the secrets, and says how to free the space" '[ -d $HLS_ROOT/home/testuser/audiomuse/postgres ] && grep -q "^AUDIOMUSE_DB_PASSWORD=" $HLS_ROOT/root/.homelab-setup/secrets.env && grep -q "To free the space" $SIM_DIR/s40am16.out'
+( export SIM_PLUGIN_FAIL=1; printf '%s\n' y | hls audiomuse ) > $SIM_DIR/s40am17.out 2>&1
+ok "S40 a Navidrome that refuses the plugin gives a plain message and the setup stays unfinished" 'grep -q "could not switch it on" $SIM_DIR/s40am17.out && grep -q "newer Navidrome" $SIM_DIR/s40am17.out && ! grep -q "\"audiomuse_plugin\"" $HLS_ROOT/var/lib/homelab-setup/state.json'
+hls refresh > $SIM_DIR/s40am18.out 2>&1
+ok "S40 the next refresh finishes it, with the same database password as before" '[ "$(wj "w[\"nd_plugins\"][\"audiomuseai\"][\"enabled\"]")" = True ] && [ "$(wj "len([c for c in w[\"containers\"] if c.startswith(\"audiomuse\") and w[\"containers\"][c][\"running\"]])")" = 3 ] && [ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_DB_PASSWORD\"]")" = "$(grep ^AUDIOMUSE_DB_PASSWORD= $HLS_ROOT/root/.homelab-setup/secrets.env | cut -d= -f2)" ]'
+unset HLS_RAM_KB HLS_CPUS
 fi
 
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
