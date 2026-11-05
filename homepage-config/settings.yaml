@@ -43,20 +43,6 @@ layout:
   Media & Entertainment:
     tab: Home
     icon: mdi-movie-open
-  Calendar:
-    tab: Home
-    icon: mdi-calendar-month
-    style: row
-    columns: 2
-  Entertainment:
-    tab: Links
-    icon: mdi-popcorn
-  Online Shopping:
-    tab: Links
-    icon: mdi-cart
-  Productivity:
-    tab: Links
-    icon: mdi-briefcase
   At a Glance:
     tab: Stats
     icon: mdi-view-dashboard
@@ -87,3 +73,17 @@ layout:
     icon: mdi-folder-multiple
     style: row
     columns: 1
+  Calendar:
+    tab: Stats
+    icon: mdi-calendar-month
+    style: row
+    columns: 2
+  Entertainment:
+    tab: Links
+    icon: mdi-popcorn
+  Online Shopping:
+    tab: Links
+    icon: mdi-cart
+  Productivity:
+    tab: Links
+    icon: mdi-briefcase
