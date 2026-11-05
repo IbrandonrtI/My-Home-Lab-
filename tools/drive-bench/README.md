@@ -32,14 +32,14 @@ To rebuild the report from an earlier run: `sudo bash tools/drive-bench/drive-be
   by fakes that only exist inside that folder. The real drives of the machine are hidden from `drives` during the run, and the bench
   refuses to type the name of any drive that is not one of its own fake drives.
 * **The other commands** (`homelab`, `homelab-sample`, `homelab-backup`, `homelab-update`, `homelab-restore-configs`,
-  `homelab-selftest`, `hdd-recover`, `homelab-setup`, `drives`) first run on the fake layouts (they are pointed at the fake pools).
+  `homelab-selftest`, `homelab-setup`, `drives`) first run on the fake layouts (they are pointed at the fake pools).
   Then they run **for real on this server** in tiers (`--real full`, the default):
 
   | Tier | What happens | Examples |
   |---|---|---|
   | safe | only prints | `version`, `help`, `status`, `list`, unknown words |
   | asks | the command is started and every question is answered "no" | `homelab-update` (every stack: no), `clean`, `restore-configs` |
-  | real | really does its job | a backup, a self-test, `hdd-recover` (containers stop for about a minute), `homelab-update check`, `homelab-sample` |
+  | real | really does its job | a backup, a self-test, `drives remount` (containers stop for about a minute), `homelab-update check`, `homelab-sample` |
   | dangerous | **never run**, listed in the report as NOT-RUN | `homelab-update --yes`, `restore-configs restore`, `homelab-setup install` / `refresh`, `homelab theme` / `bookmark` |
 
   Before the real tiers the bench stops, and says why, when **a backup is running** or **files are being uploaded**. It asks you to
@@ -50,7 +50,7 @@ To rebuild the report from an earlier run: `sudo bash tools/drive-bench/drive-be
 ```
 --level quick|standard|full   how much to try
 --layout REGEX                only layouts whose name matches (repeatable), e.g. --layout '^m2-b1$' --layout boot
---flow NAME                   only this command (repeatable): menu status connect disconnect move adopt power recover replace
+--flow NAME                   only this command (repeatable): menu status connect disconnect move adopt power remount replace
                               fillorder release bootsection restore, list usage health check rename sleep wake eject wipe balance limit resize, and cli, faults, wish
 --budget N                    runs per command and layout
 --timeout SECONDS             how long one run may take (default 120)

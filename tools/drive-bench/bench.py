@@ -1146,12 +1146,12 @@ def check_invariants(env, flow, out, before_files, changed=False, unplugged=Fals
         elif mountfail and "still STOPPED" in out:
             pass     # every mount fails in this run: the pools cannot come back, so the containers must not start
         elif "still STOPPED" in out:
-            bad.append("INV-left-stopped: the command stopped the services and failed, so they stay down until 'sudo hdd-recover' is run")
+            bad.append("INV-left-stopped: the command stopped the services and failed, so they stay down until 'sudo drives remount' is run")
         elif rc == 0 or "did not start" not in out:
             bad.append("INV-containers: containers were left stopped but the command ended as if all was well%s"
                        % (" (it printed a warning)" if "did not start" in out else " (nothing was said)"))
     # files
-    if not unplugged and flow in ("connect", "adopt", "power", "fillorder", "recover", "status", "bootsection", "restore", "replace", "move",
+    if not unplugged and flow in ("connect", "adopt", "power", "fillorder", "remount", "status", "bootsection", "restore", "replace", "move",
                                   "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "fillorder"):
         for role, pool in (("main", env.main), ("backup", env.backup)):
             if mount_types(env.work).get(pool, "").endswith("mergerfs") and role in before_files:
@@ -1445,7 +1445,7 @@ FLOWS = [
     ("move", ["move"], "move a drive between main and backup"),
     ("adopt", ["adopt"], "convert the single data drive"),
     ("power", ["power"], "apply the power settings"),
-    ("recover", ["recover"], "recover after an unplug"),
+    ("remount", ["remount"], "remount after an unplug"),
     ("replace", ["replace"], "replace a dead drive"),
     ("fillorder", ["fillorder"], "fill drives one at a time"),
     ("release", ["release"], "take all drives out of the pools"),
@@ -1513,8 +1513,8 @@ PRE_SCENARIOS = [     # the first ones are used at the standard level
     ("a main drive is full", ["fill TMAIN1"]),
     ("a main drive is read-only", ["readonly TMAIN1"]),
 ]
-PRE_FLOWS = ["status", "list", "usage", "health", "check", "scan", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "fillorder", "recover", "replace", "disconnect", "move", "release", "restore", "connect"]
-FAULT_FLOWS = ["connect", "disconnect", "move", "replace", "recover", "release", "bootsection", "restore", "adopt", "scan"]
+PRE_FLOWS = ["status", "list", "usage", "health", "check", "scan", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "fillorder", "remount", "replace", "disconnect", "move", "release", "restore", "connect"]
+FAULT_FLOWS = ["connect", "disconnect", "move", "replace", "remount", "release", "bootsection", "restore", "adopt", "scan"]
 
 
 def last_label(layout, role):
@@ -1802,7 +1802,7 @@ def preset_expect(env, layout, setup, ndrives, nparity, dry=False, extras=None):
         if "DRY RUN" in out or rc == 0:
             bad.append("INV-preset-twice: building a second setup on top of the first was not refused")
         if arr:
-            for cmd in ("connect", "disconnect", "move", "adopt", "bootsection", "replace", "recover", "fillorder", "balance", "limit", "resize"):
+            for cmd in ("connect", "disconnect", "move", "adopt", "bootsection", "replace", "remount", "fillorder", "balance", "limit", "resize"):
                 rc, out, _ev, _s, to = run_shim(env, [cmd], timeout=60)
                 if rc == 0 or "does not apply to an array" not in out:
                     bad.append("INV-array-guard: 'drives %s' was not refused on an array (rc=%s)" % (cmd, rc))
@@ -2124,7 +2124,7 @@ def run_layout(env, rec, layout, level, st, only_flows, log):
 FLOWS_BY_NAME = {n: a for n, a, _ in FLOWS}
 
 
-CHANGING_FLOWS = ("connect", "disconnect", "move", "adopt", "recover", "replace", "fillorder", "release", "bootsection", "restore", "power", "scan",
+CHANGING_FLOWS = ("connect", "disconnect", "move", "adopt", "remount", "replace", "fillorder", "release", "bootsection", "restore", "power", "scan",
                   "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize")
 NO_BUSY_FLOWS = ("power", "rename", "sleep", "wake", "eject", "wipe", "fillorder", "limit")      # they stop no container, so they do not wait for a backup
 SAFETY_LAYOUTS = r"^(m1-b1|m2-b2|m1-b0|legacy-single-drive|oldpool-m2-b1|m1-b1-bootsec|m2-b1-uneven)$"

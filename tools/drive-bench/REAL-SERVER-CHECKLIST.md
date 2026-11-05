@@ -109,11 +109,11 @@ For every step that did not match: the exact command, what you expected, and wha
 
 ## 5. Known limits (on purpose, for now)
 
-- `drives replace`, `recover`, `connect`, `disconnect` and the other pool commands are refused on a ZFS / RAID array. Use the
+- `drives replace`, `remount`, `connect`, `disconnect` and the other pool commands are refused on a ZFS / RAID array. Use the
   tools of the array (`zpool`, `mdadm`) to replace a drive; `sudo drives status` shows what is wrong.
 - A ZFS / RAID setup becomes the Main storage. It cannot be built while the Main storage already has drives.
 - Encryption, hot spare and SSD cache are for the ZFS / RAID setups only. Pools (plain, mirror, SnapRAID) are not encrypted
-  by this tool: that needs extra work in connect / replace / recover and can be added later if you want it.
+  by this tool: that needs extra work in connect / replace / remount and can be added later if you want it.
 - The encryption key sits on the boot drive: it protects against a stolen drive, not a stolen server. Always keep a copy elsewhere.
 - A hot spare takes over by itself, but putting a new drive in the spare's place afterwards is done by hand (`zpool` / `mdadm`).
 - All drives of a RAID setup should be the same size: a bigger drive only uses as much space as the smallest one.

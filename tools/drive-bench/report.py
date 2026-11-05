@@ -238,8 +238,8 @@ def capabilities(R, meta):
     add("Disconnect the last Backup drive (typing REMOVE)", [r for r in d if ans_at(r, "Type REMOVE")], 0, "", "no run reached the question")
     add("Move a drive between Main and Backup", of(R, "move", pre=False), 0, "", "not run")
     add("Replace a dead drive (restores its files from the backup)", of(R, "replace", pre=True), 0, "", "needs the unplug scenarios")
-    add("Recover after an unplug or power cut", of(R, "recover", pre=True), 0, "", "needs the unplug scenarios", ok=("DONE", "NOTHING"))
-    add("Recover when nothing is wrong", of(R, "recover", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
+    add("Remount after an unplug or power cut", of(R, "remount", pre=True), 0, "", "needs the unplug scenarios", ok=("DONE", "NOTHING"))
+    add("Remount when nothing is wrong", of(R, "remount", pre=False), 0, "", "not run", ok=("DONE", "NOTHING"))
     add("Use part of the boot drive as a pool drive", of(R, "bootsection", pre=False), 0, "", "not run")
     add("Take all drives out of the pools", of(R, "release", pre=False), 0, "", "not run")
     add("Copy back only the missing files from the backup", of(R, "restore", pre=False), 0, "", "not run")
@@ -359,7 +359,7 @@ IDEAS = [
     ("exitcodes", "Exit code 1 when a command is refused", "Commands that refuse ('is the only main drive', 'No new drive found') exit with 0, so a script cannot tell.",
      "Make each flow's refusal end with `exit 1` (the dispatcher already runs `sync_filebrowser` after, which hides the code).",
      lambda w, c, s, f: any(x["severity"] == "LOW" and x["problem"].startswith("exit 0 although") for x in f)),
-    ("backupaware", "Wait or warn when a backup or an upload is running", "disconnect, move, release, recover and replace stop containers and unmount pools with no check; `homelab-update` has one.",
+    ("backupaware", "Wait or warn when a backup or an upload is running", "disconnect, move, release, remount and replace stop containers and unmount pools with no check; `homelab-update` has one.",
      "Reuse `busy_reason` from homelab-update: before stopping containers, say 'a backup is running' and ask to wait.",
      lambda w, c, s, f: s and not s.get("knows_about_backup", True)),
     ("testmode", "Make the power and health steps testable", "In test mode power_apply, smart_health, udisksctl and the Homepage/FileBrowser sync are skipped, so the bench cannot see if they work.",
@@ -391,7 +391,7 @@ def others(R):
 
 
 # ---------------------------------------------------------------------------------------------------------------- output
-FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "recover", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "preset", "wizard"]
+FLOW_ORDER = ["menu", "status", "list", "usage", "health", "check", "scan", "connect", "disconnect", "move", "adopt", "power", "remount", "replace", "fillorder", "release", "bootsection", "restore", "rename", "sleep", "wake", "eject", "wipe", "balance", "limit", "resize", "preset", "wizard"]
 
 
 def stats(R):

@@ -1,12 +1,12 @@
 """The other commands of the project: homelab, homelab-sample, homelab-backup, homelab-update, homelab-restore-configs,
-homelab-selftest, homelab-check, hdd-recover.
+homelab-selftest, homelab-repocheck.
 
 Two parts:
   1. layout runs   the commands that can be pointed at the fake pools (HOMELAB_* settings) run on every layout
   2. real runs     every command on THIS server, as it is (you chose "fully real"), in tiers:
         safe        only reads and prints (version, help, status, list ...)
         asks        the command is started and every question is answered "no" / Enter, so nothing is changed
-        real        really does its job (a backup, a self-test, a recover, an update check ...)
+        real        really does its job (a backup, a self-test, a remount, an update check ...)
         dangerous   would change the server for good (update --yes, restore, install, theme edits): NOT run, listed in the report
     Before the real runs the bench stops when a backup is running or files are being uploaded, and asks you to type a word.
 """
@@ -59,9 +59,9 @@ REAL = [
     ("homelab-selftest version", "safe", "homelab-selftest", ["version"], "", ""),
     ("homelab-selftest help", "safe", "homelab-selftest", ["help"], "", ""),
     ("homelab-selftest", "real", "homelab-selftest", [], "", "checks the whole lab, writes a report file in your home"),
-    ("homelab-check", "safe", "homelab-check", ["version"], "", ""),
+    ("homelab-repocheck", "safe", "homelab-repocheck", ["version"], "", ""),
     ("homelab-backup", "real", "homelab-backup", [], "", "the real daily backup"),
-    ("hdd-recover", "real", "hdd-recover", [], "", "stops the containers, remounts the drives, starts them again"),
+    ("drives remount", "real", "drives", ["remount", "--now"], "", "stops the containers, remounts the drives, starts them again"),
     ("drives status (real)", "safe", "drives", ["status"], "", "the real pools, read only"),
     ("drives version (real)", "safe", "drives", ["version"], "", ""),
     ("drives power (real)", "real", "drives", ["power"], "", "applies the real power settings"),
@@ -91,7 +91,7 @@ def find(env, name):
 
 
 def interpreter(path):
-    """bash for shell scripts, python for the python ones (homelab-check)."""
+    """bash for shell scripts, python for the python ones (homelab-repocheck)."""
     try:
         first = open(path, errors="replace").readline()
     except OSError:
@@ -234,7 +234,7 @@ def run(env, rec, a, log):
     if a.real == "full":
         log("")
         log("REAL RUNS on this server: %s" % ", ".join(tiers))
-        log("It will run a real backup, a real self-test and a real recover (containers stop for about a minute)")
+        log("It will run a real backup, a real self-test and a real remount (containers stop for about a minute)")
         log("and start (but decline) updates and restores. Nothing marked 'dangerous' is run.")
         if not a.yes_real:
             try:

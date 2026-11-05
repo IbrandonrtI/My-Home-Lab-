@@ -670,7 +670,7 @@ def smoke_scenarios(env, rec, layout, log):
     for cmd, args, rc_ok in (("homelab-update", ["list"], (0,)), ("homelab-restore-configs", ["list"], (0, 1)),
                              ("homelab-restore-configs", ["check"], (0, 1)), ("homelab", ["docs"], (0,)), ("homelab", ["commands"], (0,)),
                              ("homelab", ["secrets"], (0, 1)), ("drives", ["list"], (0,)), ("drives", ["usage"], (0,)),
-                             ("drives", ["status"], (0,)), ("homelab-check", ["version"], (0,))):
+                             ("drives", ["status"], (0,)), ("homelab-repocheck", ["version"], (0,))):
         cid = "truth|%s|smoke: %s %s" % (layout.key, cmd, " ".join(args))
         if cid in rec.done or not others.find(env, cmd):
             continue
@@ -701,7 +701,7 @@ CLI = [
     ("drives", ["help", "--help", "-h"], ["version", "--version"]),
 ]
 
-ALIASES = ("priority", "rebalance", "reorder", "recover", "menu")     # other names of a command that is listed (recover = hdd-recover)
+ALIASES = ("priority", "rebalance", "reorder", "menu")     # other names of a command that is listed
 BAD_TEXT = [r"unbound variable", r"syntax error", r"command not found", r"Traceback \(most recent", r"\$\{[A-Za-z_]", r"\(null\)",
             r"\bundefined\b", r"bad substitution", r"integer expression expected", r"\[: .*: (?:unary|binary) operator expected"]
 
@@ -809,7 +809,7 @@ def check_named_commands(ctx, env, rec, mapped):
     rc, out, secs, to = ctx.run("homelab", ["commands"], timeout=60)
     n = 0
     bad = bad_text(out)
-    named = re.findall(r"^\s+(?:sudo )?((?:drives|homelab[\w-]*|hdd-recover)(?: [a-z-]+)?)\s*$", out, re.M)
+    named = re.findall(r"^\s+(?:sudo )?((?:drives|homelab[\w-]*)(?: [a-z-]+)?)\s*$", out, re.M)
     for item in sorted(set(named)):
         parts = item.split()
         cmd = parts[0]
