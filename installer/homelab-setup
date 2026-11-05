@@ -96,6 +96,22 @@ OLD_LAN = os.environ.get("HOMELAB_OLD_LAN", "")
 OLD_FQDN = os.environ.get("HOMELAB_OLD_FQDN", "")
 OLD_TAILNET = OLD_FQDN.split(".", 1)[1] if "." in OLD_FQDN else ""
 
+
+class Abort(Exception):
+    """A step that cannot continue. The message is shown to the person."""
+
+
+# ---------------------------------------------------------------- global switches
+class Opt:
+    """Command-line options."""
+    dry = False
+    yes = False
+    backup = None
+    no_restore = False
+    force_existing = False
+    all = False
+    details = False
+    repo = None
 # ---------------------------------------------------------------- look (same style as the homelab command)
 _tty = ((sys.stdout.isatty() or os.environ.get("HLS_COLOR") == "1")          # HLS_COLOR=1 forces colour (tests)
         and not os.environ.get("NO_COLOR") and os.environ.get("TERM", "dumb") != "dumb")
@@ -106,8 +122,8 @@ else:
     B = D = G = Y = R = N = C = U = ""
 _loc = (os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or "")
 _utf = bool(re.search(r"utf-?8", _loc, re.I))
-S_OK, S_TODO, S_BAD, S_WAIT, S_NA, S_RULE, S_DOT = (
-    ("✓", "○", "✗", "·", "–", "─", "·") if _utf else ("+", "o", "x", ".", "-", "-", "-"))
+S_OK, S_TODO, S_BAD, S_WAIT, S_RULE, S_DOT = (
+    ("✓", "○", "✗", "·", "─", "·") if _utf else ("+", "o", "x", ".", "-", "-"))
 
 
 def _terminal_size():
@@ -149,11 +165,6 @@ def window_rows():
 def term_cols():
     """Width of the terminal in columns, at least 40."""
     return max(window_cols(), 40)
-
-
-def live_cols():
-    """The window width with no minimum: the status line must never be longer than the window."""
-    return max(window_cols(), 1)
 
 
 def out(msg=""):
@@ -502,25 +513,6 @@ class Live:
 
 
 atexit.register(Live.close)                 # never leave the terminal with the last row reserved or its echo switched off
-
-
-class Abort(Exception):
-    """A step that cannot continue. The message is shown to the person."""
-
-
-# ---------------------------------------------------------------- global switches
-class Opt:
-    """Command-line options."""
-    dry = False
-    yes = False
-    backup = None
-    no_restore = False
-    force_existing = False
-    all = False
-    details = False
-    repo = None
-
-
 # ---------------------------------------------------------------- running commands
 def run(args, input_text=None, timeout=None, check=False, env=None, quiet=False, shell=False):
     """Run a command. Returns (returncode, stdout+stderr). In dry-run mode, changing commands are not run."""
@@ -643,14 +635,6 @@ def mkdirs(path, uid=None, gid=None, mode=0o755):
         pass
     if uid is not None:
         chown(path, uid, gid)
-
-
-def sha(path):
-    """SHA-256 of a file as hex text, or '' when it cannot be read."""
-    try:
-        return hashlib.sha256(open(path, "rb").read()).hexdigest()
-    except OSError:
-        return ""
 
 
 # ---------------------------------------------------------------- random values
@@ -810,8 +794,6 @@ def typed(word, prompt):
     if Opt.yes:
         return True
     return ask(prompt).strip() == word
-
-
 # ================================================================ state, answers, secrets
 class State:
     """Non-secret facts: the answers given, which one-time actions ran, and what was acknowledged."""
@@ -933,8 +915,6 @@ def password_problem(pw):
     if not re.fullmatch(r"[A-Za-z0-9]+", pw):
         return "Use letters and digits only. Other characters can break the stack files and the Homepage configuration."
     return ""
-
-
 # ================================================================ the machine
 class Ctx:
     """Facts about THIS machine and the answers given at the start."""
@@ -943,7 +923,7 @@ class Ctx:
     admin = email = ""
     fqdn = tailnet = ts_id = ""
     repo = ""
-    os_id = os_like = os_name = os_codename = os_version = ""
+    os_id = os_name = os_codename = os_version = ""
 
     @classmethod
     def detect(cls):
@@ -977,7 +957,6 @@ class Ctx:
                 k, v = line.split("=", 1)
                 info[k] = v.strip().strip('"')
         cls.os_id = info.get("ID", "")
-        cls.os_like = info.get("ID_LIKE", "")
         cls.os_name = info.get("PRETTY_NAME", cls.os_id)
         cls.os_version = info.get("VERSION_ID", "")
         cls.os_codename = info.get("UBUNTU_CODENAME") or info.get("VERSION_CODENAME", "")
@@ -1161,6 +1140,72 @@ def repo_file(*parts):
     return os.path.join(Ctx.repo, *parts)
 
 
+def stack_text(name):
+    """The stack file for `name` with this machine's values filled in."""
+    fn = STACKS[name][0]
+    text = read_file(repo_file("stacks", fn))
+    if not text:
+        raise Abort("The repository file stacks/%s is missing (looked in %s)." % (fn, Ctx.repo))
+    text = subst(text)
+    if name == "filebrowser":
+        text = filebrowser_volumes(text)
+    if name == "speedtest-tracker":
+        key = Secrets.get("APP_KEY")
+        text = re.sub(r'(APP_KEY:\s*)"[^"]*"', lambda m: '%s"%s"' % (m.group(1), key), text)
+    if name == "navidrome":
+        text = text.replace("/mnt/storage/music:/music:ro", "%s:/music:ro" % (music_folder() or "/mnt/storage/music"))
+        text = text.replace('user: "1000:1000"', 'user: "%d:%d"' % (Ctx.uid, Ctx.gid))
+    if name == "beszel-agent":
+        text = re.sub(r"(\n\s*KEY:\s*)'[^']*'", lambda m: "%s'%s'" % (m.group(1), Secrets.get("BESZEL_KEY")), text)
+        text = re.sub(r"(\n\s*TOKEN:\s*)\S+", lambda m: "%s%s" % (m.group(1), Secrets.get("BESZEL_TOKEN")), text)
+    return text
+
+
+MUSIC_FOLDER_NAMES = ("music", "Music", "downtify", "Downtify", "Downtify/music", "downtify/music", "media/music", "Media/Music", "downloads/music")
+
+
+def music_folder():
+    """The folder with the songs Downtify saved, or '' (the same search as homelab-stats). In this order: HOMELAB_MUSIC_DIR, the line in
+    /var/lib/homelab/music-dir, the music folder of the Downtify container, a few usual names in the main pool."""
+    forced = os.environ.get("HOMELAB_MUSIC_DIR") or read_file(P("/var/lib/homelab/music-dir")).strip()
+    if forced:
+        return forced if os.path.isdir(P(forced)) else ""
+    rc, ps = run(["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}"], timeout=20)
+    for line in ps.splitlines():
+        f = line.split("|")
+        if rc == 0 and len(f) == 2 and "downtify" in line.lower():
+            rc2, mounts = run(["docker", "inspect", f[0], "--format", "{{range .Mounts}}{{.Destination}}|{{.Source}}{{println}}{{end}}"], timeout=10)
+            for m in mounts.splitlines():
+                d = m.split("|", 1)
+                if len(d) == 2 and re.search(r"music|download", d[0], re.I) and os.path.isdir(P(d[1])):
+                    return d[1]
+    for name in MUSIC_FOLDER_NAMES:
+        if os.path.isdir(P("/mnt/storage/" + name)):
+            return "/mnt/storage/" + name
+    return ""
+
+
+def stack_env(name):
+    """The variables Portainer needs for the stack, as (name, value) pairs."""
+    if name == "immich":
+        return [("UPLOAD_LOCATION", "/mnt/storage/immich"), ("DB_DATA_LOCATION", Ctx.home + "/immich/postgres"),
+                ("TZ", Ctx.tz), ("IMMICH_VERSION", "release"), ("DB_PASSWORD", Secrets.get("DB_PASSWORD")),
+                ("DB_USERNAME", "postgres"), ("DB_DATABASE_NAME", "immich")]
+    if name == "nextcloud":
+        return [("NC_ADMIN_USER", Ctx.admin), ("NC_ADMIN_PASSWORD", Runtime.password or ""),
+                ("NC_DB_PASSWORD", Secrets.get("NC_DB_PASSWORD"))]
+    return []
+
+
+def images_in(text):
+    """The image names used in a stack file."""
+    imgs = []
+    for m in re.finditer(r"^\s*image:\s*(\S+)", text, re.M):
+        img = m.group(1).replace("${IMMICH_VERSION:-release}", "release")
+        if img not in imgs:
+            imgs.append(img)
+    return imgs
+# ================================================================ drives, pools, drive names and the volumes that Homepage and FileBrowser get
 def backup_mounted():
     """The backup pool (/mnt/backup) is a real mount point (a backup drive has been connected with `sudo drives`)."""
     return os.path.ismount(P("/mnt/backup")) or os.environ.get("HLS_MOUNTED_BACKUP") == "1"
@@ -1489,8 +1534,7 @@ def mount_types(mountinfo):
         if len(f) > 4 and tail.split():
             types[f[4].replace("\\040", " ")] = tail.split()[0]
     return types
-
-
+# ================================================================ dashboard layout: tabs, groups, styles and settings edits (managed blocks)
 CSS_LAYOUT_MARK = "How this file is organised"      # in the header of the shipped custom.css since it was tidied up
 THEME_BEGIN, THEME_END = "/* >>> homelab theme >>>", "/* <<< homelab theme <<< */"      # the block `homelab theme` writes
 
@@ -1848,53 +1892,7 @@ def layout_storage_wide(settings, seen):
 def layout_music_wide(settings, seen):
     """The Music Library row holds two cards since Recently Saved Songs was added: columns 1 becomes 2, once."""
     return layout_columns_changed(settings, seen, "Music Library", 1, 2, MUSIC_WIDE)
-
-
-def stack_text(name):
-    """The stack file for `name` with this machine's values filled in."""
-    fn = STACKS[name][0]
-    text = read_file(repo_file("stacks", fn))
-    if not text:
-        raise Abort("The repository file stacks/%s is missing (looked in %s)." % (fn, Ctx.repo))
-    text = subst(text)
-    if name == "filebrowser":
-        text = filebrowser_volumes(text)
-    if name == "speedtest-tracker":
-        key = Secrets.get("APP_KEY")
-        text = re.sub(r'(APP_KEY:\s*)"[^"]*"', lambda m: '%s"%s"' % (m.group(1), key), text)
-    if name == "navidrome":
-        text = text.replace("/mnt/storage/music:/music:ro", "%s:/music:ro" % (music_folder() or "/mnt/storage/music"))
-        text = text.replace('user: "1000:1000"', 'user: "%d:%d"' % (Ctx.uid, Ctx.gid))
-    if name == "beszel-agent":
-        text = re.sub(r"(\n\s*KEY:\s*)'[^']*'", lambda m: "%s'%s'" % (m.group(1), Secrets.get("BESZEL_KEY")), text)
-        text = re.sub(r"(\n\s*TOKEN:\s*)\S+", lambda m: "%s%s" % (m.group(1), Secrets.get("BESZEL_TOKEN")), text)
-    return text
-
-
-MUSIC_FOLDER_NAMES = ("music", "Music", "downtify", "Downtify", "Downtify/music", "downtify/music", "media/music", "Media/Music", "downloads/music")
-
-
-def music_folder():
-    """The folder with the songs Downtify saved, or '' (the same search as homelab-stats). In this order: HOMELAB_MUSIC_DIR, the line in
-    /var/lib/homelab/music-dir, the music folder of the Downtify container, a few usual names in the main pool."""
-    forced = os.environ.get("HOMELAB_MUSIC_DIR") or read_file(P("/var/lib/homelab/music-dir")).strip()
-    if forced:
-        return forced if os.path.isdir(P(forced)) else ""
-    rc, ps = run(["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}"], timeout=20)
-    for line in ps.splitlines():
-        f = line.split("|")
-        if rc == 0 and len(f) == 2 and "downtify" in line.lower():
-            rc2, mounts = run(["docker", "inspect", f[0], "--format", "{{range .Mounts}}{{.Destination}}|{{.Source}}{{println}}{{end}}"], timeout=10)
-            for m in mounts.splitlines():
-                d = m.split("|", 1)
-                if len(d) == 2 and re.search(r"music|download", d[0], re.I) and os.path.isdir(P(d[1])):
-                    return d[1]
-    for name in MUSIC_FOLDER_NAMES:
-        if os.path.isdir(P("/mnt/storage/" + name)):
-            return "/mnt/storage/" + name
-    return ""
-
-
+# ================================================================ dashboard cards: find, add, move and edit cards in services.yaml
 def card_range(lines, card_id):
     """(start, end) of the card with this id in a services.yaml split into lines, or None."""
     idx = next((i for i, l in enumerate(lines) if re.match(r"^\s*id:\s*%s\s*$" % re.escape(card_id), l)), None)
@@ -2016,28 +2014,6 @@ def services_without_card(text, card_id):
 def navidrome_card_first(text):
     """True when the Navidrome card is the first card of its group (or there is no such card)."""
     return card_to_top(text, "navidrome-card") == text
-
-
-def stack_env(name):
-    """The variables Portainer needs for the stack, as (name, value) pairs."""
-    if name == "immich":
-        return [("UPLOAD_LOCATION", "/mnt/storage/immich"), ("DB_DATA_LOCATION", Ctx.home + "/immich/postgres"),
-                ("TZ", Ctx.tz), ("IMMICH_VERSION", "release"), ("DB_PASSWORD", Secrets.get("DB_PASSWORD")),
-                ("DB_USERNAME", "postgres"), ("DB_DATABASE_NAME", "immich")]
-    if name == "nextcloud":
-        return [("NC_ADMIN_USER", Ctx.admin), ("NC_ADMIN_PASSWORD", Runtime.password or ""),
-                ("NC_DB_PASSWORD", Secrets.get("NC_DB_PASSWORD"))]
-    return []
-
-
-def images_in(text):
-    """The image names used in a stack file."""
-    imgs = []
-    for m in re.finditer(r"^\s*image:\s*(\S+)", text, re.M):
-        img = m.group(1).replace("${IMMICH_VERSION:-release}", "release")
-        if img not in imgs:
-            imgs.append(img)
-    return imgs
 
 
 # ================================================================ Homepage config (text edits that keep your comments and order)
@@ -2210,8 +2186,6 @@ def hp_strip_widgets(text):
         if r and r[2] is not None:
             del lines[r[2]:r[3]]
     return "\n".join(lines)
-
-
 # ================================================================ steps and the checklist
 class Result:
     """The state of one step: done, todo, blocked, skip or na, with a detail text."""
@@ -2494,8 +2468,7 @@ def run_pass(res, selected=None):
         unblock(res)
     Live.close()
     return gained
-
-
+# ================================================================ system, Tailscale, network and folders
 class Mode:
     """How the machine was classified: new, or an existing lab."""
     existing = False          # this machine already runs the lab (built by hand)
@@ -2987,8 +2960,6 @@ class SecretsFile(Step):
         if old:
             Secrets.vals["NC_DB_PASSWORD"] = old
         Secrets.save()
-
-
 # ================================================================ Portainer
 class Portainer:
     """Portainer's web API (login, token, stacks)."""
@@ -3336,8 +3307,6 @@ class FileBrowserDrives(Step):
         wait_for(lambda: stack_up("filebrowser"), "FileBrowser to restart", 120)
         wait_for(lambda: self.probe() == "done", "FileBrowser to show the drives", 60)
 
-
-
 # ================================================================ restore from a backup (only when one is found and you said yes)
 def need_email():
     """The email address given at the start, or a message saying how to give it (Immich and Beszel need one)."""
@@ -3478,8 +3447,6 @@ class RestoreData(Step):
 def immich_restored():
     """True when data was restored from a backup and Immich's own database dumps are present."""
     return bool(restore_choice().get("data")) and bool(glob.glob(P("/mnt/storage/immich/backups/*")))
-
-
 # ================================================================ Homepage config files
 HP_FILES = ["services.yaml", "settings.yaml", "widgets.yaml", "bookmarks.yaml", "custom.css"]
 
@@ -3538,7 +3505,7 @@ class HomepageFiles(Step):
 
 @step
 class HomepageTabs(Step):
-    id, group, title = "homepage-tabs", "Homepage", "Homepage tabs (Home, Links, Stats), group icons, bookmark cards, the STATS cards and their styles"
+    id, group, title = "homepage-tabs", "Homepage", "Homepage tabs (Home, Stats, Links), group icons, bookmark cards, the STATS cards and their styles"
     needs = ("homepage-files", "scripts")
 
     def applies(self):
@@ -3592,7 +3559,7 @@ class HomepageTabs(Step):
         sett, css, seen, js, svc = self.wanted()
         own = (Ctx.uid, Ctx.gid)
         if Opt.dry:
-            out("      would add the tabs (Home, Links, Stats), the group icons, the bookmark cards, the STATS cards and their styles to the Homepage files")
+            out("      would add the tabs (Home, Stats, Links), the group icons, the bookmark cards, the STATS cards and their styles to the Homepage files")
             return
         for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js), ("services.yaml", old_svc, svc)):
             if new == old:
@@ -3619,7 +3586,7 @@ class HomepageTabs(Step):
         if STATS_BEGIN in svc:
             out("      The Stats tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
         if CAL_BEGIN in svc:
-            out("      The Calendar is at the bottom of the Home tab. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
+            out("      The Calendar is at the bottom of the Stats tab, under Folder Sizes. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
 
 
 def fetch_picture(addr):
@@ -3683,6 +3650,14 @@ class HomepageBackground(Step):
             "To use another picture later:  homelab theme background URL-or-FILE" % name)
 
 
+def run_calendar_build():
+    """Make the calendar files (holidays, observances, your events) in the images folder of Homepage."""
+    run([P("/usr/local/bin/homelab-calendar"), "build"], env=dict(os.environ, HP_DIR=P(hp_dir())), timeout=60)
+
+
+def run_as_root_stats(stats_file):
+    """Make the first stats.json (without counting folder sizes, which takes minutes)."""
+    run([P("/usr/local/sbin/homelab-stats"), "quick"], env=dict(os.environ, HOMELAB_STATS_OUT=stats_file), timeout=180)
 # ================================================================ Navidrome (plays the songs Downtify saved)
 class NavidromeStack(StackStep):
     """Only on a machine that has a music folder (the folder Downtify saves into). A hand-built server is only looked at."""
@@ -3765,16 +3740,6 @@ class NavidromeCard(Step):
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
             out("      The Navidrome card is first in its group, called Navidrome (\"Spotify Music Player\"), and has Navidrome's own player inside "
                 "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
-
-
-def run_calendar_build():
-    """Make the calendar files (holidays, observances, your events) in the images folder of Homepage."""
-    run([P("/usr/local/bin/homelab-calendar"), "build"], env=dict(os.environ, HP_DIR=P(hp_dir())), timeout=60)
-
-
-def run_as_root_stats(stats_file):
-    """Make the first stats.json (without counting folder sizes, which takes minutes)."""
-    run([P("/usr/local/sbin/homelab-stats"), "quick"], env=dict(os.environ, HOMELAB_STATS_OUT=stats_file), timeout=180)
 
 
 # ================================================================ AdGuard Home
@@ -4071,8 +4036,6 @@ class BeszelAgentKey(Step):
             raise Abort("The Beszel hub did not give an agent token (HTTP %s)." % st)
         Secrets.set("BESZEL_KEY", key)
         Secrets.set("BESZEL_TOKEN", token)
-
-
 # ================================================================ Homepage widgets: create the key, TEST it, then write it
 def basic(user, pw):
     """Basic-authentication header for a user name and password."""
@@ -4439,8 +4402,6 @@ def _register_widgets():
 
 
 _register_widgets()
-
-
 # ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
            ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"), ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"),
@@ -4853,9 +4814,7 @@ class Blocklists(Step):
 
 
 _register_acks()
-
-
-# ================================================================ commands
+# ================================================================ commands: install, refresh, verify, checklist, growdisk
 def ensure_root():
     """Start the installer again under sudo when it was not started as root."""
     if FAKE or os.geteuid() == 0:
@@ -5423,8 +5382,7 @@ def cmd_refresh():
     write_progress(res)
     show_checklist(res)
     next_step_section(res)
-
-
+# ================================================================ more commands: adguard, cards, upgrade, filebrowser, homepage, fill, secrets, progress
 def cmd_adguard():
     """`adguard`: add AdGuard Home to a machine that was installed without it."""
     load_all()
@@ -5781,8 +5739,7 @@ is growing an LVM system volume into unused space of its drive, and only after y
 COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
             "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
             "homepage": cmd_homepage, "adguard": cmd_adguard, "upgrade": cmd_upgrade, "growdisk": cmd_growdisk}
-
-
+# ================================================================ the command line
 def main(argv):
     """Read the command line and run the command."""
     try:
