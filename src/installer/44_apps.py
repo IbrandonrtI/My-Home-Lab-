@@ -9,7 +9,8 @@ class NavidromeStack(StackStep):
         return "music folder %s" % music_folder()
 
     def stamp(self):
-        return hashlib.md5(stack_text("navidrome").encode()).hexdigest()
+        keys = Secrets.get("LASTFM_APIKEY") + Secrets.get("LASTFM_SECRET")        # new Last.fm keys deploy Navidrome once more
+        return hashlib.md5((stack_text("navidrome") + keys).encode()).hexdigest()
 
     def probe(self):
         # a Navidrome from an earlier version of the installer is deployed once more, so it gets the Spotify-ish theme and the frame setting

@@ -28,6 +28,54 @@ def cmd_adguard():
     cmd_refresh()
 
 
+LASTFM_KEY = re.compile(r"^[0-9a-fA-F]{32}$")
+
+
+def cmd_lastfm(rest):
+    """`lastfm`: save your own Last.fm API key and secret so Navidrome can suggest similar songs and artists (`lastfm remove` takes them out)."""
+    load_all()
+    if Mode.existing:
+        say("This machine was built by hand, so the installer only reads it. Put the two Last.fm keys into the Navidrome stack in Portainer yourself.")
+        return
+    if not State.exists():
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    have = bool(Secrets.get("LASTFM_APIKEY"))
+    if rest[:1] == ["remove"]:
+        if not have:
+            say("No Last.fm key is saved. Nothing to remove.")
+            return
+        if Opt.dry:
+            say("This is a dry run: it would remove the saved Last.fm key and deploy Navidrome again. Nothing was changed.")
+            return
+        for k in ("LASTFM_APIKEY", "LASTFM_SECRET"):
+            Secrets.vals.pop(k, None)
+        Secrets.save()
+        good("The Last.fm key was removed. Navidrome is deployed again without it.")
+        return cmd_refresh()
+    if rest:
+        raise Abort("Unknown word '%s'. Use: homelab-setup lastfm   or   homelab-setup lastfm remove" % rest[0])
+    out("")
+    say("Navidrome can use Last.fm to suggest similar songs and artists (the Instant Mix of a song). You make a free key once:")
+    say("  1. Sign in (or sign up) at https://www.last.fm\n"
+        "  2. Open https://www.last.fm/api/account/create and fill in an application name (for example Home Lab) and a short description.\n"
+        "  3. The page that follows shows an API key and a Shared secret. Copy both.")
+    if have:
+        warn("A Last.fm key is already saved. Typing a new one replaces it.")
+    if Opt.dry:
+        say("This is a dry run: it would ask for the two keys, save them (root only) and deploy Navidrome again. Nothing was changed.")
+        return
+    key = ask("API key").strip()
+    secret = ask_secret("Shared secret").strip()
+    if not LASTFM_KEY.match(key) or not LASTFM_KEY.match(secret):
+        raise Abort("That does not look like a Last.fm key: the API key and the Shared secret are each 32 letters and digits. Nothing was saved.")
+    Secrets.set("LASTFM_APIKEY", key.lower())
+    Secrets.set("LASTFM_SECRET", secret.lower())
+    good("The keys are saved in %s (root only). Deploying Navidrome with them ..." % SECRET_FILE.replace(ROOT, ""))
+    cmd_refresh()
+    say("Done. In Navidrome open a song's menu and choose Instant Mix. Optional: to also send what you play to Last.fm, click your name in Navidrome, "
+        "then Personal, and link your Last.fm account there.")
+
+
 def cmd_cards(rest):
     """`cards`: look for new services (containers with a web page) and give each its Homepage card; also move, ignore, list."""
     prog = installed_copy("homelab-cards", "/usr/local/sbin")
@@ -341,6 +389,7 @@ Commands:
   homepage                 let Homepage see the Main and Backup pool, and move custom.css to the current layout
   adguard                  add AdGuard Home, if you skipped it during the install
   cards                    give every new service (a container with a web page) its Homepage card; also: cards list | move | ignore
+  lastfm                   save your free Last.fm key so Navidrome can suggest similar songs; also: lastfm remove
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help

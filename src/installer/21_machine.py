@@ -277,6 +277,8 @@ def stack_env(name):
     if name == "nextcloud":
         return [("NC_ADMIN_USER", Ctx.admin), ("NC_ADMIN_PASSWORD", Runtime.password or ""),
                 ("NC_DB_PASSWORD", Secrets.get("NC_DB_PASSWORD"))]
+    if name == "navidrome":
+        return [("LASTFM_APIKEY", Secrets.get("LASTFM_APIKEY")), ("LASTFM_SECRET", Secrets.get("LASTFM_SECRET"))]
     return []
 
 
