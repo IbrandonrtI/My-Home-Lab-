@@ -1,7 +1,10 @@
 # ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
-           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"), ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"),
-           ("homelab-selftest", "/usr/local/sbin"), ("hdd-recover", "/usr/local/bin"), ("homelab", "/usr/local/bin"), ("homelab-check", "/usr/local/bin")]
+           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"),
+           ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"), ("homelab-selftest", "/usr/local/sbin"),
+           ("homelab", "/usr/local/bin"), ("homelab-repocheck", "/usr/local/bin")]
+# commands that were renamed or removed: an upgrade deletes the old copies so they do not linger on the server
+RETIRED_SCRIPTS = ["/usr/local/bin/hdd-recover", "/usr/local/bin/homelab-check"]
 
 
 def render_script(name):
@@ -32,6 +35,8 @@ class ScriptsInstalled(Step):
         return items
 
     def probe(self):
+        if any(os.path.exists(P(old)) for old in RETIRED_SCRIPTS):
+            return "todo"
         for n, d, body in self._wanted():
             if not body:
                 return "todo"
@@ -48,6 +53,9 @@ class ScriptsInstalled(Step):
             if os.path.exists(dst) and read_file(dst) == body:
                 continue
             write_file(dst, body, 0o755)
+        for old in RETIRED_SCRIPTS:
+            if os.path.exists(P(old)):
+                os.remove(P(old))
 
 
 @step
