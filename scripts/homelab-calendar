@@ -2,7 +2,7 @@
 """homelab-calendar - the holidays and your own events for the Calendar on the Homepage dashboard.
 
 It writes three small calendar files into the images folder of Homepage (~/homepage-config/images/), which the Calendar on the
-Home tab reads:
+Stats tab reads:
   holidays.ics       US federal holidays, plus Lincoln's Birthday and Election Day (New York State)
   observances.ics    Valentine's Day, Mother's Day, Father's Day, Halloween, Lunar New Year and Diwali
   events.ics         your own events (kept in ~/homepage-config/events.txt, one per line, you may edit that file by hand)
