@@ -15,7 +15,7 @@ import termios
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-src = open(os.path.join(HERE, "..", "src", "p08_system2.py"), encoding="utf-8").read()
+src = open(os.path.join(HERE, "..", "src", "installer", "46_scripts_cron.py"), encoding="utf-8").read()
 m = re.search(r'LOGIN_BLOCK = """(.*?)"""', src, re.S)
 bad = 0
 
