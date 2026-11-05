@@ -1,0 +1,104 @@
+# AudioMuse-AI: listens to your songs once, then Navidrome can suggest similar songs (Instant Mix) from how they sound.
+# Stack name in Portainer: audiomuse
+# Port:    8100 (AudioMuse's own web page; the analysis of your songs is started there). Inside the container it is 8000,
+#          but Downtify already uses 8000 on the machine.
+# Folders: /home/your-username/audiomuse/postgres holds its database (the analysis results, which take hours to make again).
+# Logins:  the installer fills everything in (the AudioMuse login, the link to Navidrome and the token the Navidrome plugin uses),
+#          so the setup wizard of the web page is not needed.
+# Limits:  the worker is the part that listens to the songs and the only heavy one. AUDIOMUSE_MEM and AUDIOMUSE_CPUS cap it,
+#          so a slow analysis can never starve the other apps. Change the memory cap with:  sudo homelab-setup audiomuse memory
+# Models:  the CLAP and lyrics models are switched off (each needs a lot more memory). "Similar Song" does not need them.
+#          They only apply the first time the stack starts; after that the web page (Administration > Setup Wizard) decides.
+services:
+  audiomuse-postgres:
+    image: postgres:15-alpine
+    container_name: audiomuse-postgres
+    restart: unless-stopped
+    environment:
+      TZ: "${TZ:-UTC}"
+      POSTGRES_USER: "audiomuse"
+      POSTGRES_PASSWORD: "${AUDIOMUSE_DB_PASSWORD}"
+      POSTGRES_DB: "audiomusedb"
+    volumes:
+      - /home/your-username/audiomuse/postgres:/var/lib/postgresql/data
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  audiomuse-flask:
+    image: ghcr.io/neptunehub/audiomuse-ai:3.7.0
+    container_name: audiomuse-flask
+    restart: unless-stopped
+    labels:
+      org.opencontainers.image.title: "AudioMuse-AI"
+    ports:
+      - "8100:8000"
+    environment:
+      SERVICE_TYPE: "flask"
+      TZ: "${TZ:-UTC}"
+      POSTGRES_USER: "audiomuse"
+      POSTGRES_PASSWORD: "${AUDIOMUSE_DB_PASSWORD}"
+      POSTGRES_DB: "audiomusedb"
+      POSTGRES_HOST: "audiomuse-postgres"
+      POSTGRES_PORT: "5432"
+      TEMP_DIR: "/app/temp_audio"
+      MEDIASERVER_TYPE: "navidrome"
+      NAVIDROME_URL: "${AUDIOMUSE_NAVIDROME_URL}"
+      NAVIDROME_USER: "${AUDIOMUSE_NAVIDROME_USER}"
+      NAVIDROME_PASSWORD: "${AUDIOMUSE_NAVIDROME_PASSWORD}"
+      AUDIOMUSE_USER: "${AUDIOMUSE_USER}"
+      AUDIOMUSE_PASSWORD: "${AUDIOMUSE_PASSWORD}"
+      API_TOKEN: "${AUDIOMUSE_TOKEN}"
+      JWT_SECRET: "${AUDIOMUSE_JWT_SECRET}"
+      CLAP_ENABLED: "false"
+      LYRICS_ENABLED: "false"
+    volumes:
+      - temp-audio-flask:/app/temp_audio
+      - plugins-flask:/app/plugin/installed
+    depends_on:
+      - audiomuse-postgres
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  audiomuse-worker:
+    image: ghcr.io/neptunehub/audiomuse-ai:3.7.0
+    container_name: audiomuse-worker
+    restart: unless-stopped
+    environment:
+      SERVICE_TYPE: "worker"
+      TZ: "${TZ:-UTC}"
+      POSTGRES_USER: "audiomuse"
+      POSTGRES_PASSWORD: "${AUDIOMUSE_DB_PASSWORD}"
+      POSTGRES_DB: "audiomusedb"
+      POSTGRES_HOST: "audiomuse-postgres"
+      POSTGRES_PORT: "5432"
+      TEMP_DIR: "/app/temp_audio"
+      MEDIASERVER_TYPE: "navidrome"
+      NAVIDROME_URL: "${AUDIOMUSE_NAVIDROME_URL}"
+      NAVIDROME_USER: "${AUDIOMUSE_NAVIDROME_USER}"
+      NAVIDROME_PASSWORD: "${AUDIOMUSE_NAVIDROME_PASSWORD}"
+      AUDIOMUSE_USER: "${AUDIOMUSE_USER}"
+      AUDIOMUSE_PASSWORD: "${AUDIOMUSE_PASSWORD}"
+      API_TOKEN: "${AUDIOMUSE_TOKEN}"
+      JWT_SECRET: "${AUDIOMUSE_JWT_SECRET}"
+      CLAP_ENABLED: "false"
+      LYRICS_ENABLED: "false"
+    volumes:
+      - temp-audio-worker:/app/temp_audio
+      - plugins-worker:/app/plugin/installed
+    depends_on:
+      - audiomuse-postgres
+    deploy:
+      resources:
+        limits:
+          memory: "${AUDIOMUSE_MEM:-3g}"
+          cpus: "${AUDIOMUSE_CPUS:-3}"
+
+volumes:
+  temp-audio-flask:
+  temp-audio-worker:
+  plugins-flask:
+  plugins-worker:
