@@ -45,7 +45,7 @@ pool_reconfigure() {   # pool_reconfigure main|backup: the saved policy, order o
     return 1
   fi
   fstab_set_pool "$role"; sd_reload
-  say "The change is saved. It takes effect after the next restart (or: sudo hdd-recover)."
+  say "The change is saved. It takes effect after the next restart (or: sudo drives remount)."
   return 0
 }
 
@@ -167,7 +167,7 @@ limit_flow() {   # how much free space a pool drive keeps before the pool uses t
   local mp role label size cur new parsed
   mp=$(pick_branch "Which drive do you want to set the free-space limit for? ") || return 1
   role=$(branch_role "$mp"); label=$(basename "$mp")
-  if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo hdd-recover). Nothing was changed."; return 1; fi
+  if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo drives remount). Nothing was changed."; return 1; fi
   size=$(total_bytes "$mp")
   say ""
   say "$(branch_name "$mp") is $(human "$size"). It keeps this much free before the $role storage uses the next drive: $(limit_text "$mp")"

@@ -43,14 +43,14 @@ status_flow() {
         printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" \
           "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "-" "connected (used last)"
       else
-        printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" "-" "-" "-" "NOT MOUNTED (try: sudo hdd-recover)"
+        printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" "-" "-" "-" "NOT MOUNTED (try: sudo drives remount)"
       fi
     elif [ -n "$p" ] && mountpoint -q "$mp"; then
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "$p" \
         "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" \
         "$(smart_health "$(disk_of_part "$p")")" "connected"
     else
-      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover. Dead? sudo drives replace)"
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo drives remount. Dead? sudo drives replace)"
     fi
   done
   for mp in $(parity_mounts); do
@@ -59,7 +59,7 @@ status_flow() {
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "$p" \
         "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "$(smart_health "$(disk_of_part "$p")")" "connected (SnapRAID protection)"
     else
-      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "-" "-" "-" "-" "MISSING (cable? then: sudo hdd-recover)"
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "-" "-" "-" "-" "MISSING (cable? then: sudo drives remount)"
     fi
   done
   if array_active; then

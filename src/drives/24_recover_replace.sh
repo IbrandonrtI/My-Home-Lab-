@@ -1,9 +1,9 @@
-# ---------- recover ----------
-recover_flow() {
+# ---------- remount (after an unplug or a power cut) ----------
+remount_flow() {
   array_guard || return 1
   local mp fail=0
   if [ -z "$(all_branches)" ] && ! pool_in_fstab "$MAIN_POOL" && ! pool_in_fstab "$BACKUP_POOL"; then
-    note "No drive is assigned to a pool, so there is nothing to recover."
+    note "No drive is assigned to a pool, so there is nothing to remount."
     note "Choose the drives first:  sudo drives"
     return 1
   fi
@@ -33,7 +33,7 @@ recover_flow() {
     mount_fstab "$BACKUP_POOL" || warn "The backup pool did not mount."
   fi
   if [ "$fail" = 1 ]; then
-    HOLD_HINT="They stay stopped on purpose: with a main drive missing they would write to an incomplete storage. Plug the drive in and run  sudo hdd-recover  again. If it is dead:  sudo drives replace"
+    HOLD_HINT="They stay stopped on purpose: with a main drive missing they would write to an incomplete storage. Plug the drive in and run  sudo drives remount  again. If it is dead:  sudo drives replace"
     return 1
   fi
   # main storage: the pool, or the plain drive before it is converted
@@ -136,7 +136,7 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
                "Copy the $n missing files ($(human "$bytes")) from the backup into the main storage. Files already there are never overwritten." \
                "Check that every file is there, then start the containers again." && return 0
     stop_containers "$MAIN_POOL"
-    HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo hdd-recover  to start them without restoring."
+    HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo drives remount  to start them without restoring."
   fi
   say "Copying (the services stay stopped)..."
   local prog=--info=stats1
@@ -172,7 +172,7 @@ after_restore_hints() {
 
 restore_flow() {   # restore only the missing files from the backup into the main pool
   need_tools || return 1
-  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive and run sudo hdd-recover first."; return 1; }
+  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive and run sudo drives remount first."; return 1; }
   local src
   src=$(find_backup_source) || { note "No backup copy of the main storage was found, so there is nothing to restore from."; return 1; }
   show_backup_source "$src" || { say "Cancelled."; return 1; }
@@ -194,7 +194,7 @@ replace_flow() {
   done
   if [ ${#miss[@]} -eq 0 ]; then
     say "No pool drive is missing, so there is nothing to replace."
-    say "  - A drive that was only unplugged: plug it in and run  sudo hdd-recover"
+    say "  - A drive that was only unplugged: plug it in and run  sudo drives remount"
     say "  - A working drive you want to swap: use  sudo drives  > Add or remove drives > Disconnect, then Connect"
     return 1
   fi

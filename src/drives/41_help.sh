@@ -22,7 +22,7 @@ Change the drives:
   spare         add a hot spare drive to a ZFS or RAID array (it takes over by itself when a drive dies)
   cache         add an SSD read cache to a ZFS array
   release       take every drive out of the pools (the files stay on the drives)
-  recover       after an unplug or a power cut: mount the drives and start the containers again
+  remount       after an unplug or a power cut: mount the drives and start the containers again
   replace       a drive died: put a new one in its place and copy the files back from the backup
   restore       copy only the missing files back from the backup
   fillorder     how a pool picks a drive for a new file (one at a time or spread) and which drive goes first
@@ -143,8 +143,8 @@ sudo drives release [--dry-run] [--yes] [--now]
   Try it first with --dry-run.
 EOF
     ;;
-    recover) cat <<'EOF'
-sudo drives recover [--dry-run] [--now]      (the same as sudo hdd-recover)
+    remount) cat <<'EOF'
+sudo drives remount [--dry-run] [--now]
   After an unplug or a power cut: stops the containers, mounts every drive and pool again, applies the power settings
   and starts the containers. When a main drive is missing the containers stay stopped on purpose.
 EOF

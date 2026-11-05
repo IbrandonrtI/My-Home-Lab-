@@ -235,7 +235,7 @@ health_flow() {
 
 check_findings() {   # check_findings MOUNTPOINT -> lines "LEVEL US text" (OK, WARN or PROBLEM) about one pool drive
   local mp=$1 part dev opts info st errs first sd h pe re base n total used
-  if ! mountpoint -q "$mp"; then printf '%s\n' "PROBLEM${US}it is not connected or not mounted (check the cable, then: sudo hdd-recover)"; return 0; fi
+  if ! mountpoint -q "$mp"; then printf '%s\n' "PROBLEM${US}it is not connected or not mounted (check the cable, then: sudo drives remount)"; return 0; fi
   part=$(branch_part "$mp")
   opts=$(findmnt -no OPTIONS "$mp" 2>/dev/null)
   if [[ ",$opts," == *,ro,* ]]; then printf '%s\n' "PROBLEM${US}it is mounted read-only: it hit an error and the system stopped writing to it"; fi
@@ -340,8 +340,8 @@ check_full_flow() {   # a full read-only scan of one drive: it is taken offline 
   fi
   say "Scanning $part (read-only)..."
   e2fsck -fn "$part" || rc=$?
-  mount_fstab "$mp" || die "Could not mount $name again. Run  sudo hdd-recover"
-  mount_fstab "$pool" || die "Could not mount the $role storage again. Run  sudo hdd-recover"
+  mount_fstab "$mp" || die "Could not mount $name again. Run  sudo drives remount"
+  mount_fstab "$pool" || die "Could not mount the $role storage again. Run  sudo drives remount"
   start_containers
   say ""
   if [ "$rc" = 0 ]; then

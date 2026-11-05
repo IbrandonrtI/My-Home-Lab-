@@ -17,7 +17,7 @@ sync_filebrowser() {
 # The first screen has three groups so it stays short; each group opens its own small menu.
 #   1) Show status
 #   2) Add or remove drives      connect, disconnect, move, boot drive section, take all out
-#   3) Fix a problem             recover after an unplug, replace a dead drive, copy back missing files
+#   3) Fix a problem             remount after an unplug, replace a dead drive, copy back missing files
 #   4) Settings and upgrades     power settings, fill order, convert the old single data drive
 ask_choice() { ask "Type a number and press Enter: "; }
 
@@ -87,16 +87,16 @@ problem_menu() {
   while :; do
     say ""
     say "Fix a problem"
-    say "  1) Recover after an unplug or power cut (same as hdd-recover)"
+    say "  1) Mount the drives again after an unplug or power cut"
     say "  2) Replace a dead drive (restores the missing files from the backup)"
     say "  3) Copy back only the files that are missing from the backup"
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
-      1) intro_ask "Recover after an unplug or power cut" \
+      1) intro_ask "Mount the drives again after an unplug or power cut" \
            "The services that use the storage are stopped, the drives are mounted again and the services start again." \
            "No files are changed. It takes about a minute." &&
-         { recover_flow && sync_filebrowser; } ;;
+         { remount_flow && sync_filebrowser; } ;;
       2) intro "Replace a dead drive" \
            "Next I list the pool drives that cannot be found and you pick the dead one." \
            "Then you pick the new drive. The missing files are copied back from the backup." \

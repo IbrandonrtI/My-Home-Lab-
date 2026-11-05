@@ -3,7 +3,7 @@ adopt_flow() {
   array_guard || return 1
   need_tools || return 1
   [ -z "$(branches_of main)" ] || { note "A main pool already exists. Nothing to convert."; return 1; }
-  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Plug the drive in, run sudo hdd-recover, then try again."; return 1; }
+  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Plug the drive in, run sudo drives remount, then try again."; return 1; }
   local src fst uuid part label cur before after pool="$MAIN_POOL" mp
   src=$(findmnt -no SOURCE "$pool"); fst=$(findmnt -no FSTYPE "$pool")
   [ "$fst" = ext4 ] || { note "$pool is $fst, not a plain ext4 drive. Cannot convert."; return 1; }

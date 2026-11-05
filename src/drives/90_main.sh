@@ -80,7 +80,7 @@ main() {
     move)         run_changing move_flow ;;
     adopt)        run_changing adopt_flow ;;
     power)        power_all ;;
-    recover)      run_changing recover_flow ;;
+    remount)      run_changing remount_flow ;;
     replace)      run_changing replace_flow ;;
     fillorder|reorder|priority) fillorder_flow ;;
     balance|rebalance) run_changing balance_flow ;;
@@ -103,6 +103,7 @@ main() {
     test-setup)   shift; test_setup "$@" ;;
     test-cleanup) test_cleanup ;;
     version)      echo "drives $VERSION" ;;
+    recover) note "'recover' is now called:  sudo drives remount"; exit 1 ;;
     *) note "Unknown command: $1"; note ""; usage_text >&2; exit 1 ;;
   esac
 }

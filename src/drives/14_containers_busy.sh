@@ -147,7 +147,7 @@ on_exit() {
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
-    note "${HOLD_HINT:-Fix the problem, then run:  sudo hdd-recover}"
+    note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
   [ -n "${BALANCE_TMP:-}" ] && rm -rf "$BALANCE_TMP"

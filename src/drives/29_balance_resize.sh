@@ -38,7 +38,7 @@ balance_main() {
   pool=$(role_pool "$role")
   for mp in $(branches_of "$role"); do
     is_boot_section "$mp" && continue
-    if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo hdd-recover). Nothing was changed."; return 1; fi
+    if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo drives remount). Nothing was changed."; return 1; fi
     mps+=("$mp")
   done
   say ""
@@ -167,7 +167,7 @@ resize_flow() {
   fi
   if [ ${#roles[@]} -eq 1 ]; then role=${roles[0]}; else idx=$(choose "Which boot drive section? " "${items[@]}") || return 1; role=${roles[$idx]}; fi
   mp=$(boot_section_of "$role"); img=$(boot_image_of "$mp"); pool=$(role_pool "$role")
-  if [ ! -f "$img" ] || ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not mounted. Run  sudo hdd-recover  first. Nothing was changed."; return 1; fi
+  if [ ! -f "$img" ] || ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not mounted. Run  sudo drives remount  first. Nothing was changed."; return 1; fi
   cur=$(stat -c %s "$img"); used=$(used_bytes "$mp")
   keep=$BOOT_KEEP_FREE_BYTES; min=$BOOT_MIN_BYTES
   free=$(( $(boot_free_bytes) + cur ))
@@ -230,8 +230,8 @@ resize_flow() {
     if ! resize2fs "$img" >/dev/null 2>&1; then truncate -s "$cur" "$img"; back; die "Growing the file system failed. The section has its old size again."; fi
   fi
   e2fsck -fn "$img" >/dev/null 2>&1 || warn "The check after the change reports problems. Run: sudo drives check --full"
-  if ! mount_fstab "$mp"; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not mount the section again. Run  sudo hdd-recover"; fi
-  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role storage again. Run  sudo hdd-recover"; fi
+  if ! mount_fstab "$mp"; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not mount the section again. Run  sudo drives remount"; fi
+  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role storage again. Run  sudo drives remount"; fi
   after_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l)
   start_containers
   name_store_put "$(basename "$mp")" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
