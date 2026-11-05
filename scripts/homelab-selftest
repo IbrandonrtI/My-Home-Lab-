@@ -21,7 +21,7 @@
 # The full report is saved in your home folder as homelab-selftest-<date>.txt. Known secret formats
 # (tokens, keys, passwords) are hidden in it, but read it before you share it.
 
-VERSION="1.6"
+VERSION="1.7"
 case "${1:-}" in
   version|--version) echo "homelab-selftest $VERSION"; exit 0 ;;
   -h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
@@ -65,6 +65,19 @@ info() { N_INFO=$((N_INFO + 1)); emit "  info  $*"; }
 warn() { N_WARN=$((N_WARN + 1)); emit "  WARN  $*"; ISSUES+=("WARN  $*"); }
 fail() { N_FAIL=$((N_FAIL + 1)); emit "  FAIL  $*"; ISSUES+=("FAIL  $*"); }
 
+# run_limited DIR SECONDS COMMAND...  runs the command in DIR with no input and sets OUT (its output) and RC (its exit code).
+# The output goes to a file, so a leftover child process cannot keep this script waiting, and a command that ignores the
+# time limit is killed 5 seconds later (RC is then 124 or 137: "stuck").
+run_limited() {
+  local dir=$1 secs=$2 tmp
+  shift 2
+  tmp=$(mktemp)
+  { ( cd "$dir" && timeout -k 5 "$secs" "$@" ) >"$tmp" 2>&1 </dev/null; } 2>/dev/null
+  RC=$?
+  OUT=$(cat "$tmp")
+  rm -f "$tmp"
+}
+
 # ---------------------------------------------------------------- part 1: every command
 run_cmd() {   # run_cmd LABEL SECONDS user|root ALLOWED_EXIT_CODES -- command...
   local label=$1 secs=$2 who=$3 allowed=$4 out rc start elapsed errwords
@@ -75,16 +88,17 @@ run_cmd() {   # run_cmd LABEL SECONDS user|root ALLOWED_EXIT_CODES -- command...
   fi
   start=$(date +%s)
   if [ "$who" = user ]; then
-    out=$(cd "$REAL_HOME" && timeout "$secs" sudo -u "$REAL_USER" -H env TERM=dumb "$@" 2>&1 </dev/null); rc=$?
+    run_limited "$REAL_HOME" "$secs" sudo -u "$REAL_USER" -H env TERM=dumb "$@"
   else
-    out=$(cd /root && timeout "$secs" env TERM=dumb "$@" 2>&1 </dev/null); rc=$?
+    run_limited /root "$secs" env TERM=dumb "$@"
   fi
+  out=$OUT rc=$RC
   elapsed=$(( $(date +%s) - start ))
   {
     printf '\n--- %s   [%s]  exit %s  %ss\n' "$label" "$*" "$rc" "$elapsed"
     printf '%s\n' "$out" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | head -60
   } | to_report
-  if [ "$rc" = 124 ]; then
+  if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then
     fail "$label: no answer after ${secs}s (stuck?)"
     return
   fi
@@ -382,10 +396,11 @@ fingerprint() {   # everything the ready-made setups could change, as one line o
 expect_cmd() {   # expect_cmd LABEL SECONDS ALLOWED_EXIT_CODES REGEX -- command...   (root, no input; REGEX must match the output)
   local label=$1 secs=$2 allowed=$3 want=$4 out rc clean
   shift 5
-  out=$(cd /root && timeout "$secs" env TERM=dumb "$@" 2>&1 </dev/null); rc=$?
+  run_limited /root "$secs" env TERM=dumb "$@"
+  out=$OUT rc=$RC
   clean=$(printf '%s\n' "$out" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g')
   { printf '\n--- %s   [%s]  exit %s\n' "$label" "$*" "$rc"; printf '%s\n' "$clean" | head -60; } | to_report
-  if [ "$rc" = 124 ]; then fail "$label: no answer after ${secs}s (stuck?)"; return; fi
+  if [ "$rc" = 124 ] || [ "$rc" = 137 ]; then fail "$label: no answer after ${secs}s (stuck?)"; return; fi
   case " $allowed " in *" $rc "*) ;; *) fail "$label: exit code $rc, expected $allowed ($(printf '%s\n' "$clean" | grep -m1 . | cut -c1-100))"; return ;; esac
   if printf '%s\n' "$clean" | grep -Eiq 'traceback|command not found|syntax error|unbound variable|bad substitution'; then
     fail "$label: the output has a script error ($(printf '%s\n' "$clean" | grep -Eim1 'traceback|command not found|syntax error|unbound variable|bad substitution'))"; return
@@ -460,7 +475,8 @@ part_presets() {
   repo=$(repo_dir)
   if [ -n "$repo" ] && [ -f "$repo/tests/t_preset.sh" ]; then
     local t_out t_rc
-    t_out=$(cd "$repo" && timeout 300 bash tests/t_preset.sh 2>&1 </dev/null); t_rc=$?
+    run_limited "$repo" 300 bash tests/t_preset.sh
+    t_out=$OUT t_rc=$RC
     { printf '\n--- tests/t_preset.sh  exit %s\n' "$t_rc"; printf '%s\n' "$t_out" | tail -20; } | to_report
     if [ "$t_rc" = 0 ] && printf '%s\n' "$t_out" | tail -1 | grep -qx OK; then ok "tests/t_preset.sh: $(printf '%s\n' "$t_out" | grep -m1 '^ok ' | sed 's/^ok *//')"
     else fail "tests/t_preset.sh failed: $(printf '%s\n' "$t_out" | grep -m1 FAIL | cut -c1-120)"; fi
