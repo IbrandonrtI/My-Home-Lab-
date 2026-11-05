@@ -89,6 +89,22 @@ def write_file(path, text, mode=None, owner=None):
         chown(path, *owner)
 
 
+def write_bytes(path, data, mode=None, owner=None):
+    """Write a binary file (atomically, with the given mode and owner); a dry run only says what would be written."""
+    if Opt.dry:
+        out("      would write: %s" % path)
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp-hls"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    if owner:
+        chown(path, *owner)
+
+
 def chown(path, uid, gid, recursive=False):
     """Change the owner of a path, and of everything under it when `recursive` is set."""
     if FAKE or Opt.dry:

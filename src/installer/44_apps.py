@@ -9,8 +9,8 @@ class NavidromeStack(StackStep):
         return "music folder %s" % music_folder()
 
     def stamp(self):
-        keys = Secrets.get("LASTFM_APIKEY") + Secrets.get("LASTFM_SECRET")        # new Last.fm keys deploy Navidrome once more
-        return hashlib.md5((stack_text("navidrome") + keys).encode()).hexdigest()
+        env = "".join(v for _, v in stack_env("navidrome"))        # new Last.fm keys, or AudioMuse-AI first in the agents, deploy Navidrome once more
+        return hashlib.md5((stack_text("navidrome") + env).encode()).hexdigest()
 
     def probe(self):
         # a Navidrome from an earlier version of the installer is deployed once more, so it gets the Spotify-ish theme and the frame setting
@@ -81,6 +81,154 @@ class NavidromeCard(Step):
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
             out("      The Navidrome card is first in its group, called Navidrome (\"Spotify Music Player\"), and has Navidrome's own player inside "
                 "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
+
+
+# ================================================================ AudioMuse-AI (similar songs for Navidrome; only after `homelab-setup audiomuse`)
+AUDIOMUSE_PLUGIN_URL = "https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/v11/audiomuseai.ndp"
+AUDIOMUSE_PLUGIN_ID = "audiomuseai"
+
+
+def audiomuse_applies():
+    return audiomuse_wanted() and BY_ID["stack-navidrome"].applies()
+
+
+def audiomuse_plugin_file():
+    return P(Ctx.home + "/navidrome/plugins/%s.ndp" % AUDIOMUSE_PLUGIN_ID)
+
+
+def navidrome_cli(*args, **kw):
+    """Run Navidrome's own program inside its container (plugin rescan, edit, enable ...). Returns (exit code, output)."""
+    return docker("exec", "-i", "navidrome", "/app/navidrome", *args, **kw)
+
+
+@step
+class AudioMuseUser(Step):
+    id, group = "audiomuse-user", "Services"
+    title = "AudioMuse-AI has its own small Navidrome login (a normal login with a generated password)"
+    needs = ("stack-navidrome", "navidrome-card")
+
+    def applies(self):
+        return audiomuse_applies()
+
+    def probe(self):
+        return "done" if State.data.get("audiomuse_user") and Secrets.get("AUDIOMUSE_ND_PASSWORD") else "todo"
+
+    def run(self):
+        if Opt.dry:
+            out("      would make the Navidrome login '%s' for AudioMuse-AI (a normal login, not an admin)" % AUDIOMUSE_ND_USER)
+            return
+        for key, make in AUDIOMUSE_SECRETS.items():
+            if not Secrets.get(key):
+                Secrets.vals[key] = make()
+        Secrets.save()
+        mine = {"username": AUDIOMUSE_ND_USER, "password": Secrets.get("AUDIOMUSE_ND_PASSWORD")}
+        if http("POST", url("navidrome", "/auth/login"), body=mine, timeout=30)[0] != 200:       # not made yet (or by an earlier try)
+            pw = need_password("to make the AudioMuse-AI login in Navidrome")
+            st, js, _ = http("POST", url("navidrome", "/auth/login"), body={"username": Ctx.admin, "password": pw}, timeout=30)
+            if st != 200 or not isinstance(js, dict) or not js.get("token"):
+                raise Abort("Navidrome did not accept the login %s with the shared admin password, so the AudioMuse-AI login could not be made. "
+                            "Open Navidrome and check the login, then run `sudo homelab-setup refresh`." % Ctx.admin)
+            st, js, _ = http("POST", url("navidrome", "/api/user"), headers={"X-ND-Authorization": "Bearer " + js["token"]}, timeout=30,
+                             body={"userName": AUDIOMUSE_ND_USER, "name": "AudioMuse-AI", "password": mine["password"], "isAdmin": False})
+            if st not in (200, 201):
+                raise Abort("Navidrome refused to make the login '%s' (HTTP %s). If a login with that name is already there, delete it in Navidrome "
+                            "(Users page), then run `sudo homelab-setup refresh`. Navidrome said: %s" % (AUDIOMUSE_ND_USER, st, str(js)[:200]))
+            out("      Made the Navidrome login '%s' for AudioMuse-AI. Its password is saved in the root-only file (sudo homelab-setup secrets)." % AUDIOMUSE_ND_USER)
+        State.data["audiomuse_user"] = True
+        State.save()
+
+
+class AudioMuseStack(StackStep):
+    """AudioMuse-AI's three containers: database, web page and worker. Only after `homelab-setup audiomuse`."""
+
+    def applies(self):
+        return audiomuse_applies()
+
+    def detail(self):
+        return "port %d, the worker may use %s of memory" % (PORTS["audiomuse"], audiomuse_mem())
+
+    def stamp(self):
+        env = "|".join("%s=%s" % kv for kv in stack_env("audiomuse"))          # a new memory limit deploys the stack once more
+        return hashlib.md5((stack_text("audiomuse") + env).encode()).hexdigest()
+
+    def probe(self):
+        need = {"audiomuse-postgres", "audiomuse-flask"}
+        if not State.data.get("audiomuse_paused"):
+            need.add("audiomuse-worker")                     # a paused worker (`audiomuse pause`) is wanted, not a fault
+        return "done" if need <= containers_running() and State.data.get("audiomuse_stack") == self.stamp() else "todo"
+
+    def run(self):
+        if not Opt.dry:
+            for folder in (Ctx.home + "/audiomuse", Ctx.home + "/audiomuse/postgres"):
+                os.makedirs(P(folder), exist_ok=True)
+                chown(P(folder), Ctx.uid, Ctx.gid)
+        StackStep.run(self)
+        if Opt.dry:
+            return
+        State.data.pop("audiomuse_paused", None)             # a new deploy starts the worker again
+        State.data["audiomuse_stack"] = self.stamp()
+        State.save()
+        if not wait_for(lambda: http("GET", url("audiomuse", "/api/health"), timeout=10)[0] == 200, "AudioMuse-AI to answer", 240):
+            raise Abort("AudioMuse-AI does not answer on port %d. Look at its log:  docker logs audiomuse-flask" % PORTS["audiomuse"])
+        head = {"Authorization": "Bearer " + Secrets.get("AUDIOMUSE_TOKEN")}
+        if http("GET", url("audiomuse", "/api/last_task"), headers=head, timeout=20)[0] != 200:
+            warn("AudioMuse-AI did not accept its saved token. Open %s, go to Administration > Setup Wizard and enter the API token shown by "
+                 "`sudo homelab-setup secrets` (AUDIOMUSE_TOKEN)." % url("audiomuse"))
+
+
+register(AudioMuseStack("audiomuse", ("portainer-env", "folders", "stack-navidrome", "audiomuse-user"),
+                        "AudioMuse-AI stack (listens to your songs so Navidrome can suggest similar ones)", 600))
+
+
+@step
+class AudioMusePlugin(Step):
+    id, group = "audiomuse-plugin", "Services"
+    title = "The AudioMuse-AI plugin is in Navidrome, switched on and pointed at AudioMuse-AI"
+    needs = ("stack-navidrome", "stack-audiomuse")
+
+    def applies(self):
+        return audiomuse_applies()
+
+    def config(self):
+        return {"apiUrl": "http://%s:%d" % (svc_host(), PORTS["audiomuse"]), "apiToken": Secrets.get("AUDIOMUSE_TOKEN")}
+
+    def stamp(self):
+        return hashlib.md5((AUDIOMUSE_PLUGIN_URL + json.dumps(self.config(), sort_keys=True)).encode()).hexdigest()
+
+    def probe(self):
+        return "done" if os.path.isfile(audiomuse_plugin_file()) and State.data.get("audiomuse_plugin") == self.stamp() else "todo"
+
+    def run(self):
+        if Opt.dry:
+            out("      would download the AudioMuse-AI plugin, put it in Navidrome's plugins folder, point it at AudioMuse-AI and switch it on")
+            return
+        try:
+            data = fetch_bytes(AUDIOMUSE_PLUGIN_URL, timeout=120)
+        except (OSError, ValueError) as e:
+            raise Abort("The AudioMuse-AI plugin could not be downloaded from GitHub (%s). Check the internet connection, then run "
+                        "`sudo homelab-setup refresh`." % e) from None
+        if not FAKE and data[:2] != b"PK":
+            raise Abort("The file from %s is not a plugin file. Nothing was changed." % AUDIOMUSE_PLUGIN_URL)
+        folder = os.path.dirname(audiomuse_plugin_file())
+        os.makedirs(folder, exist_ok=True)
+        chown(folder, Ctx.uid, Ctx.gid)
+        write_bytes(audiomuse_plugin_file(), data, 0o644, (Ctx.uid, Ctx.gid))
+        for what, args, extra in (("find the plugin", ("plugin", "rescan"), {}),
+                                  ("take its settings", ("plugin", "edit", AUDIOMUSE_PLUGIN_ID, "--config-file", "-"),
+                                   {"input_text": json.dumps(self.config())}),
+                                  ("switch it on", ("plugin", "enable", AUDIOMUSE_PLUGIN_ID), {})):
+            rc, txt = navidrome_cli(*args, timeout=120, **extra)
+            if rc != 0:
+                raise Abort("Navidrome could not %s: %s\nThis plugin is made for a newer Navidrome than the one this lab runs. "
+                            "`sudo homelab-setup audiomuse remove` takes it out again." % (what, txt.strip()[-300:]))
+        docker("restart", "navidrome", timeout=120)
+        wait_for(lambda: http("GET", url("navidrome", "/"), raw=True, timeout=10)[0] == 200, "Navidrome to answer", 120)
+        State.data["audiomuse_plugin"] = self.stamp()
+        State.save()
+        if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
+            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)        # the dashboard card of AudioMuse-AI, now
+        out("      The plugin is on. Now let AudioMuse-AI listen to your songs once: open %s, log in as %s and press Start Analysis." % (
+            url("audiomuse"), Ctx.admin))
 
 
 # ================================================================ AdGuard Home

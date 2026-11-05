@@ -278,8 +278,53 @@ def stack_env(name):
         return [("NC_ADMIN_USER", Ctx.admin), ("NC_ADMIN_PASSWORD", Runtime.password or ""),
                 ("NC_DB_PASSWORD", Secrets.get("NC_DB_PASSWORD"))]
     if name == "navidrome":
-        return [("LASTFM_APIKEY", Secrets.get("LASTFM_APIKEY")), ("LASTFM_SECRET", Secrets.get("LASTFM_SECRET"))]
+        return [("LASTFM_APIKEY", Secrets.get("LASTFM_APIKEY")), ("LASTFM_SECRET", Secrets.get("LASTFM_SECRET")),
+                ("NAVIDROME_AGENTS", NAVIDROME_AGENTS_WITH if audiomuse_wanted() else "")]
+    if name == "audiomuse":
+        return [("TZ", Ctx.tz), ("AUDIOMUSE_DB_PASSWORD", Secrets.get("AUDIOMUSE_DB_PASSWORD")),
+                ("AUDIOMUSE_NAVIDROME_URL", "http://%s:%d" % (svc_host(), PORTS["navidrome"])),
+                ("AUDIOMUSE_NAVIDROME_USER", AUDIOMUSE_ND_USER), ("AUDIOMUSE_NAVIDROME_PASSWORD", Secrets.get("AUDIOMUSE_ND_PASSWORD")),
+                ("AUDIOMUSE_USER", Ctx.admin), ("AUDIOMUSE_PASSWORD", Secrets.get("AUDIOMUSE_PASSWORD")),
+                ("AUDIOMUSE_TOKEN", Secrets.get("AUDIOMUSE_TOKEN")), ("AUDIOMUSE_JWT_SECRET", Secrets.get("AUDIOMUSE_JWT_SECRET")),
+                ("AUDIOMUSE_MEM", audiomuse_mem()), ("AUDIOMUSE_CPUS", str(audiomuse_cpus()))]
     return []
+
+
+# ---------------------------------------------------------------- AudioMuse-AI (optional: `homelab-setup audiomuse`)
+AUDIOMUSE_ND_USER = "audiomuse"                       # the small Navidrome login AudioMuse-AI uses to read the library
+AUDIOMUSE_SECRETS = {"AUDIOMUSE_DB_PASSWORD": lambda: rand_alnum(28), "AUDIOMUSE_ND_PASSWORD": lambda: rand_alnum(28),
+                     "AUDIOMUSE_PASSWORD": lambda: rand_alnum(20), "AUDIOMUSE_TOKEN": lambda: rand_hex(24),
+                     "AUDIOMUSE_JWT_SECRET": lambda: rand_hex(32)}
+NAVIDROME_AGENTS_WITH = "audiomuseai,deezer,lastfm,listenbrainz"      # audiomuseai must be first: Navidrome asks the first agent that knows similar songs
+
+
+def audiomuse_wanted():
+    """True when the person asked for AudioMuse-AI (`homelab-setup audiomuse`) on a machine the installer built."""
+    return bool(State.data.get("audiomuse")) and not Mode.existing
+
+
+def ram_gb():
+    """The memory of this machine in GB, as Linux counts it (an 8 GB stick shows as about 7.4). 0 when it cannot be read."""
+    try:
+        kb = int(os.environ.get("HLS_RAM_KB") or [l for l in open("/proc/meminfo") if l.startswith("MemTotal:")][0].split()[1])
+    except (OSError, IndexError, ValueError):
+        return 0.0
+    return kb / 1024 / 1024
+
+
+def audiomuse_mem_suggest(total=None):
+    """The worker's memory cap that suits a machine with `total` GB of memory (this machine when not given)."""
+    total = ram_gb() if total is None else total
+    return "2g" if total < 5.5 else "3g" if total < 11 else "6g" if total < 24 else "8g"
+
+
+def audiomuse_mem():
+    return State.data.get("audiomuse_mem") or audiomuse_mem_suggest()
+
+
+def audiomuse_cpus():
+    """The worker may use all processor cores but one, so the rest of the lab stays quick while it listens to the songs."""
+    return max(1, int(os.environ.get("HLS_CPUS") or os.cpu_count() or 2) - 1)
 
 
 def images_in(text):

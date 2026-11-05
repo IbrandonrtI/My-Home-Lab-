@@ -76,6 +76,16 @@ class Portainer:
                                    "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
         return st, js
 
+    @classmethod
+    def delete(cls, name):
+        """Remove the stack `name` and its containers (the data in folders stays). True when it is gone."""
+        stack = cls.stack_named(name)
+        if not stack:
+            return True
+        eid = stack.get("EndpointId") or cls.endpoint_id()
+        st, _, _ = cls.call("DELETE", "/api/stacks/%s?endpointId=%s" % (stack["Id"], eid), timeout=300)
+        return st in (200, 204)
+
     @staticmethod
     def error_text(js):
         """What Portainer said when it refused something."""

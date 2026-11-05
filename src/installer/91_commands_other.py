@@ -76,6 +76,233 @@ def cmd_lastfm(rest):
         "then Personal, and link your Last.fm account there.")
 
 
+MEM_SIZE = re.compile(r"^(\d+(?:\.\d+)?)\s*([mMgG])[bB]?$")
+
+
+def cpu_has_avx2():
+    """True when the processor has AVX2 (AudioMuse-AI will not start without it). True too when it cannot be read."""
+    if os.environ.get("HLS_NO_AVX2"):
+        return False
+    try:
+        return any("avx2" in line.split() for line in open("/proc/cpuinfo") if line.startswith("flags"))
+    except OSError:
+        return True
+
+
+def mem_mb(text):
+    """'3g' or '3072m' as megabytes (3072)."""
+    m = MEM_SIZE.match(str(text))
+    return int(float(m.group(1)) * (1024 if m.group(2).lower() == "g" else 1)) if m else 3072
+
+
+def gb_text(mb):
+    """'3072' (megabytes) as '3 GB'."""
+    return "%g GB" % round(int(mb) / 1024, 1)
+
+
+def audiomuse_limit_mb(text):
+    """The worker's memory cap in whole megabytes, from what was typed (3g, 4096m, 2.5g). Raises Abort for a number that does not work."""
+    m = MEM_SIZE.match(text.strip())
+    if not m:
+        raise Abort("'%s' is not a size. Write it like 3g (gigabytes) or 3072m (megabytes), or write auto." % text)
+    mb = mem_mb(text.strip())
+    total = ram_gb()
+    if mb < 1024:
+        raise Abort("%s is too little: the worker needs at least 1g to listen to a song." % text)
+    if total and mb > total * 1024 * 0.8:
+        raise Abort("%s is more than this machine can spare: it has %.1f GB in all and the other apps need some. Nothing was changed." % (text, total))
+    return mb
+
+
+def port_taken_by(port, mine=("audiomuse-flask",)):
+    """The name of another container that already publishes this port on the machine ('' when none does)."""
+    rc, txt = docker("ps", "--format", "{{.Names}}|{{.Ports}}", timeout=30)
+    for line in txt.splitlines():
+        name, _, ports = line.partition("|")
+        if name not in mine and re.search(r":%d->" % port, ports):
+            return name
+    return ""
+
+
+def audiomuse_memory_help():
+    total = ram_gb()
+    cur = audiomuse_mem()
+    rows = [(4, "a small machine"), (8, "what most small servers have"), (16, "a roomy machine"), (32, "a big machine")]
+    out("")
+    say("The AudioMuse-AI worker (the part that listens to your songs) may use up to %s of memory." % (
+        gb_text(mem_mb(cur))) + (" This machine has %.1f GB in all." % total if total else ""))
+    say("What I suggest, by the memory of the machine (my estimates for a library of a few thousand songs, not measurements):")
+    for gb, note in rows:
+        out("      %2d GB machine   %-5s  %s%s" % (gb, audiomuse_mem_suggest(gb * 0.93).replace("g", " GB"), note,
+                                                  "   <- this machine" if total and abs(total - gb * 0.93) < gb * 0.2 else ""))
+    say("Too low: a long song can make the worker run out, and AudioMuse-AI then tries it again later. Too high: the other apps can run short "
+        "while it works. More memory does not make it much faster; the processor does that.")
+
+
+def audiomuse_usage():
+    """What the three containers use right now, as lines of text ([] when Docker cannot say)."""
+    rc, txt = docker("stats", "--no-stream", "--format", "{{.Name}}|{{.MemUsage}}", *STACKS["audiomuse"][1], timeout=60)
+    return ["%-20s %s" % tuple(l.split("|", 1)) for l in txt.splitlines() if "|" in l] if rc == 0 else []
+
+
+def audiomuse_set_memory(rest):
+    """`audiomuse memory [SIZE | auto]`: show the worker's memory cap with suggestions, and change it."""
+    audiomuse_memory_help()
+    if audiomuse_wanted():
+        for line in audiomuse_usage():
+            out("      right now: " + line)
+    if rest:
+        word = rest[0]
+    elif Opt.dry:
+        say("This is a dry run: nothing was changed.")
+        return
+    else:
+        word = ask("New limit (for example 4g), auto for the suggestion for this machine, or Enter to keep it", "")
+    if not word:
+        say("Kept at %s." % gb_text(mem_mb(audiomuse_mem())))
+        return
+    new = None if word == "auto" else "%dm" % audiomuse_limit_mb(word)
+    if Opt.dry:
+        say("This is a dry run: the limit would become %s. Nothing was changed." % gb_text(mem_mb(new or audiomuse_mem_suggest())))
+        return
+    if new:
+        State.data["audiomuse_mem"] = new
+    else:
+        State.data.pop("audiomuse_mem", None)
+    State.save()
+    good("The worker's memory limit is now %s." % gb_text(mem_mb(audiomuse_mem())))
+    if audiomuse_wanted():
+        say("AudioMuse-AI is deployed again with it (it restarts; an analysis that was running carries on afterwards).")
+        cmd_refresh()
+    else:
+        say("It takes effect when AudioMuse-AI is set up (sudo homelab-setup audiomuse).")
+
+
+def audiomuse_worker(stop):
+    """`audiomuse pause` / `audiomuse resume`: stop the worker to free its memory, or start it again."""
+    if not audiomuse_wanted():
+        raise Abort("AudioMuse-AI is not set up on this machine. Run `sudo homelab-setup audiomuse`.")
+    if Opt.dry:
+        say("This is a dry run: the worker would be %s. Nothing was changed." % ("paused" if stop else "started"))
+        return
+    rc, txt = docker("stop" if stop else "start", "audiomuse-worker", timeout=120)
+    if rc != 0:
+        raise Abort("Docker could not %s the worker: %s" % ("stop" if stop else "start", txt.strip()[-200:]))
+    if stop:
+        State.data["audiomuse_paused"] = True
+    else:
+        State.data.pop("audiomuse_paused", None)
+    State.save()
+    if stop:
+        good("The worker is paused and its memory is free. Songs are not analysed until you run:  sudo homelab-setup audiomuse resume")
+    else:
+        good("The worker is running again. An analysis you started carries on.")
+
+
+def audiomuse_status():
+    out("")
+    if not audiomuse_wanted():
+        say("AudioMuse-AI is not set up on this machine. `sudo homelab-setup audiomuse` sets it up.")
+        return
+    up = containers_running()
+    say("Web page: %s   (log in as %s; the password is AUDIOMUSE_PASSWORD in `sudo homelab-setup secrets`)" % (url("audiomuse"), Ctx.admin))
+    for c in STACKS["audiomuse"][1]:
+        paused = c == "audiomuse-worker" and State.data.get("audiomuse_paused")
+        out("      %-20s %s" % (c, "paused on purpose" if paused and c not in up else "running" if c in up else "NOT running"))
+    say("The worker may use up to %s of memory (change it: sudo homelab-setup audiomuse memory)." % gb_text(mem_mb(audiomuse_mem())))
+    for line in audiomuse_usage():
+        out("      right now: " + line)
+
+
+def audiomuse_remove():
+    """`audiomuse remove`: take the plugin out of Navidrome and remove the three containers (the analysis data stays)."""
+    if not audiomuse_wanted():
+        say("AudioMuse-AI is not set up. Nothing to remove.")
+        return
+    if Opt.dry:
+        say("This is a dry run: it would switch the plugin off, remove the three AudioMuse-AI containers and deploy Navidrome again. Nothing was changed.")
+        return
+    if not yesno("Remove AudioMuse-AI (its analysis data stays on the drive)?", False):
+        say("Nothing was changed.")
+        return
+    navidrome_cli("plugin", "disable", AUDIOMUSE_PLUGIN_ID, timeout=120)
+    try:
+        os.remove(audiomuse_plugin_file())
+    except OSError:
+        pass
+    if not Portainer.delete("audiomuse"):
+        raise Abort("Portainer could not remove the stack 'audiomuse'. Remove it in Portainer (Stacks), then run this again.")
+    for k in ("audiomuse", "audiomuse_stack", "audiomuse_plugin", "audiomuse_paused"):
+        State.data.pop(k, None)
+    State.save()
+    good("AudioMuse-AI is removed. Navidrome is deployed again without it.")
+    say("Its analysis data is still in %s/audiomuse (it took hours to make, so a later setup reuses it). To free the space: sudo rm -rf %s/audiomuse\n"
+        "The Navidrome login called %s stays too; you can delete it on Navidrome's Users page." % (Ctx.home, Ctx.home, AUDIOMUSE_ND_USER))
+    cmd_refresh()
+
+
+def cmd_audiomuse(rest):
+    """`audiomuse`: set up AudioMuse-AI (Navidrome suggests similar songs by how they sound); also memory, pause, resume, status, remove."""
+    load_all()
+    if Mode.existing:
+        say("This machine was built by hand, so the installer only reads it. AudioMuse-AI is set up with its own compose file; see its page on GitHub.")
+        return
+    if not State.exists():
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    word = rest[0] if rest else ""
+    if word == "memory":
+        return audiomuse_set_memory(rest[1:])
+    if word in ("pause", "resume"):
+        return audiomuse_worker(word == "pause")
+    if word == "status":
+        return audiomuse_status()
+    if word == "remove":
+        return audiomuse_remove()
+    if rest:
+        raise Abort("Unknown word '%s'. Use: homelab-setup audiomuse   or   audiomuse memory | pause | resume | status | remove" % word)
+    if not navidrome_wanted():
+        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome (it needs a music folder). Nothing was changed.")
+    other = "" if State.data.get("audiomuse") else port_taken_by(PORTS["audiomuse"])
+    if other:
+        raise Abort("Port %d is already used by the container %s, and AudioMuse-AI needs it for its web page. Nothing was changed." % (PORTS["audiomuse"], other))
+    if not cpu_has_avx2():
+        raise Abort("The processor of this machine has no AVX2, and AudioMuse-AI will not start without it. Nothing was changed.")
+    out("")
+    say("AudioMuse-AI listens to every song in Navidrome once and works out which songs sound alike. After that, Instant Mix in Navidrome "
+        "builds its queue from songs that sound like the one you picked (it also works for songs nobody has tagged).")
+    say("What this does:\n"
+        "  - adds three containers (a database, a web page and a worker); the first download is a few GB\n"
+        "  - makes a small Navidrome login for it and puts its plugin into Navidrome (Navidrome restarts once)\n"
+        "  - limits the worker to %s of memory and all processor cores but one, so your other apps keep running\n"
+        "  - the first analysis is started by you, takes hours for a few thousand songs, and keeps your processor busy meanwhile" % gb_text(mem_mb(audiomuse_mem())))
+    total = ram_gb()
+    if total and total < 5.5:
+        warn("This machine has only %.1f GB of memory. AudioMuse-AI recommends 8 GB; it will be slow and may stop other apps." % total)
+    elif total and total < 9:
+        say("This machine has %.1f GB of memory, a little under the 8 GB AudioMuse-AI recommends. The limits above are there for that; "
+            "`sudo homelab-setup audiomuse memory` shows how to change them, and `audiomuse pause` frees the worker's memory." % total)
+    if State.data.get("audiomuse"):
+        say("AudioMuse-AI is already set up; this checks it again.")
+    elif Opt.dry:
+        say("This is a dry run: nothing was changed.")
+        return
+    elif not yesno("Set up AudioMuse-AI now?", True):
+        say("Nothing was changed.")
+        return
+    State.data["audiomuse"] = True
+    State.save()
+    cmd_refresh()
+    if State.data.get("audiomuse_plugin"):
+        good("AudioMuse-AI is set up.")
+        say("Next, let it listen to your songs (once):\n"
+            "  1. Open %s and log in as %s. The password is AUDIOMUSE_PASSWORD in `sudo homelab-setup secrets`.\n"
+            "  2. On the main page (Analysis and Clustering) press Start Analysis. You can close the page; it keeps going.\n"
+            "  3. When it has finished, open a song's menu in Navidrome and choose Instant Mix.\n"
+            "Check on it with `sudo homelab-setup audiomuse status`." % (url("audiomuse"), Ctx.admin))
+    else:
+        warn("The setup did not finish. Read the message above, then run `sudo homelab-setup refresh` to continue.")
+
+
 def cmd_cards(rest):
     """`cards`: look for new services (containers with a web page) and give each its Homepage card; also move, ignore, list."""
     prog = installed_copy("homelab-cards", "/usr/local/sbin")
@@ -390,6 +617,7 @@ Commands:
   adguard                  add AdGuard Home, if you skipped it during the install
   cards                    give every new service (a container with a web page) its Homepage card; also: cards list | move | ignore
   lastfm                   save your free Last.fm key so Navidrome can suggest similar songs; also: lastfm remove
+  audiomuse                set up AudioMuse-AI (Navidrome suggests songs that sound alike); also: audiomuse memory | pause | resume | status | remove
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
