@@ -59,7 +59,7 @@ SECRET_DIR = P("/root/.homelab-setup")
 SECRET_FILE = SECRET_DIR + "/secrets.env"
 LOG_FILE = P("/var/log/homelab-setup.log")
 
-# ---------------------------------------------------------------- the nine stacks (and Navidrome, an optional tenth)
+# ---------------------------------------------------------------- the nine stacks (and Navidrome and AudioMuse-AI, two optional ones)
 # name -> (file in stacks/, containers that must run)
 STACKS = {
     "adguard": ("adguard.yaml", ["adguardhome"]),
@@ -72,13 +72,14 @@ STACKS = {
     "homepage": ("homepage.yaml", ["homepage"]),
     "beszel-agent": ("beszel-agent.yaml", ["beszel-agent"]),
     "navidrome": ("navidrome.yaml", ["navidrome"]),        # optional: only on a machine with a music folder (see NavidromeStack)
+    "audiomuse": ("audiomuse.yaml", ["audiomuse-postgres", "audiomuse-flask", "audiomuse-worker"]),   # optional: `homelab-setup audiomuse` (see AudioMuseStack)
 }
 STACK_ORDER = ["adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
                "immich", "nextcloud", "homepage", "beszel-agent"]
 
 # local port of each service, and the HTTPS port Tailscale Serve uses for it
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,
-         "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999, "navidrome": 4533}
+         "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999, "navidrome": 4533, "audiomuse": 8100}
 SERVE = [(1000, "homepage"), (1001, "portainer"), (1002, "immich"), (1003, "beszel"), (1004, "adguard"),
          (1005, "nextcloud"), (1006, "filebrowser"), (1007, "speedtest"), (1008, "netdata")]
 
@@ -597,6 +598,22 @@ def write_file(path, text, mode=None, owner=None):
     tmp = path + ".tmp-hls"
     with open(tmp, "w") as f:
         f.write(text)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    if owner:
+        chown(path, *owner)
+
+
+def write_bytes(path, data, mode=None, owner=None):
+    """Write a binary file (atomically, with the given mode and owner); a dry run only says what would be written."""
+    if Opt.dry:
+        out("      would write: %s" % path)
+        return
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp-hls"
+    with open(tmp, "wb") as f:
+        f.write(data)
     if mode is not None:
         os.chmod(tmp, mode)
     os.replace(tmp, path)
@@ -1195,8 +1212,53 @@ def stack_env(name):
         return [("NC_ADMIN_USER", Ctx.admin), ("NC_ADMIN_PASSWORD", Runtime.password or ""),
                 ("NC_DB_PASSWORD", Secrets.get("NC_DB_PASSWORD"))]
     if name == "navidrome":
-        return [("LASTFM_APIKEY", Secrets.get("LASTFM_APIKEY")), ("LASTFM_SECRET", Secrets.get("LASTFM_SECRET"))]
+        return [("LASTFM_APIKEY", Secrets.get("LASTFM_APIKEY")), ("LASTFM_SECRET", Secrets.get("LASTFM_SECRET")),
+                ("NAVIDROME_AGENTS", NAVIDROME_AGENTS_WITH if audiomuse_wanted() else "")]
+    if name == "audiomuse":
+        return [("TZ", Ctx.tz), ("AUDIOMUSE_DB_PASSWORD", Secrets.get("AUDIOMUSE_DB_PASSWORD")),
+                ("AUDIOMUSE_NAVIDROME_URL", "http://%s:%d" % (svc_host(), PORTS["navidrome"])),
+                ("AUDIOMUSE_NAVIDROME_USER", AUDIOMUSE_ND_USER), ("AUDIOMUSE_NAVIDROME_PASSWORD", Secrets.get("AUDIOMUSE_ND_PASSWORD")),
+                ("AUDIOMUSE_USER", Ctx.admin), ("AUDIOMUSE_PASSWORD", Secrets.get("AUDIOMUSE_PASSWORD")),
+                ("AUDIOMUSE_TOKEN", Secrets.get("AUDIOMUSE_TOKEN")), ("AUDIOMUSE_JWT_SECRET", Secrets.get("AUDIOMUSE_JWT_SECRET")),
+                ("AUDIOMUSE_MEM", audiomuse_mem()), ("AUDIOMUSE_CPUS", str(audiomuse_cpus()))]
     return []
+
+
+# ---------------------------------------------------------------- AudioMuse-AI (optional: `homelab-setup audiomuse`)
+AUDIOMUSE_ND_USER = "audiomuse"                       # the small Navidrome login AudioMuse-AI uses to read the library
+AUDIOMUSE_SECRETS = {"AUDIOMUSE_DB_PASSWORD": lambda: rand_alnum(28), "AUDIOMUSE_ND_PASSWORD": lambda: rand_alnum(28),
+                     "AUDIOMUSE_PASSWORD": lambda: rand_alnum(20), "AUDIOMUSE_TOKEN": lambda: rand_hex(24),
+                     "AUDIOMUSE_JWT_SECRET": lambda: rand_hex(32)}
+NAVIDROME_AGENTS_WITH = "audiomuseai,deezer,lastfm,listenbrainz"      # audiomuseai must be first: Navidrome asks the first agent that knows similar songs
+
+
+def audiomuse_wanted():
+    """True when the person asked for AudioMuse-AI (`homelab-setup audiomuse`) on a machine the installer built."""
+    return bool(State.data.get("audiomuse")) and not Mode.existing
+
+
+def ram_gb():
+    """The memory of this machine in GB, as Linux counts it (an 8 GB stick shows as about 7.4). 0 when it cannot be read."""
+    try:
+        kb = int(os.environ.get("HLS_RAM_KB") or [l for l in open("/proc/meminfo") if l.startswith("MemTotal:")][0].split()[1])
+    except (OSError, IndexError, ValueError):
+        return 0.0
+    return kb / 1024 / 1024
+
+
+def audiomuse_mem_suggest(total=None):
+    """The worker's memory cap that suits a machine with `total` GB of memory (this machine when not given)."""
+    total = ram_gb() if total is None else total
+    return "2g" if total < 5.5 else "3g" if total < 11 else "6g" if total < 24 else "8g"
+
+
+def audiomuse_mem():
+    return State.data.get("audiomuse_mem") or audiomuse_mem_suggest()
+
+
+def audiomuse_cpus():
+    """The worker may use all processor cores but one, so the rest of the lab stays quick while it listens to the songs."""
+    return max(1, int(os.environ.get("HLS_CPUS") or os.cpu_count() or 2) - 1)
 
 
 def images_in(text):
@@ -3050,6 +3112,16 @@ class Portainer:
                                    "pullImage": False, "repullImageAndRedeploy": False}, timeout=900)
         return st, js
 
+    @classmethod
+    def delete(cls, name):
+        """Remove the stack `name` and its containers (the data in folders stays). True when it is gone."""
+        stack = cls.stack_named(name)
+        if not stack:
+            return True
+        eid = stack.get("EndpointId") or cls.endpoint_id()
+        st, _, _ = cls.call("DELETE", "/api/stacks/%s?endpointId=%s" % (stack["Id"], eid), timeout=300)
+        return st in (200, 204)
+
     @staticmethod
     def error_text(js):
         """What Portainer said when it refused something."""
@@ -3681,8 +3753,8 @@ class NavidromeStack(StackStep):
         return "music folder %s" % music_folder()
 
     def stamp(self):
-        keys = Secrets.get("LASTFM_APIKEY") + Secrets.get("LASTFM_SECRET")        # new Last.fm keys deploy Navidrome once more
-        return hashlib.md5((stack_text("navidrome") + keys).encode()).hexdigest()
+        env = "".join(v for _, v in stack_env("navidrome"))        # new Last.fm keys, or AudioMuse-AI first in the agents, deploy Navidrome once more
+        return hashlib.md5((stack_text("navidrome") + env).encode()).hexdigest()
 
     def probe(self):
         # a Navidrome from an earlier version of the installer is deployed once more, so it gets the Spotify-ish theme and the frame setting
@@ -3753,6 +3825,154 @@ class NavidromeCard(Step):
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
             out("      The Navidrome card is first in its group, called Navidrome (\"Spotify Music Player\"), and has Navidrome's own player inside "
                 "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
+
+
+# ================================================================ AudioMuse-AI (similar songs for Navidrome; only after `homelab-setup audiomuse`)
+AUDIOMUSE_PLUGIN_URL = "https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/v11/audiomuseai.ndp"
+AUDIOMUSE_PLUGIN_ID = "audiomuseai"
+
+
+def audiomuse_applies():
+    return audiomuse_wanted() and BY_ID["stack-navidrome"].applies()
+
+
+def audiomuse_plugin_file():
+    return P(Ctx.home + "/navidrome/plugins/%s.ndp" % AUDIOMUSE_PLUGIN_ID)
+
+
+def navidrome_cli(*args, **kw):
+    """Run Navidrome's own program inside its container (plugin rescan, edit, enable ...). Returns (exit code, output)."""
+    return docker("exec", "-i", "navidrome", "/app/navidrome", *args, **kw)
+
+
+@step
+class AudioMuseUser(Step):
+    id, group = "audiomuse-user", "Services"
+    title = "AudioMuse-AI has its own small Navidrome login (a normal login with a generated password)"
+    needs = ("stack-navidrome", "navidrome-card")
+
+    def applies(self):
+        return audiomuse_applies()
+
+    def probe(self):
+        return "done" if State.data.get("audiomuse_user") and Secrets.get("AUDIOMUSE_ND_PASSWORD") else "todo"
+
+    def run(self):
+        if Opt.dry:
+            out("      would make the Navidrome login '%s' for AudioMuse-AI (a normal login, not an admin)" % AUDIOMUSE_ND_USER)
+            return
+        for key, make in AUDIOMUSE_SECRETS.items():
+            if not Secrets.get(key):
+                Secrets.vals[key] = make()
+        Secrets.save()
+        mine = {"username": AUDIOMUSE_ND_USER, "password": Secrets.get("AUDIOMUSE_ND_PASSWORD")}
+        if http("POST", url("navidrome", "/auth/login"), body=mine, timeout=30)[0] != 200:       # not made yet (or by an earlier try)
+            pw = need_password("to make the AudioMuse-AI login in Navidrome")
+            st, js, _ = http("POST", url("navidrome", "/auth/login"), body={"username": Ctx.admin, "password": pw}, timeout=30)
+            if st != 200 or not isinstance(js, dict) or not js.get("token"):
+                raise Abort("Navidrome did not accept the login %s with the shared admin password, so the AudioMuse-AI login could not be made. "
+                            "Open Navidrome and check the login, then run `sudo homelab-setup refresh`." % Ctx.admin)
+            st, js, _ = http("POST", url("navidrome", "/api/user"), headers={"X-ND-Authorization": "Bearer " + js["token"]}, timeout=30,
+                             body={"userName": AUDIOMUSE_ND_USER, "name": "AudioMuse-AI", "password": mine["password"], "isAdmin": False})
+            if st not in (200, 201):
+                raise Abort("Navidrome refused to make the login '%s' (HTTP %s). If a login with that name is already there, delete it in Navidrome "
+                            "(Users page), then run `sudo homelab-setup refresh`. Navidrome said: %s" % (AUDIOMUSE_ND_USER, st, str(js)[:200]))
+            out("      Made the Navidrome login '%s' for AudioMuse-AI. Its password is saved in the root-only file (sudo homelab-setup secrets)." % AUDIOMUSE_ND_USER)
+        State.data["audiomuse_user"] = True
+        State.save()
+
+
+class AudioMuseStack(StackStep):
+    """AudioMuse-AI's three containers: database, web page and worker. Only after `homelab-setup audiomuse`."""
+
+    def applies(self):
+        return audiomuse_applies()
+
+    def detail(self):
+        return "port %d, the worker may use %s of memory" % (PORTS["audiomuse"], audiomuse_mem())
+
+    def stamp(self):
+        env = "|".join("%s=%s" % kv for kv in stack_env("audiomuse"))          # a new memory limit deploys the stack once more
+        return hashlib.md5((stack_text("audiomuse") + env).encode()).hexdigest()
+
+    def probe(self):
+        need = {"audiomuse-postgres", "audiomuse-flask"}
+        if not State.data.get("audiomuse_paused"):
+            need.add("audiomuse-worker")                     # a paused worker (`audiomuse pause`) is wanted, not a fault
+        return "done" if need <= containers_running() and State.data.get("audiomuse_stack") == self.stamp() else "todo"
+
+    def run(self):
+        if not Opt.dry:
+            for folder in (Ctx.home + "/audiomuse", Ctx.home + "/audiomuse/postgres"):
+                os.makedirs(P(folder), exist_ok=True)
+                chown(P(folder), Ctx.uid, Ctx.gid)
+        StackStep.run(self)
+        if Opt.dry:
+            return
+        State.data.pop("audiomuse_paused", None)             # a new deploy starts the worker again
+        State.data["audiomuse_stack"] = self.stamp()
+        State.save()
+        if not wait_for(lambda: http("GET", url("audiomuse", "/api/health"), timeout=10)[0] == 200, "AudioMuse-AI to answer", 240):
+            raise Abort("AudioMuse-AI does not answer on port %d. Look at its log:  docker logs audiomuse-flask" % PORTS["audiomuse"])
+        head = {"Authorization": "Bearer " + Secrets.get("AUDIOMUSE_TOKEN")}
+        if http("GET", url("audiomuse", "/api/last_task"), headers=head, timeout=20)[0] != 200:
+            warn("AudioMuse-AI did not accept its saved token. Open %s, go to Administration > Setup Wizard and enter the API token shown by "
+                 "`sudo homelab-setup secrets` (AUDIOMUSE_TOKEN)." % url("audiomuse"))
+
+
+register(AudioMuseStack("audiomuse", ("portainer-env", "folders", "stack-navidrome", "audiomuse-user"),
+                        "AudioMuse-AI stack (listens to your songs so Navidrome can suggest similar ones)", 600))
+
+
+@step
+class AudioMusePlugin(Step):
+    id, group = "audiomuse-plugin", "Services"
+    title = "The AudioMuse-AI plugin is in Navidrome, switched on and pointed at AudioMuse-AI"
+    needs = ("stack-navidrome", "stack-audiomuse")
+
+    def applies(self):
+        return audiomuse_applies()
+
+    def config(self):
+        return {"apiUrl": "http://%s:%d" % (svc_host(), PORTS["audiomuse"]), "apiToken": Secrets.get("AUDIOMUSE_TOKEN")}
+
+    def stamp(self):
+        return hashlib.md5((AUDIOMUSE_PLUGIN_URL + json.dumps(self.config(), sort_keys=True)).encode()).hexdigest()
+
+    def probe(self):
+        return "done" if os.path.isfile(audiomuse_plugin_file()) and State.data.get("audiomuse_plugin") == self.stamp() else "todo"
+
+    def run(self):
+        if Opt.dry:
+            out("      would download the AudioMuse-AI plugin, put it in Navidrome's plugins folder, point it at AudioMuse-AI and switch it on")
+            return
+        try:
+            data = fetch_bytes(AUDIOMUSE_PLUGIN_URL, timeout=120)
+        except (OSError, ValueError) as e:
+            raise Abort("The AudioMuse-AI plugin could not be downloaded from GitHub (%s). Check the internet connection, then run "
+                        "`sudo homelab-setup refresh`." % e) from None
+        if not FAKE and data[:2] != b"PK":
+            raise Abort("The file from %s is not a plugin file. Nothing was changed." % AUDIOMUSE_PLUGIN_URL)
+        folder = os.path.dirname(audiomuse_plugin_file())
+        os.makedirs(folder, exist_ok=True)
+        chown(folder, Ctx.uid, Ctx.gid)
+        write_bytes(audiomuse_plugin_file(), data, 0o644, (Ctx.uid, Ctx.gid))
+        for what, args, extra in (("find the plugin", ("plugin", "rescan"), {}),
+                                  ("take its settings", ("plugin", "edit", AUDIOMUSE_PLUGIN_ID, "--config-file", "-"),
+                                   {"input_text": json.dumps(self.config())}),
+                                  ("switch it on", ("plugin", "enable", AUDIOMUSE_PLUGIN_ID), {})):
+            rc, txt = navidrome_cli(*args, timeout=120, **extra)
+            if rc != 0:
+                raise Abort("Navidrome could not %s: %s\nThis plugin is made for a newer Navidrome than the one this lab runs. "
+                            "`sudo homelab-setup audiomuse remove` takes it out again." % (what, txt.strip()[-300:]))
+        docker("restart", "navidrome", timeout=120)
+        wait_for(lambda: http("GET", url("navidrome", "/"), raw=True, timeout=10)[0] == 200, "Navidrome to answer", 120)
+        State.data["audiomuse_plugin"] = self.stamp()
+        State.save()
+        if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
+            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)        # the dashboard card of AudioMuse-AI, now
+        out("      The plugin is on. Now let AudioMuse-AI listen to your songs once: open %s, log in as %s and press Start Analysis." % (
+            url("audiomuse"), Ctx.admin))
 
 
 # ================================================================ AdGuard Home
@@ -5108,6 +5328,10 @@ def added_services():
         found["navidrome"] = ("Navidrome", "navidrome", PORTS["navidrome"], 0)
     if "navidrome" in found:                                  # the card is called Navidrome, whatever the saved list says
         found["navidrome"] = ("Navidrome",) + found["navidrome"][1:]
+    if audiomuse_wanted() and navidrome_wanted() and "audiomuse-flask" not in found:
+        found["audiomuse-flask"] = ("AudioMuse-AI", "audiomuse-flask", PORTS["audiomuse"], 0)
+    if "audiomuse-flask" in found:
+        found["audiomuse-flask"] = ("AudioMuse-AI",) + found["audiomuse-flask"][1:]
     return sorted(found.values(), key=lambda x: x[0].lower())
 
 
@@ -5118,6 +5342,8 @@ def system_check():
     names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
     if navidrome_wanted():
         names.append("navidrome")
+    if audiomuse_wanted() and navidrome_wanted():
+        names += [c for c in STACKS["audiomuse"][1] if c != "audiomuse-worker" or not State.data.get("audiomuse_paused")]
     up = containers_running()
     missing = [c for c in names if c not in up]
     if missing:
@@ -5157,7 +5383,8 @@ def system_check():
             st = http("GET", link, timeout=10)[0]
             if 0 < st < 500:
                 out("  %s%s%s %-18s %s" % (G, S_OK, N, label, mark(link)))
-            elif container == "navidrome":                    # the installer owns Navidrome, so a silent one is a problem
+            elif container in ("navidrome", "audiomuse-flask") and (container == "navidrome" or audiomuse_wanted()):
+                # the installer owns Navidrome and AudioMuse-AI, so a silent one is a problem
                 out("  %s%s%s %-18s %s  (no answer)" % (R, S_BAD, N, label, mark(link)))
                 problems.append(container)
             else:                                             # a service the person added: stopping it can be on purpose
@@ -5524,6 +5751,233 @@ def cmd_lastfm(rest):
         "then Personal, and link your Last.fm account there.")
 
 
+MEM_SIZE = re.compile(r"^(\d+(?:\.\d+)?)\s*([mMgG])[bB]?$")
+
+
+def cpu_has_avx2():
+    """True when the processor has AVX2 (AudioMuse-AI will not start without it). True too when it cannot be read."""
+    if os.environ.get("HLS_NO_AVX2"):
+        return False
+    try:
+        return any("avx2" in line.split() for line in open("/proc/cpuinfo") if line.startswith("flags"))
+    except OSError:
+        return True
+
+
+def mem_mb(text):
+    """'3g' or '3072m' as megabytes (3072)."""
+    m = MEM_SIZE.match(str(text))
+    return int(float(m.group(1)) * (1024 if m.group(2).lower() == "g" else 1)) if m else 3072
+
+
+def gb_text(mb):
+    """'3072' (megabytes) as '3 GB'."""
+    return "%g GB" % round(int(mb) / 1024, 1)
+
+
+def audiomuse_limit_mb(text):
+    """The worker's memory cap in whole megabytes, from what was typed (3g, 4096m, 2.5g). Raises Abort for a number that does not work."""
+    m = MEM_SIZE.match(text.strip())
+    if not m:
+        raise Abort("'%s' is not a size. Write it like 3g (gigabytes) or 3072m (megabytes), or write auto." % text)
+    mb = mem_mb(text.strip())
+    total = ram_gb()
+    if mb < 1024:
+        raise Abort("%s is too little: the worker needs at least 1g to listen to a song." % text)
+    if total and mb > total * 1024 * 0.8:
+        raise Abort("%s is more than this machine can spare: it has %.1f GB in all and the other apps need some. Nothing was changed." % (text, total))
+    return mb
+
+
+def port_taken_by(port, mine=("audiomuse-flask",)):
+    """The name of another container that already publishes this port on the machine ('' when none does)."""
+    rc, txt = docker("ps", "--format", "{{.Names}}|{{.Ports}}", timeout=30)
+    for line in txt.splitlines():
+        name, _, ports = line.partition("|")
+        if name not in mine and re.search(r":%d->" % port, ports):
+            return name
+    return ""
+
+
+def audiomuse_memory_help():
+    total = ram_gb()
+    cur = audiomuse_mem()
+    rows = [(4, "a small machine"), (8, "what most small servers have"), (16, "a roomy machine"), (32, "a big machine")]
+    out("")
+    say("The AudioMuse-AI worker (the part that listens to your songs) may use up to %s of memory." % (
+        gb_text(mem_mb(cur))) + (" This machine has %.1f GB in all." % total if total else ""))
+    say("What I suggest, by the memory of the machine (my estimates for a library of a few thousand songs, not measurements):")
+    for gb, note in rows:
+        out("      %2d GB machine   %-5s  %s%s" % (gb, audiomuse_mem_suggest(gb * 0.93).replace("g", " GB"), note,
+                                                  "   <- this machine" if total and abs(total - gb * 0.93) < gb * 0.2 else ""))
+    say("Too low: a long song can make the worker run out, and AudioMuse-AI then tries it again later. Too high: the other apps can run short "
+        "while it works. More memory does not make it much faster; the processor does that.")
+
+
+def audiomuse_usage():
+    """What the three containers use right now, as lines of text ([] when Docker cannot say)."""
+    rc, txt = docker("stats", "--no-stream", "--format", "{{.Name}}|{{.MemUsage}}", *STACKS["audiomuse"][1], timeout=60)
+    return ["%-20s %s" % tuple(l.split("|", 1)) for l in txt.splitlines() if "|" in l] if rc == 0 else []
+
+
+def audiomuse_set_memory(rest):
+    """`audiomuse memory [SIZE | auto]`: show the worker's memory cap with suggestions, and change it."""
+    audiomuse_memory_help()
+    if audiomuse_wanted():
+        for line in audiomuse_usage():
+            out("      right now: " + line)
+    if rest:
+        word = rest[0]
+    elif Opt.dry:
+        say("This is a dry run: nothing was changed.")
+        return
+    else:
+        word = ask("New limit (for example 4g), auto for the suggestion for this machine, or Enter to keep it", "")
+    if not word:
+        say("Kept at %s." % gb_text(mem_mb(audiomuse_mem())))
+        return
+    new = None if word == "auto" else "%dm" % audiomuse_limit_mb(word)
+    if Opt.dry:
+        say("This is a dry run: the limit would become %s. Nothing was changed." % gb_text(mem_mb(new or audiomuse_mem_suggest())))
+        return
+    if new:
+        State.data["audiomuse_mem"] = new
+    else:
+        State.data.pop("audiomuse_mem", None)
+    State.save()
+    good("The worker's memory limit is now %s." % gb_text(mem_mb(audiomuse_mem())))
+    if audiomuse_wanted():
+        say("AudioMuse-AI is deployed again with it (it restarts; an analysis that was running carries on afterwards).")
+        cmd_refresh()
+    else:
+        say("It takes effect when AudioMuse-AI is set up (sudo homelab-setup audiomuse).")
+
+
+def audiomuse_worker(stop):
+    """`audiomuse pause` / `audiomuse resume`: stop the worker to free its memory, or start it again."""
+    if not audiomuse_wanted():
+        raise Abort("AudioMuse-AI is not set up on this machine. Run `sudo homelab-setup audiomuse`.")
+    if Opt.dry:
+        say("This is a dry run: the worker would be %s. Nothing was changed." % ("paused" if stop else "started"))
+        return
+    rc, txt = docker("stop" if stop else "start", "audiomuse-worker", timeout=120)
+    if rc != 0:
+        raise Abort("Docker could not %s the worker: %s" % ("stop" if stop else "start", txt.strip()[-200:]))
+    if stop:
+        State.data["audiomuse_paused"] = True
+    else:
+        State.data.pop("audiomuse_paused", None)
+    State.save()
+    if stop:
+        good("The worker is paused and its memory is free. Songs are not analysed until you run:  sudo homelab-setup audiomuse resume")
+    else:
+        good("The worker is running again. An analysis you started carries on.")
+
+
+def audiomuse_status():
+    out("")
+    if not audiomuse_wanted():
+        say("AudioMuse-AI is not set up on this machine. `sudo homelab-setup audiomuse` sets it up.")
+        return
+    up = containers_running()
+    say("Web page: %s   (log in as %s; the password is AUDIOMUSE_PASSWORD in `sudo homelab-setup secrets`)" % (url("audiomuse"), Ctx.admin))
+    for c in STACKS["audiomuse"][1]:
+        paused = c == "audiomuse-worker" and State.data.get("audiomuse_paused")
+        out("      %-20s %s" % (c, "paused on purpose" if paused and c not in up else "running" if c in up else "NOT running"))
+    say("The worker may use up to %s of memory (change it: sudo homelab-setup audiomuse memory)." % gb_text(mem_mb(audiomuse_mem())))
+    for line in audiomuse_usage():
+        out("      right now: " + line)
+
+
+def audiomuse_remove():
+    """`audiomuse remove`: take the plugin out of Navidrome and remove the three containers (the analysis data stays)."""
+    if not audiomuse_wanted():
+        say("AudioMuse-AI is not set up. Nothing to remove.")
+        return
+    if Opt.dry:
+        say("This is a dry run: it would switch the plugin off, remove the three AudioMuse-AI containers and deploy Navidrome again. Nothing was changed.")
+        return
+    if not yesno("Remove AudioMuse-AI (its analysis data stays on the drive)?", False):
+        say("Nothing was changed.")
+        return
+    navidrome_cli("plugin", "disable", AUDIOMUSE_PLUGIN_ID, timeout=120)
+    try:
+        os.remove(audiomuse_plugin_file())
+    except OSError:
+        pass
+    if not Portainer.delete("audiomuse"):
+        raise Abort("Portainer could not remove the stack 'audiomuse'. Remove it in Portainer (Stacks), then run this again.")
+    for k in ("audiomuse", "audiomuse_stack", "audiomuse_plugin", "audiomuse_paused"):
+        State.data.pop(k, None)
+    State.save()
+    good("AudioMuse-AI is removed. Navidrome is deployed again without it.")
+    say("Its analysis data is still in %s/audiomuse (it took hours to make, so a later setup reuses it). To free the space: sudo rm -rf %s/audiomuse\n"
+        "The Navidrome login called %s stays too; you can delete it on Navidrome's Users page." % (Ctx.home, Ctx.home, AUDIOMUSE_ND_USER))
+    cmd_refresh()
+
+
+def cmd_audiomuse(rest):
+    """`audiomuse`: set up AudioMuse-AI (Navidrome suggests similar songs by how they sound); also memory, pause, resume, status, remove."""
+    load_all()
+    if Mode.existing:
+        say("This machine was built by hand, so the installer only reads it. AudioMuse-AI is set up with its own compose file; see its page on GitHub.")
+        return
+    if not State.exists():
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    word = rest[0] if rest else ""
+    if word == "memory":
+        return audiomuse_set_memory(rest[1:])
+    if word in ("pause", "resume"):
+        return audiomuse_worker(word == "pause")
+    if word == "status":
+        return audiomuse_status()
+    if word == "remove":
+        return audiomuse_remove()
+    if rest:
+        raise Abort("Unknown word '%s'. Use: homelab-setup audiomuse   or   audiomuse memory | pause | resume | status | remove" % word)
+    if not navidrome_wanted():
+        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome (it needs a music folder). Nothing was changed.")
+    other = "" if State.data.get("audiomuse") else port_taken_by(PORTS["audiomuse"])
+    if other:
+        raise Abort("Port %d is already used by the container %s, and AudioMuse-AI needs it for its web page. Nothing was changed." % (PORTS["audiomuse"], other))
+    if not cpu_has_avx2():
+        raise Abort("The processor of this machine has no AVX2, and AudioMuse-AI will not start without it. Nothing was changed.")
+    out("")
+    say("AudioMuse-AI listens to every song in Navidrome once and works out which songs sound alike. After that, Instant Mix in Navidrome "
+        "builds its queue from songs that sound like the one you picked (it also works for songs nobody has tagged).")
+    say("What this does:\n"
+        "  - adds three containers (a database, a web page and a worker); the first download is a few GB\n"
+        "  - makes a small Navidrome login for it and puts its plugin into Navidrome (Navidrome restarts once)\n"
+        "  - limits the worker to %s of memory and all processor cores but one, so your other apps keep running\n"
+        "  - the first analysis is started by you, takes hours for a few thousand songs, and keeps your processor busy meanwhile" % gb_text(mem_mb(audiomuse_mem())))
+    total = ram_gb()
+    if total and total < 5.5:
+        warn("This machine has only %.1f GB of memory. AudioMuse-AI recommends 8 GB; it will be slow and may stop other apps." % total)
+    elif total and total < 9:
+        say("This machine has %.1f GB of memory, a little under the 8 GB AudioMuse-AI recommends. The limits above are there for that; "
+            "`sudo homelab-setup audiomuse memory` shows how to change them, and `audiomuse pause` frees the worker's memory." % total)
+    if State.data.get("audiomuse"):
+        say("AudioMuse-AI is already set up; this checks it again.")
+    elif Opt.dry:
+        say("This is a dry run: nothing was changed.")
+        return
+    elif not yesno("Set up AudioMuse-AI now?", True):
+        say("Nothing was changed.")
+        return
+    State.data["audiomuse"] = True
+    State.save()
+    cmd_refresh()
+    if State.data.get("audiomuse_plugin"):
+        good("AudioMuse-AI is set up.")
+        say("Next, let it listen to your songs (once):\n"
+            "  1. Open %s and log in as %s. The password is AUDIOMUSE_PASSWORD in `sudo homelab-setup secrets`.\n"
+            "  2. On the main page (Analysis and Clustering) press Start Analysis. You can close the page; it keeps going.\n"
+            "  3. When it has finished, open a song's menu in Navidrome and choose Instant Mix.\n"
+            "Check on it with `sudo homelab-setup audiomuse status`." % (url("audiomuse"), Ctx.admin))
+    else:
+        warn("The setup did not finish. Read the message above, then run `sudo homelab-setup refresh` to continue.")
+
+
 def cmd_cards(rest):
     """`cards`: look for new services (containers with a web page) and give each its Homepage card; also move, ignore, list."""
     prog = installed_copy("homelab-cards", "/usr/local/sbin")
@@ -5838,6 +6292,7 @@ Commands:
   adguard                  add AdGuard Home, if you skipped it during the install
   cards                    give every new service (a container with a web page) its Homepage card; also: cards list | move | ignore
   lastfm                   save your free Last.fm key so Navidrome can suggest similar songs; also: lastfm remove
+  audiomuse                set up AudioMuse-AI (Navidrome suggests songs that sound alike); also: audiomuse memory | pause | resume | status | remove
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -5898,7 +6353,7 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in COMMANDS and cmd not in ("done", "skip", "cards", "lastfm"):
+    if cmd not in COMMANDS and cmd not in ("done", "skip", "cards", "lastfm", "audiomuse"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
@@ -5912,6 +6367,8 @@ def main(argv):
             return cmd_cards(pos[1:])
         elif cmd == "lastfm":
             return cmd_lastfm(pos[1:])
+        elif cmd == "audiomuse":
+            return cmd_audiomuse(pos[1:])
         else:
             COMMANDS[cmd]()
     except Abort as e:
