@@ -31,6 +31,11 @@ t1=$(date +%s)
 check "term_cols does not ask a terminal that is not there" "$(( t1 - t0 < 5 ? 1 : 0 ))" "1"
 check "term_cols falls back to a plain width" "$COLS" "80"
 
+# real_home: a command started by root through "sudo -u NAME" sees SUDO_USER=root and must use its own HOME, not /root
+RH=$(sed -n '/^real_home()/,/^}/p' "$REPO/scripts/homelab")
+check "real_home ignores SUDO_USER=root" "$(env -u HOMELAB_HOME SUDO_USER=root HOME=/home/someone bash -c "$RH; real_home")" "/home/someone"
+check "real_home follows the person who used sudo" "$(env -u HOMELAB_HOME SUDO_USER=nobody HOME=/nowhere bash -c "$RH; real_home")" "$(getent passwd nobody | cut -d: -f6)"
+
 # homelab: short forms run the real command (with sudo when not root) and say which one; other wrong guesses get "Did you mean"
 export HOMELAB_COLOR=0 HOMELAB_STATE_DIR="$T/st" HOMELAB_HOMEPAGE_DIR="$T/hp" HOMELAB_LAN_IP=192.168.1.50 HOMELAB_MAIN_POOL="$T/main" HOMELAB_BACKUP_POOL="$T/backup"
 export HOMELAB_LAST_RUN_FILE="$T/nolog/last-run" HOME="$T/home"; mkdir -p "$T/st" "$T/hp" "$T/home" "$T/bin"

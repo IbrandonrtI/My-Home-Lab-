@@ -267,6 +267,17 @@ stale = own + "\n/* >>> homelab groups >>> old\nvar old = 1;\n/* <<< homelab gro
 r = m.js_groups_block(stale, J)
 check("an older block is replaced and the code around it is kept", "var old" not in r and "console.log('mine')" in r and "console.log('after')" in r and r.count(m.JS_BEGIN) == 1)
 check("no shipped block: the file is left alone", m.js_groups_block(own, "") == own)
+# the second block (the player that keeps the music playing)
+check("the shipped custom.js has the player block too", m.PLAYER_JS_BEGIN in J and m.PLAYER_JS_END in J)
+r = m.js_groups_block(own, J)
+check("both blocks are added after an own script", r.count(m.JS_BEGIN) == 1 and r.count(m.PLAYER_JS_BEGIN) == 1 and r.startswith(own.rstrip("\n")))
+groups_only = J[:J.index(m.PLAYER_JS_BEGIN)].rstrip("\n") + "\n"
+r2 = m.js_groups_block(groups_only, J)
+check("a file from before the player block gets it added, the rest is kept", r2.count(m.PLAYER_JS_BEGIN) == 1 and r2.startswith(groups_only.rstrip("\n")))
+old_player = groups_only + "\n/* >>> homelab player >>> old\nvar old = 1;\n/* <<< homelab player <<< */\nconsole.log('after');\n"
+r3 = m.js_groups_block(old_player, J)
+check("an older player block is replaced and the code after it is kept", "var old" not in r3 and "console.log('after')" in r3 and r3.count(m.PLAYER_JS_BEGIN) == 1)
+check("running it again changes nothing", m.js_groups_block(r3, J) == r3)
 check("the css colours the groups by their name tag", all('.bookmark-group[data-group="%s"]' % g in C for g in ("entertainment", "online-shopping", "productivity")))
 check("the css gives every bookmark the glass, glow and edge of a service card", all(x in C for x in (".bookmark > a {", ".bookmark > a::before", ".bookmark > a::after", "var(--accent)")))
 check("the bookmark styles are inside the managed block", C.index(".bookmark > a {") > C.index(m.TABS_BEGIN) and C.index(".bookmark > a {") < C.index(m.TABS_END))
