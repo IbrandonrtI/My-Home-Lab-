@@ -88,7 +88,7 @@ run_cmd() {   # run_cmd LABEL SECONDS user|root ALLOWED_EXIT_CODES -- command...
   fi
   start=$(date +%s)
   if [ "$who" = user ]; then
-    run_limited "$REAL_HOME" "$secs" sudo -u "$REAL_USER" -H env TERM=dumb "$@"
+    run_limited "$REAL_HOME" "$secs" sudo -u "$REAL_USER" -H env TERM=dumb HOMELAB_HOME="$REAL_HOME" "$@"
   else
     run_limited /root "$secs" env TERM=dumb "$@"
   fi

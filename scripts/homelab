@@ -1614,7 +1614,7 @@ status() {
 # It NEVER prints a value: only "set", a length, or a yes/no.
 real_home() {   # home folder of the person who runs it (also under sudo)
   if [ -n "${HOMELAB_HOME:-}" ]; then echo "$HOMELAB_HOME"; return; fi
-  if [ -n "${SUDO_USER:-}" ]; then getent passwd "$SUDO_USER" | cut -d: -f6; else echo "$HOME"; fi
+  if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then getent passwd "$SUDO_USER" | cut -d: -f6; else echo "$HOME"; fi
 }
 
 dk() { timeout 10 docker "$@" 2>/dev/null; }
