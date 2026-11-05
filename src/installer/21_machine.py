@@ -1,0 +1,290 @@
+# ================================================================ the machine
+class Ctx:
+    """Facts about THIS machine and the answers given at the start."""
+    user = uid = gid = home = ""
+    lan = gateway = tz = hostname = ""
+    admin = email = ""
+    fqdn = tailnet = ts_id = ""
+    repo = ""
+    os_id = os_name = os_codename = os_version = ""
+
+    @classmethod
+    def detect(cls):
+        a = State.data["answers"]
+        cls.user = a.get("user") or detect_user()
+        try:
+            pw = pwd.getpwnam(cls.user)
+            cls.uid, cls.gid, cls.home = pw.pw_uid, pw.pw_gid, pw.pw_dir
+        except KeyError:
+            cls.uid = cls.gid = 1000
+            cls.home = "/home/" + cls.user
+        if ROOT and not os.path.isabs(cls.home):
+            cls.home = "/home/" + cls.user
+        if FAKE:
+            cls.uid, cls.gid, cls.home = 1000, 1000, "/home/" + cls.user
+        cls.lan = a.get("lan") or detect_lan()
+        cls.gateway = detect_gateway()
+        cls.tz = a.get("tz") or detect_tz()
+        cls.hostname = socket.gethostname()
+        cls.admin = a.get("admin", "")
+        cls.email = a.get("email", "")
+        cls.repo = Opt.repo or State.data.get("repo") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cls.refresh_tailscale()
+        cls.read_os()
+
+    @classmethod
+    def read_os(cls):
+        info = {}
+        for line in read_file(P("/etc/os-release")).splitlines():
+            if "=" in line:
+                k, v = line.split("=", 1)
+                info[k] = v.strip().strip('"')
+        cls.os_id = info.get("ID", "")
+        cls.os_name = info.get("PRETTY_NAME", cls.os_id)
+        cls.os_version = info.get("VERSION_ID", "")
+        cls.os_codename = info.get("UBUNTU_CODENAME") or info.get("VERSION_CODENAME", "")
+
+    @classmethod
+    def refresh_tailscale(cls):
+        js = ts_status()
+        cls.fqdn = cls.tailnet = cls.ts_id = ""
+        if js and js.get("BackendState") == "Running":
+            me = js.get("Self") or {}
+            cls.fqdn = (me.get("DNSName") or "").rstrip(".")
+            cls.ts_id = me.get("ID", "")
+            if cls.fqdn.count(".") >= 2:
+                cls.tailnet = cls.fqdn.split(".", 1)[1]
+
+
+def detect_user():
+    """The normal user who ran sudo (the owner of the lab folders)."""
+    if os.environ.get("HLS_USER"):
+        return os.environ["HLS_USER"]
+    u = os.environ.get("SUDO_USER")
+    if u and u != "root":
+        return u
+    try:
+        names = [p.pw_name for p in pwd.getpwall() if 1000 <= p.pw_uid < 60000 and os.path.isdir(p.pw_dir)]
+    except Exception:
+        names = []
+    return names[0] if names else (os.environ.get("USER") or "root")
+
+
+def detect_lan():
+    """This machine's address on the home network."""
+    if os.environ.get("HLS_LAN"):
+        return os.environ["HLS_LAN"]
+    rc, txt = run(["ip", "-4", "route", "get", "1.1.1.1"])
+    m = re.search(r"\bsrc (\d+\.\d+\.\d+\.\d+)", txt)
+    if m:
+        return m.group(1)
+    rc, txt = run(["hostname", "-I"])
+    for tok in txt.split():
+        if re.match(r"^(10|192\.168|172\.(1[6-9]|2\d|3[01]))\.", tok):
+            return tok
+    return ""
+
+
+def detect_gateway():
+    """The router's address."""
+    if os.environ.get("HLS_GATEWAY"):
+        return os.environ["HLS_GATEWAY"]
+    rc, txt = run(["ip", "-4", "route", "show", "default"])
+    m = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", txt)
+    return m.group(1) if m else ""
+
+
+def detect_tz():
+    """The machine's time zone name."""
+    rc, txt = run(["timedatectl", "show", "-p", "Timezone", "--value"])
+    if rc == 0 and txt.strip():
+        return txt.strip()
+    return read_file(P("/etc/timezone")).strip() or "UTC"
+
+
+WEATHER_CITY_DEFAULT = "New York"
+
+
+def geocode_city(query):
+    """Look a city up with Open-Meteo's free geocoding service (no key needed).
+    Returns a list of {name, region, country, lat, lon} (empty = no such city), or None when the service cannot be reached."""
+    base = os.environ.get("HLS_GEOCODE_API", "https://geocoding-api.open-meteo.com")
+    st, js, _ = http("GET", base + "/v1/search?count=5&language=en&format=json&name=" + urllib.parse.quote(query), timeout=15)
+    if st != 200 or not isinstance(js, dict):
+        return None
+    found = []
+    for r in js.get("results") or []:
+        try:
+            found.append({"name": str(r["name"]), "region": str(r.get("admin1") or ""), "country": str(r.get("country") or ""),
+                          "lat": float(r["latitude"]), "lon": float(r["longitude"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return found
+
+
+def weather_apply(text, w):
+    """Put a chosen city (name, lat, lon) into the openmeteo block of widgets.yaml. Returns the new text, or None if the block is missing."""
+    m = re.search(r"(openmeteo:)(.*?)(\n- |\Z)", text, re.S)
+    if not m:
+        return None
+    block = m.group(2)
+    label = w["name"].replace("\\", "").replace('"', "")
+    block = re.sub(r"(\n\s+label:).*", lambda x: '%s "%s"' % (x.group(1), label), block, count=1)
+    block = re.sub(r"(\n\s+latitude:).*", lambda x: "%s %.4f" % (x.group(1), w["lat"]), block, count=1)
+    block = re.sub(r"(\n\s+longitude:).*", lambda x: "%s %.4f" % (x.group(1), w["lon"]), block, count=1)
+    return text[:m.start(2)] + block + text[m.end(2):]
+
+
+def ts_status():
+    """Tailscale's status as a dict, or None when Tailscale is not installed or does not answer."""
+    if not have("tailscale"):
+        return None
+    rc, txt = run(["tailscale", "status", "--json"], timeout=15)
+    if rc != 0:
+        return None
+    try:
+        return json.loads(txt)
+    except ValueError:
+        return None
+
+
+# ================================================================ docker facts
+def _container_names(*flags):
+    """Names of the containers `docker ps` lists with these flags (an empty set when Docker does not answer)."""
+    rc, txt = docker("ps", *flags, "--format", "{{.Names}}", timeout=30)
+    return set(txt.split()) if rc == 0 else set()
+
+
+def containers_running():
+    """Names of the containers that are running."""
+    return _container_names()
+
+
+def containers_starting():
+    """Names of the containers that are running but still starting up (Docker says 'health: starting' or 'Restarting')."""
+    rc, txt = docker("ps", "--format", "{{.Names}}|{{.Status}}", timeout=30)
+    if rc != 0:
+        return set()
+    return {line.split("|")[0] for line in txt.splitlines() if "|" in line and ("starting" in line.lower() or "restarting" in line.lower())}
+
+
+def containers_all():
+    """Names of all containers, running or not."""
+    return _container_names("-a")
+
+
+def stack_up(name):
+    """True when every container of the stack is running."""
+    need = STACKS[name][1]
+    run_now = containers_running()
+    return all(c in run_now for c in need)
+
+
+def is_existing():
+    """A machine that already runs the lab (set up by hand, not by the installer)."""
+    if State.exists() and State.ran("install-started"):
+        return False
+    run_now = containers_running()
+    n = sum(1 for s in STACKS if all(c in run_now for c in STACKS[s][1]))
+    return n >= 7
+
+
+def svc_host():
+    """Address used to reach the services from this machine."""
+    return HOST_OVERRIDE or Ctx.lan or "127.0.0.1"
+
+
+def url(service, path=""):
+    """Local web address of a service, with an optional path."""
+    return "http://%s:%d%s" % (svc_host(), PORTS[service], path)
+
+
+# ================================================================ rendering the repo's files for THIS machine
+def subst(text):
+    """Replace the original server's values (and the placeholders) with this machine's."""
+    pairs = []
+    if Ctx.fqdn:
+        pairs += [(OLD_FQDN, Ctx.fqdn), (PH_FQDN, Ctx.fqdn)]
+    if Ctx.tailnet:
+        pairs += [(OLD_TAILNET, Ctx.tailnet)]
+    if Ctx.lan:
+        pairs += [(OLD_LAN, Ctx.lan), (PH_LAN, Ctx.lan)]
+    pairs += [("/home/" + OLD_USER, Ctx.home), ("/home/" + PH_USER, Ctx.home)]
+    for a, b in pairs:
+        if a and a != "/home/":          # an empty old value (none set) must never match
+            text = text.replace(a, b)
+    text = re.sub(r'(PUID:\s*)"\d+"', r'\g<1>"%s"' % Ctx.uid, text)
+    text = re.sub(r'(PGID:\s*)"\d+"', r'\g<1>"%s"' % Ctx.gid, text)
+    return text
+
+
+def repo_file(*parts):
+    """Path of a file inside the repository the installer was started from."""
+    return os.path.join(Ctx.repo, *parts)
+
+
+def stack_text(name):
+    """The stack file for `name` with this machine's values filled in."""
+    fn = STACKS[name][0]
+    text = read_file(repo_file("stacks", fn))
+    if not text:
+        raise Abort("The repository file stacks/%s is missing (looked in %s)." % (fn, Ctx.repo))
+    text = subst(text)
+    if name == "filebrowser":
+        text = filebrowser_volumes(text)
+    if name == "speedtest-tracker":
+        key = Secrets.get("APP_KEY")
+        text = re.sub(r'(APP_KEY:\s*)"[^"]*"', lambda m: '%s"%s"' % (m.group(1), key), text)
+    if name == "navidrome":
+        text = text.replace("/mnt/storage/music:/music:ro", "%s:/music:ro" % (music_folder() or "/mnt/storage/music"))
+        text = text.replace('user: "1000:1000"', 'user: "%d:%d"' % (Ctx.uid, Ctx.gid))
+    if name == "beszel-agent":
+        text = re.sub(r"(\n\s*KEY:\s*)'[^']*'", lambda m: "%s'%s'" % (m.group(1), Secrets.get("BESZEL_KEY")), text)
+        text = re.sub(r"(\n\s*TOKEN:\s*)\S+", lambda m: "%s%s" % (m.group(1), Secrets.get("BESZEL_TOKEN")), text)
+    return text
+
+
+MUSIC_FOLDER_NAMES = ("music", "Music", "downtify", "Downtify", "Downtify/music", "downtify/music", "media/music", "Media/Music", "downloads/music")
+
+
+def music_folder():
+    """The folder with the songs Downtify saved, or '' (the same search as homelab-stats). In this order: HOMELAB_MUSIC_DIR, the line in
+    /var/lib/homelab/music-dir, the music folder of the Downtify container, a few usual names in the main pool."""
+    forced = os.environ.get("HOMELAB_MUSIC_DIR") or read_file(P("/var/lib/homelab/music-dir")).strip()
+    if forced:
+        return forced if os.path.isdir(P(forced)) else ""
+    rc, ps = run(["docker", "ps", "-a", "--format", "{{.Names}}|{{.Image}}"], timeout=20)
+    for line in ps.splitlines():
+        f = line.split("|")
+        if rc == 0 and len(f) == 2 and "downtify" in line.lower():
+            rc2, mounts = run(["docker", "inspect", f[0], "--format", "{{range .Mounts}}{{.Destination}}|{{.Source}}{{println}}{{end}}"], timeout=10)
+            for m in mounts.splitlines():
+                d = m.split("|", 1)
+                if len(d) == 2 and re.search(r"music|download", d[0], re.I) and os.path.isdir(P(d[1])):
+                    return d[1]
+    for name in MUSIC_FOLDER_NAMES:
+        if os.path.isdir(P("/mnt/storage/" + name)):
+            return "/mnt/storage/" + name
+    return ""
+
+
+def stack_env(name):
+    """The variables Portainer needs for the stack, as (name, value) pairs."""
+    if name == "immich":
+        return [("UPLOAD_LOCATION", "/mnt/storage/immich"), ("DB_DATA_LOCATION", Ctx.home + "/immich/postgres"),
+                ("TZ", Ctx.tz), ("IMMICH_VERSION", "release"), ("DB_PASSWORD", Secrets.get("DB_PASSWORD")),
+                ("DB_USERNAME", "postgres"), ("DB_DATABASE_NAME", "immich")]
+    if name == "nextcloud":
+        return [("NC_ADMIN_USER", Ctx.admin), ("NC_ADMIN_PASSWORD", Runtime.password or ""),
+                ("NC_DB_PASSWORD", Secrets.get("NC_DB_PASSWORD"))]
+    return []
+
+
+def images_in(text):
+    """The image names used in a stack file."""
+    imgs = []
+    for m in re.finditer(r"^\s*image:\s*(\S+)", text, re.M):
+        img = m.group(1).replace("${IMMICH_VERSION:-release}", "release")
+        if img not in imgs:
+            imgs.append(img)
+    return imgs
