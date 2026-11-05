@@ -217,8 +217,8 @@ check("group_names reads the top level groups", m.group_names("- Net & DNS:\n\n 
 check("group_names skips comments", m.group_names("# - Not:\n- Real:  # note\n") == ["Real"])
 
 # ---- the Calendar group in services.yaml (a second managed block) and in the layout
-check("the Calendar group is on the Home tab, in a row of its own, in the shipped layout",
-      re.search(r"(?m)^  Calendar:\n    tab: Home\n    icon: mdi-calendar-month\n    style: row\n    columns: 2\n", S) is not None)
+check("the Calendar group is on the Stats tab, in a row of its own, in the shipped layout",
+      re.search(r"(?m)^  Calendar:\n    tab: Stats\n    icon: mdi-calendar-month\n    style: row\n    columns: 2\n", S) is not None)
 check("the shipped services.yaml has the calendar block after the STATS block", m.CAL_BEGIN in V and m.CAL_END in V and V.index(m.CAL_BEGIN) > V.index(m.STATS_END))
 check("a shipped services.yaml is up to date for the calendar too", m.services_calendar_block(V, V) == V)
 NOCAL = V[:V.index(m.CAL_BEGIN)].rstrip("\n") + "\n"
@@ -230,7 +230,27 @@ check("an older calendar block is replaced and what follows it is kept", "- Old:
 check("the calendar reads the three files homelab-calendar writes",
       all("http://192.168.X.X:3001/images/%s.ics" % n in V for n in ("holidays", "observances", "events")))
 rc, _s = m.layout_complete(base, ["Network & DNS", "Calendar"], ["Productivity"], [])
-check("a Calendar group goes on Home with its icon, in a row", "  Calendar:\n    tab: Home\n    icon: mdi-calendar-month\n    style: row\n    columns: 2" in rc, rc)
+check("a Calendar group goes on Stats with its icon, in a row", "  Calendar:\n    tab: Stats\n    icon: mdi-calendar-month\n    style: row\n    columns: 2" in rc, rc)
+names_in = lambda s: re.findall(r"(?m)^  (\S[^:]*):\n    tab:", s)
+tabs_in = lambda s: [x for i, x in enumerate(re.findall(r"(?m)^    tab: (\S+)$", s)) if x not in re.findall(r"(?m)^    tab: (\S+)$", s)[:i]]
+check("the tabs of the shipped layout read Home, Stats, Links, and the Calendar is the last group of Stats", tabs_in(S) == ["Home", "Stats", "Links"]
+      and names_in(S)[names_in(S).index("Folder Sizes") + 1] == "Calendar" and names_in(S)[names_in(S).index("Calendar") + 1] == "Entertainment", names_in(S))
+check("the shipped layout is already in the new order: the two moves change nothing", m.layout_stats_before_links(m.layout_calendar_on_stats(S, [])[0], [])[0] == S)
+OLDL = ("title: X\nlayout:\n  Network & DNS:\n    tab: Home\n    icon: a\n  Calendar:\n    tab: Home\n    icon: c\n    style: row\n    columns: 2\n"
+        "  Entertainment:\n    tab: Links\n    icon: e\n  Productivity:\n    tab: Links\n    icon: p\n  At a Glance:\n    tab: Stats\n    icon: g\n"
+        "  Folder Sizes:\n    tab: Stats\n    icon: f\nhideVersion: true\n")
+c1, s1 = m.layout_calendar_on_stats(OLDL, [])
+c2, s2 = m.layout_stats_before_links(c1, s1)
+check("an older layout (Calendar on Home, Links before Stats) is reordered: Home, Stats, Calendar, Links",
+      names_in(c2) == ["Network & DNS", "At a Glance", "Folder Sizes", "Calendar", "Entertainment", "Productivity"] and tabs_in(c2) == ["Home", "Stats", "Links"], c2)
+check("the Calendar is on the Stats tab now and keeps its icon and its row", "  Calendar:\n    tab: Stats\n    icon: c\n    style: row\n    columns: 2\n" in c2, c2)
+check("the lines after the layout block are kept, and no line is lost", c2.endswith("hideVersion: true\n") and sorted(c2.split("\n")) == sorted(OLDL.replace("  Calendar:\n    tab: Home", "  Calendar:\n    tab: Stats").split("\n")), c2)
+check("the two moves happen once: a second run changes nothing", m.layout_stats_before_links(m.layout_calendar_on_stats(c2, s2)[0], s2)[0] == c2 and m.CALENDAR_ON_STATS in s2 and m.STATS_BEFORE_LINKS in s2)
+mine2 = c2.replace("  Calendar:\n    tab: Stats", "  Calendar:\n    tab: Home")
+check("a Calendar you put back on Home later is left alone", m.layout_calendar_on_stats(mine2, s2)[0] == mine2)
+check("a layout without Links groups, or without a Calendar, is not changed", m.layout_stats_before_links("layout:\n  A:\n    tab: Home\n  B:\n    tab: Stats\n", [])[0] == "layout:\n  A:\n    tab: Home\n  B:\n    tab: Stats\n"
+      and m.layout_calendar_on_stats("layout:\n  A:\n    tab: Home\n", [])[0] == "layout:\n  A:\n    tab: Home\n")
+check("a file without a layout block is not changed", m.layout_calendar_on_stats("title: X\n", [])[0] == "title: X\n" and m.layout_stats_before_links("title: X\n", [])[0] == "title: X\n")
 check("the Calendar cards share the stats card look in the css", all(x in C for x in ('li[id^="cal-"]::before', 'li[id^="cal-"]::after', "#cal-month", "#cal-agenda")))
 check("the calendar cards have ids that start with cal-", re.findall(r"(?m)^        id: (cal-[\w-]+)$", V) == ["cal-month", "cal-agenda"])
 

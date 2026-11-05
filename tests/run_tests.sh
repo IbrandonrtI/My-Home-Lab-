@@ -813,10 +813,10 @@ assert "tab: Home\n    icon: mdi-apps" not in t.split("At a Glance:")[1].split("
 PY'
 ok "S39 the old services.yaml was saved without the STATS cards" '[ -f $HP39/services.yaml.before-tabs ] && ! grep -q "homelab stats" $HP39/services.yaml.before-tabs && grep -q "id: immich-card" $HP39/services.yaml.before-tabs'
 ok "S39 it tells how to fill the STATS tab in now" 'grep -q "sudo homelab-stats" $SIM_DIR/s39b.out'
-ok "S39 refresh also adds the Calendar (block, layout entry on Home, calendar files) and says how to add an event" 'grep -q "homelab calendar >>>" $HP39/services.yaml && grep -q "^  Calendar:" $HP39/settings.yaml && [ -s $HP39/images/events.ics ] && grep -q "homelab event add" $SIM_DIR/s39b.out && python3 - <<PY
+ok "S39 refresh also adds the Calendar (block, layout entry on Stats, calendar files) and says how to add an event" 'grep -q "homelab calendar >>>" $HP39/services.yaml && grep -q "^  Calendar:" $HP39/settings.yaml && [ -s $HP39/images/events.ics ] && grep -q "homelab event add" $SIM_DIR/s39b.out && python3 - <<PY
 import re,os
 t=open(os.environ["HP39"]+"/settings.yaml").read()
-assert re.search(r"(?m)^  Calendar:\n    tab: Home\n    icon: mdi-calendar-month\n    style: row\n    columns: 2\n", t), t
+assert re.search(r"(?m)^  Calendar:\n    tab: Stats\n    icon: mdi-calendar-month\n    style: row\n    columns: 2\n", t), t
 PY'
 cp $HP39/settings.yaml $SIM_DIR/s39.keep
 cp $HP39/services.yaml $SIM_DIR/s39svc.keep
@@ -986,6 +986,41 @@ card=t[t.index("id: navidrome-card"):t.index("id: metube-card")]
 assert "type: iframe" in card and "type: navidrome" not in card and "token:" not in card, card
 PY
 [ $? = 0 ] && ! grep -qi "admin password" $SIM_DIR/s40h.out'
+python3 - <<PY
+import os,re,json
+hp=os.environ["HP40"]; p=hp+"/settings.yaml"
+t=open(p).read()
+i=t.index("layout:\n"); head,body=t[:i+8],t[i+8:]
+ents=[]
+for l in body.split("\n"):
+    if re.match(r"^  \S",l): ents.append([l])
+    elif ents and l: ents[-1].append(l)
+nm=lambda e:e[0].strip().rstrip(":")
+tb=lambda e:next(re.match(r"\s+tab: (\S+)",l).group(1) for l in e if "tab:" in l)
+home=[e for e in ents if tb(e)=="Home"]; links=[e for e in ents if tb(e)=="Links"]; stats=[e for e in ents if tb(e)=="Stats" and nm(e)!="Calendar"]
+cal=[e for e in ents if nm(e)=="Calendar"][0]; cal[[k for k,l in enumerate(cal) if "tab:" in l][0]]="    tab: Home"
+old=home[:4]+[cal]+home[4:]+links+stats           # the order of zips 29 to 35: Calendar on Home, Links before Stats
+open(p,"w").write(head+"\n".join(l for e in old for l in e)+"\n")
+sp=os.environ["HLS_ROOT"]+"/var/lib/homelab-setup/state.json"
+st=json.load(open(sp)); st["layout_seen"]=[g for g in st.get("layout_seen",[]) if not g.startswith("~stats-before") and not g.startswith("~calendar-on")]
+json.dump(st,open(sp,"w"))
+PY
+hls refresh > $SIM_DIR/s40i.out 2>&1
+ok "S40 an older dashboard (Calendar on Home, Links tab before Stats) gets the tabs Home, Stats, Links and the Calendar at the end of Stats" 'python3 - <<PY
+import os,re
+t=open(os.environ["HP40"]+"/settings.yaml").read()
+names=re.findall(r"(?m)^  (\S[^:]*):\n    tab: (\S+)", t)
+tabs=[]
+for n,tb in names:
+    if tb not in tabs: tabs.append(tb)
+assert tabs==["Home","Stats","Links"], names
+order=[n for n,_ in names]
+assert order[order.index("Folder Sizes")+1]=="Calendar" and order[order.index("Calendar")+1]=="Entertainment", order
+assert "  Calendar:\n    tab: Stats\n" in t, t
+PY'
+cp $HP40/settings.yaml $SIM_DIR/s40set.keep
+hls refresh > $SIM_DIR/s40j.out 2>&1
+ok "S40 a second refresh leaves the tab order alone" 'cmp -s $HP40/settings.yaml $SIM_DIR/s40set.keep'
 fi
 
 echo; echo "TOTAL pass=$PASS fail=$FAIL"
