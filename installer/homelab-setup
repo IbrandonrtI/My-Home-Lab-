@@ -5074,11 +5074,34 @@ SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguar
                   ("immich", "Immich"), ("nextcloud", "Nextcloud")]
 
 
+def navidrome_wanted():
+    """True when this machine is meant to run Navidrome (it has a music folder)."""
+    return BY_ID["stack-navidrome"].applies()
+
+
+def added_services():
+    """Services added after the install: Navidrome (when set up) and every card that `homelab-cards` made.
+    Returns [(label, container, local port, Tailscale port or 0)], sorted by label."""
+    found = {}
+    try:
+        managed = json.loads(read_file(PROGRESS_DIR + "/cards.json") or "{}").get("managed", {})
+        for container, m in managed.items():
+            if m.get("hostport"):
+                found[container] = (m.get("name") or container, container, int(m["hostport"]), int(m.get("serve") or 0))
+    except (ValueError, AttributeError, TypeError):
+        pass                                                  # an unreadable list only means "nothing added"
+    if navidrome_wanted() and "navidrome" not in found:
+        found["navidrome"] = ("Navidrome", "navidrome", PORTS["navidrome"], 0)
+    return sorted(found.values(), key=lambda x: x[0].lower())
+
+
 def system_check():
     """Look at the running system and report whether everything is up. Returns the number of problems."""
     rule("System check")
     problems = []
     names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
+    if navidrome_wanted():
+        names.append("navidrome")
     up = containers_running()
     missing = [c for c in names if c not in up]
     if missing:
@@ -5109,12 +5132,29 @@ def system_check():
         else:
             out("  %s%s%s %-18s %s  (no answer)" % (R, S_BAD, N, label, mark(url(key))))
             problems.append(key)
+    extras = added_services()
+    if extras:
+        out("")
+        out("  %sOther services%s" % (B, N))
+        for label, container, port, _ in extras:
+            link = "http://%s:%d" % (svc_host(), port)
+            st = http("GET", link, timeout=10)[0]
+            if 0 < st < 500:
+                out("  %s%s%s %-18s %s" % (G, S_OK, N, label, mark(link)))
+            elif container == "navidrome":                    # the installer owns Navidrome, so a silent one is a problem
+                out("  %s%s%s %-18s %s  (no answer)" % (R, S_BAD, N, label, mark(link)))
+                problems.append(container)
+            else:                                             # a service the person added: stopping it can be on purpose
+                out("  %s%s%s %-18s %s  (no answer: is the container running?)" % (Y, S_WAIT, N, label, mark(link)))
     if Ctx.fqdn:
         out("")
         out("  %sServices over Tailscale%s %s(use these from your other devices; a machine cannot open its own Tailscale addresses)%s" % (B, N, D, N))
         for port, key in serve_items():
             label = dict(SERVICE_LABELS)[key]
             out("    %-18s %s" % (label, mark("https://%s:%d" % (Ctx.fqdn, port))))
+        for label, _, _, port in extras:
+            if port:
+                out("    %-18s %s" % (label, mark("https://%s:%d" % (Ctx.fqdn, port))))
     out("")
     if problems:
         say("%d problem(s) found. Run:\n$ sudo homelab-setup refresh" % len(problems))
