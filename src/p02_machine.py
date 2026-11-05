@@ -752,7 +752,7 @@ STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"   
 # The STATS groups: name -> (icon, columns). layout_complete puts them on the Stats tab (never on Home).
 STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 2), "Library Totals": ("mdi-image-multiple", 2),
                 "Storage": ("mdi-harddisk", 3), "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
-STATS_AFTER = {"Music Library": "At a Glance"}          # a STATS group that is added later goes right under this one, not at the end
+STATS_AFTER = {"Music Library": "At a Glance", "Calendar": "Folder Sizes"}          # a STATS group that is added later goes right under this one, not at the end
 MUSIC_WIDE = "~music-2-columns"                         # the same for the Music Library row (two cards)
 STORAGE_WIDE = "~storage-3-columns"                     # in the groups-seen list: the Storage row was widened to three cards (done once)
 # Names and tab names used before they were capitalised: layout_renamed() renames them in a layout: block that has them.
@@ -761,7 +761,7 @@ OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
 
 
 CAL_BEGIN, CAL_END = "# >>> homelab calendar >>>", "# <<< homelab calendar <<<"      # the block with the Calendar group in the shipped services.yaml
-CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Home tab, in a row of its own
+CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Stats tab, in a row of its own, last
 
 
 def services_block(live, shipped, begin, end):
@@ -896,12 +896,11 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
     for tab, icon, groups in (("Home", "mdi-apps", service_groups), ("Links", "mdi-bookmark-multiple", bookmark_groups)):
         for g in groups:
             if g and g not in known and g not in seen and g not in [a[0] for a in add]:
-                add.append((g, "Stats" if g in STATS_GROUPS and tab == "Home" else tab, icon))
+                add.append((g, "Stats" if (g in STATS_GROUPS or g in CALENDAR_GROUPS) and tab == "Home" else tab, icon))
     for g, tab, icon in add:
         if tab == "Stats":
-            new = ["  %s:" % yaml_key(g), "    tab: Stats", "    icon: %s" % STATS_GROUPS[g][0], "    style: row", "    columns: %d" % STATS_GROUPS[g][1]]
-        elif g in CALENDAR_GROUPS and tab == "Home":
-            new = ["  %s:" % yaml_key(g), "    tab: Home", "    icon: %s" % CALENDAR_GROUPS[g][0], "    style: row", "    columns: %d" % CALENDAR_GROUPS[g][1]]
+            icon_g, cols_g = STATS_GROUPS.get(g) or CALENDAR_GROUPS[g]
+            new = ["  %s:" % yaml_key(g), "    tab: Stats", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
         else:
             new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
         at = end
@@ -916,6 +915,98 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
         lines[at:at] = new
         end += len(new)
     return "\n".join(lines), sorted(set(seen) | set(present))
+
+
+STATS_BEFORE_LINKS = "~stats-before-links"               # in the groups-seen list: the Stats tab was put in front of the Links tab (done once)
+CALENDAR_ON_STATS = "~calendar-on-stats"                 # the Calendar was moved from Home to the end of the Stats tab (done once)
+
+
+def layout_entries(settings):
+    """(head, entries, tail, rest) of the layout: block: head is the text up to and including the line "layout:", entries is a list of groups
+    (each a list of lines: the "  Name:" line and what belongs to it) and tail is the list of lines after the block. None without a layout."""
+    m = re.search(r"(?m)^layout:[ \t]*(?:#.*)?$", settings)
+    if not m:
+        return None
+    head = settings[:m.end()]
+    lines = settings[m.end():].split("\n")            # lines[0] is the rest of the "layout:" line (empty)
+    end = 1
+    while end < len(lines) and (lines[end].strip() == "" or lines[end][0] in " \t#"):
+        end += 1
+    while end > 1 and lines[end - 1].strip() == "":
+        end -= 1
+    entries, cur = [], None
+    for l in lines[1:end]:
+        if re.match(r"^  \S", l):
+            cur = [l]
+            entries.append(cur)
+        elif cur is not None:
+            cur.append(l)
+    return head, entries, lines[end:], lines[0]
+
+
+def _entry_tab(e):
+    for l in e:
+        k = re.match(r"^    tab:\s*(\S+)\s*$", l)
+        if k:
+            return k.group(1)
+    return None
+
+
+def _entry_name(e):
+    k = re.match(r"^  '?([^'#:][^']*?)'?:\s*$", e[0])
+    return k.group(1).strip() if k else ""
+
+
+def _entries_text(parts):
+    head, entries, tail, rest = parts
+    body = "\n".join(l for e in entries for l in e)
+    return head + rest + ("\n" + body if body else "") + ("\n" + "\n".join(tail) if tail else "")
+
+
+def layout_calendar_on_stats(settings, seen):
+    """The Calendar group moves from the Home tab to the end of the Stats tab (right under Folder Sizes), once. A Calendar that was put
+    somewhere else on purpose later is left alone. Returns (settings, seen)."""
+    if CALENDAR_ON_STATS in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {CALENDAR_ON_STATS})
+    parts = layout_entries(settings)
+    if not parts:
+        return settings, seen
+    head, entries, tail, rest = parts
+    cal = next((e for e in entries if _entry_name(e) == "Calendar" and _entry_tab(e) == "Home"), None)
+    if cal is None:
+        return settings, seen
+    entries.remove(cal)
+    for i, l in enumerate(cal):
+        if re.match(r"^    tab:\s*\S+\s*$", l):
+            cal[i] = "    tab: Stats"
+    at = next((i + 1 for i, e in enumerate(entries) if _entry_name(e) == "Folder Sizes"), None)
+    if at is None:
+        stats_at = [i for i, e in enumerate(entries) if _entry_tab(e) == "Stats"]
+        at = stats_at[-1] + 1 if stats_at else len(entries)
+    entries.insert(at, cal)
+    return _entries_text((head, entries, tail, rest)), seen
+
+
+def layout_stats_before_links(settings, seen):
+    """The tabs are shown in the order their groups come in the layout: the Stats groups are put in front of the first Links group, so
+    the tabs read Home, Stats, Links. Once; an order you chose later is left alone. Returns (settings, seen)."""
+    if STATS_BEFORE_LINKS in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {STATS_BEFORE_LINKS})
+    parts = layout_entries(settings)
+    if not parts:
+        return settings, seen
+    head, entries, tail, rest = parts
+    first_links = next((i for i, e in enumerate(entries) if _entry_tab(e) == "Links"), None)
+    if first_links is None:
+        return settings, seen
+    later = [e for e in entries[first_links:] if _entry_tab(e) == "Stats"]
+    if not later:
+        return settings, seen
+    keep = [e for e in entries[first_links:] if _entry_tab(e) != "Stats"]
+    entries = entries[:first_links] + later + keep
+    return _entries_text((head, entries, tail, rest)), seen
 
 
 def layout_columns_changed(settings, seen, group, old, new, marker):
