@@ -147,8 +147,8 @@ pool_lines() {
     warn "Main pool" "no data drive set up yet (when you have one: sudo drives)"
     suggest 5 "sudo drives" "connect a data drive (a menu; it asks before erasing anything)"
   else
-    bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo hdd-recover (drive dead? sudo drives replace)"
-    suggest 1 "sudo hdd-recover" "the data drive is not mounted: remount it and restart the containers"
+    bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo drives remount (drive dead? sudo drives replace)"
+    suggest 1 "sudo drives remount" "the data drive is not mounted: remount it and restart the containers"
   fi
 
   # backup pool

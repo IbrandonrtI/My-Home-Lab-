@@ -59,7 +59,7 @@ did_you_mean() {   # a word that is not a homelab option: point to the command t
     pull|install)                      c="homelab upgrade";                    why="download the newest lab files from GitHub and put them on this server" ;;
     check|test|health|verify)          c="sudo homelab-selftest";              why="the big check of the whole lab. Which check fits? see: homelab commands" ;;
     restore)                           c="sudo homelab-restore-configs check"; why="preview restoring the saved settings after a rebuild" ;;
-    recover|remount|mount)             c="sudo drives recover";                why="after an unplug or power cut: remount the drives and start the containers" ;;
+    recover|remount|mount)             c="sudo drives remount";                why="after an unplug or power cut: remount the drives and start the containers" ;;
     logs|log)                          c="docker logs --tail 50 NAME";         why="the last lines a container printed" ;;
     help-me|-?|\?)                    c="homelab help";                       why="what this command can do" ;;
   esac
