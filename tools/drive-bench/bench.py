@@ -709,7 +709,7 @@ def teardown_pools(env):
                 sh(["umount", "-l", m])
 
 
-def wipe(env, keep_tpl=True):
+def wipe(env):
     teardown(env)
     for d in (env.state, env.disks, env.main, env.backup):
         if os.path.exists(d):

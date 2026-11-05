@@ -780,18 +780,17 @@ def run_contract(env, rec, log):
                       "every word the script accepts is in its help")
         mapped[script] = words
         # an unknown word is refused: exit code 1, and the checks do not start
-        if True:
-            rc, out, secs, to = go(["bogus-word"])
-            bad = bad_text(out)
-            if rc == 0:
-                bad.append("an unknown word was accepted with exit code 0")
-            elif script == "homelab-selftest" and "Part 1" in out:
-                bad.append("INV-truth-refuse: 'homelab-selftest bogus-word' ignored the word and started all the checks")
-            elif not re.search(r"[Uu]nknown|[Uu]sage|no command called|[Tt]ry", out):
-                bad.append("INV-truth-text: the unknown word was refused but the screen does not say what to do: %r" % out.strip()[:80])
-            n += 1
-            others.record(rec, "truth|contract|%s|bogus" % script, "contract", "other:truth: %s bogus-word" % script, ["bogus-word"], "", rc, out, secs,
-                          "REFUSED" if not [b for b in bad if b.startswith(("INV", "an unknown"))] else "BUG", bad, "", "an unknown word")
+        rc, out, secs, to = go(["bogus-word"])
+        bad = bad_text(out)
+        if rc == 0:
+            bad.append("an unknown word was accepted with exit code 0")
+        elif script == "homelab-selftest" and "Part 1" in out:
+            bad.append("INV-truth-refuse: 'homelab-selftest bogus-word' ignored the word and started all the checks")
+        elif not re.search(r"[Uu]nknown|[Uu]sage|no command called|[Tt]ry", out):
+            bad.append("INV-truth-text: the unknown word was refused but the screen does not say what to do: %r" % out.strip()[:80])
+        n += 1
+        others.record(rec, "truth|contract|%s|bogus" % script, "contract", "other:truth: %s bogus-word" % script, ["bogus-word"], "", rc, out, secs,
+                      "REFUSED" if not [b for b in bad if b.startswith(("INV", "an unknown"))] else "BUG", bad, "", "an unknown word")
     # help for a topic that does not exist
     rc, out, secs, to = ctx.run("drives", ["help", "bogus-word"], timeout=60)
     bad = [] if rc != 0 else ["exit 0 although 'drives help bogus-word' says there is no such command"]
