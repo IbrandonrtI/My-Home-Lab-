@@ -73,7 +73,7 @@ class H(BaseHTTPRequestHandler):
         with World() as w:
             names = {"portainer": ["portainer"], "adguard": ["adguardhome"], "immich": ["immich_server"],
                      "beszel": ["beszel"], "nextcloud": ["nextcloud"], "speedtest": ["speedtest-tracker"],
-                     "filebrowser": ["filebrowser-filebrowser-1"], "netdata": ["netdata-netdata-1"], "navidrome": ["navidrome"], "audiomuse": ["audiomuse-flask"],
+                     "filebrowser": ["filebrowser-filebrowser-1"], "netdata": ["netdata-netdata-1"], "navidrome": ["navidrome"], "audiomuse": ["audiomuse-flask"], "navilist": ["navilist"],
                      "tsapi": [], "homepage": ["homepage"]}[self.svc]
             if names and not all(running(w, n) for n in names):
                 return self.send(502, "not running")
@@ -391,6 +391,57 @@ class H(BaseHTTPRequestHandler):
             return self.send(200, {"status": "NO_PREVIOUS_MAIN_TASK"}) if want and self.headers.get("Authorization") == "Bearer " + want else self.send(401)
         return self.send(200, "<html>AudioMuse-AI</html>", "text/html") if path == "/" else self.send(404)
 
+    # --- naviList: keeps its settings, answers the library sync and the ListenBrainz / Last.fm playlist routes
+    #     (the file $SIM_DIR/navilist.lb means ListenBrainz has made the person's playlists already)
+    def s_navilist(self, w, m, path, q, b):
+        N = w.setdefault("navilist_app", {"settings": {}, "lb_subs": [], "lfm_subs": [], "library_syncs": 0})
+        S = N["settings"]
+        lb_on = os.path.exists(os.path.join(os.environ.get("SIM_DIR", os.path.join(os.environ.get("TMPDIR", "/tmp"), "homelab-sim")), "navilist.lb"))
+        if path == "/health":
+            return self.send(200, {"ok": True})
+        if path == "/settings/api":
+            return self.send(200, {"ok": True, "settings": S})
+        if path == "/settings/test-navidrome" and m == "POST":
+            for k in ("navidrome_url", "navidrome_user", "navidrome_password"):
+                S[k] = b.get(k, "")
+            good = w["navidrome"].get("users", {}).get(S["navidrome_user"]) == S["navidrome_password"] and S["navidrome_password"]
+            return self.send(200, {"ok": True} if good else {"ok": False, "error": "Auth failed"})
+        if path == "/settings" and m == "POST":
+            S.update({k: v for k, v in b.items() if v is not None})
+            return self.send(200, "<html>settings</html>", "text/html")
+        if path == "/sync/library" and m == "POST":
+            N["library_syncs"] += 1
+            return self.send(200, {"ok": True, "message": "Sync started"})
+        lb = [{"lb_mbid": "mbid-wj", "title": "Weekly Jams for tester", "playlist_type": "generated", "source_patch": "weekly-jams"},
+              {"lb_mbid": "mbid-we", "title": "Weekly Exploration for tester", "playlist_type": "generated", "source_patch": "weekly-exploration"},
+              {"lb_mbid": "mbid-mine", "title": "My road trip", "playlist_type": "user", "source_patch": None}] if lb_on else []
+        if path == "/sync/lb-playlists" and m == "POST":
+            if not S.get("listenbrainz_token") or not S.get("listenbrainz_username"):
+                return self.send(200, {"ok": False, "error": "ListenBrainz credentials required"})
+            return self.send(200, {"ok": True, "message": "LB playlists synced"})
+        if path == "/sync/lb-playlists/cached":
+            return self.send(200, {"ok": True, "playlists": [dict(p, enabled=1 if p["lb_mbid"] in N["lb_subs"] else 0) for p in lb]})
+        mm = re.fullmatch(r"/sync/lb-playlists/([^/]+)/import", path)
+        if mm and m == "POST":
+            if mm.group(1) in N["lb_subs"]:
+                return self.send(200, {"ok": False, "error": "Already subscribed"})
+            N["lb_subs"].append(mm.group(1))
+            return self.send(200, {"ok": True, "navidrome_id": "pl-" + mm.group(1)})
+        lfm = [{"lfm_id": "weekly", "title": "Last.fm: This week"}, {"lfm_id": "top_7day", "title": "Last.fm: Top 7 days"},
+               {"lfm_id": "top_1month", "title": "Last.fm: Top of the month"}]
+        if path == "/sync/lfm-playlists" and m == "POST":
+            if not S.get("lastfm_api_key") or not S.get("lastfm_username"):
+                return self.send(200, {"ok": False, "error": "Last.fm credentials required"})
+            N["lfm_known"] = True
+            return self.send(200, {"ok": True})
+        if path == "/sync/lfm-playlists/cached":
+            return self.send(200, {"ok": True, "playlists": [dict(p, enabled=1 if p["lfm_id"] in N["lfm_subs"] else 0) for p in lfm] if N.get("lfm_known") else []})
+        mm = re.fullmatch(r"/sync/lfm-playlists/([^/]+)/import", path)
+        if mm and m == "POST":
+            N["lfm_subs"].append(mm.group(1))
+            return self.send(200, {"ok": True, "navidrome_id": "pl-" + mm.group(1)})
+        return self.send(404)
+
     def s_netdata(self, w, m, path, q, b):
         if w.get("netdata_fail", 0) > 0:
             w["netdata_fail"] -= 1
@@ -413,7 +464,7 @@ class H(BaseHTTPRequestHandler):
 
 
 PORTS = {"portainer": 9000, "adguard": 3000, "immich": 2283, "beszel": 8090, "nextcloud": 8082,
-         "speedtest": 8088, "filebrowser": 8081, "netdata": 19999, "tsapi": 9999, "homepage": 3001, "navidrome": 4533, "audiomuse": 8100}
+         "speedtest": 8088, "filebrowser": 8081, "netdata": 19999, "tsapi": 9999, "homepage": 3001, "navidrome": 4533, "audiomuse": 8100, "navilist": 8200}
 
 
 def main():

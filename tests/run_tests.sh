@@ -1099,6 +1099,50 @@ ok "S40 remove keeps the analysis data and the secrets, and says how to free the
 ok "S40 a Navidrome that refuses the plugin gives a plain message and the setup stays unfinished" 'grep -q "could not switch it on" $SIM_DIR/s40am17.out && grep -q "do not fit each other" $SIM_DIR/s40am17.out && ! grep -q "\"audiomuse_plugin\"" $HLS_ROOT/var/lib/homelab-setup/state.json'
 hls refresh > $SIM_DIR/s40am18.out 2>&1
 ok "S40 the next refresh finishes it, with the same database password as before" '[ "$(wj "w[\"nd_plugins\"][\"audiomuseai\"][\"enabled\"]")" = True ] && [ "$(wj "len([c for c in w[\"containers\"] if c.startswith(\"audiomuse\") and w[\"containers\"][c][\"running\"]])")" = 3 ] && [ "$(wj "w[\"stack_env\"][\"audiomuse\"][\"AUDIOMUSE_DB_PASSWORD\"]")" = "$(grep ^AUDIOMUSE_DB_PASSWORD= $HLS_ROOT/root/.homelab-setup/secrets.env | cut -d= -f2)" ]'
+# naviList: asked for with `homelab-setup navilist`; its own Navidrome login, the ListenBrainz token, the playlists subscribed once ListenBrainz has made them
+LBT=1b2c3d4e-0000-1111-2222-333344445555
+NLEV(){ wj "len([e for e in w[\"events\"] if \"stack updated: navilist\" in e or \"stack created: navilist\" in e])"; }
+NLCN(){ wj "len([c for c in w[\"containers\"] if c == \"navilist\"])"; }
+hls navilist --dry-run > $SIM_DIR/s40nl0.out 2>&1
+ok "S40 navilist --dry-run changes nothing" '[ "$(NLCN)" = 0 ] && ! grep -q navilist $HLS_ROOT/var/lib/homelab-setup/state.json && grep -q "dry run" $SIM_DIR/s40nl0.out'
+( export SIM_PORT_BUSY=8200:downtify; printf '%s\n' y | hls navilist ) > $SIM_DIR/s40nl1.out 2>&1
+ok "S40 naviList: a port that another container already uses is refused with that container's name" 'grep -q "Port 8200 is already used by the container downtify" $SIM_DIR/s40nl1.out && [ "$(NLCN)" = 0 ]'
+printf '%s\n' n | hls navilist > $SIM_DIR/s40nl2.out 2>&1
+ok "S40 naviList: answering no changes nothing, and the question says what it does in plain words" '[ "$(NLCN)" = 0 ] && ! grep -q navilist $HLS_ROOT/var/lib/homelab-setup/state.json && grep -q "never downloads anything" $SIM_DIR/s40nl2.out && grep -q "a few days" $SIM_DIR/s40nl2.out'
+printf '%s\n' y tester_lb not-a-token | hls navilist > $SIM_DIR/s40nl3.out 2>&1
+ok "S40 naviList: a token that is not a ListenBrainz token is refused and nothing is saved" 'grep -q "does not look like a ListenBrainz token" $SIM_DIR/s40nl3.out && ! grep -q NAVILIST $HLS_ROOT/root/.homelab-setup/secrets.env && [ "$(NLCN)" = 0 ]'
+printf '%s\n' y tester_lb "" | hls navilist > $SIM_DIR/s40nl4.out 2>&1
+ok "S40 naviList: a user name without a token is refused" 'grep -q "needs both the user name and the token" $SIM_DIR/s40nl4.out && [ "$(NLCN)" = 0 ]'
+printf '%s\n' y "" "" | hls navilist > $SIM_DIR/s40nl5.out 2>&1
+ok "S40 naviList: with no Last.fm key and no ListenBrainz account there is nothing to make playlists from" 'grep -q "needs at least ListenBrainz or Last.fm" $SIM_DIR/s40nl5.out && [ "$(NLCN)" = 0 ]'
+printf '%s\n' y tester_lb $LBT $PW | hls navilist > $SIM_DIR/s40nl6.out 2>&1
+ok "S40 naviList runs, and says plainly that no Last.fm key is saved" '[ "$(wj "w[\"containers\"][\"navilist\"][\"running\"]")" = True ] && grep -q "No Last.fm key is saved" $SIM_DIR/s40nl6.out'
+ok "S40 naviList has its own small Navidrome login, and the admin password is not in its stack" 'wj "list(w[\"navidrome\"][\"users\"])" | grep -q navilist && [ "$(wj "w[\"stack_env\"][\"navilist\"][\"NAVILIST_NAVIDROME_USER\"]")" = navilist ] && [ "$(wj "w[\"stack_env\"][\"navilist\"][\"NAVILIST_NAVIDROME_PASSWORD\"]")" = "$(wj "w[\"navidrome\"][\"users\"][\"navilist\"]")" ] && ! wj "w[\"stack_env\"][\"navilist\"]" | grep -q "$PW"'
+ok "S40 the ListenBrainz token and the generated password are saved root-only and not printed" 'grep -q "^NAVILIST_LB_TOKEN=$LBT" $HLS_ROOT/root/.homelab-setup/secrets.env && grep -q "^NAVILIST_LB_USER=tester_lb" $HLS_ROOT/root/.homelab-setup/secrets.env && v=$(grep "^NAVILIST_ND_PASSWORD=" $HLS_ROOT/root/.homelab-setup/secrets.env | cut -d= -f2) && [ -n "$v" ] && ! grep -q "$v" $SIM_DIR/s40nl6.out && ! grep -q "$LBT" $SIM_DIR/s40nl6.out && [ "$(stat -c %a $HLS_ROOT/root/.homelab-setup/secrets.env)" = 600 ]'
+ok "S40 the running naviList got the Navidrome login and the ListenBrainz token on its settings page, and read the library" '[ "$(wj "w[\"navilist_app\"][\"settings\"][\"navidrome_user\"]")" = navilist ] && [ "$(wj "w[\"navilist_app\"][\"settings\"][\"listenbrainz_token\"]")" = "$LBT" ] && [ "$(wj "w[\"navilist_app\"][\"settings\"][\"listenbrainz_username\"]")" = tester_lb ] && [ "$(wj "w[\"navilist_app\"][\"library_syncs\"]")" -ge 1 ]'
+ok "S40 naviList's data folder is under the home folder, and its stack file uses port 8200 for its own port 3000" '[ -d $HLS_ROOT/home/testuser/navilist/data ] && grep -q "\"8200:3000\"" $SIMDIR/../stacks/navilist.yaml && grep -q "ghcr.io/ofernander/navilist:v" $SIMDIR/../stacks/navilist.yaml'
+ok "S40 with ListenBrainz still empty it says the playlists are not there yet and subscribes to nothing" 'grep -q "Not there yet" $SIM_DIR/s40nl6.out && grep -q "a few days" $SIM_DIR/s40nl6.out && [ "$(wj "len(w[\"navilist_app\"][\"lb_subs\"])")" = 0 ] && grep -q "Scrobble to ListenBrainz" $SIM_DIR/s40nl6.out'
+touch $SIM_DIR/navilist.lb
+hls navilist subscribe > $SIM_DIR/s40nl7.out 2>&1
+ok "S40 once ListenBrainz has made the playlists, subscribe takes Weekly Jams and Weekly Exploration and leaves the person's own playlist alone" '[ "$(wj "sorted(w[\"navilist_app\"][\"lb_subs\"])==[\"mbid-we\",\"mbid-wj\"]")" = True ] && grep -q "Subscribed: Weekly Jams" $SIM_DIR/s40nl7.out && grep -q "Subscribed: Weekly Exploration" $SIM_DIR/s40nl7.out'
+hls navilist subscribe > $SIM_DIR/s40nl8.out 2>&1
+ok "S40 subscribing again changes nothing" 'grep -q "Everything is subscribed already" $SIM_DIR/s40nl8.out && [ "$(wj "len(w[\"navilist_app\"][\"lb_subs\"])")" = 2 ]'
+EVN=$(NLEV)
+hls refresh > $SIM_DIR/s40nl9.out 2>&1
+ok "S40 a second refresh does not deploy naviList again and asks for no password" '[ "$(NLEV)" = "$EVN" ] && ! grep -qi "admin password" $SIM_DIR/s40nl9.out'
+printf '%s\n' "$LFK" "$LFS" | hls lastfm > $SIM_DIR/s40nl10.out 2>&1
+printf '%s\n' "" "" tester_fm | hls navilist > $SIM_DIR/s40nl11.out 2>&1
+ok "S40 with a Last.fm key saved, naviList asks for the Last.fm user name and keeps the ListenBrainz details when Enter is pressed" 'grep -q "^NAVILIST_LASTFM_USER=tester_fm" $HLS_ROOT/root/.homelab-setup/secrets.env && grep -q "^NAVILIST_LB_TOKEN=$LBT" $HLS_ROOT/root/.homelab-setup/secrets.env && [ "$(wj "w[\"stack_env\"][\"navilist\"][\"NAVILIST_LASTFM_KEY\"]")" = "$LFK" ]'
+ok "S40 the new Last.fm details reach the running naviList's settings and the two Last.fm charts are subscribed" '[ "$(wj "w[\"navilist_app\"][\"settings\"][\"lastfm_username\"]")" = tester_fm ] && [ "$(wj "w[\"navilist_app\"][\"settings\"][\"lastfm_api_key\"]")" = "$LFK" ] && [ "$(wj "sorted(w[\"navilist_app\"][\"lfm_subs\"])==[\"top_1month\",\"weekly\"]")" = True ]'
+hls navilist status > $SIM_DIR/s40nl12.out 2>&1
+ok "S40 navilist status shows the web page, the container, the names and what is subscribed" 'grep -Eq "http://[0-9.]+:8200" $SIM_DIR/s40nl12.out && grep -q "navilist  *running" $SIM_DIR/s40nl12.out && grep -q "tester_lb" $SIM_DIR/s40nl12.out && grep -q "tester_fm" $SIM_DIR/s40nl12.out && grep -q "subscribed: Weekly Jams" $SIM_DIR/s40nl12.out'
+hls verify > $SIM_DIR/s40nl13.out 2>&1
+ok "S40 the System check counts the naviList container and lists it under the other services" 'grep -Eq "Containers: ([0-9]+) of \1 running" $SIM_DIR/s40nl13.out && grep -Eq "naviList +http://[^ ]+:8200" $SIM_DIR/s40nl13.out'
+printf '%s\n' y | hls navilist remove > $SIM_DIR/s40nl14.out 2>&1
+ok "S40 navilist remove takes the container out and forgets the personal names and token" '[ "$(NLCN)" = 0 ] && ! grep -q "^NAVILIST_LB_TOKEN=" $HLS_ROOT/root/.homelab-setup/secrets.env && ! grep -q "^NAVILIST_LB_USER=" $HLS_ROOT/root/.homelab-setup/secrets.env && ! grep -q "\"navilist\": true" $HLS_ROOT/var/lib/homelab-setup/state.json'
+ok "S40 remove keeps the data folder and the Navidrome login, and says the playlists stay" '[ -d $HLS_ROOT/home/testuser/navilist/data ] && wj "list(w[\"navidrome\"][\"users\"])" | grep -q navilist && grep -q "playlists it made are still in Navidrome" $SIM_DIR/s40nl14.out'
+printf '%s\n' y tester_lb $LBT tester_fm | hls navilist > $SIM_DIR/s40nl15.out 2>&1
+ok "S40 setting it up again reuses the Navidrome login and asks for no admin password" '[ "$(wj "w[\"containers\"][\"navilist\"][\"running\"]")" = True ] && [ "$(wj "len(w[\"navidrome\"][\"users\"])")" = 2 ] && ! grep -qi "admin password" $SIM_DIR/s40nl15.out'
 unset HLS_RAM_KB HLS_CPUS
 fi
 
