@@ -82,6 +82,7 @@ class HomepageTabs(Step):
             sett, seen = layout_storage_wide(sett, seen)
             sett, seen = layout_music_wide(sett, seen)
             sett, seen = layout_calendar_on_stats(sett, seen)
+            sett, seen = layout_calendar_on_home(sett, seen)
             sett, seen = layout_stats_before_links(sett, seen)
         sett, seen = settings_quicklaunch(sett, seen)
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
@@ -137,7 +138,7 @@ class HomepageTabs(Step):
         if STATS_BEGIN in svc:
             out("      The Stats tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
         if CAL_BEGIN in svc:
-            out("      The Calendar is at the bottom of the Stats tab, under Folder Sizes. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
+            out("      The Calendar is at the bottom of the Home tab, under the service cards. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
 
 
 def fetch_picture(addr):

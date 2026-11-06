@@ -84,7 +84,7 @@ STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"   
 # The STATS groups: name -> (icon, columns). layout_complete puts them on the Stats tab (never on Home).
 STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 2), "Library Totals": ("mdi-image-multiple", 2),
                 "Storage": ("mdi-harddisk", 3), "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
-STATS_AFTER = {"Music Library": "At a Glance", "Calendar": "Folder Sizes"}          # a STATS group that is added later goes right under this one, not at the end
+STATS_AFTER = {"Music Library": "At a Glance"}          # a STATS group that is added later goes right under this one, not at the end
 MUSIC_WIDE = "~music-2-columns"                         # the same for the Music Library row (two cards)
 STORAGE_WIDE = "~storage-3-columns"                     # in the groups-seen list: the Storage row was widened to three cards (done once)
 # Names and tab names used before they were capitalised: layout_renamed() renames them in a layout: block that has them.
@@ -93,7 +93,7 @@ OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
 
 
 CAL_BEGIN, CAL_END = "# >>> homelab calendar >>>", "# <<< homelab calendar <<<"      # the block with the Calendar group in the shipped services.yaml
-CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Stats tab, in a row of its own, last
+CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Home tab, in a row of its own, last
 
 
 def services_block(live, shipped, begin, end):
@@ -228,11 +228,14 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
     for tab, icon, groups in (("Home", "mdi-apps", service_groups), ("Links", "mdi-bookmark-multiple", bookmark_groups)):
         for g in groups:
             if g and g not in known and g not in seen and g not in [a[0] for a in add]:
-                add.append((g, "Stats" if (g in STATS_GROUPS or g in CALENDAR_GROUPS) and tab == "Home" else tab, icon))
+                add.append((g, "Stats" if g in STATS_GROUPS and tab == "Home" else tab, icon))
     for g, tab, icon in add:
         if tab == "Stats":
-            icon_g, cols_g = STATS_GROUPS.get(g) or CALENDAR_GROUPS[g]
+            icon_g, cols_g = STATS_GROUPS[g]
             new = ["  %s:" % yaml_key(g), "    tab: Stats", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
+        elif g in CALENDAR_GROUPS:                               # the Calendar is on the Home tab, in a row of its own, last
+            icon_g, cols_g = CALENDAR_GROUPS[g]
+            new = ["  %s:" % yaml_key(g), "    tab: Home", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
         else:
             new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
         at = end
@@ -251,6 +254,7 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
 
 STATS_BEFORE_LINKS = "~stats-before-links"               # in the groups-seen list: the Stats tab was put in front of the Links tab (done once)
 CALENDAR_ON_STATS = "~calendar-on-stats"                 # the Calendar was moved from Home to the end of the Stats tab (done once)
+CALENDAR_ON_HOME = "~calendar-on-home"                   # ... and then to the end of the Home tab, where it is seen first (done once)
 
 
 def layout_entries(settings):
@@ -317,6 +321,28 @@ def layout_calendar_on_stats(settings, seen):
         stats_at = [i for i, e in enumerate(entries) if _entry_tab(e) == "Stats"]
         at = stats_at[-1] + 1 if stats_at else len(entries)
     entries.insert(at, cal)
+    return _entries_text((head, entries, tail, rest)), seen
+
+
+def layout_calendar_on_home(settings, seen):
+    """The Calendar group moves from the Stats tab to the end of the Home tab (after the last Home group), once. A Calendar that was put
+    somewhere else on purpose later is left alone. Returns (settings, seen)."""
+    if CALENDAR_ON_HOME in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {CALENDAR_ON_HOME})
+    parts = layout_entries(settings)
+    if not parts:
+        return settings, seen
+    head, entries, tail, rest = parts
+    cal = next((e for e in entries if _entry_name(e) == "Calendar" and _entry_tab(e) == "Stats"), None)
+    if cal is None:
+        return settings, seen
+    entries.remove(cal)
+    for i, l in enumerate(cal):
+        if re.match(r"^    tab:\s*\S+\s*$", l):
+            cal[i] = "    tab: Home"
+    home_at = [i for i, e in enumerate(entries) if _entry_tab(e) == "Home"]
+    entries.insert(home_at[-1] + 1 if home_at else 0, cal)
     return _entries_text((head, entries, tail, rest)), seen
 
 
