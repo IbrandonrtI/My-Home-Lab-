@@ -217,8 +217,8 @@ check("group_names reads the top level groups", m.group_names("- Net & DNS:\n\n 
 check("group_names skips comments", m.group_names("# - Not:\n- Real:  # note\n") == ["Real"])
 
 # ---- the Calendar group in services.yaml (a second managed block) and in the layout
-check("the Calendar group is on the Stats tab, in a row of its own, in the shipped layout",
-      re.search(r"(?m)^  Calendar:\n    tab: Stats\n    icon: mdi-calendar-month\n    style: row\n    columns: 2\n", S) is not None)
+check("the Calendar group is on the Home tab, in a row of its own, right after Media & Entertainment, in the shipped layout",
+      re.search(r"(?m)^  Media & Entertainment:\n    tab: Home\n    icon: [\w-]+\n  Calendar:\n    tab: Home\n    icon: mdi-calendar-month\n    style: row\n    columns: 2\n", S) is not None)
 check("the shipped services.yaml has the calendar block after the STATS block", m.CAL_BEGIN in V and m.CAL_END in V and V.index(m.CAL_BEGIN) > V.index(m.STATS_END))
 check("a shipped services.yaml is up to date for the calendar too", m.services_calendar_block(V, V) == V)
 NOCAL = V[:V.index(m.CAL_BEGIN)].rstrip("\n") + "\n"
@@ -230,12 +230,12 @@ check("an older calendar block is replaced and what follows it is kept", "- Old:
 check("the calendar reads the three files homelab-calendar writes",
       all("http://192.168.X.X:3001/images/%s.ics" % n in V for n in ("holidays", "observances", "events")))
 rc, _s = m.layout_complete(base, ["Network & DNS", "Calendar"], ["Productivity"], [])
-check("a Calendar group goes on Stats with its icon, in a row", "  Calendar:\n    tab: Stats\n    icon: mdi-calendar-month\n    style: row\n    columns: 2" in rc, rc)
+check("a Calendar group goes on Home with its icon, in a row", "  Calendar:\n    tab: Home\n    icon: mdi-calendar-month\n    style: row\n    columns: 2" in rc, rc)
 names_in = lambda s: re.findall(r"(?m)^  (\S[^:]*):\n    tab:", s)
 tabs_in = lambda s: [x for i, x in enumerate(re.findall(r"(?m)^    tab: (\S+)$", s)) if x not in re.findall(r"(?m)^    tab: (\S+)$", s)[:i]]
-check("the tabs of the shipped layout read Home, Stats, Links, and the Calendar is the last group of Stats", tabs_in(S) == ["Home", "Stats", "Links"]
-      and names_in(S)[names_in(S).index("Folder Sizes") + 1] == "Calendar" and names_in(S)[names_in(S).index("Calendar") + 1] == "Entertainment", names_in(S))
-check("the shipped layout is already in the new order: the two moves change nothing", m.layout_stats_before_links(m.layout_calendar_on_stats(S, [])[0], [])[0] == S)
+check("the tabs of the shipped layout read Home, Stats, Links, and the Calendar is the last group of Home", tabs_in(S) == ["Home", "Stats", "Links"]
+      and names_in(S)[names_in(S).index("Calendar") - 1] == "Media & Entertainment" and names_in(S)[names_in(S).index("Calendar") + 1] == "At a Glance", names_in(S))
+check("the shipped layout is already in the new order: the moves change nothing", m.layout_calendar_on_home(m.layout_stats_before_links(m.layout_calendar_on_stats(S, [])[0], [])[0], [])[0] == S)
 OLDL = ("title: X\nlayout:\n  Network & DNS:\n    tab: Home\n    icon: a\n  Calendar:\n    tab: Home\n    icon: c\n    style: row\n    columns: 2\n"
         "  Entertainment:\n    tab: Links\n    icon: e\n  Productivity:\n    tab: Links\n    icon: p\n  At a Glance:\n    tab: Stats\n    icon: g\n"
         "  Folder Sizes:\n    tab: Stats\n    icon: f\nhideVersion: true\n")
@@ -248,6 +248,13 @@ check("the lines after the layout block are kept, and no line is lost", c2.endsw
 check("the two moves happen once: a second run changes nothing", m.layout_stats_before_links(m.layout_calendar_on_stats(c2, s2)[0], s2)[0] == c2 and m.CALENDAR_ON_STATS in s2 and m.STATS_BEFORE_LINKS in s2)
 mine2 = c2.replace("  Calendar:\n    tab: Stats", "  Calendar:\n    tab: Home")
 check("a Calendar you put back on Home later is left alone", m.layout_calendar_on_stats(mine2, s2)[0] == mine2)
+c3, s3 = m.layout_calendar_on_home(c2, s2)
+check("the Calendar then moves to the end of the Home tab, after the last Home group", names_in(c3) == ["Network & DNS", "Calendar", "At a Glance", "Folder Sizes", "Entertainment", "Productivity"] and tabs_in(c3) == ["Home", "Stats", "Links"], c3)
+check("it keeps its icon and its row on Home", "  Calendar:\n    tab: Home\n    icon: c\n    style: row\n    columns: 2\n" in c3, c3)
+check("the move to Home happens once: a second run changes nothing", m.layout_calendar_on_home(c3, s3)[0] == c3 and m.CALENDAR_ON_HOME in s3)
+mine3 = c3.replace("  Calendar:\n    tab: Home", "  Calendar:\n    tab: Stats")
+check("a Calendar you put back on Stats later is left alone", m.layout_calendar_on_home(mine3, s3)[0] == mine3)
+check("no Calendar, or no layout block: nothing changes", m.layout_calendar_on_home("layout:\n  A:\n    tab: Home\n", [])[0] == "layout:\n  A:\n    tab: Home\n" and m.layout_calendar_on_home("title: X\n", [])[0] == "title: X\n")
 check("a layout without Links groups, or without a Calendar, is not changed", m.layout_stats_before_links("layout:\n  A:\n    tab: Home\n  B:\n    tab: Stats\n", [])[0] == "layout:\n  A:\n    tab: Home\n  B:\n    tab: Stats\n"
       and m.layout_calendar_on_stats("layout:\n  A:\n    tab: Home\n", [])[0] == "layout:\n  A:\n    tab: Home\n")
 check("a file without a layout block is not changed", m.layout_calendar_on_stats("title: X\n", [])[0] == "title: X\n" and m.layout_stats_before_links("title: X\n", [])[0] == "title: X\n")
