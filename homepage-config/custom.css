@@ -611,6 +611,175 @@ li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-colo
 li[id^="stat-"] .service-block-value { font-size: 1rem !important; font-weight: 600 !important; color: #f4f6fa; }
 li[id^="stat-"] .service-block-label { opacity: 0.7; }
 
+/* ---- Health line above the tabs (made by custom.js): green when every service answers, red with the names when one does not */
+#hl-health {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: fit-content;
+  max-width: calc(100% - 2 * var(--lk-side));
+  margin: 18px auto 0;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  letter-spacing: 0.01em;
+  color: var(--lk-muted);
+  background: rgba(var(--lk-glass), 0.5);
+  border: 1px solid var(--lk-line);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+#hl-health i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #8793a8; }
+#hl-health.hl-ok i { background: #34d399; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); animation: hl-pulse 2.6s ease-out infinite; }
+#hl-health.hl-ok { color: #cfe9de; }
+#hl-health.hl-bad { color: #ffd1d1; border-color: rgba(248, 113, 113, 0.4); background: rgba(90, 20, 28, 0.45); }
+#hl-health.hl-bad i { background: #f87171; }
+@keyframes hl-pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.45); } 70%, 100% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); } }
+#inner_wrapper #tabs { margin-top: 14px !important; }
+/* a card whose service does not answer gets a red edge */
+#inner_wrapper .service.hl-down .service-card { border-color: rgba(248, 113, 113, 0.55) !important; }
+
+/* ---- Shrink button on the music player (made by custom.js) and the folded state */
+#inner_wrapper .hl-shrink {
+  position: absolute;
+  top: 8px; right: 38px;
+  z-index: 12;
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lk-muted);
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+#inner_wrapper .hl-shrink::before {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 7px; height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translate(-50%, -75%) rotate(45deg);
+  transition: transform 0.25s ease;
+}
+#inner_wrapper .hl-shrink:hover, #inner_wrapper .hl-shrink:focus-visible { background: rgba(255, 255, 255, 0.08); color: #fff; outline: none; }
+html.hl-player-min #inner_wrapper .hl-shrink::before { transform: translate(-50%, -25%) rotate(-135deg); }
+html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { display: none !important; }
+html.hl-player-min #inner_wrapper #navidrome-card .service-card { height: auto !important; }
+
+/* ---- Groups: a count behind the name, a thin line after it and a fold button (made by custom.js) */
+#inner_wrapper .services-group, #inner_wrapper .bookmark-group { position: relative; }
+#inner_wrapper .service-group-name::after, #inner_wrapper .bookmark-group-name::after {
+  content: attr(data-count);
+  margin-left: 8px;
+  padding: 0 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--lk-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.5rem;
+  align-self: center;
+}
+#inner_wrapper .service-group-name:not([data-count])::after, #inner_wrapper .bookmark-group-name:not([data-count])::after { display: none; }
+#inner_wrapper .services-group > button:first-child::after, #inner_wrapper .bookmark-group > button:first-child::after {
+  content: "";
+  flex: 1 1 auto;
+  height: 1px;
+  margin: 0 40px 0 14px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0));
+}
+#inner_wrapper .hl-gfold {
+  position: absolute;
+  top: 6px; right: 8px;
+  z-index: 3;
+  width: 26px; height: 26px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--lk-muted);
+  cursor: pointer;
+  opacity: 0.55;
+  transition: opacity 0.2s ease, background-color 0.2s ease;
+}
+#inner_wrapper .hl-gfold::before {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 6px; height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translate(-50%, -70%) rotate(45deg);
+  transition: transform 0.25s ease;
+}
+#inner_wrapper .hl-gfold:hover, #inner_wrapper .hl-gfold:focus-visible { opacity: 1; background: rgba(255, 255, 255, 0.08); outline: none; }
+#inner_wrapper .hl-folded > .hl-gfold::before { transform: translate(-50%, -30%) rotate(-135deg); }
+#inner_wrapper .hl-folded > div:not(:first-child) { max-height: 0 !important; min-height: 0 !important; margin: 0 !important; opacity: 0; visibility: hidden; pointer-events: none; }      /* (not display:none: Homepage's own rule says display:block!important and wins) */
+#inner_wrapper .hl-folded { padding-bottom: 4px !important; }
+
+/* ---- Cards come up one after the other when a tab opens, and lift a little when you point at one (not the music player: the frame lies over it) */
+@keyframes hl-rise { from { opacity: 0; transform: translateY(8px); } }
+#inner_wrapper .services-list > li:not(#navidrome-card), #inner_wrapper .bookmarks-list > li, #inner_wrapper .bookmark-list > li { animation: hl-rise 0.45s ease both; }
+#inner_wrapper .services-list > li:nth-child(2), #inner_wrapper .bookmark-list > li:nth-child(2) { animation-delay: 0.04s; }
+#inner_wrapper .services-list > li:nth-child(3), #inner_wrapper .bookmark-list > li:nth-child(3) { animation-delay: 0.08s; }
+#inner_wrapper .services-list > li:nth-child(4), #inner_wrapper .bookmark-list > li:nth-child(4) { animation-delay: 0.12s; }
+#inner_wrapper .services-list > li:nth-child(5), #inner_wrapper .bookmark-list > li:nth-child(5) { animation-delay: 0.16s; }
+#inner_wrapper .services-list > li:nth-child(n+6), #inner_wrapper .bookmark-list > li:nth-child(n+6) { animation-delay: 0.2s; }
+#inner_wrapper .service-card, #inner_wrapper .bookmark > a { transition: border-color 0.2s ease, transform 0.2s ease; }
+#inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { transform: translateY(-2px); }
+#inner_wrapper #navidrome-card .service-card:hover { transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  #inner_wrapper .services-list > li, #inner_wrapper .bookmark-list > li, #hl-health i { animation: none !important; }
+  #inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { transform: none; }
+}
+
+/* ---- Icons sit on a soft rounded backing, so logos of every shape look even */
+#inner_wrapper .service-icon { position: relative; }
+#inner_wrapper .service-icon::before {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  width: 42px; height: 42px;
+  transform: translate(-50%, -50%);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  z-index: -1;
+}
+#inner_wrapper #navidrome-card .service-icon::before { display: none; }
+
+/* ---- Each tab gives the page its own accent colour (custom.js writes the tab name on the page) */
+html[data-tab="Stats"] #inner_wrapper { --lk-accent: 94, 214, 164; }
+html[data-tab="Links"] #inner_wrapper { --lk-accent: 190, 160, 255; }
+
+/* ---- Stats: a percentage gets a bar under it (custom.js marks the block); amber from 85 %, red from 95 % */
+li[id^="stat-"] .service-block.hl-bar { position: relative; overflow: hidden; }
+li[id^="stat-"] .service-block.hl-bar::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: 0;
+  height: 3px;
+  width: var(--hl-pct, 0%);
+  background: linear-gradient(90deg, rgba(var(--lk-accent), 0.5), rgb(var(--lk-accent)));
+  border-radius: 0 3px 0 0;
+  transition: width 0.6s ease;
+}
+li[id^="stat-"] .service-block.hl-bar.hl-amber::after { background: linear-gradient(90deg, rgba(245, 158, 11, 0.5), #f59e0b); }
+li[id^="stat-"] .service-block.hl-bar.hl-red::after { background: linear-gradient(90deg, rgba(248, 113, 113, 0.5), #f87171); }
+li[id^="stat-"] .service-block.hl-bar.hl-amber .service-block-value, li[id^="stat-"] .service-block.hl-bar.hl-amber .font-thin { color: #fbbf24 !important; }
+li[id^="stat-"] .service-block.hl-bar.hl-red .service-block-value, li[id^="stat-"] .service-block.hl-bar.hl-red .font-thin { color: #fca5a5 !important; }
+
+/* ---- Late at night the picture gets a little darker (custom.js sets --hl-night from 0 by day to 1 at night) */
+#background::after { background: radial-gradient(1100px 520px at 50% -8%, rgba(var(--lk-accent, 138, 180, 255), 0.07), transparent 65%), linear-gradient(rgba(4, 7, 14, calc(0.30 + var(--hl-night, 0) * 0.18)), rgba(4, 7, 14, calc(0.50 + var(--hl-night, 0) * 0.2))); }
+
+/* ---- Scrollbar like Spotify's: thin, invisible until you point at the page, a little brighter when you point at the bar itself */
+#inner_wrapper::-webkit-scrollbar { display: block; width: 14px; height: 14px; background: transparent; }
+#inner_wrapper::-webkit-scrollbar-track { background: transparent; }
+#inner_wrapper::-webkit-scrollbar-corner { background: transparent; }
+#inner_wrapper::-webkit-scrollbar-thumb { background-color: transparent; border: 3px solid transparent; background-clip: padding-box; border-radius: 10px; min-height: 40px; }
+#inner_wrapper:hover::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.28); }
+#inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.5); }
+@supports not selector(::-webkit-scrollbar) { #inner_wrapper { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.3) transparent; } }
+
 /* ---- Narrow windows and phones: the older small-screen rules above make long pills; here they become the same calm tiles (the extra ids beat them) */
 @media (max-width: 1000px) {
   #inner_wrapper #widgets-wrap > .widget-container,
@@ -657,5 +826,47 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
   #inner_wrapper #layout-groups { margin: 8px calc(var(--lk-side) - 4px) 0 !important; }
   #inner_wrapper .services-group:has(#navidrome-card) .services-list > li { flex-basis: 100%; }
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 100%; }
+}
+/* ---- Phone: the three tabs sit in a bar at the bottom of the screen (thumb reach), the search opens from a button next to the weather */
+#hl-search-btn { display: none; }
+@media (max-width: 700px) {
+  #inner_wrapper #tabs {
+    order: 5;
+    position: sticky;
+    bottom: 0;
+    z-index: 30;
+    margin-top: 12px !important;
+    margin-bottom: 0 !important;
+    margin-left: 0 !important;      /* the bar is as wide as the screen; the space at the sides is its own padding */
+    margin-right: 0 !important;
+    padding: 10px var(--lk-side) calc(10px + env(safe-area-inset-bottom, 0px));
+    background: linear-gradient(rgba(6, 9, 18, 0), rgba(6, 9, 18, 0.88) 38%);
+    pointer-events: none;
+  }
+  #inner_wrapper #myTab { pointer-events: auto; box-shadow: 0 -8px 28px -10px rgba(0, 0, 0, 0.7); }
+  #inner_wrapper #footer { order: 6; padding: 8px !important; }
+  #hl-health { margin-top: 12px; }
+  #hl-search-btn {
+    display: flex;
+    order: 20;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 56px;
+    border-radius: 14px;
+    border: 1px solid var(--lk-line);
+    background: rgba(var(--lk-glass), var(--lk-glass-a));
+    -webkit-backdrop-filter: blur(14px);
+    backdrop-filter: blur(14px);
+    color: var(--lk-text);
+    font: inherit;
+    font-size: 0.9rem;
+  }
+  #hl-search-btn:active { border-color: rgba(var(--lk-accent), 0.5); }
+  #inner_wrapper #information-widgets-right > [class*="information-widget-openmeteo"] { grid-column: auto !important; }
+  #inner_wrapper #information-widgets #information-widgets-right > .information-widget-search { display: none; order: 22 !important; }
+  html.hl-search-open #inner_wrapper #information-widgets #information-widgets-right > .information-widget-search { display: flex; grid-column: 1 / -1; }
+  html.hl-search-open #hl-search-btn { border-color: rgba(var(--lk-accent), 0.5); }
+  #inner_wrapper .hl-gfold { opacity: 0.8; }
 }
 /* <<< homelab tabs <<< */
