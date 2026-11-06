@@ -68,7 +68,7 @@ KEYWORDS = {
         "files file photos photo cloud backup drive pdf docs notes storage"),
     "Media & Entertainment": (
         "metube downtify jellyfin plex emby sonarr radarr lidarr readarr bazarr prowlarr jackett qbittorrent transmission deluge "
-        "sabnzbd nzbget navidrome audiomuse audiobookshelf kavita calibre calibreweb komga tubearchivist spotdl ytdl ytdlp youtubedl overseerr "
+        "sabnzbd nzbget navidrome audiomuse navilist audiobookshelf kavita calibre calibreweb komga tubearchivist spotdl ytdl ytdlp youtubedl overseerr "
         "jellyseerr tautulli stash romm tdarr handbrake ersatztv owncast airsonic funkwhale subsonic koel mstream lazylibrarian "
         "minecraft",
         "music video movies movie media download downloader spotify youtube podcast games game tv"),
@@ -90,7 +90,7 @@ KNOWN_DESCRIPTIONS = {
     "radarr": "Movie manager", "lidarr": "Music manager", "readarr": "Book manager", "prowlarr": "Search indexer manager",
     "bazarr": "Subtitle manager", "jackett": "Torrent search indexer", "qbittorrent": "Torrent downloader",
     "transmission": "Torrent downloader", "deluge": "Torrent downloader", "sabnzbd": "Usenet downloader",
-    "navidrome": "Spotify Music Player", "audiomuse": "Finds similar songs for Navidrome", "audiobookshelf": "Audiobooks and podcasts", "kavita": "Book and comic reader",
+    "navidrome": "Spotify Music Player", "audiomuse": "Finds similar songs for Navidrome", "navilist": "Playlists from ListenBrainz and Last.fm", "audiobookshelf": "Audiobooks and podcasts", "kavita": "Book and comic reader",
     "komga": "Comic and book server", "calibreweb": "Ebook library", "overseerr": "Media requests", "jellyseerr": "Media requests",
     "tautulli": "Plex statistics", "tubearchivist": "YouTube archive", "stash": "Media organiser", "tdarr": "Video converter",
     "grafana": "Dashboards and graphs", "prometheus": "Metrics database", "uptimekuma": "Uptime monitor", "glances": "System monitor",
