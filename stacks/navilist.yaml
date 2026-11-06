@@ -1,0 +1,42 @@
+# naviList: playlists for Navidrome from your ListenBrainz and Last.fm listening (Weekly Jams, Weekly Exploration, Daily Jams, your Last.fm charts).
+# Stack name in Portainer: navilist
+# Port:    8200 (naviList's own web page). Inside the container it is 3000, but AdGuard Home already uses 3000 on the machine.
+# Folders: /home/your-username/navilist/data holds its database and settings.
+# Songs:   it only puts songs you already have in Navidrome into a playlist. It never downloads anything.
+# Logins:  the installer fills in the Navidrome login (a small one made just for naviList), your Last.fm key (from sudo homelab-setup lastfm),
+#          your Last.fm user name, and your ListenBrainz user name and token (asked for by sudo homelab-setup navilist).
+#          These only start it off: naviList keeps its settings in its database, and its Settings page can change them later.
+# Refresh: naviList checks Navidrome every 5 minutes and ListenBrainz and Last.fm every 30 minutes by itself.
+# Version: pinned to a release, so an update never arrives by surprise.
+services:
+  navilist:
+    image: ghcr.io/ofernander/navilist:v1.0.1
+    container_name: navilist
+    restart: unless-stopped
+    labels:
+      org.opencontainers.image.title: "naviList"
+    ports:
+      - "8200:3000"
+    environment:
+      TZ: "${TZ:-UTC}"
+      PORT: "3000"
+      DATA_DIR: "/app/data"
+      NAVIDROME_URL: "${NAVILIST_NAVIDROME_URL}"
+      NAVIDROME_USER: "${NAVILIST_NAVIDROME_USER}"
+      NAVIDROME_PASSWORD: "${NAVILIST_NAVIDROME_PASSWORD}"
+      LASTFM_API_KEY: "${NAVILIST_LASTFM_KEY:-}"
+      LASTFM_USERNAME: "${NAVILIST_LASTFM_USER:-}"
+      LISTENBRAINZ_TOKEN: "${NAVILIST_LB_TOKEN:-}"
+      LISTENBRAINZ_USERNAME: "${NAVILIST_LB_USER:-}"
+    volumes:
+      - /home/your-username/navilist/data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
