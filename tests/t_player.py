@@ -33,6 +33,9 @@ function showStats() { document.getElementById("root").innerHTML = "<h1>Stats</h
 showHome();
 </script><script src="/custom.js"></script></body></html>"""
 
+INNER = DASHBOARD.replace(b"<body>", b'<body><div id="scroller" style="position:fixed;inset:0;overflow:auto">').replace(
+    b'<script src="/custom.js"></script>', b'<div style="height:1500px"></div></div><script src="/custom.js"></script>')
+
 PLAYER = b"""<!doctype html><body style="margin:0;background:#123"><h3>player</h3><script>
 window.__id = Math.random();
 var ctx = new (window.AudioContext || window.webkitAudioContext)(); var o = ctx.createOscillator(); o.connect(ctx.destination); o.start();
@@ -49,6 +52,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body, kind = open(JS, "rb").read(), "application/javascript"
         elif self.path.startswith("/player.html"):
             body, kind = PLAYER, "text/html"
+        elif self.path.startswith("/inner"):
+            body, kind = INNER, "text/html"
         else:
             body, kind = DASHBOARD, "text/html"
         self.send_response(200)
@@ -120,6 +125,19 @@ try:
             pg.wait_for_timeout(300)
         check("quick tab changes leave one player", pg.locator("#hl-player").count() == 1 and len(players(pg)) == 1)
         check("no script errors", not errors, errors)
+        # when the page's own scrolling box moves (not the whole page), the player must follow at once, not half a second later
+        pg2 = browser.new_page(viewport={"width": 1000, "height": 900})
+        pg2.goto(URL + "inner")
+        pg2.wait_for_timeout(1500)
+        check("inner scrolling box: the player lies over the card to begin with", *over(pg2))
+        late = []
+        for top in (150, 0, 220, 40, 300, 0):                      # several scrolls, each looked at 60 ms later (the old half-second timer cannot catch them all)
+            pg2.evaluate("document.getElementById('scroller').scrollTop = %d" % top)
+            pg2.wait_for_timeout(60)
+            ok_, detail = over(pg2)
+            if not ok_:
+                late.append((top, detail))
+        check("inner scrolling box: the player follows the card within a moment of every scroll", not late, late[:1])
         browser.close()
 finally:
     srv.shutdown()
