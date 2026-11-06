@@ -1665,7 +1665,8 @@ def css_tabs_block(live, shipped):
 
 JS_BEGIN, JS_END = "/* >>> homelab groups >>>", "/* <<< homelab groups <<< */"      # the block in the shipped custom.js
 PLAYER_JS_BEGIN, PLAYER_JS_END = "/* >>> homelab player >>>", "/* <<< homelab player <<< */"      # the second block: keeps the music playing
-JS_BLOCKS = [(JS_BEGIN, JS_END), (PLAYER_JS_BEGIN, PLAYER_JS_END)]
+EXTRAS_JS_BEGIN, EXTRAS_JS_END = "/* >>> homelab extras >>>", "/* <<< homelab extras <<< */"      # the third block: health line, fold and shrink buttons, Stats bars
+JS_BLOCKS = [(JS_BEGIN, JS_END), (PLAYER_JS_BEGIN, PLAYER_JS_END), (EXTRAS_JS_BEGIN, EXTRAS_JS_END)]
 
 
 def js_put_block(live, shipped, begin, end):
@@ -1686,7 +1687,8 @@ def js_put_block(live, shipped, begin, end):
 
 def js_groups_block(live, shipped):
     """This machine's custom.js with the managed blocks put in, or brought up to date: the group tags (they let custom.css colour each
-    bookmark group) and the player (it keeps the Navidrome music playing when the tab changes). Anything else in the file is left alone.
+    bookmark group), the player (it keeps the Navidrome music playing when the tab changes) and the extras (health line, fold and shrink
+    buttons, bars on the Stats tab). Anything else in the file is left alone.
     A missing file becomes the shipped file."""
     for begin, end in JS_BLOCKS:
         live = js_put_block(live, shipped, begin, end)
