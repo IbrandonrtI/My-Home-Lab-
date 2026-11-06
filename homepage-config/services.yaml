@@ -365,7 +365,7 @@
 # <<< homelab stats <<<
 
 # >>> homelab calendar >>>
-# The Calendar at the bottom of the Stats tab, under Folder Sizes: US federal holidays (and Lincoln's Birthday and Election Day), a few more days
+# The Calendar at the bottom of the Home tab, under the service cards: US federal holidays (and Lincoln's Birthday and Election Day), a few more days
 # (Valentine's Day, Lunar New Year, Diwali ...) and your own events. The calendar files are made by the command homelab-calendar
 # (the installer runs it, and a weekly job keeps the years coming). Add your own events with:  homelab event add 2026-12-25 "Family dinner"
 # and an online calendar (Google, school ...) with:  homelab calendar add NAME ADDRESS

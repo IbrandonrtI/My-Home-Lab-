@@ -120,6 +120,17 @@
     });
   }
 
+  // While a card or a group slides, the player block is told to look again on every frame; the music frame itself stays out of sight until it stops.
+  function moving() {
+    var until = Date.now() + 450;
+    root.classList.add("hl-sliding");
+    (function follow() {
+      window.dispatchEvent(new Event("resize"));
+      if (Date.now() < until) window.requestAnimationFrame(follow);
+      else { root.classList.remove("hl-sliding"); window.dispatchEvent(new Event("resize")); }
+    })();
+  }
+
   // ---- the shrink button on the Navidrome card: the card folds to its title bar, the music keeps playing
   function shrinkButton() {
     root.classList.toggle("hl-player-min", store("hl-player-min") === "1");
@@ -133,9 +144,9 @@
       ev.stopPropagation();
       var on = !root.classList.contains("hl-player-min");
       store("hl-player-min", on ? "1" : "0");
+      moving();                                                        // the player frame waits (out of sight) while the card slides
       root.classList.toggle("hl-player-min", on);
       label(b);
-      window.dispatchEvent(new Event("resize"));                       // the player block moves the frame over (or away from) the card
     });
     label(b);
     title.appendChild(b);
@@ -154,10 +165,9 @@
   function slide(g, fold) {
     var panel = g.querySelector(":scope > div"), still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (!panel || still) { g.classList.toggle("hl-folded", fold); window.dispatchEvent(new Event("resize")); return; }
-    var music = !!g.querySelector("#navidrome-card"), until = Date.now() + 450;
-    if (music) root.classList.add("hl-sliding");                     // the player frame waits (out of sight) until the card has stopped moving
-    (function follow() { window.dispatchEvent(new Event("resize")); if (Date.now() < until) window.requestAnimationFrame(follow); })();
-    function done() { panel.style.maxHeight = ""; panel.removeEventListener("transitionend", ended); root.classList.remove("hl-sliding"); window.dispatchEvent(new Event("resize")); }
+    if (g.querySelector("#navidrome-card")) moving();                // the player frame waits (out of sight) until the card has stopped moving
+    else { var until = Date.now() + 450; (function follow() { window.dispatchEvent(new Event("resize")); if (Date.now() < until) window.requestAnimationFrame(follow); })(); }
+    function done() { panel.style.maxHeight = ""; panel.removeEventListener("transitionend", ended); }
     function ended(ev) { if (ev.target === panel && ev.propertyName === "max-height") done(); }
     panel.addEventListener("transitionend", ended);
     window.setTimeout(done, 600);

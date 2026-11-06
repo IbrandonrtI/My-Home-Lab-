@@ -552,7 +552,8 @@ body { --icon-color: #c9d6f2; }
 /* ---- The music panel: when the Navidrome card is there, its group goes on top over the full width. The player takes the whole width, and the other
    music apps (Downtify, Metube, AudioMuse-AI, naviList ...) are one row of cards under it. The other groups follow in three columns. */
 #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { order: -1; flex: 0 0 100%; max-width: 100%; }
-#inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 0; min-width: 300px; }
+#inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)):not(:has(li[id^="cal-"])) { flex: 1 1 0; min-width: 300px; }
+#inner_wrapper #layout-groups > .services-group:has(li[id^="cal-"]) { flex: 0 0 100%; max-width: 100%; order: 3; }      /* the Calendar: a row of its own, last */
 #inner_wrapper .services-group:has(#navidrome-card) .services-list {
   display: flex !important;
   flex-flow: row wrap !important;
@@ -639,8 +640,10 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
 }
 #inner_wrapper .hl-shrink:hover, #inner_wrapper .hl-shrink:focus-visible { background: rgba(255, 255, 255, 0.08); color: #fff; outline: none; }
 html.hl-player-min #inner_wrapper .hl-shrink::before { transform: translate(-50%, -25%) rotate(-135deg); }
-html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { display: none !important; }
-html.hl-player-min #inner_wrapper #navidrome-card .service-card { height: auto !important; }
+#inner_wrapper #navidrome-card div:has(> iframe) { max-height: calc(var(--lk-player-h) + 8px); transition: max-height 0.35s ease, opacity 0.25s ease 0.05s; }
+html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height: 0 !important; opacity: 0; transition: max-height 0.35s ease, opacity 0.2s ease; }
+#inner_wrapper #navidrome-card .service-card { transition: border-color 0.2s ease; }
+@media (prefers-reduced-motion: reduce) { #inner_wrapper #navidrome-card div:has(> iframe) { transition: none !important; } }
 
 /* ---- Groups: a count behind the name, a thin line after it and a fold button (made by custom.js) */
 #inner_wrapper .services-group, #inner_wrapper .bookmark-group { position: relative; }
@@ -752,13 +755,13 @@ li[id^="stat-"] .service-block.hl-bar.hl-red .service-block-value, li[id^="stat-
 /* ---- Late at night the picture gets a little darker (custom.js sets --hl-night from 0 by day to 1 at night) */
 #background::after { background: radial-gradient(1100px 520px at 50% -8%, rgba(var(--lk-accent, 138, 180, 255), 0.07), transparent 65%), linear-gradient(rgba(4, 7, 14, calc(0.30 + var(--hl-night, 0) * 0.18)), rgba(4, 7, 14, calc(0.50 + var(--hl-night, 0) * 0.2))); }
 
-/* ---- Scrollbar like Spotify's: thin, invisible until you point at the page, a little brighter when you point at the bar itself */
-#inner_wrapper::-webkit-scrollbar { display: block; width: 14px; height: 14px; background: transparent; }
-#inner_wrapper::-webkit-scrollbar-track { background: transparent; }
-#inner_wrapper::-webkit-scrollbar-corner { background: transparent; }
-#inner_wrapper::-webkit-scrollbar-thumb { background-color: transparent; border: 3px solid transparent; background-clip: padding-box; border-radius: 10px; min-height: 40px; }
-#inner_wrapper:hover::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.28); }
-#inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.5); }
+/* ---- Scrollbar like Spotify's: slim and rounded, faint all the time, brighter when you point at the page, brighter again when you point at the bar */
+html #inner_wrapper::-webkit-scrollbar { display: block !important; width: 14px !important; height: 14px !important; background: transparent; }
+html #inner_wrapper::-webkit-scrollbar-track { background: transparent; }
+html #inner_wrapper::-webkit-scrollbar-corner { background: transparent; }
+html #inner_wrapper::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.2); border: 3px solid transparent; background-clip: padding-box; border-radius: 10px; min-height: 48px; }
+html #inner_wrapper:hover::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.34); }
+html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.55); }
 @supports not selector(::-webkit-scrollbar) { #inner_wrapper { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.3) transparent; } }
 
 /* ---- Narrow windows and phones: the older small-screen rules above make long pills; here they become the same calm tiles (the extra ids beat them) */
@@ -806,7 +809,7 @@ li[id^="stat-"] .service-block.hl-bar.hl-red .service-block-value, li[id^="stat-
   #inner_wrapper button[id$="-tab"] { padding: 9px 6px !important; font-size: 13px !important; letter-spacing: 0.04em; }
   #inner_wrapper #layout-groups { margin: 8px calc(var(--lk-side) - 4px) 0 !important; }
   #inner_wrapper .services-group:has(#navidrome-card) .services-list > li { flex-basis: 100%; }
-  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 100%; }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)):not(:has(li[id^="cal-"])) { flex: 1 1 100%; }
 }
 /* ---- Phone: the three tabs sit in a bar at the bottom of the screen (thumb reach), the search opens from a button next to the weather */
 #hl-search-btn { display: none; }
