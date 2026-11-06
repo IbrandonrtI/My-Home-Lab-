@@ -87,3 +87,8 @@ layout:
   Productivity:
     tab: Links
     icon: mdi-briefcase
+  Customize:
+    tab: Customize
+    icon: mdi-tune
+    style: row
+    columns: 1

@@ -263,3 +263,60 @@
   window.setInterval(night, 600000);
 })();
 /* <<< homelab extras <<< */
+
+/* >>> homelab panel >>> managed by the installer: an upgrade replaces everything between this line and the closing marker.
+   The Customize tab shows the control panel as a page inside one card. While you move a slider in it, the panel sends the new look to this
+   page, so the real dashboard around it changes at once (the preview). Nothing is saved by this: the panel saves with its own Save button, and
+   leaving the preview (or reloading the page) brings the saved look back. Only messages from the panel's own frame are accepted, and only a
+   few kinds of them (some CSS variables, the background sliders, "clear" and "reload"). */
+(function () {
+  var STYLE_ID = "hl-live-look";
+  var BLUR_PX = { none: 0, sm: 4, md: 12, lg: 16, xl: 24, "2xl": 40, "3xl": 64 };
+
+  function fromPanel(e) {
+    var frames = document.querySelectorAll("iframe");
+    for (var i = 0; i < frames.length; i++) {
+      if (frames[i].contentWindow === e.source) return !!frames[i].closest("#customize-card");
+    }
+    return false;
+  }
+  function inRange(n) { return typeof n === "number" && n >= 0 && n <= 100; }
+
+  function clearAll() {
+    var s = document.getElementById(STYLE_ID);
+    if (s) s.remove();
+    var w = document.getElementById("inner_wrapper");
+    if (w) { w.style.removeProperty("backdrop-filter"); w.style.removeProperty("-webkit-backdrop-filter"); }
+    var b = document.getElementById("background");
+    if (b) b.style.removeProperty("background-image");
+  }
+  function look(css) {
+    if (typeof css !== "string" || css.length > 6000 || /[<\\]|url\s*\(|@import|expression|javascript:/i.test(css) || !/^[A-Za-z0-9 #,.:;(){}\[\]="%@&_>*~+-]*$/.test(css)) return;
+    var s = document.getElementById(STYLE_ID);
+    if (!s) { s = document.createElement("style"); s.id = STYLE_ID; document.head.appendChild(s); }
+    s.textContent = css;
+  }
+  function background(d) {
+    if (!inRange(d.saturate) || !inRange(d.brightness) || !inRange(d.opacity) || !Object.prototype.hasOwnProperty.call(BLUR_PX, d.blur)) return;
+    var w = document.getElementById("inner_wrapper");
+    if (w) {
+      var f = "blur(" + BLUR_PX[d.blur] + "px) saturate(" + d.saturate / 100 + ") brightness(" + d.brightness / 100 + ")";
+      w.style.setProperty("backdrop-filter", f);
+      w.style.setProperty("-webkit-backdrop-filter", f);
+    }
+    var b = document.getElementById("background");
+    if (b && typeof d.image === "string" && /^(https?:\/\/|\/)[^'"()\\\s]+$/.test(d.image)) {
+      var o = 1 - d.opacity / 100;
+      b.style.setProperty("background-image", "linear-gradient(rgb(var(--bg-color) / " + o + "), rgb(var(--bg-color) / " + o + ")), url('" + d.image + "')");
+    }
+  }
+  window.addEventListener("message", function (e) {
+    var d = e.data;
+    if (!d || d.hlp !== 1 || typeof d.type !== "string" || !fromPanel(e)) return;
+    if (d.type === "css") look(d.css);
+    else if (d.type === "bg") background(d);
+    else if (d.type === "clear") clearAll();
+    else if (d.type === "reload") window.location.reload();
+  });
+})();
+/* <<< homelab panel <<< */

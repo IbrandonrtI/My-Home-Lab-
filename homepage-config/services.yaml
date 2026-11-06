@@ -425,3 +425,24 @@
               color: emerald
 
 # <<< homelab calendar <<<
+
+# >>> homelab customize >>>
+# The CUSTOMIZE tab: the control panel (the program homelab-panel) as one big card. It changes the look, the layout, the cards and the links of this
+# dashboard by pointing and clicking. It has its own password (set with:  homelab panel password) and is only reachable from your own devices (Tailscale).
+# This block is brought up to date by the installer. To remove the tab: delete everything between the two marker lines, then delete the Customize
+# entry from the layout: block of settings.yaml.
+- Customize:
+
+    - Control panel:
+        id: customize-card
+        icon: mdi-tune
+        description: Look, layout, cards and links
+        widget:
+          type: iframe
+          name: control-panel
+          src: https://pc.your-tailnet.ts.net:1100/
+          classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96
+          allowScrolling: yes
+          loadingStrategy: lazy
+
+# <<< homelab customize <<<
