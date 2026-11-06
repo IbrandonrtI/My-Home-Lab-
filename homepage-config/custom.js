@@ -133,7 +133,7 @@
 
   // ---- the shrink button on the Navidrome card: the card folds to its title bar, the music keeps playing
   function shrinkButton() {
-    root.classList.toggle("hl-player-min", store("hl-player-min") === "1");
+    root.classList.toggle("hl-player-min", store("hl-player-shrunk") === "1");
     var title = document.querySelector("#navidrome-card .service-title");
     if (!title || title.querySelector(".hl-shrink")) return;
     var b = document.createElement("button");
@@ -143,7 +143,7 @@
       ev.preventDefault();
       ev.stopPropagation();
       var on = !root.classList.contains("hl-player-min");
-      store("hl-player-min", on ? "1" : "0");
+      store("hl-player-shrunk", on ? "1" : "0");
       moving();                                                        // the player frame waits (out of sight) while the card slides
       root.classList.toggle("hl-player-min", on);
       label(b);

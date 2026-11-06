@@ -385,7 +385,7 @@ div[id$="-card"] > div {
   --lk-text: #eef2f9;
   --lk-muted: #a9b4c7;
   --lk-side: 28px;                     /* space left and right of the page */
-  --lk-player-h: 560px;                /* height of the Navidrome player panel */
+  --lk-player-h: 600px;                /* height of the Navidrome player panel */
   position: relative;
 }
 
@@ -787,7 +787,7 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
 
 /* ---- Phones and narrow windows: a small tile grid on top, then one column of cards */
 @media (max-width: 700px) {
-  #inner_wrapper { --lk-side: 14px; --lk-player-h: 540px; }
+  #inner_wrapper { --lk-side: 14px; --lk-player-h: 560px; }
   #inner_wrapper #information-widgets { margin-top: 12px !important; }
   #inner_wrapper #widgets-wrap { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
   #inner_wrapper .widget-container,
