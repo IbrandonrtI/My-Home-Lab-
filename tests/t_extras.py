@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Test of the extras block in homepage-config/custom.js (needs Playwright with Chromium; without it the test says so and passes).
 
-A small web page with the same markup as Homepage's stands in for it. The checks: the health line counts the services that answer and names
-the ones that do not, the shrink button on the music card folds it and is remembered, every group gets a count and a fold button that is
+A small web page with the same markup as Homepage's stands in for it. The checks: a card whose service does not answer is marked, the shrink button on the music card folds it and is remembered, every group gets a count and a fold button that is
 remembered, a percentage gets a bar (amber from 85, red from 95), the tab you are on is written on the page, and the phone's search button works.
 Run: python3 tests/t_extras.py   (last line is OK or FAIL)"""
 import http.server
@@ -19,8 +18,9 @@ except ImportError:
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 JS = os.path.join(HERE, "..", "homepage-config", "custom.js")
+CSS = os.path.join(HERE, "..", "homepage-config", "custom.css")
 
-PAGE = b"""<!doctype html><html><head><style>.hidden{display:none}</style></head><body>
+PAGE = b"""<!doctype html><html><head><style>.services-group > div{overflow:hidden}</style><link rel="stylesheet" href="/custom.css"></head><body>
 <div id="inner_wrapper"><div class="container">
 <div id="information-widgets"><div id="widgets-wrap"><div id="information-widgets-right"><form class="information-widget-search"><input type="text"></form></div></div></div>
 <div id="tabs"><ul id="myTab"><li><button id="Home-tab" aria-selected="true">Home</button></li><li><button id="Stats-tab" aria-selected="false">Stats</button></li></ul></div>
@@ -45,6 +45,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/custom.js"):
             body, kind = open(JS, "rb").read(), "application/javascript"
+        elif self.path.startswith("/custom.css"):
+            body, kind = open(CSS, "rb").read(), "text/css"
         else:
             body, kind = PAGE, "text/html"
         self.send_response(200)
@@ -74,23 +76,24 @@ try:
         pg.on("pageerror", lambda e: errors.append(str(e)))
         pg.goto(URL)
         pg.wait_for_timeout(700)
-        txt = lambda: pg.inner_text("#hl-health")
-        check("the health line sits right before the tabs", pg.evaluate("document.getElementById('hl-health').nextElementSibling.id") == "tabs")
-        check("all answering: the line says how many", txt() == "All 3 services running", txt())
+        check("there is no health line any more", pg.evaluate("document.getElementById('hl-health')") is None)
         pg.evaluate("document.getElementById('immich-dot').className = 'rounded-full bg-rose-500'")
         pg.wait_for_timeout(3600)
-        check("a service that does not answer is named", txt() == "1 of 3 not answering: Immich", txt())
-        check("its card is marked", pg.evaluate("document.querySelector('#immich-card').classList.contains('hl-down')"))
-        check("the line turns to the warning look", "hl-bad" in pg.get_attribute("#hl-health", "class"))
+        check("the card of a service that does not answer is marked", pg.evaluate("document.querySelector('#immich-card').classList.contains('hl-down')") and pg.evaluate("document.querySelectorAll('.hl-down').length") == 1)
         pg.evaluate("document.getElementById('immich-dot').className = 'rounded-full bg-emerald-500'")
         pg.wait_for_timeout(3600)
-        check("it is back to green when the service answers again", txt() == "All 3 services running" and pg.evaluate("document.querySelectorAll('.hl-down').length") == 0, txt())
+        check("the mark is gone when the service answers again", pg.evaluate("document.querySelectorAll('.hl-down').length") == 0)
         # groups
         counts = pg.evaluate("[...document.querySelectorAll('.service-group-name')].map(h => h.getAttribute('data-count')).join(',')")
         check("every group has the count of its cards", counts == "2,1,1", counts)
         check("every group has one fold button", pg.evaluate("document.querySelectorAll('.services-group > .hl-gfold').length") == 3)
         pg.locator(".services-group").nth(1).locator("> .hl-gfold").click()
         check("a click folds the group", pg.evaluate("document.querySelectorAll('.services-group')[1].classList.contains('hl-folded')"))
+        pg.wait_for_timeout(100)
+        mid = pg.evaluate("document.querySelectorAll('.services-group')[1].children[1].getBoundingClientRect().height")
+        check("the fold is not instant: a moment after the click the group is still part way shut", 0 < mid, mid)
+        pg.wait_for_timeout(700)
+        check("when the animation is over the group is shut", pg.evaluate("document.querySelectorAll('.services-group')[1].children[1].getBoundingClientRect().height") == 0 and pg.evaluate("document.querySelectorAll('.services-group')[1].children[1].style.maxHeight") == "")
         pg.reload()
         pg.wait_for_timeout(700)
         check("the fold is remembered after a reload", pg.evaluate("document.querySelectorAll('.services-group')[1].classList.contains('hl-folded')") and pg.evaluate("document.querySelectorAll('.hl-folded').length") == 1)
@@ -118,6 +121,7 @@ try:
         pg.wait_for_timeout(300)
         check("... and follows a tab change", pg.evaluate("document.documentElement.getAttribute('data-tab')") == "Stats")
         check("the search button exists once", pg.evaluate("document.querySelectorAll('#hl-search-btn').length") == 1)
+        pg.set_viewport_size({"width": 600, "height": 800})          # the button is for phone-width windows
         pg.click("#hl-search-btn")
         check("a click on it opens the search (page marked)", pg.evaluate("document.documentElement.classList.contains('hl-search-open')"))
         check("and puts the cursor in the search field", pg.evaluate("document.activeElement.tagName") == "INPUT")
