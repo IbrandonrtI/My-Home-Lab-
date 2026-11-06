@@ -275,8 +275,9 @@ def number(v, what, lo, hi):
 # ================================================================ the look (colors, glass, shapes) -> a block in custom.css
 SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}       # the shipped color of two tabs (see the tabs block of custom.css)
 LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "glassClear": False, "glassLevel": 70, "radius": 16, "edge": 7.5,
-                "side": 28, "playerHeight": 600, "paintStrength": 40, "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}}
+                "side": 28, "playerHeight": 600, "paintStrength": 40, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}}
 LABEL_ICONS = ("plain", "circle", "square", "ring")
+PAINT_STYLES = ("gradient", "solid")
 NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card")        # the panel's own cards and the music player are never painted
 LOOK_PRESETS = [
     {"id": "calm", "name": "Calm Night", "look": {}},
@@ -336,6 +337,10 @@ def look_clean(raw):
         out["playerHeight"] = number(raw["playerHeight"], "The height of the music player", 240, 1000)
     if "paintStrength" in raw:
         out["paintStrength"] = number(raw["paintStrength"], "How strong the colors are", 0, 100)
+    if "paintStyle" in raw:
+        if raw["paintStyle"] not in PAINT_STYLES:
+            raise Fail("The color style is not understood.")
+        out["paintStyle"] = raw["paintStyle"]
     if "labelIcon" in raw:
         if raw["labelIcon"] not in LABEL_ICONS:
             raise Fail("The label icon style is not understood.")
@@ -406,55 +411,85 @@ def shipped_accent(css, key):
     return None
 
 
+def shipped_group_accent(css, slug):
+    """The --accent a bookmark group has in the part of custom.css that is not the look block, or None."""
+    before, _block, after = css_look_split(css)
+    for text in (before, after):
+        for m in re.finditer(r'\[data-group="%s"\]\s*\{\s*--accent:\s*(\d+,\s*\d+,\s*\d+)\s*;?\s*\}' % re.escape(slug), text):
+            return m.group(1)
+    return None
+
+
+def rgb_to_hex(txt):
+    r, g, b = [int(x) for x in txt.split(",")]
+    return rgb_hex((r, g, b))
+
+
 WRAP = "html body #inner_wrapper"
 
 
+def paint_vars(rgbs, t, style):
+    """The color of one painted card, tile or bookmark: its color and how strong the fill is (the page's CSS draws the fill from these three values).
+    A gradient is strong on one side and fades out; solid is the same strength everywhere."""
+    if style == "solid":
+        a1 = a2 = num(0.12 + 0.6 * t)
+    else:
+        a1, a2 = num(0.18 + 0.72 * t), num(0.02 + 0.2 * t)
+    return "--accent:%s;--hl-a1:%s;--hl-a2:%s;" % (rgbs, a1, a2)
+
+
+RESET_VARS = "--hl-a1:initial;--hl-a2:initial;"
+
+
 def paint_decl(rgbs, t):
-    """The look of one painted card: a tint over the glass, a colored edge and a soft glow around it."""
-    return ("background-image:linear-gradient(rgba(%s,%s),rgba(%s,%s))!important;border-color:rgba(%s,%s)!important;"
+    """The edge of one painted card: a colored border and a soft glow around it."""
+    return ("border-color:rgba(%s,%s)!important;"
             "box-shadow:0 0 0 1px rgba(%s,%s),0 0 24px -6px rgba(%s,%s),0 14px 30px -20px rgba(0,0,0,.75)!important;" % (
-                rgbs, num(0.06 + 0.5 * t), rgbs, num(0.06 + 0.5 * t), rgbs, num(0.30 + 0.5 * t), rgbs, num(0.10 + 0.25 * t), rgbs, num(0.15 + 0.6 * t)))
+                rgbs, num(0.30 + 0.5 * t), rgbs, num(0.10 + 0.25 * t), rgbs, num(0.15 + 0.6 * t)))
 
 
-PLAIN_DECL = "background-image:none!important;border-color:var(--lk-line)!important;box-shadow:0 14px 30px -20px rgba(0,0,0,.75)!important;"
+PLAIN_DECL = "border-color:var(--lk-line)!important;box-shadow:0 14px 30px -20px rgba(0,0,0,.75)!important;"
 
 
 def paint_rules(v, saved, css):
     """Rules for the colors of cards, tiles and bookmarks. With `saved` (the look on the page now) the things that were painted and are not any more
     get rules that put them back, so a preview shows a removed color at once."""
     t = v["paintStrength"] / 100.0
+    st = v["paintStyle"]
     rules = []
-    if v.get("paintAll"):
-        c = "%d, %d, %d" % hex_rgb(v["paintAll"])
-        cards = WRAP + " .service" + "".join(":not(#%s)" % x for x in NO_PAINT)
-        rules.append("%s{--accent:%s}%s .service-card{%s}" % (cards, c, cards, paint_decl(c, t)))
-        rules.append("%s .bookmark>a{--accent:%s;%s}" % (WRAP, c, paint_decl(c, t)))
+    allc = "%d, %d, %d" % hex_rgb(v["paintAll"]) if v.get("paintAll") else None
+    cards_all = WRAP + " .service" + "".join(":not(#%s)" % x for x in NO_PAINT)
+
+    def card(cid, c):
+        return "%s #%s{%s}%s #%s .service-card{%s}" % (WRAP, cid, paint_vars(c, t, st), WRAP, cid, paint_decl(c, t))
+
+    def mark(sl, c):
+        return '%s .bookmark>a[data-bm="%s"]{%s%s}' % (WRAP, sl, paint_vars(c, t, st), paint_decl(c, t))
+    if allc:
+        rules.append("%s{%s}%s .service-card{%s}" % (cards_all, paint_vars(allc, t, st), cards_all, paint_decl(allc, t)))
+        rules.append("%s .bookmark>a{%s%s}" % (WRAP, paint_vars(allc, t, st), paint_decl(allc, t)))
     for cid in sorted(v["cards"]):
-        c = "%d, %d, %d" % hex_rgb(v["cards"][cid])
-        rules.append("%s #%s{--accent:%s}%s #%s .service-card{%s}" % (WRAP, cid, c, WRAP, cid, paint_decl(c, t)))
+        rules.append(card(cid, "%d, %d, %d" % hex_rgb(v["cards"][cid])))
     for name in sorted(v["links"]):
-        sl = slugify(name)
-        c = "%d, %d, %d" % hex_rgb(v["links"][name])
-        rules.append('%s .bookmark>a[data-bm="%s"]{--accent:%s;%s}' % (WRAP, sl, c, paint_decl(c, t)))
+        rules.append(mark(slugify(name), "%d, %d, %d" % hex_rgb(v["links"][name])))
     if saved is not None:
         was = look_full(saved)
         for cid in sorted(set(was["cards"]) - set(v["cards"])):
-            if v.get("paintAll"):
-                acc, decl = "%d, %d, %d" % hex_rgb(v["paintAll"]), paint_decl("%d, %d, %d" % hex_rgb(v["paintAll"]), t)
+            if allc:
+                rules.append(card(cid, allc))
             else:
-                acc, decl = shipped_accent(css, cid) or ("148, 163, 184" if cid.startswith(("stat-", "cal-")) else "var(--lk-accent)"), PLAIN_DECL
-            rules.append("%s #%s{--accent:%s}%s #%s .service-card{%s}" % (WRAP, cid, acc, WRAP, cid, decl))
+                acc = shipped_accent(css, cid) or ("148, 163, 184" if cid.startswith(("stat-", "cal-")) else "var(--lk-accent)")
+                rules.append("%s #%s{--accent:%s;%s}%s #%s .service-card{%s}" % (WRAP, cid, acc, RESET_VARS, WRAP, cid, PLAIN_DECL))
         have = {slugify(n) for n in v["links"]}
         for name in sorted(was["links"]):
             if slugify(name) not in have:
-                if v.get("paintAll"):
-                    c = "%d, %d, %d" % hex_rgb(v["paintAll"])
-                    rules.append('%s .bookmark>a[data-bm="%s"]{--accent:%s;%s}' % (WRAP, slugify(name), c, paint_decl(c, t)))
+                if allc:
+                    rules.append(mark(slugify(name), allc))
                 else:
-                    rules.append('%s .bookmark>a[data-bm="%s"]{--accent:inherit;%s}' % (WRAP, slugify(name), PLAIN_DECL))
-        if was.get("paintAll") and not v.get("paintAll"):
-            cards = WRAP + " .service" + "".join(":not(#%s)" % x for x in NO_PAINT)
-            rules.append("%s .service-card{%s}%s .bookmark>a{%s}" % (cards, PLAIN_DECL, WRAP, PLAIN_DECL))
+                    rules.append('%s .bookmark>a[data-bm="%s"]{--accent:inherit;%s%s}' % (WRAP, slugify(name), RESET_VARS, PLAIN_DECL))
+        if was.get("paintAll") and not allc:
+            rules.append("%s{%s}%s .service-card{%s}" % (cards_all, RESET_VARS, cards_all, PLAIN_DECL))
+            rules.append("%s .bookmark>a{--accent:inherit;%s%s}" % (WRAP, RESET_VARS, PLAIN_DECL))
     return rules
 
 
@@ -1428,6 +1463,8 @@ def session_ok(tok):
 def paint_state():
     """The cards, tiles and bookmarks and the group labels the Colors screen lists."""
     lines = read(SERVICES).split("\n")
+    css = read(CSS)
+    look_accent = look_full(look_get(css))["accent"]
     cards, stats, cal, labels = [], [], [], []
     for g in services_parse(lines):
         if g["name"] not in PROTECTED and g["name"] not in labels:
@@ -1436,12 +1473,16 @@ def paint_state():
             cid = card_fields(lines, c).get("id", "")
             if not cid or cid in NO_PAINT or not re.fullmatch(r"[A-Za-z0-9_-]+", cid):
                 continue
-            (stats if cid.startswith("stat-") else cal if cid.startswith("cal-") else cards).append({"id": cid, "name": c["name"], "group": g["name"]})
+            tile = cid.startswith(("stat-", "cal-"))
+            acc = shipped_accent(css, cid)
+            col = rgb_to_hex(acc) if acc else ("#94a3b8" if tile else look_accent)
+            (stats if cid.startswith("stat-") else cal if cid.startswith("cal-") else cards).append({"id": cid, "name": c["name"], "group": g["name"], "color": col})
     links = []
     for g in marks_parse(read(BOOKMARKS))[1]:
         if g["name"] not in labels:
             labels.append(g["name"])
-        links += [{"name": e["name"], "group": g["name"]} for e in g["links"]]
+        gcol = rgb_to_hex(shipped_group_accent(css, slugify(g["name"])) or "148, 163, 184")
+        links += [{"name": e["name"], "group": g["name"], "color": gcol} for e in g["links"]]
     return {"cards": cards, "stats": stats, "calendar": cal, "links": links, "labels": labels}
 
 
