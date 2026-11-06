@@ -8,6 +8,22 @@ calendar_cmd() {   # homelab event add|list|remove|holidays: the holidays and yo
   HP_DIR="$HOMEPAGE_DIR" homelab-calendar "$@"
 }
 
+panel_cmd() {   # homelab panel password|status: the password of the control panel (the Customize tab), saved in your own folder
+  if ! command -v homelab-panel >/dev/null 2>&1; then
+    echo "The control panel is not installed yet. Run:  homelab upgrade" >&2
+    return 1
+  fi
+  if [ "$(id -u)" -eq 0 ] && [ -z "${HOMELAB_ALLOW_ROOT:-}" ]; then
+    echo "Run this without sudo, as yourself: the password is saved in your own folder." >&2
+    return 1
+  fi
+  case "${1:-}" in
+    password|passwd) homelab-panel set-password ;;
+    status|"")       homelab-panel status ;;
+    *) echo "Use:  homelab panel password   (choose the password)   or   homelab panel status" >&2; return 1 ;;
+  esac
+}
+
 homepage_edit() {
   if [ "$(id -u)" -eq 0 ] && [ -z "${HOMELAB_ALLOW_ROOT:-}" ]; then
     echo "Run this without sudo, as the user who owns $HOMEPAGE_DIR (sudo would make the files belong to root)." >&2

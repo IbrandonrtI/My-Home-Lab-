@@ -503,6 +503,10 @@ def theme_links_cmd(words):
 def theme_reset():
     need_dir()
     def restore(head):   # every colour line goes back to the shipped line (the rest of the file is not touched)
+        a = head.find("/* >>> homelab look >>>")           # the look block of the control panel goes too
+        z = head.find("/* <<< homelab look <<< */", a) if a >= 0 else -1
+        if a >= 0 and z >= 0:
+            head = head[:a].rstrip("\n") + "\n" + head[z + len("/* <<< homelab look <<< */"):].lstrip("\n")
         for line in shipped_css().split("\n"):
             m = re.match(r"#([\w-]+)-card\s*\{\s*--accent:", line)
             if m:

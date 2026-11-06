@@ -70,6 +70,7 @@ did_you_mean() {   # a word that is not a homelab option: point to the command t
 
 case "${1:-}" in
   backup|update|upgrade|setup|drives|drive|cards|selftest) forward "$@" ;;
+  panel)  panel_cmd "${@:2}" ;;
   theme)  homepage_edit theme "${@:2}" ;;
   simple) homepage_edit simple "${@:2}" ;;
   bookmark|bookmarks) homepage_edit bookmark "${@:2}" ;;
