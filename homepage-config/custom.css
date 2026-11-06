@@ -371,115 +371,231 @@ div[id$="-card"] > div {
 
 
 /* >>> homelab tabs >>> managed by the installer: an upgrade replaces everything between this line and the closing marker,
-   so put your own rules above it. Frosted tab buttons and bookmark cards in the same glass as the service cards.
-   The colour of a bookmark group is set by typing  theme links GROUP COLOR  after the word homelab (see: homelab). */
-#tabs { margin-top: 6px !important; margin-bottom: 14px !important; }      /* only up and down: the sides keep Homepage's own margin, so the tabs line up with the cards */
-
-#myTab {
-  display: flex !important;
-  gap: 10px !important;
-  padding: 0 !important;
-  background: none !important;
-  border: 0 !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
+   so put your own rules above it. This block is THE LOOK of the dashboard (calm dark glass): the top bar, the tabs, the cards, the music
+   player panel, the Stats tab, the bookmarks and the phone layout. It sits after the rules above, so it wins over them; every rule starts with
+   #inner_wrapper to make sure of that. The few numbers you may want to change are the --lk- lines right below.
+   The colour of a single card is still set with the theme command (type: homelab) and so is a bookmark group's colour;
+   both only add a faint tint now, because the page uses ONE accent colour. */
+#inner_wrapper {
+  --lk-accent: 138, 180, 255;          /* the one accent colour (R, G, B): the active tab, bars, icons, the edge of a card you point at */
+  --lk-glass: 13, 18, 30;              /* the colour of the glass (R, G, B) */
+  --lk-glass-a: 0.56;                  /* how solid the glass is: 0 = clear, 1 = solid */
+  --lk-line: rgba(255, 255, 255, 0.075);    /* the thin edge of every card */
+  --lk-radius: 16px;                   /* how round the cards are */
+  --lk-text: #eef2f9;
+  --lk-muted: #a9b4c7;
+  --lk-side: 28px;                     /* space left and right of the page */
+  --lk-player-h: 460px;                /* height of the Navidrome player panel */
+  position: relative;
 }
 
-#myTab li { flex: 1 1 0 !important; margin: 0 !important; min-width: 0; }
+/* ---- The page: a little narrower on big screens, a darker and softer picture behind it */
+#inner_wrapper > .container { max-width: 1480px; z-index: auto !important; }      /* no own layer: the music player (custom.js) must lie above the cards but under the search dialog */
+#background { filter: blur(5px) saturate(0.85); transform: scale(1.04); }
+#background::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(1100px 520px at 50% -8%, rgba(var(--lk-accent, 138, 180, 255), 0.07), transparent 65%), linear-gradient(rgba(4, 7, 14, 0.30), rgba(4, 7, 14, 0.50));
+}
 
-button[id$="-tab"] {
+/* ---- The top bar: the server, the pools and the network as calm glass tiles, the date and the weather on the right, the search under them */
+#inner_wrapper #information-widgets {
+  zoom: 1 !important;
+  position: static !important;
+  padding: 0 !important;
+  margin: 20px var(--lk-side) 0 !important;
+}
+#inner_wrapper #widgets-wrap { display: flex !important; flex-wrap: wrap !important; align-items: stretch !important; gap: 10px !important; }
+#inner_wrapper #information-widgets-right { display: contents !important; }
+#inner_wrapper .widget-container,
+#inner_wrapper .information-widget-logo,
+#inner_wrapper [class*="information-widget-glances"] {
+  box-sizing: border-box !important;
+  height: auto !important;
+  min-height: 56px !important;
+  margin: 0 !important;
+  padding: 8px 14px !important;
+  width: auto !important;
+  max-width: none !important;
+  flex: 0 0 auto !important;
+  border-radius: 14px !important;
+  background: rgba(var(--lk-glass), var(--lk-glass-a)) !important;
+  border: 1px solid var(--lk-line) !important;
+  box-shadow: 0 12px 28px -18px rgba(0, 0, 0, 0.7) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(125%);
+  backdrop-filter: blur(14px) saturate(125%);
+}
+#inner_wrapper .widget-container:has(.information-widget-resource) { flex-direction: column !important; justify-content: center !important; gap: 3px !important; }
+#inner_wrapper #widgets-wrap > .widget-container:first-child { flex: 1 1 auto !important; }      /* the server tile takes the free space */
+#inner_wrapper .widget-container:has(.information-widget-resource) > div:last-child {
+  margin: 0 !important;
+  padding: 0 !important;
+  text-align: center !important;
+  color: var(--lk-muted) !important;
+  font-size: 11px !important;
+  letter-spacing: 0.02em;
+}
+#inner_wrapper .information-widget-resource:not(:last-child) { border-right: 1px solid rgba(255, 255, 255, 0.08) !important; padding-right: 10px !important; margin-right: 10px !important; }
+#inner_wrapper .information-widget-resource div[style*="width"] {
+  background: linear-gradient(90deg, rgba(var(--lk-accent), 0.45), rgb(var(--lk-accent))) !important;
+  opacity: 0.8 !important;
+  border-radius: 10px !important;
+}
+#inner_wrapper .information-widget-resource svg { color: rgb(var(--lk-accent)) !important; opacity: 0.9; }
+#inner_wrapper #widgets-wrap > .widget-container:first-child .information-widget-resource:nth-of-type(3) svg { color: #f2b05e !important; }      /* the temperature keeps a warm colour */
+#inner_wrapper [class*="information-widget-datetime"] { margin-left: auto !important; }
+#inner_wrapper #information-widgets .information-widget-search {
+  position: static !important;
+  background: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  padding: 0 !important;
+  min-height: 0 !important;
+  order: 20 !important;
+  flex: 1 1 320px !important;
+  width: auto !important;
+  max-width: none !important;
+  align-self: center !important;
+  margin: 0 !important;
+  box-sizing: border-box !important;
+}
+#inner_wrapper [class*="information-widget-openmeteo"] { order: 19 !important; }
+
+/* ---- Tabs: one segmented switch in the middle */
+#inner_wrapper #tabs { margin: 22px var(--lk-side) 6px !important; display: flex; justify-content: center; }
+#inner_wrapper #myTab {
+  display: flex !important;
+  gap: 4px !important;
+  width: min(100%, 520px);
+  padding: 4px !important;
+  border-radius: 14px !important;
+  background: rgba(var(--lk-glass), var(--lk-glass-a)) !important;
+  border: 1px solid var(--lk-line) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(125%);
+  backdrop-filter: blur(14px) saturate(125%);
+}
+#inner_wrapper #myTab li { flex: 1 1 0 !important; margin: 0 !important; min-width: 0; height: auto !important; }
+#inner_wrapper button[id$="-tab"] {
   width: 100% !important;
   margin: 0 !important;
   padding: 9px 12px !important;
-  border-radius: 16px !important;
-  background: rgba(14, 19, 31, 0.58) !important;
-  border: 1px solid rgba(255, 255, 255, 0.09) !important;
-  box-shadow: 0 10px 28px -14px rgba(0, 0, 0, 0.6) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  backdrop-filter: blur(16px) saturate(140%);
-  color: rgba(255, 255, 255, 0.72) !important;
+  border-radius: 10px !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  box-shadow: none !important;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  color: var(--lk-muted) !important;
   font-weight: 600 !important;
-  letter-spacing: 0.08em;
-  transition: border-color 0.2s ease, background-color 0.2s ease, color 0.2s ease;
+  letter-spacing: 0.06em;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
-
-button[id$="-tab"]:hover { border-color: rgba(255, 255, 255, 0.22) !important; color: #fff !important; }
-
-button[id$="-tab"][aria-selected="true"] {
-  background: rgba(255, 255, 255, 0.13) !important;
-  border-color: rgba(255, 255, 255, 0.38) !important;
+#inner_wrapper button[id$="-tab"]:hover { color: #fff !important; background: rgba(255, 255, 255, 0.05) !important; }
+#inner_wrapper button[id$="-tab"][aria-selected="true"] {
+  background: rgba(var(--lk-accent), 0.16) !important;
+  border-color: rgba(var(--lk-accent), 0.35) !important;
   color: #fff !important;
 }
+#inner_wrapper button[id$="-tab"]:focus-visible { outline: 2px solid rgba(var(--lk-accent), 0.8); outline-offset: 2px; }
 
-button[id$="-tab"]:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.6); outline-offset: 2px; }
-
-@media (max-width: 640px) {
-  #myTab { gap: 8px !important; }
-  button[id$="-tab"] { padding: 8px 6px !important; font-size: 13px !important; letter-spacing: 0.04em; }
+/* ---- Groups: a quiet title above each row of cards */
+#inner_wrapper #layout-groups { margin: 10px calc(var(--lk-side) - 4px) 0 !important; row-gap: 6px; }
+#inner_wrapper .service-group-name, #inner_wrapper .bookmark-group-name {
+  color: var(--lk-text) !important;
+  font-size: 0.98rem !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.01em;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
 }
+body { --icon-color: #c9d6f2; }
+.service-group-icon > div, .bookmark-group-icon > div,
+.service-icon > div[style*="mask"], .bookmark-icon > div[style*="mask"] { background: var(--icon-color) !important; }
 
+/* ---- Cards: calm glass, a thin edge, the accent colour only when you point at one */
+/* the glass colour is set with a LOW weight on purpose: the colour command of the dashboard theme writes its own rule after this block and must win */
+.service-card, .bookmark > a { background: rgba(var(--lk-glass), var(--lk-glass-a)) !important; }
+#inner_wrapper .service-card,
+#inner_wrapper .bookmark > a {
+  border-radius: var(--lk-radius) !important;
+  border: 1px solid var(--lk-line) !important;
+  box-shadow: 0 14px 30px -20px rgba(0, 0, 0, 0.75) !important;
+  -webkit-backdrop-filter: blur(14px) saturate(125%);
+  backdrop-filter: blur(14px) saturate(125%);
+  transition: border-color 0.2s ease;
+}
+#inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { border-color: rgba(var(--lk-accent), 0.40) !important; }
+#inner_wrapper .service-card:focus-within, #inner_wrapper .bookmark > a:focus-visible { border-color: rgba(var(--lk-accent), 0.75) !important; }
+/* a faint tint in the corner (the colour of the card, or the accent) instead of the strong glow, and no coloured rail */
+#inner_wrapper [id$="-card"]::before, #inner_wrapper li[id^="stat-"]::before, #inner_wrapper li[id^="cal-"]::before {
+  content: "";
+  position: absolute;
+  top: 2px; left: 2px; right: 2px; bottom: 6px;
+  z-index: 0;
+  border-radius: 14px !important;
+  pointer-events: none;
+  background: linear-gradient(135deg, rgba(var(--accent, var(--lk-accent)), 0.10), rgba(var(--accent, var(--lk-accent)), 0) 55%) !important;
+}
+#inner_wrapper [id$="-card"]::after, #inner_wrapper li[id^="stat-"]::after, #inner_wrapper li[id^="cal-"]::after { display: none !important; }
+#inner_wrapper [id$="-card"] { position: relative !important; background-color: transparent !important; }
+#inner_wrapper .service-name { color: var(--lk-text) !important; font-size: 0.93rem !important; font-weight: 600 !important; letter-spacing: -0.01em; }
+#inner_wrapper .service-description { color: var(--lk-muted) !important; font-size: 0.74rem !important; }
+#inner_wrapper .service-block { background: rgba(255, 255, 255, 0.045) !important; border-radius: 10px !important; }
+#inner_wrapper .service-block-value { font-weight: 600; }
+#inner_wrapper .service-block-label { color: var(--lk-muted); letter-spacing: 0.04em; }
 @media (prefers-reduced-motion: reduce) {
-  button[id$="-tab"] { transition: none; }
+  #inner_wrapper .service-card, #inner_wrapper .bookmark > a, #inner_wrapper button[id$="-tab"] { transition: none; }
 }
-/* ---- Bookmark groups: every bookmark is a frosted card like the service cards. The group's colour (--accent) paints the soft
-   glow and the thin edge on the left. The script custom.js tags each group with its name (data-group) so each group can have its own. */
+
+/* ---- The music panel: when the Navidrome card is there, its group goes on top over the full width. The player is wide on the left and the
+   other music apps (Downtify, AudioMuse-AI, naviList ...) are a column on the right. The other groups follow in three columns. */
+#inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { order: -1; flex: 0 0 100%; max-width: 100%; }
+#inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 0; min-width: 300px; }
+#inner_wrapper .services-group:has(#navidrome-card) .services-list {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  grid-auto-rows: min-content;
+  column-gap: 12px;
+  row-gap: 0;
+}
+#inner_wrapper .services-group:has(#navidrome-card) .services-list > li { grid-column: 2; }
+#inner_wrapper .services-group:has(#navidrome-card) .services-list > #navidrome-card { grid-column: 1; grid-row: 1 / span 24; }
+#inner_wrapper #navidrome-card .service-card { height: calc(100% - 0.5rem) !important; }
+#inner_wrapper #navidrome-card div:has(> iframe) { overflow: hidden !important; border-radius: 10px; }
+#inner_wrapper #navidrome-card iframe { width: calc(100% + 32px) !important; max-width: none !important; border: 0 !important; height: var(--lk-player-h) !important; }
+
+/* ---- Bookmarks (the Links tab): the same glass. The group's colour is only a faint tint. */
 .bookmark-group { --accent: 148, 163, 184; }
 .bookmark-group[data-group="entertainment"]   { --accent: 147, 51,  234; }   /* purple */
 .bookmark-group[data-group="online-shopping"] { --accent: 214, 90,  22;  }   /* orange */
 .bookmark-group[data-group="productivity"]    { --accent: 36,  140, 255; }   /* blue */
-
-.bookmark > a {
-  position: relative !important;
-  overflow: hidden !important;
-  isolation: isolate !important;
-  border-radius: 14px !important;
-  background: rgba(14, 19, 31, 0.58) !important;
-  border: 1px solid rgba(255, 255, 255, 0.09) !important;
-  box-shadow: 0 10px 28px -14px rgba(0, 0, 0, 0.6) !important;
-  -webkit-backdrop-filter: blur(16px) saturate(140%);
-  backdrop-filter: blur(16px) saturate(140%);
-  transition: border-color 0.2s ease;
-}
-.bookmark > a:hover { border-color: rgba(255, 255, 255, 0.22) !important; }
-.bookmark > a:focus-visible { border-color: rgba(255, 255, 255, 0.55) !important; }
-
+.bookmark > a { position: relative !important; overflow: hidden !important; isolation: isolate !important; }
 .bookmark > a::before {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent), 0.26), rgba(var(--accent), 0.04) 55%);
+  background: linear-gradient(135deg, rgba(var(--accent), 0.10), rgba(var(--accent), 0) 55%);
 }
 .bookmark > a::after {
   content: "";
   position: absolute;
-  left: 0; top: 8px; bottom: 8px;
-  width: 3px;
+  left: 0; top: 10px; bottom: 10px;
+  width: 2px;
   z-index: 0;
   pointer-events: none;
-  border-radius: 0 3px 3px 0;
-  background: rgb(var(--accent));
+  border-radius: 0 2px 2px 0;
+  background: rgba(var(--accent), 0.55);
 }
 .bookmark > a > div { position: relative; z-index: 1; }
+.bookmark-icon { background: rgba(255, 255, 255, 0.04) !important; border-radius: 0 !important; }
+#inner_wrapper .bookmark-name { color: var(--lk-text) !important; font-weight: 600 !important; letter-spacing: -0.01em; }
+#inner_wrapper .bookmark-description { color: var(--lk-muted) !important; }
 
-.bookmark-icon { background: rgba(255, 255, 255, 0.05) !important; border-radius: 0 !important; }
-.bookmark-name { color: #f4f6fa !important; font-weight: 600 !important; letter-spacing: -0.01em; }
-.bookmark-description { color: #b9c2d0 !important; }
-.bookmark-group-name {
-  color: #eef1f7 !important;
-  font-weight: 650 !important;
-  letter-spacing: -0.015em;
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
-}
-
-/* ---- Icons from the mdi set (the group icons next to the group names, the icons inside the STATS cards) are drawn in Homepage's
-   gray. Here they get a light colour so they stand out on the dark glass. Change the colour on the next line. */
-body { --icon-color: #e6ebf5; }
-.service-group-icon > div, .bookmark-group-icon > div,
-.service-icon > div[style*="mask"], .bookmark-icon > div[style*="mask"] { background: var(--icon-color) !important; }
-
-/* ---- STATS tab cards (ids that start with stat-) and the Calendar cards (cal-): the same glass, glow and edge as the service cards. Each card has its own colour. */
+/* ---- STATS tab cards (ids that start with stat-) and the Calendar cards (cal-): the same glass. Each card has a faint colour of its own. */
 li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-color: transparent !important; --accent: 148, 163, 184; }
 #stat-library, #stat-immich { --accent: 209, 18, 18; }          /* photos: red */
 #stat-storage, #stat-mainpool { --accent: 107, 97, 223; }       /* storage: violet */
@@ -491,35 +607,63 @@ li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-colo
 #stat-temps { --accent: 245, 158, 11; }                         /* temperatures: amber */
 #cal-month { --accent: 36, 140, 255; }                          /* calendar: blue */
 #cal-agenda { --accent: 147, 51, 234; }                         /* coming up: purple */
-li[id^="stat-"]::before, li[id^="cal-"]::before {
-  content: "";
-  position: absolute;
-  top: 2px; left: 2px; right: 2px; bottom: 6px;
-  z-index: 0;
-  border-radius: 14px !important;
-  pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent), 0.30), rgba(var(--accent), 0.04) 55%) !important;
-}
-li[id^="stat-"]::after, li[id^="cal-"]::after {
-  content: "";
-  position: absolute;
-  left: 2px; top: 16px; bottom: 20px;
-  width: 3px;
-  z-index: 0;
-  border-radius: 0 3px 3px 0;
-  pointer-events: none;
-  background: rgb(var(--accent));
-}
 .services-group:has(li[id^="stat-"]), .services-group:has(li[id^="cal-"]) { padding-bottom: 1.1rem !important; }      /* air between the rows */
 li[id^="stat-"] .service-block-value { font-size: 1rem !important; font-weight: 600 !important; color: #f4f6fa; }
 li[id^="stat-"] .service-block-label { opacity: 0.7; }
 
-/* The Navidrome player inside its card: the scroll bar of the player is pushed out of sight (scrolling still works). The frame is made
-   a little wider than the card and the extra width is cut off. */
-#navidrome-card div:has(> iframe) { overflow: hidden !important; border-radius: 10px; }
-#navidrome-card iframe { width: calc(100% + 32px) !important; max-width: none !important; border: 0 !important; }
+/* ---- Medium screens: the music panel goes to one column (player on top, the other apps in two columns under it) */
+@media (max-width: 1100px) {
+  #inner_wrapper .services-group:has(#navidrome-card) .services-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  #inner_wrapper .services-group:has(#navidrome-card) .services-list > li { grid-column: auto; }
+  #inner_wrapper .services-group:has(#navidrome-card) .services-list > #navidrome-card { grid-column: 1 / -1; grid-row: auto; }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 320px; }
+}
 
-@media (prefers-reduced-motion: reduce) {
-  .bookmark > a { transition: none; }
+/* ---- Narrow windows and phones: the older small-screen rules above make long pills; here they become the same calm tiles (the extra ids beat them) */
+@media (max-width: 1000px) {
+  #inner_wrapper #widgets-wrap > .widget-container,
+  #inner_wrapper #information-widgets-right > * {
+    box-sizing: border-box !important;
+    width: auto !important;
+    max-width: none !important;
+    min-height: 56px !important;
+    margin: 0 !important;
+    padding: 8px 12px !important;
+    border-radius: 14px !important;
+    border: 1px solid var(--lk-line) !important;
+    flex: 1 1 150px !important;
+    justify-content: center !important;
+  }
+  #inner_wrapper #widgets-wrap > .widget-container:has(.information-widget-resource) { flex-wrap: nowrap !important; gap: 3px !important; }
+  #inner_wrapper #information-widgets-right > .information-widget-search { flex: 1 1 100% !important; padding: 0 !important; border: 0 !important; min-height: 0 !important; }
+  #inner_wrapper #information-widgets-right [class*="information-widget-datetime"] *,
+  #inner_wrapper #information-widgets-right > :first-child * { font-size: 15px !important; }
+}
+
+/* ---- Phones and narrow windows: a small tile grid on top, then one column of cards */
+@media (max-width: 700px) {
+  #inner_wrapper { --lk-side: 14px; --lk-player-h: 480px; }
+  #inner_wrapper #information-widgets { margin-top: 12px !important; }
+  #inner_wrapper #widgets-wrap { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
+  #inner_wrapper .widget-container,
+  #inner_wrapper .information-widget-logo,
+  #inner_wrapper [class*="information-widget-glances"] { width: auto !important; min-width: 0 !important; padding: 8px 12px !important; flex: none !important; justify-content: center !important; }
+  #inner_wrapper #widgets-wrap > .widget-container:first-child { grid-column: 1 / -1; }
+  #inner_wrapper #widgets-wrap > .widget-container, #inner_wrapper #information-widgets-right > * { flex: none !important; }
+  #inner_wrapper #information-widgets-right > .information-widget-search, #inner_wrapper #information-widgets-right > [class*="information-widget-openmeteo"] { grid-column: 1 / -1; }
+  #inner_wrapper .widget-container:has(.information-widget-resource) { flex-direction: column !important; flex-wrap: nowrap !important; }
+  #inner_wrapper .widget-container:has(.information-widget-resource) > div:first-child { flex-wrap: wrap; justify-content: center; row-gap: 6px; }
+  #inner_wrapper #widgets-wrap > .widget-container:first-child > div:first-child { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; width: 100%; }
+  #inner_wrapper #widgets-wrap > .widget-container:first-child .information-widget-resource { border-right: 0 !important; padding-right: 0 !important; margin-right: 0 !important; }
+  #inner_wrapper .information-widget-resource { margin-right: 0 !important; padding-right: 0 !important; border-right: 0 !important; }
+  #inner_wrapper .information-widget-resource > div { min-width: 0 !important; }
+  #inner_wrapper [class*="information-widget-datetime"] { margin-left: 0 !important; }
+  #inner_wrapper #information-widgets .information-widget-search { grid-column: 1 / -1; max-width: none !important; margin: 2px 0 0 !important; }
+  #inner_wrapper #tabs { margin: 16px var(--lk-side) 4px !important; }
+  #inner_wrapper #myTab { width: 100%; }
+  #inner_wrapper button[id$="-tab"] { padding: 9px 6px !important; font-size: 13px !important; letter-spacing: 0.04em; }
+  #inner_wrapper #layout-groups { margin: 8px calc(var(--lk-side) - 4px) 0 !important; }
+  #inner_wrapper .services-group:has(#navidrome-card) .services-list { grid-template-columns: minmax(0, 1fr); }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 100%; }
 }
 /* <<< homelab tabs <<< */

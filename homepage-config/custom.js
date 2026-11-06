@@ -55,9 +55,19 @@
     document.body.appendChild(box);
   }
 
+  // The box goes INTO the box that scrolls (Homepage scrolls inside its own page box, not the window), so the browser scrolls the player together with
+  // the cards, with no delay. Without such a box (or in an old page) it stays on the body and is moved by the timers below.
+  function scroller(el) {
+    for (var e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      var o = window.getComputedStyle(e).overflowY;
+      if ((o === "auto" || o === "scroll")) return e;
+    }
+    return null;
+  }
+
   function place() {
     queued = false;
-    var cf = cardFrame(), host = null;
+    var cf = cardFrame(), host = null, sc = null;
     if (cf) {
       var u = address(cf);
       if (u) {
@@ -65,10 +75,15 @@
         src = u;
       }
       if (real(cf.getAttribute("src"))) cf.setAttribute("src", "about:blank");
-      host = cf.parentElement ? cf.parentElement.getBoundingClientRect() : null;
+      if (cf.parentElement) { host = cf.parentElement.getBoundingClientRect(); sc = scroller(cf.parentElement); }
     }
     if (!box) return;
     if (host && host.width > 0 && host.height > 0) {
+      var home = sc || document.body;
+      if (box.parentNode !== home) {
+        if (sc && window.getComputedStyle(sc).position === "static") sc.style.position = "relative";
+        home.appendChild(box);                                   // (moving a frame reloads it, so this happens only when the scrolling box itself changes)
+      }
       box.className = "";
       box.style.left = "0px";                                    // measure from the corner, so the move is right whatever the page's own offsets are
       box.style.top = "0px";
@@ -83,7 +98,6 @@
   soon();
   new MutationObserver(soon).observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("resize", soon);
-  window.addEventListener("scroll", soon, true);                 // any scrolling box (not only the page) moves the card, so the player follows at once
   window.setInterval(soon, 500);
 })();
 /* <<< homelab player <<< */
