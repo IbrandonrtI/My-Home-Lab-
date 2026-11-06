@@ -111,6 +111,9 @@ suggestions() {
   suggest 7 "docker ps" "what is running right now"
   suggest 7 "sudo homelab-selftest" "check everything and look for problems or leftovers"
   suggest 8 "sudo drives" "menu: connect or remove drives, or use part of the boot drive for a pool"
+  if command -v homelab-panel >/dev/null 2>&1 && [ ! -f "$HOME/.config/homelab-panel/password" ]; then
+    suggest 3 "homelab panel password" "choose the password of the Customize tab (the control panel)"
+  fi
   if [ -d "$HOMEPAGE_DIR" ]; then
     suggest 8 "homelab theme" "change the dashboard's background and card colours"
     suggest 8 "homelab bookmark add NAME URL" "add a bookmark to the dashboard, with its logo"
@@ -274,6 +277,8 @@ commands() {
   cmd "homelab calendar list"          "your online calendars (also: remove N, sync)"
   cmd "homelab event add DATE \"text\" [yearly]" "your own event in the calendar"
   cmd "homelab event list"             "your events, numbered (remove: event remove NUMBER)"
+  cmd "homelab panel password"         "set the Customize tab's password (no sudo)"
+  cmd "homelab panel status"           "is the Customize tab's password set?"
   cmd "homelab simple on|off"          "hide the small text under card names (default: off)"
   cmd "homelab theme"                  "show the look and how to change it (no sudo)"
   cmd "homelab theme background [BLUR] URL" "new picture; optional BLUR: none sm md lg xl 2xl 3xl"
@@ -327,6 +332,22 @@ calendar_cmd() {   # homelab event add|list|remove|holidays: the holidays and yo
     return 1
   fi
   HP_DIR="$HOMEPAGE_DIR" homelab-calendar "$@"
+}
+
+panel_cmd() {   # homelab panel password|status: the password of the control panel (the Customize tab), saved in your own folder
+  if ! command -v homelab-panel >/dev/null 2>&1; then
+    echo "The control panel is not installed yet. Run:  homelab upgrade" >&2
+    return 1
+  fi
+  if [ "$(id -u)" -eq 0 ] && [ -z "${HOMELAB_ALLOW_ROOT:-}" ]; then
+    echo "Run this without sudo, as yourself: the password is saved in your own folder." >&2
+    return 1
+  fi
+  case "${1:-}" in
+    password|passwd) homelab-panel set-password ;;
+    status|"")       homelab-panel status ;;
+    *) echo "Use:  homelab panel password   (choose the password)   or   homelab panel status" >&2; return 1 ;;
+  esac
 }
 
 homepage_edit() {
@@ -841,6 +862,10 @@ def theme_links_cmd(words):
 def theme_reset():
     need_dir()
     def restore(head):   # every colour line goes back to the shipped line (the rest of the file is not touched)
+        a = head.find("/* >>> homelab look >>>")           # the look block of the control panel goes too
+        z = head.find("/* <<< homelab look <<< */", a) if a >= 0 else -1
+        if a >= 0 and z >= 0:
+            head = head[:a].rstrip("\n") + "\n" + head[z + len("/* <<< homelab look <<< */"):].lstrip("\n")
         for line in shipped_css().split("\n"):
             m = re.match(r"#([\w-]+)-card\s*\{\s*--accent:", line)
             if m:
@@ -1829,6 +1854,7 @@ did_you_mean() {   # a word that is not a homelab option: point to the command t
 
 case "${1:-}" in
   backup|update|upgrade|setup|drives|drive|cards|selftest) forward "$@" ;;
+  panel)  panel_cmd "${@:2}" ;;
   theme)  homepage_edit theme "${@:2}" ;;
   simple) homepage_edit simple "${@:2}" ;;
   bookmark|bookmarks) homepage_edit bookmark "${@:2}" ;;

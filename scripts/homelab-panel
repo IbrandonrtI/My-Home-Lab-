@@ -1,0 +1,1471 @@
+#!/usr/bin/env python3
+"""homelab-panel - the control panel of the lab: change the look of the dashboard by pointing and clicking.
+
+  homelab-panel serve                  run the panel (the installer starts this as the service homelab-panel)
+  homelab-panel set-password           choose the panel's password (asks twice; or: --stdin reads it from a pipe)
+  homelab-panel status                 is a password set, and where are the files
+  homelab-panel version | help
+
+What the panel is:
+  - a small web page that only listens on THIS machine (127.0.0.1); Tailscale Serve gives it an HTTPS address that only your own
+    devices (your tailnet) can reach. It is never opened to your home network, and has its own password (not the other logins).
+  - it runs as the same user as the dashboard files, so it needs no sudo: it edits ~/homepage-config (settings.yaml, services.yaml,
+    bookmarks.yaml and the look block of custom.css) and nothing else. The work is done by plain text edits, the same files you could edit by hand.
+  - every change first saves a copy of the files it changes (.panel-history in the Homepage folder), so "Undo" brings the last state back.
+
+Written with the Python standard library only (PyYAML is used when it is installed, to check a file before it is saved).
+"""
+import base64
+import getpass
+import hashlib
+import hmac
+import json
+import mimetypes
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+try:
+    import yaml
+except ImportError:                                    # only used to check a file before it is saved
+    yaml = None
+
+VERSION = "0.1"
+
+# ---------------------------------------------------------------- where things are
+HOME = os.environ.get("HLP_HOME") or os.path.expanduser("~")
+HP = os.environ.get("HOMELAB_HOMEPAGE_DIR") or os.path.join(HOME, "homepage-config")
+STATE_DIR = os.environ.get("HLP_STATE") or os.path.join(HOME, ".config", "homelab-panel")
+UI_DIR = os.environ.get("HLP_UI") or "/usr/local/share/homelab-panel/ui"
+PORT = int(os.environ.get("HLP_PORT") or 8300)
+BIND = os.environ.get("HLP_BIND") or "127.0.0.1"
+HOSTS = [h.strip().lower() for h in (os.environ.get("HLP_HOSTS") or "").split(",") if h.strip()]
+FRAME = [h.strip() for h in (os.environ.get("HLP_FRAME") or "").split(",") if h.strip()]
+HOMEPAGE_URL = (os.environ.get("HLP_HOMEPAGE_URL") or "").rstrip("/")      # where the dashboard is (for the picture preview)
+COOKIE = "hlpanel" if os.environ.get("HLP_COOKIE_PLAIN") else "__Host-hlpanel"
+NO_DOCKER = bool(os.environ.get("HLP_NO_DOCKER"))
+
+SETTINGS = os.path.join(HP, "settings.yaml")
+SERVICES = os.path.join(HP, "services.yaml")
+BOOKMARKS = os.path.join(HP, "bookmarks.yaml")
+CSS = os.path.join(HP, "custom.css")
+IMAGES = os.path.join(HP, "images")
+HISTORY = os.path.join(HP, ".panel-history")
+PASSFILE = os.path.join(STATE_DIR, "password")
+KEEP_HISTORY = 40
+MAX_UPLOAD = 14 * 1024 * 1024
+SESSION_IDLE = 24 * 3600
+SESSION_MAX = 7 * 24 * 3600
+
+LOOK_B1, LOOK_B2 = "/* >>> homelab look >>>", "/* <<< homelab look <<< */"
+THEME_B1 = "/* >>> homelab theme >>>"          # the block `homelab theme` writes (the look block always stays in front of it)
+
+
+class Fail(Exception):
+    """Something the person can fix; the message is shown as it is. code is the HTTP status."""
+    def __init__(self, msg, code=400):
+        Exception.__init__(self, msg)
+        self.code = code
+
+
+# ---------------------------------------------------------------- small file helpers
+def read(p):
+    try:
+        with open(p, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return ""
+
+
+def write_atomic(p, text, mode=None):
+    tmp = p + ".panel-tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    if mode is not None:
+        os.chmod(tmp, mode)
+    else:
+        try:
+            os.chmod(tmp, os.stat(p).st_mode & 0o777)
+        except OSError:
+            os.chmod(tmp, 0o644)
+    os.replace(tmp, p)
+
+
+LOCK = threading.RLock()
+
+
+class Tx:
+    """One change: the files are collected, checked, and written together; the old texts are saved first so Undo can bring them back."""
+    def __init__(self, label):
+        self.label = label
+        self.old = {}
+        self.new = {}
+
+    def get(self, path):
+        if path not in self.new:
+            self.old[path] = read(path)
+            self.new[path] = self.old[path]
+        return self.new[path]
+
+    def put(self, path, text):
+        self.get(path)
+        self.new[path] = text
+
+    def commit(self):
+        changed = [p for p in self.new if self.new[p] != self.old[p]]
+        for p in changed:
+            check_text(p, self.new[p])
+        if not changed:
+            return False
+        snap(self.label, {p: self.old[p] for p in changed})
+        for p in changed:
+            write_atomic(p, self.new[p])
+        return True
+
+
+def check_text(path, text):
+    """A file must still be understood by Homepage's YAML reader before it is saved."""
+    if yaml is None or not path.endswith(".yaml"):
+        return
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise Fail("That change would make %s unreadable (%s). Nothing was changed." % (os.path.basename(path), str(e).splitlines()[0])) from None
+    if os.path.basename(path) in ("services.yaml", "bookmarks.yaml") and data is not None and not isinstance(data, list):
+        raise Fail("That change would break the shape of %s. Nothing was changed." % os.path.basename(path))
+
+
+def snap(label, olds):
+    """Save the old texts of the files about to change (a folder per change, the newest 40 are kept)."""
+    os.makedirs(HISTORY, exist_ok=True)
+    name = "%s-%04d" % (time.strftime("%Y%m%d-%H%M%S"), int(time.time() * 1000) % 10000)
+    d = os.path.join(HISTORY, name)
+    os.makedirs(d)
+    meta = {"label": label, "time": int(time.time()), "files": {}}
+    for i, (p, text) in enumerate(sorted(olds.items())):
+        fn = "f%d" % i
+        with open(os.path.join(d, fn), "w", encoding="utf-8") as f:
+            f.write(text)
+        meta["files"][fn] = {"path": p, "existed": os.path.exists(p)}
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f)
+    old = sorted(x for x in os.listdir(HISTORY) if os.path.isdir(os.path.join(HISTORY, x)))
+    for x in old[:-KEEP_HISTORY]:
+        shutil.rmtree(os.path.join(HISTORY, x), ignore_errors=True)
+
+
+def history_last():
+    if not os.path.isdir(HISTORY):
+        return None
+    dirs = sorted(x for x in os.listdir(HISTORY) if os.path.isfile(os.path.join(HISTORY, x, "meta.json")))
+    if not dirs:
+        return None
+    d = os.path.join(HISTORY, dirs[-1])
+    try:
+        with open(os.path.join(d, "meta.json"), encoding="utf-8") as f:
+            return d, json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def undo():
+    h = history_last()
+    if not h:
+        raise Fail("There is nothing to undo.")
+    d, meta = h
+    for fn, info in meta["files"].items():
+        write_atomic(info["path"], read(os.path.join(d, fn)))
+    shutil.rmtree(d, ignore_errors=True)
+    return meta["label"]
+
+
+# ---------------------------------------------------------------- YAML text helpers (no PyYAML needed to write)
+YAML_WORDS = {"yes", "no", "true", "false", "on", "off", "null", "~", "y", "n"}
+
+
+def yq(s):
+    """A value as it is written in YAML: plain when that is safe, otherwise in double quotes."""
+    s = str(s)
+    if s == "":
+        return '""'
+    bad = (s[0] in "-?:,[]{}#&*!|>'\"%@`" or ": " in s or " #" in s or s.endswith(":") or s.lower() in YAML_WORDS
+           or re.fullmatch(r"[-+]?[0-9][0-9_.,:e+-]*", s) is not None or s != s.strip() or "\t" in s)
+    if not bad:
+        return s
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def unq(s):
+    """The text of a YAML scalar (quotes removed)."""
+    s = s.strip()
+    if len(s) >= 2 and s[0] == s[-1] == '"':
+        return re.sub(r'\\(["\\])', r"\1", s[1:-1])
+    if len(s) >= 2 and s[0] == s[-1] == "'":
+        return s[1:-1].replace("''", "'")
+    return s
+
+
+def indent(line):
+    return len(line) - len(line.lstrip(" "))
+
+
+def clean_text(s, what, maxlen=200, allow_empty=False):
+    s = (s or "").strip() if isinstance(s, str) else ""
+    if not s and not allow_empty:
+        raise Fail("%s cannot be empty." % what)
+    if len(s) > maxlen or re.search(r"[\x00-\x1f\x7f]", s):
+        raise Fail("%s is too long or has characters that are not allowed." % what)
+    return s
+
+
+def clean_url(s, what, allow_empty=True):
+    s = (s or "").strip() if isinstance(s, str) else ""
+    if not s:
+        if allow_empty:
+            return ""
+        raise Fail("%s cannot be empty." % what)
+    if not re.match(r"^https?://[^\s\"'<>]+$", s) or len(s) > 600:
+        raise Fail("%s must be a web address that starts with http:// or https:// and has no spaces." % what)
+    return s
+
+
+def clean_icon(s):
+    """An icon is a Homepage icon name (mdi-home, plex.svg, si-github) or a picture address."""
+    s = (s or "").strip() if isinstance(s, str) else ""
+    if not s:
+        return ""
+    if re.match(r"^https?://", s):
+        return clean_url(s, "The icon address")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/+-]{0,80}(#[0-9a-fA-F]{3,8})?", s):
+        raise Fail("The icon name can only have letters, digits and - _ . characters (for example mdi-home, plex.svg or an https:// picture address).")
+    return s
+
+
+def hex_rgb(s, what="colour"):
+    m = re.fullmatch(r"#?([0-9a-fA-F]{6})", (s or "").strip()) if isinstance(s, str) else None
+    if not m:
+        raise Fail("The %s must be a colour like #8ab4ff." % what)
+    h = m.group(1)
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def rgb_hex(rgb):
+    return "#%02x%02x%02x" % tuple(rgb)
+
+
+def number(v, what, lo, hi):
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        raise Fail("%s must be a number from %s to %s." % (what, lo, hi)) from None
+    if not lo <= n <= hi:
+        raise Fail("%s must be from %s to %s." % (what, lo, hi))
+    return int(n) if n == int(n) else n
+
+
+# ================================================================ the look (colours, glass, shapes) -> a block in custom.css
+SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}       # the shipped colour of two tabs (see the tabs block of custom.css)
+LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "radius": 16, "edge": 7.5, "side": 28, "playerHeight": 600, "tabs": {}}
+LOOK_PRESETS = [
+    {"id": "calm", "name": "Calm night", "look": {}},
+    {"id": "ocean", "name": "Ocean", "look": {"accent": "#5ec8ff", "glass": "#06141f", "glassOpacity": 58, "tabs": {"Stats": "#5ee0c8", "Links": "#9db4ff"}}},
+    {"id": "forest", "name": "Forest", "look": {"accent": "#7ee0a0", "glass": "#07150d", "glassOpacity": 58, "tabs": {"Stats": "#c8e07e", "Links": "#7ee0d0"}}},
+    {"id": "sunset", "name": "Sunset", "look": {"accent": "#ffa66b", "glass": "#1c0f12", "glassOpacity": 58, "tabs": {"Stats": "#ffd36b", "Links": "#ff7fa8"}}},
+    {"id": "rose", "name": "Rose", "look": {"accent": "#ff8fb5", "glass": "#1a0c16", "glassOpacity": 60, "radius": 22, "tabs": {"Stats": "#ffb38f", "Links": "#c9a0ff"}}},
+    {"id": "graphite", "name": "Graphite", "look": {"accent": "#c3cad6", "glass": "#111214", "glassOpacity": 64, "radius": 10, "tabs": {"Stats": "#c3cad6", "Links": "#c3cad6"}}},
+    {"id": "clear", "name": "Clear glass", "look": {"glassOpacity": 22, "radius": 20, "edge": 14}},
+    {"id": "sharp", "name": "Sharp and solid", "look": {"glassOpacity": 88, "radius": 4, "edge": 10}},
+]
+
+
+def look_clean(raw):
+    """The look a person asked for, checked; only the values that differ from the default are kept."""
+    if not isinstance(raw, dict):
+        raise Fail("The look is missing.")
+    out = {}
+    if "accent" in raw:
+        out["accent"] = rgb_hex(hex_rgb(raw["accent"], "main colour"))
+    if "glass" in raw:
+        out["glass"] = rgb_hex(hex_rgb(raw["glass"], "glass colour"))
+    if "glassOpacity" in raw:
+        out["glassOpacity"] = number(raw["glassOpacity"], "How solid the glass is", 0, 100)
+    if "radius" in raw:
+        out["radius"] = number(raw["radius"], "How round the corners are", 0, 40)
+    if "edge" in raw:
+        out["edge"] = number(raw["edge"], "The edge brightness", 0, 40)
+    if "side" in raw:
+        out["side"] = number(raw["side"], "The space at the sides", 0, 120)
+    if "playerHeight" in raw:
+        out["playerHeight"] = number(raw["playerHeight"], "The height of the music player", 240, 1000)
+    tabs = raw.get("tabs") or {}
+    if not isinstance(tabs, dict) or len(tabs) > 30:
+        raise Fail("The tab colours are not understood.")
+    tt = {}
+    for name, col in tabs.items():
+        name = clean_text(name, "A tab name", 40)
+        if not re.fullmatch(r"[^\"'\\{};<>/*]+", name):
+            raise Fail("The tab name '%s' has characters that are not allowed." % name)
+        if col:
+            tt[name] = rgb_hex(hex_rgb(col, "colour of the tab " + name))
+    if tt:
+        out["tabs"] = tt
+    return {k: v for k, v in out.items() if k != "tabs" and v != LOOK_DEFAULT[k] or k == "tabs"}
+
+
+def look_full(custom):
+    v = dict(LOOK_DEFAULT)
+    v.update({k: x for k, x in custom.items() if k != "tabs"})
+    tabs = dict(SHIPPED_TAB_COLORS)
+    tabs.update(custom.get("tabs") or {})
+    v["tabs"] = tabs
+    return v
+
+
+def look_css(custom):
+    """The rules of the look block for a look (only what differs from the default)."""
+    if not custom:
+        return ""
+    v = look_full(custom)
+    rules = []
+    tok = []
+    if "accent" in custom:
+        tok.append("--lk-accent: %d, %d, %d;" % hex_rgb(v["accent"]))
+    if "glass" in custom:
+        tok.append("--lk-glass: %d, %d, %d;" % hex_rgb(v["glass"]))
+    if "glassOpacity" in custom:
+        tok.append("--lk-glass-a: %s;" % (("%.2f" % (v["glassOpacity"] / 100.0)).rstrip("0").rstrip(".") or "0"))
+    if "radius" in custom:
+        tok.append("--lk-radius: %dpx;" % v["radius"])
+    if "edge" in custom:
+        tok.append("--lk-line: rgba(255, 255, 255, %s);" % (("%.3f" % (v["edge"] / 100.0)).rstrip("0").rstrip(".") or "0"))
+    if "side" in custom:
+        tok.append("--lk-side: %dpx;" % v["side"])
+    if "playerHeight" in custom:
+        tok.append("--lk-player-h: %dpx;" % v["playerHeight"])
+    if tok:
+        rules.append("html body #inner_wrapper { %s }" % " ".join(tok))
+    # a colour for a tab: the tab rules of the tabs block are more specific than the one above, so each tab gets its own line
+    for name in sorted(custom.get("tabs") or {}):
+        rules.append('html[data-tab="%s"] body #inner_wrapper { --lk-accent: %d, %d, %d; }' % ((name,) + hex_rgb(custom["tabs"][name])))
+    if "playerHeight" in custom:
+        ph = max(240, v["playerHeight"] - 40)
+        rules.append("@media (max-width: 700px) { html body #inner_wrapper { --lk-player-h: %dpx; } }" % ph)
+    return "\n".join(rules)
+
+
+def look_block(custom):
+    if not custom:
+        return ""
+    data = json.dumps(custom, sort_keys=True, separators=(",", ":")).replace("*/", "*\\/")
+    return "%s written by the control panel. Remove it with the Reset button there (or delete this block). */\n/* data: %s */\n%s\n%s\n" % (
+        LOOK_B1, data, look_css(custom), LOOK_B2)
+
+
+def css_look_split(text):
+    """(text before the block, the block or '', text after the block)"""
+    a = text.find(LOOK_B1)
+    if a < 0:
+        return text, "", ""
+    b = text.find(LOOK_B2, a)
+    if b < 0:
+        return text, "", ""
+    end = b + len(LOOK_B2)
+    if text[end:end + 1] == "\n":
+        end += 1
+    return text[:a], text[a:end], text[end:]
+
+
+def look_get(css=None):
+    css = read(CSS) if css is None else css
+    block = css_look_split(css)[1]
+    m = re.search(r"/\* data: (.*?) \*/", block)
+    if not m:
+        return {}
+    try:
+        data = json.loads(m.group(1).replace("*\\/", "*/"))
+        return look_clean(data)
+    except (ValueError, Fail):
+        return {}
+
+
+def css_with_look(css, custom):
+    """custom.css with the look block replaced (or added in front of the theme block, or at the end)."""
+    before, block, after = css_look_split(css)
+    new = look_block(custom)
+    if block:
+        return before + new + after
+    if not new:
+        return css
+    t = css.find(THEME_B1)
+    if t >= 0:
+        return css[:t].rstrip("\n") + "\n\n" + new + "\n" + css[t:]
+    return css.rstrip("\n") + "\n\n" + new
+
+
+def look_tab_names():
+    return [t["name"] for t in layout_tabs(layout_groups(read(SETTINGS)))]
+
+
+def look_state():
+    custom = look_get()
+    return {"custom": custom, "values": look_full(custom), "defaults": look_full({}), "presets": LOOK_PRESETS,
+            "tabNames": look_tab_names()}
+
+
+def api_look_save(body):
+    custom = look_clean(body.get("look"))
+    tx = Tx("Look changed")
+    tx.put(CSS, css_with_look(tx.get(CSS), custom))
+    tx.commit()
+    return {}
+
+
+def api_look_reset(body):
+    tx = Tx("Look reset")
+    tx.put(CSS, css_with_look(tx.get(CSS), {}))
+    tx.commit()
+    return {}
+
+
+# ================================================================ the background (settings.yaml: background:)
+BG_KEYS = ("image", "blur", "saturate", "brightness", "opacity")
+BG_DEFAULT = {"blur": "md", "saturate": 60, "brightness": 42, "opacity": 80}
+BLURS = ("sm", "md", "lg", "xl", "2xl", "3xl")
+IMG_TYPES = {b"\xff\xd8\xff": ".jpg", b"\x89PNG\r\n\x1a\n": ".png", b"GIF8": ".gif"}
+
+
+def bg_block(lines):
+    for i, l in enumerate(lines):
+        if re.match(r"^background:\s*(#.*)?$", l):
+            j = i + 1
+            while j < len(lines) and (lines[j].startswith((" ", "\t")) or (lines[j].strip() == "" and j + 1 < len(lines) and lines[j + 1].startswith(" "))):
+                j += 1
+            return i, j
+    return None, None
+
+
+def bg_get(text):
+    lines = text.split("\n")
+    i, j = bg_block(lines)
+    d = {}
+    if i is None:
+        return d
+    for l in lines[i + 1:j]:
+        m = re.match(r"^\s+([A-Za-z0-9_]+):\s*(.*?)\s*$", l)
+        if m:
+            d[m.group(1)] = unq(m.group(2))
+    return d
+
+
+def bg_set(text, key, value):
+    """Set (or, with value None, remove) one key of the background: block."""
+    lines = text.split("\n")
+    i, j = bg_block(lines)
+    new = "  %s: %s" % (key, "'" + str(value).replace("'", "''") + "'" if key == "image" else value)
+    if i is None:
+        if value is None:
+            return text
+        return text.rstrip("\n") + "\n\nbackground:\n%s\n" % new
+    for k in range(i + 1, j):
+        if re.match(r"^\s+%s:" % re.escape(key), lines[k]):
+            if value is None:
+                del lines[k]
+            else:
+                lines[k] = new
+            return "\n".join(lines)
+    if value is not None:
+        lines.insert(j, new)
+    return "\n".join(lines)
+
+
+def images_mounted():
+    if NO_DOCKER:
+        return None
+    try:
+        r = subprocess.run(["docker", "inspect", "homepage", "--format", "{{range .Mounts}}{{.Destination}} {{end}}"],
+                           capture_output=True, text=True, timeout=8)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return ("/app/public/images" in r.stdout.split()) if r.returncode == 0 else None
+
+
+def bg_state():
+    d = bg_get(read(SETTINGS))
+    return {"image": d.get("image", ""), "blur": d.get("blur", ""), "saturate": int(d.get("saturate") or 100), "brightness": int(d.get("brightness") or 100),
+            "opacity": int(d.get("opacity") or 100), "defaults": BG_DEFAULT, "mounted": images_mounted(), "homepageUrl": HOMEPAGE_URL,
+            "blurs": list(BLURS)}
+
+
+def bg_numbers(body, tx_text):
+    text = tx_text
+    if "blur" in body:
+        b = body["blur"]
+        if b in (None, "", "none"):
+            text = bg_set(text, "blur", None)
+        elif b in BLURS:
+            text = bg_set(text, "blur", b)
+        else:
+            raise Fail("The blur must be none or one of: %s." % ", ".join(BLURS))
+    for k in ("saturate", "brightness", "opacity"):
+        if k in body:
+            text = bg_set(text, k, number(body[k], k.capitalize(), 0, 100))
+    return text
+
+
+def api_bg_save(body):
+    tx = Tx("Background changed")
+    text = tx.get(SETTINGS)
+    if body.get("url"):
+        text = bg_set(text, "image", clean_url(body["url"], "The picture address", False))
+    text = bg_numbers(body, text)
+    tx.put(SETTINGS, text)
+    tx.commit()
+    return {}
+
+
+def api_bg_reset(body):
+    tx = Tx("Background sliders reset")
+    text = tx.get(SETTINGS)
+    text = bg_set(text, "blur", BG_DEFAULT["blur"])
+    for k in ("saturate", "brightness", "opacity"):
+        text = bg_set(text, k, BG_DEFAULT[k])
+    tx.put(SETTINGS, text)
+    tx.commit()
+    return {}
+
+
+def sniff_image(data):
+    for magic, ext in IMG_TYPES.items():
+        if data.startswith(magic):
+            return ext
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if data[4:12] in (b"ftypavif", b"ftypavis"):
+        return ".avif"
+    return None
+
+
+def restart_homepage():
+    """Homepage only serves a new local picture after a restart. Done in the background; the panel does not wait."""
+    if NO_DOCKER:
+        return False
+
+    def go():
+        try:
+            subprocess.run(["docker", "restart", "homepage"], capture_output=True, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            pass
+    threading.Thread(target=go, daemon=True).start()
+    return True
+
+
+def api_bg_upload(data):
+    ext = sniff_image(data)
+    if not ext:
+        raise Fail("That file is not a picture I can use. Choose a .jpg, .png, .webp, .gif or .avif file.")
+    os.makedirs(IMAGES, exist_ok=True)
+    name = "background-%s%s" % (time.strftime("%Y%m%d%H%M%S"), ext)
+    with open(os.path.join(IMAGES, name), "wb") as f:
+        f.write(data)
+    os.chmod(os.path.join(IMAGES, name), 0o644)
+    tx = Tx("Background picture changed")
+    tx.put(SETTINGS, bg_set(tx.get(SETTINGS), "image", "/images/" + name))
+    tx.commit()
+    for old in os.listdir(IMAGES):                      # earlier uploads are not needed any more (Undo only brings back the setting)
+        if re.fullmatch(r"background-\d{14}\.\w+", old) and old != name:
+            try:
+                if len([x for x in os.listdir(IMAGES) if x.startswith("background-")]) > 3:
+                    os.remove(os.path.join(IMAGES, old))
+            except OSError:
+                pass
+    return {"restarting": restart_homepage(), "image": "/images/" + name}
+
+
+# ================================================================ layout: tabs, groups, their order (settings.yaml: layout:)
+AUTOMATIC = {"At a Glance", "Music Library", "Library Totals", "Storage", "Backup & Updates", "Folder Sizes", "Calendar"}     # made by the lab's scripts
+PROTECTED = {"Customize"}          # the panel itself: it can be moved, but not removed
+
+
+def layout_span(lines):
+    i = next((k for k, l in enumerate(lines) if re.match(r"^layout:\s*(#.*)?$", l)), None)
+    if i is None:
+        return None, None
+    j = i + 1
+    while j < len(lines) and (lines[j].startswith((" ", "\t")) or not lines[j].strip()):
+        j += 1
+    while j > i + 1 and not lines[j - 1].strip():
+        j -= 1
+    return i, j
+
+
+def layout_groups(text):
+    """[{name, props: {tab, icon, style, columns, ...}, extra: [lines]}] in the order of the file."""
+    lines = text.split("\n")
+    i, j = layout_span(lines)
+    out = []
+    if i is None:
+        return out
+    cur = None
+    for l in lines[i + 1:j]:
+        m = re.match(r"^  (?! )(.+?):\s*$", l)
+        if m and not l.lstrip().startswith("#"):
+            cur = {"name": unq(m.group(1)), "props": {}, "extra": []}
+            out.append(cur)
+            continue
+        if cur is None:
+            continue
+        m = re.match(r"^    ([A-Za-z0-9_]+):\s*(.*?)\s*$", l)
+        if m:
+            cur["props"][m.group(1)] = unq(m.group(2))
+        elif l.strip():
+            cur["extra"].append(l)
+    return out
+
+
+def layout_tabs(groups):
+    tabs = []
+    for g in groups:
+        t = g["props"].get("tab") or "Home"
+        tab = next((x for x in tabs if x["name"] == t), None)
+        if not tab:
+            tab = {"name": t, "groups": []}
+            tabs.append(tab)
+        tab["groups"].append(g)
+    return tabs
+
+
+def layout_write(text, groups):
+    lines = text.split("\n")
+    i, j = layout_span(lines)
+    block = ["layout:"]
+    for g in groups:
+        block.append("  %s:" % yq(g["name"]))
+        p = dict(g["props"])
+        for k in ("tab", "icon", "style", "columns"):
+            if p.get(k) not in (None, ""):
+                block.append("    %s: %s" % (k, p[k] if k in ("style", "columns") else yq(p[k])))
+        for k, v in p.items():
+            if k not in ("tab", "icon", "style", "columns") and v != "":
+                block.append("    %s: %s" % (k, v))
+        block.extend(g["extra"])
+    if i is None:
+        return text.rstrip("\n") + "\n\n" + "\n".join(block) + "\n"
+    return "\n".join(lines[:i] + block + lines[j:])
+
+
+def group_kinds():
+    kinds = {}
+    for g in services_parse(read(SERVICES).split("\n")):
+        kinds.setdefault(g["name"], set()).add("services")
+    for g in marks_parse(read(BOOKMARKS))[1]:
+        kinds.setdefault(g["name"], set()).add("bookmarks")
+    return kinds
+
+
+def layout_state():
+    text = read(SETTINGS)
+    groups = layout_groups(text)
+    kinds = group_kinds()
+    svc = {g["name"]: len(g["cards"]) for g in services_parse(read(SERVICES).split("\n"))}
+    bm = {g["name"]: len(g["links"]) for g in marks_parse(read(BOOKMARKS))[1]}
+    listed = {g["name"] for g in groups}
+    # a group that is in services.yaml or bookmarks.yaml but not in the layout is shown on every tab by Homepage: list it as part of the first tab
+    extra = [n for n in list(svc) + list(bm) if n not in listed]
+    for n in dict.fromkeys(extra):
+        groups.append({"name": n, "props": {"tab": (layout_tabs(groups)[0]["name"] if groups else "Home")}, "extra": [], "unlisted": True})
+    tabs = []
+    for t in layout_tabs(groups):
+        tabs.append({"name": t["name"], "groups": [{
+            "name": g["name"], "icon": g["props"].get("icon", ""), "style": g["props"].get("style", ""), "columns": g["props"].get("columns", ""),
+            "kind": "+".join(sorted(kinds.get(g["name"], ()))) or "empty", "locked": g["name"] in AUTOMATIC or g["name"] in PROTECTED,
+            "automatic": g["name"] in AUTOMATIC, "count": svc.get(g["name"], 0) + bm.get(g["name"], 0)} for g in t["groups"]]})
+    return {"tabs": tabs}
+
+
+def api_layout_save(body):
+    want = body.get("tabs")
+    if not isinstance(want, list) or not want or len(want) > 12:
+        raise Fail("The layout is missing.")
+    tx = Tx("Layout changed")
+    text = tx.get(SETTINGS)
+    cur = layout_groups(text)
+    state = {g["name"]: g for g in cur}
+    for n in group_kinds():
+        if n not in state:
+            state[n] = {"name": n, "props": {}, "extra": []}
+    out, seen = [], set()
+    names = set()
+    for t in want:
+        tname = clean_text(t.get("name"), "A tab name", 24)
+        if not re.fullmatch(r"[^\"'\\{};<>/*:#]+", tname):
+            raise Fail("The tab name '%s' has characters that are not allowed." % tname)
+        if tname in names:
+            raise Fail("Two tabs are called '%s'." % tname)
+        names.add(tname)
+        for g in t.get("groups") or []:
+            n = g.get("name")
+            if n not in state or n in seen:
+                raise Fail("The group '%s' is not known (or is listed twice). Reload the panel and try again." % n)
+            seen.add(n)
+            o = state[n]
+            props = dict(o["props"])
+            props["tab"] = tname
+            icon = clean_icon(g.get("icon", props.get("icon", "")))
+            if icon:
+                props["icon"] = icon
+            else:
+                props.pop("icon", None)
+            style = g.get("style", props.get("style", ""))
+            if style not in ("", "row", "column"):
+                raise Fail("The style must be 'row' or 'column'.")
+            if style:
+                props["style"] = style
+            else:
+                props.pop("style", None)
+            cols = g.get("columns", props.get("columns", ""))
+            if cols in ("", None):
+                props.pop("columns", None)
+            else:
+                props["columns"] = str(number(cols, "The number of columns", 1, 8))
+            out.append({"name": n, "props": props, "extra": o["extra"]})
+    missing = [n for n in state if n not in seen and (n in {g["name"] for g in cur} or n in group_kinds())]
+    if missing:
+        raise Fail("These groups are missing from the layout: %s. Reload the panel and try again." % ", ".join(missing))
+    tx.put(SETTINGS, layout_write(text, out))
+    tx.commit()
+    return {}
+
+
+# ================================================================ cards (services.yaml): line based, so widgets and secrets are never touched
+def services_parse(lines):
+    """[{name, start, end, cards: [{name, start, end}]}] with line numbers; end is exclusive."""
+    heads = [(i, re.match(r"^- (.+?):\s*$", l)) for i, l in enumerate(lines)]
+    heads = [(i, unq(m.group(1))) for i, m in heads if m]
+    groups = []
+    for n, (i, name) in enumerate(heads):
+        e = heads[n + 1][0] if n + 1 < len(heads) else len(lines)
+        g = {"name": name, "start": i, "end": e, "cards": []}
+        cards = [(k, re.match(r"^    - (.+?):\s*$", lines[k])) for k in range(i + 1, e)]
+        cards = [(k, unq(m.group(1))) for k, m in cards if m]
+        for c, (k, cn) in enumerate(cards):
+            ce = cards[c + 1][0] if c + 1 < len(cards) else e
+            while ce > k + 1 and (not lines[ce - 1].strip() or lines[ce - 1].lstrip().startswith("#") and indent(lines[ce - 1]) < 8):
+                ce -= 1
+            g["cards"].append({"name": cn, "start": k, "end": ce})
+        while g["end"] > g["start"] + 1 and (not lines[g["end"] - 1].strip() or (lines[g["end"] - 1].lstrip().startswith("#") and indent(lines[g["end"] - 1]) < 4)):
+            g["end"] -= 1                    # the blank lines and the marker comments after the last card belong to no group
+        groups.append(g)
+    return groups
+
+
+def card_fields(lines, c):
+    """The simple lines of a card (id, href, icon, description, siteMonitor) and the type of its widget ('' when it has none)."""
+    f = {}
+    for k in range(c["start"] + 1, c["end"]):
+        m = re.match(r"^        (id|href|icon|description|siteMonitor|target):\s*(.*?)\s*$", lines[k])
+        if m:
+            f[m.group(1)] = unq(m.group(2))
+    w = ""
+    for k in range(c["start"] + 1, c["end"]):
+        if re.match(r"^        widget:\s*$", lines[k]):
+            w = "yes"
+            for q in range(k + 1, c["end"]):
+                m = re.match(r"^          type:\s*(\S+)\s*$", lines[q])
+                if m:
+                    w = unq(m.group(1))
+                    break
+            break
+    f["widget"] = w
+    return f
+
+
+def card_public(lines, c, group):
+    f = card_fields(lines, c)
+    managed = bool(f.get("widget")) or f.get("id", "").endswith("-card")
+    return {"name": c["name"], "id": f.get("id", ""), "href": f.get("href", ""), "icon": f.get("icon", ""), "description": f.get("description", ""),
+            "siteMonitor": f.get("siteMonitor", ""), "widget": f.get("widget", ""), "managed": managed,
+            "locked": group in AUTOMATIC or f.get("id", "") in ("customize-card", "navidrome-card")}
+
+
+def services_state():
+    lines = read(SERVICES).split("\n")
+    out = []
+    for g in services_parse(lines):
+        out.append({"group": g["name"], "locked": g["name"] in AUTOMATIC or g["name"] in PROTECTED,
+                    "cards": [card_public(lines, c, g["name"]) for c in g["cards"]]})
+    return out
+
+
+def find_card(lines, group, name):
+    for g in services_parse(lines):
+        if g["name"] == group:
+            for c in g["cards"]:
+                if c["name"] == name:
+                    return g, c
+    raise Fail("I cannot find the card '%s' in '%s'. Reload the panel and try again." % (name, group))
+
+
+def set_line(lines, c, key, value):
+    """Set one simple line of a card (value None or '' removes it). The widget lines are never touched."""
+    ind = " " * 8
+    idx = None
+    for k in range(c["start"] + 1, c["end"]):
+        if re.match(r"^        %s:\s" % re.escape(key), lines[k] + " "):
+            idx = k
+            break
+    if value in (None, ""):
+        if idx is not None:
+            del lines[idx]
+            c["end"] -= 1
+        return
+    new = "%s%s: %s" % (ind, key, yq(value))
+    if idx is not None:
+        lines[idx] = new
+        return
+    at = c["end"]
+    for k in range(c["start"] + 1, c["end"]):                       # new simple lines go in front of the widget (or any deeper block)
+        if re.match(r"^        (widget|server|container|stack):", lines[k]):
+            at = k
+            break
+    lines.insert(at, new)
+    c["end"] += 1
+
+
+def new_card_lines(name, href, icon, description, monitor):
+    block = ["    - %s:" % yq(name)]
+    if href:
+        block.append("        href: %s" % yq(href))
+    if monitor:
+        block.append("        siteMonitor: %s" % yq(monitor))
+    if icon:
+        block.append("        icon: %s" % yq(icon))
+    if description:
+        block.append("        description: %s" % yq(description))
+    return block
+
+
+def tidy_blank(lines, at):
+    """After a cut at index `at`: no double blank line."""
+    while 0 < at < len(lines) and not lines[at].strip() and not lines[at - 1].strip():
+        del lines[at]
+
+
+def card_insert(lines, group, block, before=None):
+    """Put a card block into a group: before the card named `before`, else at the end. A group that does not exist is made."""
+    for g in services_parse(lines):
+        if g["name"] == group:
+            if before is not None:
+                tgt = next((c for c in g["cards"] if c["name"] == before), None)
+                at = tgt["start"] if tgt else None
+            else:
+                at = None
+            if at is None:
+                at = g["cards"][-1]["end"] if g["cards"] else g["start"] + 1
+                ins = ([""] if lines[at - 1].strip() else []) + block + ([""] if at < len(lines) and lines[at].strip() else [])
+            else:
+                ins = block + [""]
+            if before is None and not g["cards"]:
+                ins = [""] + block + [""]
+            lines[at:at] = ins
+            return
+    while lines and not lines[-1].strip():
+        lines.pop()
+    lines.extend(([""] if lines else []) + ["- %s:" % yq(group), ""] + block + [""])
+
+
+def check_group_name(name):
+    name = clean_text(name, "The group name", 40)
+    if not re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", name):
+        raise Fail("The group name '%s' has characters that are not allowed." % name)
+    return name
+
+
+def card_values(body, managed_card=False):
+    v = {"name": clean_text(body.get("name"), "The name", 60)}
+    if not re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", v["name"]):
+        raise Fail("The name '%s' has characters that are not allowed (use letters, digits, spaces and - _ . , ( ) + )." % v["name"])
+    v["description"] = clean_text(body.get("description", ""), "The description", 160, True)
+    v["icon"] = clean_icon(body.get("icon", ""))
+    if not managed_card:
+        v["href"] = clean_url(body.get("href", ""), "The address")
+        v["siteMonitor"] = v["href"] if body.get("dot") and v["href"] else ""
+    return v
+
+
+def ensure_layout_group(tx, group, tab=None):
+    """A new group gets a line in the layout (on the tab given, else the first tab)."""
+    text = tx.get(SETTINGS)
+    gs = layout_groups(text)
+    if any(g["name"] == group for g in gs) or not gs:
+        return
+    t = tab or layout_tabs(gs)[0]["name"]
+    gs.append({"name": group, "props": {"tab": t}, "extra": []})
+    tx.put(SETTINGS, layout_write(text, gs))
+
+
+def drop_layout_group(tx, group):
+    text = tx.get(SETTINGS)
+    gs = layout_groups(text)
+    left = [g for g in gs if g["name"] != group]
+    if len(left) != len(gs):
+        tx.put(SETTINGS, layout_write(text, left))
+
+
+def api_card(body):
+    op = body.get("op")
+    tx = Tx({"add": "Card added", "edit": "Card changed", "remove": "Card removed", "move": "Card moved"}.get(op, "Cards changed"))
+    lines = tx.get(SERVICES).split("\n")
+    if op == "add":
+        group = check_group_name(body.get("group"))
+        if group in AUTOMATIC or group in PROTECTED:
+            raise Fail("The group '%s' is kept up to date by the lab. Put the card in another group." % group)
+        v = card_values(body)
+        if any(c["name"] == v["name"] for g in services_parse(lines) for c in g["cards"]):
+            raise Fail("There is already a card called '%s'. Choose another name." % v["name"])
+        card_insert(lines, group, new_card_lines(v["name"], v["href"], v["icon"], v["description"], v["siteMonitor"]))
+        tx.put(SERVICES, "\n".join(lines))
+        ensure_layout_group(tx, group, body.get("tab"))
+    elif op == "edit":
+        g, c = find_card(lines, body.get("group"), body.get("old"))
+        pub = card_public(lines, c, g["name"])
+        if pub["locked"]:
+            raise Fail("This card is kept up to date by the lab and cannot be changed here.")
+        v = card_values(body, pub["managed"])
+        if v["name"] != c["name"] and any(x["name"] == v["name"] for gg in services_parse(lines) for x in gg["cards"]):
+            raise Fail("There is already a card called '%s'." % v["name"])
+        lines[c["start"]] = "    - %s:" % yq(v["name"])
+        set_line(lines, c, "icon", v["icon"])
+        set_line(lines, c, "description", v["description"])
+        if not pub["managed"]:
+            set_line(lines, c, "href", v["href"])
+            set_line(lines, c, "siteMonitor", v["siteMonitor"])
+        tx.put(SERVICES, "\n".join(lines))
+    elif op == "remove":
+        g, c = find_card(lines, body.get("group"), body.get("name"))
+        pub = card_public(lines, c, g["name"])
+        if pub["locked"]:
+            raise Fail("This card is kept up to date by the lab and cannot be removed here.")
+        del lines[c["start"]:c["end"]]
+        tidy_blank(lines, c["start"])
+        left = next((x for x in services_parse(lines) if x["name"] == g["name"]), None)
+        if left is not None and not left["cards"]:                 # Homepage does not like an empty group
+            del lines[left["start"]:left["end"]]
+            tx.put(SERVICES, "\n".join(lines))
+            drop_layout_group(tx, g["name"])
+        else:
+            tx.put(SERVICES, "\n".join(lines))
+    elif op == "move":
+        g, c = find_card(lines, body.get("group"), body.get("name"))
+        if card_public(lines, c, g["name"])["locked"]:
+            raise Fail("This card is kept up to date by the lab and cannot be moved here.")
+        to = check_group_name(body.get("to") or g["name"])
+        if to in AUTOMATIC or to in PROTECTED:
+            raise Fail("The group '%s' is kept up to date by the lab. Choose another group." % to)
+        block = lines[c["start"]:c["end"]]
+        del lines[c["start"]:c["end"]]
+        tidy_blank(lines, c["start"])
+        card_insert(lines, to, block, before=body.get("before"))
+        left = next((x for x in services_parse(lines) if x["name"] == g["name"]), None)
+        if left is not None and not left["cards"]:
+            del lines[left["start"]:left["end"]]
+            drop_layout_group(tx, g["name"])
+        tx.put(SERVICES, "\n".join(lines))
+        ensure_layout_group(tx, to, body.get("tab"))
+    else:
+        raise Fail("Unknown action.")
+    tx.commit()
+    return {}
+
+
+# ================================================================ links (bookmarks.yaml): the whole file is rewritten from the parsed groups
+def marks_parse(text):
+    """(the comment lines at the top, [{name, links: [{name, abbr, href, icon, description, extra}]}])"""
+    lines = text.split("\n")
+    head, groups, cur, ent = [], [], None, None
+    for l in lines:
+        m = re.match(r"^- (.+?):\s*$", l)
+        if m:
+            cur = {"name": unq(m.group(1)), "links": []}
+            groups.append(cur)
+            ent = None
+            continue
+        if cur is None:
+            if l.strip():
+                head.append(l)
+            continue
+        m = re.match(r"^    - (.+?):\s*$", l)
+        if m:
+            ent = {"name": unq(m.group(1)), "abbr": "", "href": "", "icon": "", "description": "", "extra": []}
+            cur["links"].append(ent)
+            continue
+        if ent is None or not l.strip():
+            continue
+        m = re.match(r"^\s+(?:- )?([A-Za-z][A-Za-z0-9_]*):\s*(.*?)\s*$", l)
+        if m and m.group(1) in ("abbr", "href", "icon", "description"):
+            ent[m.group(1)] = unq(m.group(2))
+        elif m and l.strip() != "-":
+            ent["extra"].append((m.group(1), m.group(2)))
+    return head, groups
+
+
+def marks_write(head, groups):
+    out = list(head)
+    for g in groups:
+        out.append("- %s:" % yq(g["name"]))
+        for e in g["links"]:
+            out.append("    - %s:" % yq(e["name"]))
+            fields = [(k, yq(e[k])) for k in ("abbr", "href", "icon", "description") if e.get(k)] + list(e["extra"])
+            if not fields:
+                fields = [("href", '""')]
+            for n, (k, v) in enumerate(fields):
+                out.append("        %s%s: %s" % ("- " if n == 0 else "  ", k, v))
+            out.append("")
+        if not g["links"]:
+            out.append("")
+    while out and not out[-1].strip():
+        out.pop()
+    return "\n".join(out) + "\n"
+
+
+def marks_state():
+    return [{"group": g["name"], "links": [{k: e[k] for k in ("name", "abbr", "href", "icon", "description")} for e in g["links"]]}
+            for g in marks_parse(read(BOOKMARKS))[1]]
+
+
+def abbr_of(name):
+    w = re.sub(r"[^A-Za-z0-9 ]", "", name).split()
+    return (w[0][:4] if len(w) == 1 else "".join(x[0] for x in w[:4])).upper()
+
+
+def api_link(body):
+    op = body.get("op")
+    tx = Tx({"add": "Link added", "edit": "Link changed", "remove": "Link removed", "move": "Link moved", "group-add": "Link group added",
+             "group-rename": "Link group renamed", "group-remove": "Link group removed"}.get(op, "Links changed"))
+    head, groups = marks_parse(tx.get(BOOKMARKS))
+
+    def grp(name):
+        g = next((x for x in groups if x["name"] == name), None)
+        if not g:
+            raise Fail("I cannot find the group '%s'. Reload the panel and try again." % name)
+        return g
+
+    def link(g, name):
+        e = next((x for x in g["links"] if x["name"] == name), None)
+        if not e:
+            raise Fail("I cannot find the link '%s'. Reload the panel and try again." % name)
+        return e
+
+    def values(b):
+        name = clean_text(b.get("name"), "The name", 60)
+        if not re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", name):
+            raise Fail("The name '%s' has characters that are not allowed." % name)
+        href = clean_url(b.get("href"), "The address", False)
+        abbr = clean_text(b.get("abbr", ""), "The short label", 6, True) or abbr_of(name)
+        if not re.fullmatch(r"[A-Za-z0-9 ]{1,6}", abbr):
+            raise Fail("The short label can have up to 6 letters or digits.")
+        return {"name": name, "abbr": abbr, "href": href, "icon": clean_icon(b.get("icon", "")),
+                "description": clean_text(b.get("description", ""), "The description", 120, True), "extra": []}
+
+    if op == "add":
+        gname = check_group_name(body.get("group"))
+        g = next((x for x in groups if x["name"] == gname), None)
+        if g is None:
+            g = {"name": gname, "links": []}
+            groups.append(g)
+        e = values(body)
+        if any(x["name"] == e["name"] for gg in groups for x in gg["links"]):
+            raise Fail("There is already a link called '%s'. Choose another name." % e["name"])
+        g["links"].append(e)
+        tx.put(BOOKMARKS, marks_write(head, groups))
+        ensure_layout_group(tx, gname, body.get("tab") or "Links")
+    elif op == "edit":
+        g = grp(body.get("group"))
+        e = link(g, body.get("old"))
+        v = values(body)
+        if v["name"] != e["name"] and any(x["name"] == v["name"] for gg in groups for x in gg["links"]):
+            raise Fail("There is already a link called '%s'." % v["name"])
+        v["extra"] = e["extra"]
+        e.update(v)
+        tx.put(BOOKMARKS, marks_write(head, groups))
+    elif op == "remove":
+        g = grp(body.get("group"))
+        g["links"].remove(link(g, body.get("name")))
+        if not g["links"]:
+            groups.remove(g)
+            drop_layout_group(tx, g["name"])
+        tx.put(BOOKMARKS, marks_write(head, groups))
+    elif op == "move":
+        g = grp(body.get("group"))
+        e = link(g, body.get("name"))
+        to = check_group_name(body.get("to") or g["name"])
+        tg = next((x for x in groups if x["name"] == to), None)
+        if tg is None:
+            tg = {"name": to, "links": []}
+            groups.append(tg)
+        g["links"].remove(e)
+        before = body.get("before")
+        at = next((i for i, x in enumerate(tg["links"]) if x["name"] == before), len(tg["links"]))
+        tg["links"].insert(at, e)
+        if not g["links"]:
+            groups.remove(g)
+            drop_layout_group(tx, g["name"])
+        tx.put(BOOKMARKS, marks_write(head, groups))
+        ensure_layout_group(tx, to, body.get("tab") or "Links")
+    elif op == "group-rename":
+        g = grp(body.get("group"))
+        new = check_group_name(body.get("to"))
+        if any(x["name"] == new for x in groups):
+            raise Fail("There is already a group called '%s'." % new)
+        text = tx.get(SETTINGS)
+        gs = layout_groups(text)
+        for x in gs:
+            if x["name"] == g["name"]:
+                x["name"] = new
+        tx.put(SETTINGS, layout_write(text, gs))
+        g["name"] = new
+        tx.put(BOOKMARKS, marks_write(head, groups))
+    elif op == "group-remove":
+        g = grp(body.get("group"))
+        groups.remove(g)
+        drop_layout_group(tx, g["name"])
+        tx.put(BOOKMARKS, marks_write(head, groups))
+    else:
+        raise Fail("Unknown action.")
+    tx.commit()
+    return {}
+
+
+def api_group(body):
+    """Groups of cards: rename or remove a whole group of the dashboard (not the ones the lab keeps up to date)."""
+    op = body.get("op")
+    name = body.get("group")
+    if name in AUTOMATIC or name in PROTECTED:
+        raise Fail("The group '%s' is kept up to date by the lab and cannot be changed here." % name)
+    tx = Tx("Group changed")
+    lines = tx.get(SERVICES).split("\n")
+    g = next((x for x in services_parse(lines) if x["name"] == name), None)
+    if g is None:
+        raise Fail("I cannot find the group '%s'. Reload the panel and try again." % name)
+    if op == "rename":
+        new = check_group_name(body.get("to"))
+        if any(x["name"] == new for x in services_parse(lines)):
+            raise Fail("There is already a group called '%s'." % new)
+        lines[g["start"]] = "- %s:" % yq(new)
+        tx.put(SERVICES, "\n".join(lines))
+        text = tx.get(SETTINGS)
+        gs = layout_groups(text)
+        for x in gs:
+            if x["name"] == name:
+                x["name"] = new
+        tx.put(SETTINGS, layout_write(text, gs))
+    elif op == "remove":
+        if any(card_public(lines, c, name)["locked"] for c in g["cards"]):
+            raise Fail("This group has a card the lab keeps up to date. Remove the other cards one by one.")
+        del lines[g["start"]:g["end"]]
+        tx.put(SERVICES, "\n".join(lines))
+        drop_layout_group(tx, name)
+    else:
+        raise Fail("Unknown action.")
+    tx.commit()
+    return {}
+
+
+# ================================================================ the password and the sessions
+def hash_password(pw, salt=None):
+    salt = salt or secrets.token_bytes(16)
+    h = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
+    return "scrypt$%s$%s" % (base64.b64encode(salt).decode(), base64.b64encode(h).decode())
+
+
+def check_password(pw):
+    txt = read(PASSFILE).strip()
+    m = re.fullmatch(r"scrypt\$([A-Za-z0-9+/=]+)\$([A-Za-z0-9+/=]+)", txt)
+    if not m:
+        return False
+    salt = base64.b64decode(m.group(1))
+    return hmac.compare_digest(hash_password(pw, salt), txt)
+
+
+def password_problem(pw):
+    if len(pw) < 10:
+        return "The password needs at least 10 characters."
+    if pw.strip() != pw:
+        return "The password cannot start or end with a space."
+    return ""
+
+
+def set_password(pw):
+    p = password_problem(pw)
+    if p:
+        raise Fail(p)
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    os.chmod(STATE_DIR, 0o700)
+    write_atomic(PASSFILE, hash_password(pw) + "\n", 0o600)
+    SESSIONS.clear()                                   # a new password logs everyone out
+
+
+SESSIONS = {}          # token -> {"created", "seen", "csrf"}
+FAILS = {"count": 0, "until": 0.0}
+
+
+def login(pw):
+    now = time.time()
+    if now < FAILS["until"]:
+        raise Fail("Too many wrong passwords. Wait %d seconds and try again." % int(FAILS["until"] - now + 1), 429)
+    if not os.path.exists(PASSFILE):
+        raise Fail("No password is set yet. In a terminal on the server, run:  homelab panel password", 403)
+    if not isinstance(pw, str) or not check_password(pw):
+        FAILS["count"] += 1
+        FAILS["until"] = now + min(300, 2 ** min(FAILS["count"], 8)) if FAILS["count"] >= 4 else 0.0
+        raise Fail("That is not the password.", 401)
+    FAILS["count"], FAILS["until"] = 0, 0.0
+    tok = secrets.token_urlsafe(32)
+    SESSIONS[tok] = {"created": now, "seen": now, "pw": pw_version()}
+    for t in [t for t, s in SESSIONS.items() if now - s["seen"] > SESSION_IDLE or now - s["created"] > SESSION_MAX]:
+        del SESSIONS[t]
+    return tok
+
+
+def pw_version():
+    """Changes whenever the password file does: a new password logs every session out, also in a running panel."""
+    try:
+        return os.stat(PASSFILE).st_mtime_ns
+    except OSError:
+        return 0
+
+
+def session_ok(tok):
+    s = SESSIONS.get(tok or "")
+    now = time.time()
+    if not s or now - s["seen"] > SESSION_IDLE or now - s["created"] > SESSION_MAX or s["pw"] != pw_version():
+        SESSIONS.pop(tok or "", None)
+        return False
+    s["seen"] = now
+    return True
+
+
+# ================================================================ the state the page shows
+def full_state():
+    h = history_last()
+    return {"version": VERSION, "look": look_state(), "background": bg_state(), "layout": layout_state(), "services": services_state(),
+            "links": marks_state(), "undo": (h[1]["label"] if h else ""), "automatic": sorted(AUTOMATIC), "protected": sorted(PROTECTED)}
+
+
+# ================================================================ the web server
+class Handler(BaseHTTPRequestHandler):
+    server_version = "homelab-panel"
+    sys_version = ""
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        if os.environ.get("HLP_LOG"):
+            sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
+
+    # --- helpers
+    def host_ok(self):
+        host = (self.headers.get("Host") or "").lower()
+        ok = {"localhost:%d" % PORT, "127.0.0.1:%d" % PORT, "[::1]:%d" % PORT}
+        for h in HOSTS:
+            ok.add(h)
+        return host in ok
+
+    def origin_ok(self, origin):
+        """The page that sent the request is the panel itself. (Tailscale may pass the Host header on or replace it; both are accepted.)"""
+        net = urllib.parse.urlparse(origin).netloc.lower()
+        return net == (self.headers.get("Host") or "").lower() or net in set(HOSTS) | {"localhost:%d" % PORT, "127.0.0.1:%d" % PORT}
+
+    def cookie_token(self):
+        for part in (self.headers.get("Cookie") or "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == COOKIE:
+                return v
+        return ""
+
+    def send(self, code, body, ctype="application/json", extra=None):
+        if isinstance(body, (dict, list)):
+            body = json.dumps(body).encode("utf-8")
+        elif isinstance(body, str):
+            body = body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        anc = " ".join(["'self'"] + FRAME)
+        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; "
+                         "script-src 'self'; connect-src 'self'; frame-ancestors " + anc)
+        for k, v in (extra or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def fail(self, e):
+        self.send(e.code, {"error": str(e)})
+
+    def read_body(self, limit):
+        n = int(self.headers.get("Content-Length") or 0)
+        if n > limit:
+            raise Fail("That is too big.", 413)
+        return self.rfile.read(n) if n else b""
+
+    def api_guard(self):
+        """Every call that changes something: right host, same origin, our own header, a logged-in session."""
+        if self.headers.get("X-Panel") != "1":
+            raise Fail("This request did not come from the panel page.", 403)
+        origin = self.headers.get("Origin")
+        if origin and not self.origin_ok(origin):
+            raise Fail("This request came from another website.", 403)
+        if not session_ok(self.cookie_token()):
+            raise Fail("Please log in again.", 401)
+
+    # --- GET
+    def do_HEAD(self):
+        self.do_GET()
+
+    def do_GET(self):
+        try:
+            if not self.host_ok():
+                return self.send(421, {"error": "Unknown address."})
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/api/session":
+                return self.send(200, {"loggedIn": session_ok(self.cookie_token()), "passwordSet": os.path.exists(PASSFILE), "version": VERSION})
+            if path == "/api/state":
+                if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
+                    raise Fail("Please log in again.", 401)
+                with LOCK:
+                    return self.send(200, full_state())
+            if path.startswith("/api/"):
+                raise Fail("Unknown address.", 404)
+            self.static(path)
+        except Fail as e:
+            self.fail(e)
+        except Exception as e:      # never show a stack trace to the browser
+            sys.stderr.write("error: %r\n" % (e,))
+            self.send(500, {"error": "Something went wrong inside the panel. Look at:  journalctl -u homelab-panel -n 30"})
+
+    def static(self, path):
+        names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/app.css": "app.css", "/icon.svg": "icon.svg"}
+        fn = names.get(path)
+        if not fn:
+            return self.send(404, {"error": "Not found."})
+        data = read_bytes(os.path.join(UI_DIR, fn))
+        if data is None:
+            return self.send(404, {"error": "The panel's page files are not installed (%s). Run: sudo homelab-setup upgrade" % UI_DIR})
+        ctype = mimetypes.guess_type(fn)[0] or "application/octet-stream"
+        self.send(200, data, ctype + ("; charset=utf-8" if ctype.startswith("text/") or ctype.endswith("javascript") else ""))
+
+    # --- POST
+    def do_POST(self):
+        try:
+            if not self.host_ok():
+                return self.send(421, {"error": "Unknown address."})
+            path = urllib.parse.urlparse(self.path).path
+            if path == "/api/login":
+                if self.headers.get("X-Panel") != "1" or (self.headers.get("Origin") and not self.origin_ok(self.headers.get("Origin"))):
+                    raise Fail("This request did not come from the panel page.", 403)
+                body = json.loads(self.read_body(4096) or b"{}")
+                tok = login(body.get("password"))
+                flags = "; HttpOnly; SameSite=Lax; Path=/; Max-Age=%d" % SESSION_MAX + ("" if os.environ.get("HLP_COOKIE_PLAIN") else "; Secure")
+                return self.send(200, {"ok": True}, extra={"Set-Cookie": "%s=%s%s" % (COOKIE, tok, flags)})
+            self.api_guard()
+            if path == "/api/logout":
+                SESSIONS.pop(self.cookie_token(), None)
+                return self.send(200, {"ok": True}, extra={"Set-Cookie": "%s=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0%s" % (COOKIE, "" if os.environ.get("HLP_COOKIE_PLAIN") else "; Secure")})
+            if path == "/api/background/upload":
+                data = self.read_body(MAX_UPLOAD)
+                with LOCK:
+                    res = api_bg_upload(data)
+                return self.send(200, res)
+            body = json.loads(self.read_body(1 << 20) or b"{}")
+            if not isinstance(body, dict):
+                raise Fail("The request is not understood.")
+            routes = {"/api/look": api_look_save, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
+                      "/api/layout": api_layout_save, "/api/card": api_card, "/api/link": api_link, "/api/group": api_group,
+                      "/api/undo": lambda b: {"undone": undo()}}
+            fn = routes.get(path)
+            if not fn:
+                raise Fail("Unknown address.", 404)
+            with LOCK:
+                res = fn(body)
+            self.send(200, dict(res, ok=True))
+        except Fail as e:
+            self.fail(e)
+        except ValueError:
+            self.send(400, {"error": "The request is not understood."})
+        except Exception as e:
+            sys.stderr.write("error: %r\n" % (e,))
+            self.send(500, {"error": "Something went wrong inside the panel. Look at:  journalctl -u homelab-panel -n 30"})
+
+
+def read_bytes(p):
+    try:
+        with open(p, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+
+# ================================================================ commands
+def cmd_serve():
+    srv = ThreadingHTTPServer((BIND, PORT), Handler)
+    srv.daemon_threads = True
+    sys.stderr.write("homelab-panel %s listening on http://%s:%d (files in %s)\n" % (VERSION, BIND, PORT, HP))
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+def cmd_set_password(args):
+    if "--stdin" in args:
+        pw = sys.stdin.readline().rstrip("\n")
+    else:
+        pw = getpass.getpass("New password for the control panel (at least 10 characters): ")
+        if getpass.getpass("Type it again: ") != pw:
+            print("The two entries did not match. Nothing was changed.", file=sys.stderr)
+            return 1
+    try:
+        set_password(pw)
+    except Fail as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    print("The control panel password is set. Everyone who was logged in is logged out.")
+    return 0
+
+
+def cmd_status():
+    print("homelab-panel %s" % VERSION)
+    print("  password:       %s" % ("set" if os.path.exists(PASSFILE) else "NOT set yet (run: homelab panel password)"))
+    print("  listens on:     http://%s:%d" % (BIND, PORT))
+    print("  dashboard files: %s" % HP)
+    print("  page files:     %s" % UI_DIR)
+    return 0
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "help"
+    if cmd == "serve":
+        cmd_serve()
+        return 0
+    if cmd == "set-password":
+        return cmd_set_password(argv[2:])
+    if cmd == "status":
+        return cmd_status()
+    if cmd == "version":
+        print(VERSION)
+        return 0
+    print(__doc__)
+    return 0 if cmd in ("help", "-h", "--help") else 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
