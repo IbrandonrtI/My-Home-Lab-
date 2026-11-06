@@ -55,7 +55,10 @@ ok "S1 never touched a drive tool" '! wj "w[\"events\"]" | grep -v "apt install"
 setw ts.https true
 HLS_LIVE=1 hls refresh > $SIM_DIR/s1b.out 2>&1
 ok "S1 live mode reserves the bottom row and paints the n of m bar there and still prints the result" 'grep -q $'"'"'\033\[1;[0-9]*r'"'"' $SIM_DIR/s1b.out && grep -qE "[0-9]+ of [0-9]+  " $SIM_DIR/s1b.out && grep -q "✓" $SIM_DIR/s1b.out'
-ok "S1 refresh sets the 9 Tailscale Serve addresses" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 9 ]'
+ok "S1 refresh sets the 10 Tailscale Serve addresses (the panel on 1100 included)" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 10 ]'
+ok "S1 the control panel: page files and the unit are installed" 'for f in index.html app.js app.css icon.svg; do [ -s $HLS_ROOT/usr/local/share/homelab-panel/ui/$f ] || exit 1; done; grep -q "HLP_PORT=8300" $HLS_ROOT/etc/systemd/system/homelab-panel.service && grep -q "^User=testuser" $HLS_ROOT/etc/systemd/system/homelab-panel.service'
+ok "S1 the control panel has its Tailscale address 1100, pointing at 127.0.0.1:8300" 'wj "w[\"ts\"][\"serve\"][\"1100\"]" | grep -q "http://127.0.0.1:8300"'
+ok "S1 the Customize tab and its card are on the dashboard" 'grep -q "customize-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "Customize" $HLS_ROOT/home/testuser/homepage-config/settings.yaml'
 ok "S1 serve targets use the LAN address" 'wj "w[\"ts\"][\"serve\"][\"1005\"]" | grep -q "http://192.168.50.23:8082"'
 # the Tailscale widget key
 printf '%s\n' y tskey-api-VALID123 | hls fill > $SIM_DIR/s1c.out 2>&1
@@ -79,7 +82,7 @@ ok "S1 the checklist is compact: the open-step instructions appear only in Next 
 ok "S1 the checklist tags what needs the person" 'sed -n "/── Setup/,/── Next step/p" $SIM_DIR/s1.out | grep -q "you do this" && sed -n "/── Setup/,/── Next step/p" $SIM_DIR/s1.out | grep -q "detected automatically"'
 ok "S1 --details brings the full instructions back" 'hls --details 2>&1 | grep -q "sudo drives"'
 ok "S1 hls without --details does not repeat the instructions in the checklist" '! hls 2>&1 | sed -n "/steps done/,/── Next step/p" | grep -q "sudo drives"'
-ok "S1 checklist now lists only the by-hand items" '[ "$(hls 2>&1 | grep -c "^   ○")" = 5 ]'
+ok "S1 checklist now lists only the by-hand items (the panel password among them)" '[ "$(hls 2>&1 | grep -c "^   ○")" = 6 ]'
 # ---- weather: the city chosen at install is written into widgets.yaml and the step ticks itself
 ok "S1 weather: the city's coordinates are in widgets.yaml" 'grep -q "latitude: 40.7143" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml && grep -q "longitude: -74.0060" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml && grep -q "label: \"New York\"" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml'
 ok "S1 weather: the step is done without any manual action" '! hls 2>&1 | grep -q "○ Homepage weather location"'
@@ -101,11 +104,12 @@ ok "S1 auto: speed test step ticks itself after a result exists" '[ "$(hls 2>&1 
 ok "S1 auto: reboot step waits while the boot id is the same" 'hls 2>&1 | grep -q "○ Rebooted once"'
 export HLS_BOOT_ID=boot-B
 ok "S1 auto: reboot step ticks itself after a restart with every container up" '[ "$(hls 2>&1 | grep -c "○ Rebooted once")" = 0 ]'
-ok "S1 auto: the password-manager step and the data drive are left" '[ "$(hls 2>&1 | grep -c "^   ○")" = 2 ]'
+ok "S1 auto: the password-manager step, the panel password and the data drive are left" '[ "$(hls 2>&1 | grep -c "^   ○")" = 3 ]'
 export HLS_BOOT_ID=boot-A
 hls secrets > $SIM_DIR/s1sec.out 2>&1
 ok "S1 auto: showing the passwords with the secrets command ticks the password step" '[ "$(hls 2>&1 | grep -c "○ Generated passwords copied")" = 0 ]'
 hls skip data-drive >/dev/null 2>&1
+hls skip panel-password >/dev/null 2>&1
 ok "S1 when complete, the checklist ends with a System check that says everything is up" 'hls 2>&1 | grep -q "System check" && hls 2>&1 | grep -q "Containers: 16 of 16 running" && hls 2>&1 | grep -q "Everything is up and running"'
 # services added after the install (cards made by homelab-cards) show up in the System check; a silent one is a warning, not a problem
 mkdir -p $HLS_ROOT/var/lib/homelab
@@ -203,7 +207,7 @@ unset HLS_FETCH_FAIL
 ok "S6 Docker step is reported failed with the reason" 'hls 2>&1 | grep -q "✗ Docker installed" && hls 2>&1 | grep -q "signing key"'
 ok "S6 Tailscale install failure is reported with the manual fallback" 'hls 2>&1 | grep -q "Install Tailscale manually"'
 ok "S6 nothing that needs Docker was attempted" '[ "$(wj "len(w[\"containers\"])")" = 0 ]'
-ok "S6 the steps that do not need Docker finished (9 of 56)" 'hls 2>&1 | grep -q "9 of 56"'
+ok "S6 the steps that do not need Docker finished (9 of 59)" 'hls 2>&1 | grep -q "9 of 59"'
 ok "S6 retry after the network is back finishes the job" '(printf "yes\n\ny\n$PW\n$PW\n" | hls install >/dev/null 2>&1; [ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ])'
 echo "### S6b apt update fails"
 fresh
@@ -676,7 +680,7 @@ ok "S35 no AdGuard container, the other 15 run" '! wj "list(w[\"containers\"])" 
 ok "S35 port 53 was not touched: systemd-resolved still runs and the question about it was not asked" '[ "$(wj "w[\"units\"][\"systemd-resolved\"]")" = active ] && ! grep -q "Free port 53 now" $SIM_DIR/s35.out'
 setw ts.https true
 hls refresh > $SIM_DIR/s35r.out 2>&1
-ok "S35 eight Tailscale Serve addresses, none for AdGuard Home (1004)" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 8 ] && ! wj "list(w[\"ts\"][\"serve\"])" | grep -q 1004'
+ok "S35 nine Tailscale Serve addresses (the panel included), none for AdGuard Home (1004)" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 9 ] && ! wj "list(w[\"ts\"][\"serve\"])" | grep -q 1004'
 ok "S35 the Homepage dashboard has no AdGuard card but keeps Tailscale and the others" '! grep -q "adguard-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "tailscale-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "beszel-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
 ok "S35 services.yaml is still valid YAML" 'python3 -c "import yaml,sys; yaml.safe_load(open(\"$HLS_ROOT/home/testuser/homepage-config/services.yaml\"))"'
 ok "S35 no AdGuard step is on the checklist, and nothing failed" '! hls 2>&1 | grep -qi "adguard" && ! grep -q "✗" $SIM_DIR/s35.out'
@@ -687,7 +691,7 @@ printf '%s\n' $PW | hls adguard --yes > $SIM_DIR/s35b.out 2>&1; RC=$?
 ok "S35 homelab-setup adguard finishes" '[ $RC -eq 0 ]'
 ok "S35 AdGuard Home runs now, port 53 is free for it" 'wj "list(w[\"containers\"])" | grep -q adguard && [ "$(wj "w[\"units\"][\"systemd-resolved\"]")" = inactive ]'
 ok "S35 the card is back on the dashboard, with its widget filled in" 'grep -q "adguard-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && python3 -c "import yaml; yaml.safe_load(open(\"$HLS_ROOT/home/testuser/homepage-config/services.yaml\"))" && grep -A12 "adguard-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml | grep -q "type: adguard"'
-ok "S35 the Tailscale address for AdGuard Home (1004) is set, nine in all" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 9 ] && wj "list(w[\"ts\"][\"serve\"])" | grep -q 1004'
+ok "S35 the Tailscale address for AdGuard Home (1004) is set, ten in all" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 10 ] && wj "list(w[\"ts\"][\"serve\"])" | grep -q 1004'
 ok "S35 running it again changes nothing and does not ask again" 'printf "%s\n" $PW | hls adguard --yes 2>&1 | grep -q "already part of this machine"'
 fi
 

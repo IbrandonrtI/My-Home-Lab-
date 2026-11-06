@@ -43,7 +43,7 @@ export HLS_NO_THROTTLE=1
 REPO="$SIM_DIR/repo"
 if [ -z "$SIM_KEEP" ]; then
 mkdir -p "$REPO"
-for d in installer scripts stacks homepage-config; do cp -r "$REPO_ROOT/$d" "$REPO/"; done
+for d in installer scripts stacks homepage-config panel; do cp -r "$REPO_ROOT/$d" "$REPO/"; done
 [ -n "${HLS_PROG:-}" ] && cp "$HLS_PROG" "$REPO/installer/homelab-setup"
 fi
 export REPO
