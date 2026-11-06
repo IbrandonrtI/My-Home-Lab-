@@ -9,6 +9,7 @@ which is not the panel cannot change the page, and that the page fits a phone.
 Run: python3 tests/t_panel_ui.py   (last line is OK or FAIL)"""
 import http.server
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -132,7 +133,36 @@ def main():
             fr.locator("nav.tabs").get_by_text("Colors", exact=True).click()
             pg.wait_for_timeout(300)
             check("colors: the screen lists service cards and bookmarks", fr.get_by_text("Service Cards", exact=True).count() >= 1 and fr.get_by_text("Bookmarks", exact=True).count() >= 1)
-            fr.locator('input[aria-label="One color for everything"]').fill("#336699")
+            tsc = fr.locator('input[aria-label="Color of Tailscale"]')
+            check("colors: a card's box shows its own default color, not one blue for all", tsc.input_value().lower() == "#248cff", tsc.input_value())
+            pick = fr.locator('input[aria-label="One color for everything"]')
+            pick.evaluate("e => { e.dataset.same = '1'; }")
+            pick.fill("#223344")
+            pg.wait_for_timeout(200)
+            pick.fill("#336699")
+            pg.wait_for_timeout(300)
+            check("colors: the picker for everything stays the same element while you move (so it stays open)", fr.locator('input[aria-label="One color for everything"][data-same="1"]').count() == 1)
+            tsc.evaluate("e => { e.dataset.same = '1'; }")
+            tsc.fill("#ff8800")
+            pg.wait_for_timeout(300)
+            check("colors: a card's picker also stays put, and the row says Custom", fr.locator('input[aria-label="Color of Tailscale"][data-same="1"]').count() == 1
+                  and fr.locator(".prow", has_text="Tailscale").locator(".badge").inner_text() == "Custom")
+            fr.locator(".prow", has_text="Tailscale").get_by_role("button", name="Reset").click()
+            check("colors: Reset puts the picker back to the color for everything", tsc.input_value().lower() == "#336699", tsc.input_value())
+            lab = fr.locator('input[aria-label="Text of Network & DNS"]')
+            lab.evaluate("e => { e.dataset.same = '1'; }")
+            lab.fill("#ffeeaa")
+            pg.wait_for_timeout(300)
+            check("colors: a label's picker stays put too", fr.locator('input[aria-label="Text of Network & DNS"][data-same="1"]').count() == 1)
+            fr.get_by_role("button", name="Solid", exact=True).click()
+            pg.wait_for_timeout(300)
+            live = pg.evaluate("(document.getElementById('hl-live-look') || {}).textContent || ''")
+            check("colors: Solid gives the same strength on both ends", re.search(r"--hl-a1:([0-9.]+);--hl-a2:\1;", live) is not None, live[-500:])
+            fr.get_by_role("button", name="Gradient", exact=True).click()
+            pg.wait_for_timeout(300)
+            live = pg.evaluate("(document.getElementById('hl-live-look') || {}).textContent || ''")
+            check("colors: Gradient fades out", re.search(r"--hl-a1:([0-9.]+);--hl-a2:(?!\1;)", live) is not None, live[-500:])
+            pg.wait_for_timeout(100)
             pg.wait_for_timeout(300)
             live = pg.evaluate("(document.getElementById('hl-live-look') || {}).textContent || ''")
             check("colors: one color for everything is previewed", "51, 102, 153" in live and ".service-card" in live, live[-400:])
