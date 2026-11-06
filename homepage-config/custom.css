@@ -385,7 +385,7 @@ div[id$="-card"] > div {
   --lk-text: #eef2f9;
   --lk-muted: #a9b4c7;
   --lk-side: 28px;                     /* space left and right of the page */
-  --lk-player-h: 460px;                /* height of the Navidrome player panel */
+  --lk-player-h: 560px;                /* height of the Navidrome player panel */
   position: relative;
 }
 
@@ -549,19 +549,19 @@ body { --icon-color: #c9d6f2; }
   #inner_wrapper .service-card, #inner_wrapper .bookmark > a, #inner_wrapper button[id$="-tab"] { transition: none; }
 }
 
-/* ---- The music panel: when the Navidrome card is there, its group goes on top over the full width. The player is wide on the left and the
-   other music apps (Downtify, AudioMuse-AI, naviList ...) are a column on the right. The other groups follow in three columns. */
+/* ---- The music panel: when the Navidrome card is there, its group goes on top over the full width. The player takes the whole width, and the other
+   music apps (Downtify, Metube, AudioMuse-AI, naviList ...) are one row of cards under it. The other groups follow in three columns. */
 #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { order: -1; flex: 0 0 100%; max-width: 100%; }
 #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 0; min-width: 300px; }
 #inner_wrapper .services-group:has(#navidrome-card) .services-list {
-  display: grid !important;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-  grid-auto-rows: min-content;
+  display: flex !important;
+  flex-flow: row wrap !important;
+  align-items: flex-start;
   column-gap: 12px;
   row-gap: 0;
 }
-#inner_wrapper .services-group:has(#navidrome-card) .services-list > li { grid-column: 2; }
-#inner_wrapper .services-group:has(#navidrome-card) .services-list > #navidrome-card { grid-column: 1; grid-row: 1 / span 24; }
+#inner_wrapper .services-group:has(#navidrome-card) .services-list > li { flex: 1 1 230px; min-width: 0; margin: 0 !important; }      /* the row shares the width evenly, and wraps on a narrow window */
+#inner_wrapper .services-group:has(#navidrome-card) .services-list > #navidrome-card { flex: 0 0 100%; }
 #inner_wrapper #navidrome-card .service-card { height: calc(100% - 0.5rem) !important; }
 #inner_wrapper #navidrome-card div:has(> iframe) { overflow: hidden !important; border-radius: 10px; }
 #inner_wrapper #navidrome-card iframe { width: calc(100% + 32px) !important; max-width: none !important; border: 0 !important; height: var(--lk-player-h) !important; }
@@ -611,14 +611,6 @@ li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-colo
 li[id^="stat-"] .service-block-value { font-size: 1rem !important; font-weight: 600 !important; color: #f4f6fa; }
 li[id^="stat-"] .service-block-label { opacity: 0.7; }
 
-/* ---- Medium screens: the music panel goes to one column (player on top, the other apps in two columns under it) */
-@media (max-width: 1100px) {
-  #inner_wrapper .services-group:has(#navidrome-card) .services-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  #inner_wrapper .services-group:has(#navidrome-card) .services-list > li { grid-column: auto; }
-  #inner_wrapper .services-group:has(#navidrome-card) .services-list > #navidrome-card { grid-column: 1 / -1; grid-row: auto; }
-  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 320px; }
-}
-
 /* ---- Narrow windows and phones: the older small-screen rules above make long pills; here they become the same calm tiles (the extra ids beat them) */
 @media (max-width: 1000px) {
   #inner_wrapper #widgets-wrap > .widget-container,
@@ -642,7 +634,7 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
 
 /* ---- Phones and narrow windows: a small tile grid on top, then one column of cards */
 @media (max-width: 700px) {
-  #inner_wrapper { --lk-side: 14px; --lk-player-h: 480px; }
+  #inner_wrapper { --lk-side: 14px; --lk-player-h: 540px; }
   #inner_wrapper #information-widgets { margin-top: 12px !important; }
   #inner_wrapper #widgets-wrap { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
   #inner_wrapper .widget-container,
@@ -663,7 +655,7 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
   #inner_wrapper #myTab { width: 100%; }
   #inner_wrapper button[id$="-tab"] { padding: 9px 6px !important; font-size: 13px !important; letter-spacing: 0.04em; }
   #inner_wrapper #layout-groups { margin: 8px calc(var(--lk-side) - 4px) 0 !important; }
-  #inner_wrapper .services-group:has(#navidrome-card) .services-list { grid-template-columns: minmax(0, 1fr); }
+  #inner_wrapper .services-group:has(#navidrome-card) .services-list > li { flex-basis: 100%; }
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)) { flex: 1 1 100%; }
 }
 /* <<< homelab tabs <<< */
