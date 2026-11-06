@@ -427,7 +427,7 @@
 # <<< homelab calendar <<<
 
 # >>> homelab customize >>>
-# The CUSTOMIZE tab: the control panel (the program homelab-panel) as one big card. It changes the look, the layout, the cards and the links of this
+# The CUSTOMIZE tab: the control panel (the program homelab-panel) as one big card, and the link editor of the Links tab. It changes the look, the layout, the cards and the links of this
 # dashboard by pointing and clicking. It has its own password (set with:  homelab panel password) and is only reachable from your own devices (Tailscale).
 # This block is brought up to date by the installer. To remove the tab: delete everything between the two marker lines, then delete the Customize
 # entry from the layout: block of settings.yaml.
@@ -441,6 +441,22 @@
           type: iframe
           name: control-panel
           src: https://pc.your-tailnet.ts.net:1100/
+          classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96
+          allowScrolling: yes
+          loadingStrategy: lazy
+
+
+# The Links tab: a drop-down card above the bookmarks (closed until you open it) to add, change, move or remove bookmarks. It is part of the same panel.
+- Edit Links:
+
+    - Link editor:
+        id: linkedit-card
+        icon: mdi-pencil
+        description: Add, change, move or remove bookmarks
+        widget:
+          type: iframe
+          name: link-editor
+          src: https://pc.your-tailnet.ts.net:1100/?only=links
           classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96
           allowScrolling: yes
           loadingStrategy: lazy

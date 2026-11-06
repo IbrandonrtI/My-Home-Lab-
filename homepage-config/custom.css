@@ -392,6 +392,7 @@ div[id$="-card"] > div {
 /* ---- The page: a little narrower on big screens, a darker and softer picture behind it */
 #inner_wrapper > .container { max-width: 1480px; z-index: auto !important; }      /* no own layer: the music player (custom.js) must lie above the cards but under the search dialog */
 #background { filter: blur(5px) saturate(0.85); transform: scale(1.04); }
+html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is set to "none" (custom.js): no extra blur either */
 #background::after {
   content: "";
   position: absolute;
@@ -639,6 +640,53 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
   transition: transform 0.25s ease;
 }
 #inner_wrapper .hl-shrink:hover, #inner_wrapper .hl-shrink:focus-visible { background: rgba(255, 255, 255, 0.08); color: #fff; outline: none; }
+/* the height button next to it, and the small box with the slider */
+#inner_wrapper .hl-height {
+  position: absolute;
+  top: 8px; right: 70px;
+  z-index: 12;
+  width: 28px; height: 28px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--lk-muted);
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+#inner_wrapper .hl-height::before, #inner_wrapper .hl-height::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  width: 6px; height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+}
+#inner_wrapper .hl-height::before { top: 5px; transform: translateX(-50%) rotate(-135deg); }
+#inner_wrapper .hl-height::after { bottom: 5px; transform: translateX(-50%) rotate(45deg); }
+#inner_wrapper .hl-height:hover, #inner_wrapper .hl-height:focus-visible, #inner_wrapper .hl-height[aria-expanded="true"] { background: rgba(255, 255, 255, 0.08); color: #fff; outline: none; }
+#inner_wrapper .hl-height-pop {
+  position: absolute;
+  top: 7px; right: 106px;                   /* in the title bar, left of the buttons: the player frame lies over everything below the bar */
+  z-index: 40;
+  width: min(340px, calc(100% - 330px));
+  min-width: 230px;
+  height: 32px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 0 8px 0 12px;
+  border-radius: 10px;
+  background: rgba(14, 20, 33, 0.97);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: var(--lk-text);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+#inner_wrapper .hl-height-pop label { flex: none; }
+#inner_wrapper .hl-height-pop span { flex: none; min-width: 48px; text-align: right; color: var(--lk-muted); }
+#inner_wrapper .hl-height-pop[hidden] { display: none; }
+#inner_wrapper .hl-height-pop input { flex: 1 1 auto; min-width: 60px; accent-color: rgb(var(--lk-accent)); }
+#inner_wrapper .hl-height-pop button { flex: none; padding: 2px 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.06); color: inherit; cursor: pointer; }
 html.hl-player-min #inner_wrapper .hl-shrink::before { transform: translate(-50%, -25%) rotate(-135deg); }
 #inner_wrapper #navidrome-card div:has(> iframe) { max-height: calc(var(--lk-player-h) + 8px); transition: max-height 0.35s ease, opacity 0.25s ease 0.05s; }
 html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height: 0 !important; opacity: 0; transition: max-height 0.35s ease, opacity 0.2s ease; }
@@ -853,7 +901,8 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper .hl-gfold { opacity: 0.8; }
 }
 /* ---- The Customize tab: the control panel (a page of its own, shown in an iframe) fills one big card */
-#inner_wrapper #customize-card .service-title { display: none !important; }
-#inner_wrapper #customize-card div:has(> iframe) { margin: 0 !important; width: 100%; max-width: none !important; background: transparent !important; overflow: hidden; border-radius: calc(var(--lk-radius) - 2px); }
-#inner_wrapper #customize-card iframe { display: block; width: 100% !important; max-width: none !important; height: min(88vh, 1200px) !important; min-height: 520px; border: 0 !important; border-radius: 0 !important; background: #0a0f19; }
+#inner_wrapper #customize-card .service-title, #inner_wrapper #linkedit-card .service-title { display: none !important; }
+#inner_wrapper #customize-card div:has(> iframe), #inner_wrapper #linkedit-card div:has(> iframe) { margin: 0 !important; width: 100%; max-width: none !important; background: transparent !important; overflow: hidden; border-radius: calc(var(--lk-radius) - 2px); }
+#inner_wrapper #customize-card iframe, #inner_wrapper #linkedit-card iframe { display: block; width: 100% !important; max-width: none !important; height: min(88vh, 1200px) !important; min-height: 520px; border: 0 !important; border-radius: 0 !important; background: #0a0f19; }
+#inner_wrapper #linkedit-card iframe { height: min(78vh, 900px) !important; min-height: 420px; }          /* the link editor: the Links tab, a drop-down card above the bookmarks */
 /* <<< homelab tabs <<< */

@@ -78,6 +78,11 @@ layout:
     icon: mdi-folder-multiple
     style: row
     columns: 1
+  Edit Links:
+    tab: Links
+    icon: mdi-pencil-box-multiple
+    style: row
+    columns: 1
   Entertainment:
     tab: Links
     icon: mdi-popcorn

@@ -5,11 +5,17 @@
   function slug(t) { return String(t || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, ""); }
   function label() {
     queued = false;
-    var groups = document.querySelectorAll(".bookmark-group");
+    var groups = document.querySelectorAll(".bookmark-group, .services-group");
     for (var i = 0; i < groups.length; i++) {
-      var h = groups[i].querySelector(".bookmark-group-name");
-      var s = h ? slug(h.textContent) : "";
+      var h = groups[i].querySelector(".bookmark-group-name, .service-group-name");
+      var s = h ? slug(h.textContent.replace(/\s*\u00b7\s*\d+$/, "")) : "";
       if (s && groups[i].getAttribute("data-group") !== s) groups[i].setAttribute("data-group", s);
+    }
+    var marks = document.querySelectorAll(".bookmark > a");               // every bookmark gets its name as a tag, so the control panel can colour it
+    for (var j = 0; j < marks.length; j++) {
+      var n = marks[j].querySelector(".bookmark-name");
+      var t = n ? slug(n.textContent) : "";
+      if (t && marks[j].getAttribute("data-bm") !== t) marks[j].setAttribute("data-bm", t);
     }
   }
   function soon() { if (!queued) { queued = true; window.requestAnimationFrame(label); } }
@@ -160,6 +166,9 @@
 
   // ---- every group: a count behind its name and a button that folds it (the choice is remembered by name)
   function folded() { try { return JSON.parse(store("hl-folded") || "[]"); } catch (e) { return []; } }
+  function opened() { try { return JSON.parse(store("hl-opened") || "[]"); } catch (e) { return []; } }       // groups that start folded and that you opened
+  var FOLDED_AT_FIRST = ["Edit Links"];                                    // the link editor of the Links tab starts closed
+  function isFolded(name) { return folded().indexOf(name) >= 0 || (FOLDED_AT_FIRST.indexOf(name) >= 0 && opened().indexOf(name) < 0); }
   // The group slides shut or open (the height is animated from the real height to 0 and back). While it moves, the player block is told to
   // look again on every frame, so the music frame follows the card.
   function slide(g, fold) {
@@ -183,28 +192,84 @@
     }
   }
   function groups() {
-    var list = folded();
     all(".services-group, .bookmark-group").forEach(function (g) {
       var h = g.querySelector(".service-group-name, .bookmark-group-name");
       if (!h) return;
       var name = h.textContent.replace(/\s*·\s*\d+$/, "").trim(), n = g.querySelectorAll("li.service, li.bookmark").length;
       if (n && h.getAttribute("data-count") !== String(n)) h.setAttribute("data-count", String(n));
-      g.classList.toggle("hl-folded", list.indexOf(name) >= 0);
+      g.classList.toggle("hl-folded", isFolded(name));
       if (g.querySelector(":scope > .hl-gfold")) return;
       var b = document.createElement("button");
       b.type = "button";
       b.className = "hl-gfold";
       b.setAttribute("aria-label", "Fold or open " + name);
       b.addEventListener("click", function () {
-        var cur = folded(), i = cur.indexOf(name);
-        if (i >= 0) cur.splice(i, 1); else cur.push(name);
+        var fold = !isFolded(name), cur = folded().filter(function (x) { return x !== name; }), op = opened().filter(function (x) { return x !== name; });
+        if (fold) { if (FOLDED_AT_FIRST.indexOf(name) < 0) cur.push(name); } else if (FOLDED_AT_FIRST.indexOf(name) >= 0) op.push(name);
         store("hl-folded", JSON.stringify(cur));
-        b.setAttribute("aria-expanded", i >= 0 ? "true" : "false");
-        slide(g, i < 0);
+        store("hl-opened", JSON.stringify(op));
+        b.setAttribute("aria-expanded", fold ? "false" : "true");
+        slide(g, fold);
       });
-      b.setAttribute("aria-expanded", list.indexOf(name) >= 0 ? "false" : "true");
+      b.setAttribute("aria-expanded", isFolded(name) ? "false" : "true");
       g.appendChild(b);
     });
+  }
+
+  // ---- "no blur" really is no blur: the shipped look adds a soft blur of its own to the picture, and it is taken off when the picture is set to sharp
+  function sharp() {
+    var w = document.getElementById("inner_wrapper");
+    if (!w) return;
+    var f = window.getComputedStyle(w).getPropertyValue("backdrop-filter") || "";
+    var m = /blur\(\s*([0-9.]+)/.exec(f);
+    root.classList.toggle("hl-sharp", !m || parseFloat(m[1]) === 0);
+  }
+  window.addEventListener("hl-look-changed", sharp);
+
+  // ---- the height of the music player: a small slider next to the shrink button (kept in this browser only)
+  function playerHeight() {
+    var w = document.getElementById("inner_wrapper"), v = parseInt(store("hl-player-h") || "", 10);
+    if (!w) return;
+    if (v >= 240 && v <= 1000) { if (w.style.getPropertyValue("--lk-player-h") !== v + "px") w.style.setProperty("--lk-player-h", v + "px"); }
+    else if (w.style.getPropertyValue("--lk-player-h")) w.style.removeProperty("--lk-player-h");
+  }
+  function heightButton() {
+    var title = document.querySelector("#navidrome-card .service-title");
+    if (!title || title.querySelector(".hl-height")) return;
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "hl-height";
+    b.setAttribute("aria-label", "Change the height of the player");
+    b.setAttribute("title", "Change the height of the player");
+    b.setAttribute("aria-expanded", "false");
+    var pop = document.createElement("div");
+    pop.className = "hl-height-pop";
+    pop.hidden = true;
+    var lab = document.createElement("label");
+    lab.textContent = "Player Height";
+    var val = document.createElement("span");
+    var rng = document.createElement("input");
+    rng.type = "range"; rng.min = "240"; rng.max = "1000"; rng.step = "10";
+    rng.setAttribute("aria-label", "Player height");
+    var back = document.createElement("button");
+    back.type = "button";
+    back.textContent = "Default";
+    function current() { var v = parseInt(store("hl-player-h") || "", 10); if (v >= 240 && v <= 1000) return v; var w = document.getElementById("inner_wrapper"); return Math.round(parseFloat(window.getComputedStyle(w).getPropertyValue("--lk-player-h")) || 600); }
+    function show() { var v = current(); rng.value = String(v); val.textContent = v + " px"; }
+    rng.addEventListener("input", function () { store("hl-player-h", rng.value); playerHeight(); show(); window.dispatchEvent(new Event("resize")); });
+    back.addEventListener("click", function () { store("hl-player-h", ""); playerHeight(); show(); window.dispatchEvent(new Event("resize")); });
+    ["click", "mousedown", "pointerdown", "touchstart"].forEach(function (t) { pop.addEventListener(t, function (ev) { ev.stopPropagation(); }); });
+    b.addEventListener("click", function (ev) {
+      ev.preventDefault(); ev.stopPropagation();
+      pop.hidden = !pop.hidden;
+      b.setAttribute("aria-expanded", pop.hidden ? "false" : "true");
+      if (!pop.hidden) show();
+    });
+    document.addEventListener("click", function (ev) { if (!pop.hidden && !pop.contains(ev.target) && ev.target !== b) { pop.hidden = true; b.setAttribute("aria-expanded", "false"); } });
+    document.addEventListener("keydown", function (ev) { if (ev.key === "Escape" && !pop.hidden) { pop.hidden = true; b.setAttribute("aria-expanded", "false"); b.focus(); } });
+    pop.appendChild(lab); pop.appendChild(rng); pop.appendChild(val); pop.appendChild(back);
+    title.appendChild(b);
+    title.appendChild(pop);
   }
 
   // ---- phone: a search button next to the weather opens the search bar
@@ -254,7 +319,7 @@
 
   function run() {
     queued = false;
-    health(); shrinkButton(); groups(); searchButton(); tabName(); bars();
+    health(); shrinkButton(); heightButton(); playerHeight(); groups(); searchButton(); tabName(); bars(); sharp();
   }
   function soon() { if (!queued) { queued = true; window.requestAnimationFrame(run); } }
   night(); soon();
@@ -276,28 +341,45 @@
   function fromPanel(e) {
     var frames = document.querySelectorAll("iframe");
     for (var i = 0; i < frames.length; i++) {
-      if (frames[i].contentWindow === e.source) return !!frames[i].closest("#customize-card");
+      if (frames[i].contentWindow === e.source) return !!frames[i].closest("#customize-card, #linkedit-card");
     }
     return false;
   }
   function inRange(n) { return typeof n === "number" && n >= 0 && n <= 100; }
 
+  // What the dashboard itself had on these two elements is kept before the first preview and put back afterwards (Homepage sets the picture there).
+  var kept = null;
+  function keep() {
+    if (kept) return;
+    var w = document.getElementById("inner_wrapper"), b = document.getElementById("background");
+    kept = {
+      filter: w ? w.style.getPropertyValue("backdrop-filter") : "",
+      webkit: w ? w.style.getPropertyValue("-webkit-backdrop-filter") : "",
+      image: b ? b.style.getPropertyValue("background-image") : ""
+    };
+  }
+  function put(el, prop, val) { if (!el) return; if (val) el.style.setProperty(prop, val); else el.style.removeProperty(prop); }
   function clearAll() {
     var s = document.getElementById(STYLE_ID);
     if (s) s.remove();
-    var w = document.getElementById("inner_wrapper");
-    if (w) { w.style.removeProperty("backdrop-filter"); w.style.removeProperty("-webkit-backdrop-filter"); }
-    var b = document.getElementById("background");
-    if (b) b.style.removeProperty("background-image");
+    if (kept) {
+      var w = document.getElementById("inner_wrapper"), b = document.getElementById("background");
+      put(w, "backdrop-filter", kept.filter);
+      put(w, "-webkit-backdrop-filter", kept.webkit);
+      put(b, "background-image", kept.image);
+      kept = null;
+    }
+    window.dispatchEvent(new Event("hl-look-changed"));
   }
   function look(css) {
-    if (typeof css !== "string" || css.length > 6000 || /[<\\]|url\s*\(|@import|expression|javascript:/i.test(css) || !/^[A-Za-z0-9 #,.:;(){}\[\]="%@&_>*~+-]*$/.test(css)) return;
+    if (typeof css !== "string" || css.length > 60000 || /[<\\]|url\s*\(|@import|expression|javascript:/i.test(css) || !/^[A-Za-z0-9 \n#,.:;(){}\[\]="%@&_>*~+!-]*$/.test(css)) return;
     var s = document.getElementById(STYLE_ID);
     if (!s) { s = document.createElement("style"); s.id = STYLE_ID; document.head.appendChild(s); }
     s.textContent = css;
   }
   function background(d) {
     if (!inRange(d.saturate) || !inRange(d.brightness) || !inRange(d.opacity) || !Object.prototype.hasOwnProperty.call(BLUR_PX, d.blur)) return;
+    keep();
     var w = document.getElementById("inner_wrapper");
     if (w) {
       var f = "blur(" + BLUR_PX[d.blur] + "px) saturate(" + d.saturate / 100 + ") brightness(" + d.brightness / 100 + ")";
@@ -309,6 +391,7 @@
       var o = 1 - d.opacity / 100;
       b.style.setProperty("background-image", "linear-gradient(rgb(var(--bg-color) / " + o + "), rgb(var(--bg-color) / " + o + ")), url('" + d.image + "')");
     }
+    window.dispatchEvent(new Event("hl-look-changed"));
   }
   window.addEventListener("message", function (e) {
     var d = e.data;
