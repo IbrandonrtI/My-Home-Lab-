@@ -51,7 +51,7 @@ nav.tabs button[aria-selected="true"] { background: var(--panel2); border-color:
 .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .row.tight { gap: 6px; }
 .grow { flex: 1 1 auto; }
-.field { display: grid; gap: 4px; margin-bottom: 12px; }
+.field { display: grid; gap: 4px; margin-bottom: 12px; align-content: start; }
 .field > label, .field > .lab { font-weight: 600; font-size: 14px; }
 .field .hint { color: var(--muted); font-size: 13px; }
 
@@ -131,3 +131,36 @@ dialog .actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap
   .grp input.icon-in { width: 120px; }
 }
 @media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
+
+/* ---- Look: the preview sits next to the sliders and stays in view while you move them */
+.lookrow { align-items: start; }
+.lookrow .sticky { position: sticky; top: 8px; }
+.chip[aria-pressed="true"] { border-color: rgb(var(--accent)); background: rgba(var(--accent), 0.16); color: rgb(var(--accent)); font-weight: 650; }
+.badge.dim { opacity: 0.6; }
+
+/* ---- Colors: one row for every card, tile, bookmark or label */
+details.card > summary { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 36px; list-style: none; }
+details.card > summary::-webkit-details-marker { display: none; }
+details.card > summary::before { content: "▸"; color: var(--muted); transition: transform 0.15s; }
+details.card[open] > summary::before { transform: rotate(90deg); }
+details.card > summary b { font-size: 17px; }
+.prow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 4px; border-top: 1px solid var(--line); }
+.prow:first-child { border-top: 0; }
+.prow .txt { flex: 1 1 180px; min-width: 140px; overflow: hidden; }
+.prow .txt b { display: block; }
+.prow .txt span { display: block; color: var(--muted); font-size: 13px; }
+.lpart { display: inline-flex; align-items: center; gap: 6px; }
+.row.bulk { margin: 8px 0 12px; padding: 8px 10px; border-radius: 12px; background: var(--panel2); }
+.row.bulk .lab { font-weight: 600; font-size: 14px; }
+
+/* ---- Samples of the label icon styles */
+.lis { display: inline-grid; place-items: center; width: 22px; height: 22px; box-sizing: content-box; }
+.lis img { width: 20px; height: 20px; }
+.lis-circle { padding: 6px; border-radius: 50%; background: rgba(var(--accent), 0.22); }
+.lis-square { padding: 6px; border-radius: 10px; background: rgba(var(--accent), 0.22); }
+.lis-ring { padding: 5px; border-radius: 50%; border: 1.5px solid rgba(var(--accent), 0.75); box-shadow: 0 0 12px rgba(var(--accent), 0.45); }
+.chip.styl { padding: 6px 14px 6px 10px; }
+dialog.wide { width: min(720px, calc(100vw - 24px)); }
+.picker button { min-height: 84px; }
+.picker img { width: 34px; height: 34px; filter: none; object-fit: contain; }
+.picker img.mdi { filter: invert(1) opacity(0.9); }

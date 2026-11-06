@@ -6,8 +6,12 @@ let S = null;                 // what the server says (look, background, layout,
 let view = "look";
 let lookW = null, bgW = null, layW = null;     // the changes in progress (not saved yet)
 const root = document.getElementById("app");
+const LOOKVIEWS = ["look", "colors"];                // these two screens work on the same look, so going from one to the other keeps the changes
 const BLURS = ["none", "sm", "md", "lg", "xl", "2xl", "3xl"];
-const VIEWS = [["look", "Look"], ["background", "Background"], ["layout", "Layout"], ["cards", "Cards"], ["links", "Links"]];
+const ONLY = new URLSearchParams(location.search).get("only");       // "links": only the link editor, shown inside the Links tab of the dashboard
+const VIEWS = ONLY === "links" ? [["links", "Links"]]
+  : [["look", "Look"], ["colors", "Colors"], ["background", "Background"], ["layout", "Layout"], ["cards", "Cards"]];
+if (ONLY === "links") view = "links";
 
 try { const v = sessionStorage.getItem("hlp-view"); if (v && VIEWS.some(x => x[0] === v)) view = v; } catch (e) { /* storage may be blocked */ }
 
@@ -94,6 +98,7 @@ function afterChange(reload) {
     const y = window.scrollY;
     S = s;
     lookW = bgW = layW = null;
+    clearDraft();
     render();
     window.scrollTo(0, y);
     if (reload && autoReload()) setTimeout(() => send({ type: "reload" }), 900);
@@ -131,25 +136,46 @@ function iconEl(name) {
 function siteIcon(href) {
   try { return "https://www.google.com/s2/favicons?domain=" + new URL(href).hostname + "&sz=128"; } catch (e) { return ""; }
 }
+let iconLib = null;                 // the icon names (loaded once from the server, which keeps a copy for a month)
+function loadIcons() {
+  if (!iconLib) iconLib = api("GET", "/api/icons").catch(() => ({ apps: [], mdi: [] }));
+  return iconLib;
+}
+const APP_ICON_URL = n => "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/" + n.slice(n.lastIndexOf(".") + 1) + "/" + n;
 function pickIcon(current) {
   return new Promise(resolve => {
+    let kind = "apps", lib = { apps: [], mdi: [] };
     const grid = h("div", { class: "picker" });
-    const q = h("input", { type: "text", placeholder: "Search, for example: music, server, school", "aria-label": "Search icons" });
+    const note = h("p", { class: "muted small" });
+    const q = h("input", { type: "text", placeholder: "Search, for example: portainer, plex, music, server", "aria-label": "Search icons" });
+    const tabs = h("div", { class: "chips", style: { margin: "10px 0" } });
+    const MAX = 120;
+    const choose = v => { d.close(); resolve(v); };
     const draw = () => {
       const t = q.value.trim().toLowerCase();
-      put(grid, MDI.filter(n => !t || n.includes(t)).map(n =>
-        h("button", { title: "mdi-" + n, onclick: () => { d.close(); resolve("mdi-" + n); } }, h("img", { src: iconInfo("mdi-" + n).url, alt: "", loading: "lazy" }), n)));
-      if (!grid.children.length) grid.append(h("p", { class: "muted" }, "No icon with that word in this short list. You can type any icon name in the box instead."));
+      const names = kind === "apps" ? (lib.apps.length ? lib.apps : []) : (lib.mdi.length ? lib.mdi : MDI);
+      const hits = names.filter(n => !t || n.toLowerCase().includes(t));
+      put(grid, hits.slice(0, MAX).map(n => kind === "apps"
+        ? h("button", { title: n, onclick: () => choose(n) }, h("img", { src: APP_ICON_URL(n), alt: "", loading: "lazy" }), n.replace(/\.(svg|png)$/, ""))
+        : h("button", { title: "mdi-" + n, onclick: () => choose("mdi-" + n) }, h("img", { src: iconInfo("mdi-" + n).url, class: "mdi", alt: "", loading: "lazy" }), n)));
+      if (!hits.length) grid.append(h("p", { class: "muted" }, kind === "apps" && !lib.apps.length
+        ? "The list of app icons could not be loaded (is the server online?). You can still type an icon name such as plex.svg in the icon box."
+        : "Nothing matches that word. Try a shorter word."));
+      put(note, hits.length > MAX ? "Showing the first " + MAX + " of " + hits.length + ". Type more letters to narrow it down." : hits.length + " icon" + (hits.length === 1 ? "" : "s"));
     };
+    const drawTabs = () => put(tabs, [["apps", "Apps and Logos"], ["mdi", "Symbols"]].map(([id, text]) =>
+      h("button", { class: "chip", "aria-pressed": String(kind === id), onclick: () => { kind = id; drawTabs(); draw(); } }, text)));
     q.addEventListener("input", draw);
-    const d = h("dialog", {}, h("h2", {}, "Choose an icon"), q, grid,
-      h("p", { class: "muted small" }, "These are a few of the thousands of icons Homepage knows. You can also type a name such as ", h("b", {}, "plex.svg"), " or ", h("b", {}, "si-github"), " in the icon box."),
+    const d = h("dialog", { class: "wide" }, h("h2", {}, "Choose an Icon"), q, tabs, grid, note,
+      h("p", { class: "muted small" }, "Apps and Logos has the icons of thousands of programs (Portainer, Plex, Nextcloud…). Symbols are plain pictures such as a house or a folder. You can also type a name in the icon box, or a web address of a picture."),
       h("div", { class: "actions" }, h("button", { onclick: () => { d.close(); resolve(current); } }, "Cancel")));
     d.addEventListener("close", () => { d.remove(); resolve(current); });
     document.body.append(d);
-    draw();
+    drawTabs();
+    put(grid, h("p", { class: "muted" }, "Loading the icon library…"));
     d.showModal();
     q.focus();
+    loadIcons().then(l => { lib = l; if (!lib.apps.length && lib.mdi.length) kind = "mdi"; drawTabs(); draw(); });
   });
 }
 function iconField(initial, getHref) {
@@ -179,9 +205,9 @@ function showLogin(passwordSet = true, msg = "") {
   };
   pw.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
   put(root, h("div", { class: "login card" },
-    h("h1", {}, "Customize your dashboard"),
+    h("h1", {}, "Customize Your Dashboard"),
     h("p", { class: "muted" }, "Type the control panel password. It is its own password (not the one for your other apps)."),
-    passwordSet ? [pw, err, h("button", { class: "primary", onclick: go }, "Log in")] :
+    passwordSet ? [pw, err, h("button", { class: "primary", onclick: go }, "Log In")] :
       h("p", {}, "No password is set yet. On the server, open a terminal and run: ", h("b", {}, "homelab panel password")),
     framed ? h("p", { class: "muted small" }, "If the login does not stay, your browser may block it inside the dashboard. ", h("a", { href: location.href, target: "_blank", rel: "noopener" }, "Open the panel in its own tab"), ".") : null));
   if (passwordSet) pw.focus();
@@ -191,16 +217,17 @@ function showLogin(passwordSet = true, msg = "") {
 function render() {
   if (!S) return;
   try { sessionStorage.setItem("hlp-view", view); } catch (e) { /* storage may be blocked */ }
-  const fns = { look: viewLook, background: viewBackground, layout: viewLayout, cards: viewCards, links: viewLinks };
+  const fns = { look: viewLook, colors: viewColors, background: viewBackground, layout: viewLayout, cards: viewCards, links: viewLinks };
+  if (ONLY === "links") { put(root, viewLinks()); applyAccent(); return; }
   const auto = h("input", { type: "checkbox", checked: autoReload(), id: "auto", onchange: ev => { try { localStorage.setItem("hlp-auto", ev.target.checked ? "1" : "0"); } catch (e) { /* ignore */ } } });
   put(root,
     h("header", { class: "top" },
-      h("div", { class: "grow" }, h("h1", {}, "Customize your dashboard"), h("div", { class: "sub" }, "Changes are saved to your dashboard files. Undo brings the last change back.")),
+      h("div", { class: "grow" }, h("h1", {}, "Customize Your Dashboard"), h("div", { class: "sub" }, "Changes are saved to your dashboard files. Undo brings the last change back.")),
       h("button", { disabled: !S.undo, onclick: doUndo, title: S.undo ? "Undo: " + S.undo : "Nothing to undo" }, "↶ Undo" + (S.undo ? " (" + S.undo + ")" : "")),
-      framed ? h("a", { class: "btn", href: location.href, target: "_blank", rel: "noopener" }, "Open in its own tab") : null,
-      h("button", { class: "ghost", onclick: async () => { try { await api("POST", "/api/logout", {}); } catch (e) { /* already out */ } S = null; showLogin(); } }, "Log out")),
+      framed ? h("a", { class: "btn", href: location.href, target: "_blank", rel: "noopener" }, "Open in Its Own Tab") : null,
+      h("button", { class: "ghost", onclick: async () => { try { await api("POST", "/api/logout", {}); } catch (e) { /* already out */ } S = null; showLogin(); } }, "Log Out")),
     h("nav", { class: "tabs", role: "tablist" }, VIEWS.map(([id, label]) =>
-      h("button", { role: "tab", "aria-selected": String(view === id), onclick: () => { if (view !== id) { discardPreview(); view = id; render(); window.scrollTo(0, 0); } } }, label))),
+      h("button", { role: "tab", "aria-selected": String(view === id), onclick: () => { if (view !== id) { if (!(LOOKVIEWS.includes(view) && LOOKVIEWS.includes(id))) discardPreview(); view = id; render(); window.scrollTo(0, 0); } } }, label))),
     fns[view](),
     framed ? h("p", { class: "muted small" }, h("label", { for: "auto" }, auto, " Refresh the dashboard by itself after I change layout, cards or links")) : null);
   applyAccent();
@@ -213,107 +240,240 @@ function applyAccent() {
 async function doUndo() {
   try { const r = await api("POST", "/api/undo", {}); send({ type: "clear" }); toast("Undone: " + r.undone); await afterChange(true); } catch (e) { fail(e); }
 }
-function discardPreview() { send({ type: "clear" }); lookW = bgW = layW = null; }
+function discardPreview() { send({ type: "clear" }); lookW = bgW = layW = null; clearDraft(); }
 
 function saveBar(dirty, onSave, onRevert, saveLabel, extra) {
   return h("div", { class: "savebar" },
     h("div", { class: "state" + (dirty ? " dirty" : "") }, dirty ? "You have changes that are not saved yet." : "Everything shown is saved."),
     extra || null,
-    h("button", { disabled: !dirty, onclick: onRevert }, "Throw away"),
+    h("button", { disabled: !dirty, onclick: onRevert }, "Throw Away"),
     h("button", { class: "primary", disabled: !dirty, onclick: onSave }, saveLabel || "Save"));
 }
 
-// ---------------------------------------------------------------- Look
+// ---------------------------------------------------------------- Look and Colors (one look, two screens)
 function rgb(hex) { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ""); const n = m ? parseInt(m[1], 16) : 0; return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
-function lookCss(v) {
-  const a = rgb(v.accent).join(", ");
-  let css = "html body #inner_wrapper{--lk-accent:" + a + ";--lk-glass:" + rgb(v.glass).join(", ") + ";--lk-glass-a:" + (v.glassOpacity / 100) +
-    ";--lk-radius:" + v.radius + "px;--lk-line:rgba(255,255,255," + (v.edge / 100) + ");--lk-side:" + v.side + "px;--lk-player-h:" + v.playerHeight + "px}";
-  for (const [name, col] of Object.entries(v.tabs || {})) if (/^[A-Za-z0-9 _&-]+$/.test(name)) css += 'html[data-tab="' + name + '"] body #inner_wrapper{--lk-accent:' + rgb(col).join(", ") + "}";
-  css += "@media (max-width:700px){html body #inner_wrapper{--lk-player-h:" + Math.max(240, v.playerHeight - 40) + "px}}";
-  return css;
+const PAINT_KEYS = ["paintAll", "paintStrength", "cards", "links", "labels", "labelIcon"];
+let lookBarEl = null, pvTimer = null, pvSeq = 0;
+
+function lookOut() {                       // what is sent to the server: the look, with only the tab colors that differ from the shipped ones
+  const out = clone(lookW);
+  out.tabs = {};
+  for (const [n, c] of Object.entries(lookW.tabs)) if (c !== S.look.defaults.tabs[n]) out.tabs[n] = c;
+  return out;
 }
+function glassAlpha(v) { return v.glassClear ? 0.4 * (1 - v.glassLevel / 100) : v.glassOpacity / 100; }
 function lookPreview(quiet) {
-  if (!quiet) send({ type: "css", css: lookCss(lookW) });
   const p = document.getElementById("mock");
   if (p) {
     p.style.setProperty("--pc", rgb(lookW.accent).join(", "));
     p.style.setProperty("--pg", rgb(lookW.glass).join(", "));
-    p.style.setProperty("--pa", lookW.glassOpacity / 100);
+    p.style.setProperty("--pa", glassAlpha(lookW));
     p.style.setProperty("--pr", Math.min(lookW.radius, 30) + "px");
     p.style.setProperty("--pe", lookW.edge / 100);
   }
   applyAccent();
+  if (quiet) return;
+  clearTimeout(pvTimer);                    // the server writes the rules, so the preview is exactly what Save keeps
+  pvTimer = setTimeout(async () => {
+    const n = ++pvSeq;
+    try { const r = await api("POST", "/api/look/css", { look: lookOut() }); if (n === pvSeq) send({ type: "css", css: r.css }); } catch (e) { /* the next change tries again */ }
+  }, 120);
 }
 function lookDirty() { return !same(lookNorm(lookW), lookNorm(S.look.values)); }
 function lookNorm(v) { const o = clone(v); o.tabs = o.tabs || {}; return o; }
+function refreshLookBar() {
+  if (!lookBarEl) return;
+  put(lookBarEl, saveBar(lookDirty(), saveLook, () => { discardPreview(); render(); }, "Save This Look",
+    h("button", { onclick: resetLook }, "Back to the Shipped Look")));
+}
+function lookChanged() { lookPreview(); refreshLookBar(); try { sessionStorage.setItem("hlp-draft", JSON.stringify(lookW)); } catch (e) { /* storage may be blocked */ } }
+function clearDraft() { try { sessionStorage.removeItem("hlp-draft"); } catch (e) { /* ignore */ } }
+// Cards of the other tabs are only on the page while their tab is open, so you look at them on their own tab and come back: the unsaved work is kept for that
+function startLook() {
+  try {
+    const d = JSON.parse(sessionStorage.getItem("hlp-draft") || "null");
+    if (d && typeof d === "object") { const l = Object.assign(clone(S.look.values), d); if (!same(lookNorm(l), lookNorm(S.look.values))) return l; }
+  } catch (e) { /* no draft */ }
+  return clone(S.look.values);
+}
+async function saveLook() {
+  try { await api("POST", "/api/look", { look: lookOut() }); toast("Look saved."); await afterChange(false); } catch (e) { fail(e); }
+}
+async function resetLook() {
+  if (!await confirmBox("Go Back to the Shipped Look?", "The colors, glass, shapes and the colors of cards and labels go back to how the dashboard came. Your cards and layout stay as they are. Undo can bring this change back.", "Reset the Look")) return;
+  try { await api("POST", "/api/look/reset", {}); send({ type: "clear" }); toast("The shipped look is back."); await afterChange(true); } catch (e) { fail(e); }
+}
+function lookSlider(label, key, lo, hi, step, unit, hint) {
+  const L = lookW;
+  const val = h("span", { class: "val" }, L[key] + unit);
+  const inp = h("input", { type: "range", min: lo, max: hi, step, value: L[key], "aria-label": label, oninput: ev => { L[key] = Number(ev.target.value); val.textContent = L[key] + unit; lookChanged(); } });
+  return h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, label), val, inp), hint ? h("div", { class: "hint" }, hint) : null);
+}
+function colorField(label, key, hint, swatches) {
+  const L = lookW;
+  const hex = h("input", { type: "text", value: L[key], maxlength: 7, "aria-label": label + " (hex code)", style: { maxWidth: "120px" } });
+  const pick = h("input", { type: "color", value: L[key], "aria-label": label });
+  const set = v => { L[key] = v; hex.value = v; pick.value = v; lookChanged(); };
+  pick.addEventListener("input", () => set(pick.value));
+  hex.addEventListener("change", () => { if (/^#[0-9a-f]{6}$/i.test(hex.value.trim())) set(hex.value.trim().toLowerCase()); else hex.value = L[key]; });
+  return h("div", { class: "field" }, h("div", { class: "lab" }, label),
+    h("div", { class: "row" }, pick, hex, h("div", { class: "swatches" }, (swatches || []).map(c => h("button", { class: "swatch", style: { background: c }, title: c, "aria-label": "Use " + c, onclick: () => set(c) })))),
+    hint ? h("div", { class: "hint" }, hint) : null);
+}
 
 function viewLook() {
   const sv = S.look.values, def = S.look.defaults;
-  if (!lookW) lookW = clone(sv);
+  if (!lookW) lookW = startLook();
   const L = lookW;
-  const upd = (k, val) => { L[k] = val; lookPreview(); refreshBar(); };
-  const bar = h("div", {});
-  const refreshBar = () => put(bar, saveBar(lookDirty(), saveLook, () => { discardPreview(); render(); }, "Save this look",
-    h("button", { onclick: resetLook }, "Back to the shipped look")));
-  async function saveLook() {
-    const out = clone(L);
-    out.tabs = {};
-    for (const [n, c] of Object.entries(L.tabs)) if (c !== def.tabs[n]) out.tabs[n] = c;
-    try { await api("POST", "/api/look", { look: out }); toast("Look saved."); await afterChange(false); } catch (e) { fail(e); }
+  lookBarEl = h("div", {});
+  const glass = h("div", {});
+  function drawGlass() {
+    const chip = (on, text, set) => h("button", { class: "chip", "aria-pressed": String(on), onclick: () => { set(); lookChanged(); drawGlass(); } }, text);
+    put(glass,
+      h("div", { class: "field" }, h("div", { class: "lab" }, "Glass Style"),
+        h("div", { class: "chips" }, chip(!L.glassClear, "Tinted", () => { L.glassClear = false; }), chip(L.glassClear, "Transparent", () => { L.glassClear = true; })),
+        h("div", { class: "hint" }, "Transparent glass lets the picture and the colors of your cards show through, so they look more vibrant.")),
+      L.glassClear
+        ? [lookSlider("How Transparent", "glassLevel", 0, 100, 1, "%", "Higher is clearer. 100% is plain frosted glass with no tint."),
+           h("div", { class: "chips", style: { marginBottom: "12px" } }, [["A Little", 30], ["Medium", 55], ["Very", 80], ["Clear", 100]].map(([t, n]) =>
+             h("button", { class: "chip", onclick: () => { L.glassLevel = n; lookChanged(); render(); } }, t)))]
+        : lookSlider("How Solid the Glass Is", "glassOpacity", 0, 100, 1, "%", "Low shows the picture through the cards. High makes them solid."));
   }
-  async function resetLook() {
-    if (!await confirmBox("Back to the shipped look?", "The colours, glass and shapes go back to how the dashboard came. Your cards and layout stay as they are. Undo can bring this change back.", "Reset the look")) return;
-    try { await api("POST", "/api/look/reset", {}); send({ type: "clear" }); toast("The shipped look is back."); await afterChange(true); } catch (e) { fail(e); }
-  }
-  function slider(label, key, lo, hi, step, unit, hint) {
-    const val = h("span", { class: "val" }, L[key] + unit);
-    const inp = h("input", { type: "range", min: lo, max: hi, step, value: L[key], "aria-label": label, oninput: ev => { val.textContent = ev.target.value + unit; upd(key, Number(ev.target.value)); } });
-    return h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, label), val, inp), hint ? h("div", { class: "hint" }, hint) : null);
-  }
-  function colorField(label, key, hint, swatches) {
-    const hex = h("input", { type: "text", value: L[key], maxlength: 7, "aria-label": label + " (hex code)", style: { maxWidth: "120px" } });
-    const pick = h("input", { type: "color", value: L[key], "aria-label": label });
-    const set = v => { L[key] = v; hex.value = v; pick.value = v; lookPreview(); refreshBar(); };
-    pick.addEventListener("input", () => set(pick.value));
-    hex.addEventListener("change", () => { if (/^#[0-9a-f]{6}$/i.test(hex.value.trim())) set(hex.value.trim().toLowerCase()); else hex.value = L[key]; });
-    return h("div", { class: "field" }, h("div", { class: "lab" }, label),
-      h("div", { class: "row" }, pick, hex, h("div", { class: "swatches" }, (swatches || []).map(c => h("button", { class: "swatch", style: { background: c }, title: c, "aria-label": "Use " + c, onclick: () => set(c) })))),
-      hint ? h("div", { class: "hint" }, hint) : null);
-  }
+  drawGlass();
   const tabRows = S.look.tabNames.map(name => {
     const cur = () => L.tabs[name] || L.accent;
-    const pick = h("input", { type: "color", value: cur(), "aria-label": "Colour of the tab " + name });
-    pick.addEventListener("input", () => { L.tabs[name] = pick.value; lookPreview(); refreshBar(); });
+    const pick = h("input", { type: "color", value: cur(), "aria-label": "Color of the tab " + name });
+    pick.addEventListener("input", () => { L.tabs[name] = pick.value; lookChanged(); });
     return h("div", { class: "row", style: { marginBottom: "6px" } }, pick, h("span", { class: "grow" }, name),
-      h("button", { class: "small", onclick: () => { L.tabs[name] = L.accent; pick.value = L.accent; lookPreview(); refreshBar(); } }, "Same as main colour"));
+      h("button", { class: "small", onclick: () => { L.tabs[name] = L.accent; pick.value = L.accent; lookChanged(); } }, "Same as Main Color"));
   });
   const mock = h("div", { class: "preview", id: "mock" },
     h("div", { class: "mini-tabs" }, h("span", { class: "on" }, "Home"), h("span", {}, "Stats"), h("span", {}, "Links")),
-    h("div", { class: "mini-cards" }, ["Navidrome", "Immich", "Beszel"].map(n => h("div", { class: "mini-card" }, h("b", {}, n), h("span", { class: "small muted" }, "Sample card"), h("i", {})))));
-  setTimeout(() => { lookPreview(!lookDirty()); refreshBar(); }, 0);       // nothing is sent to the dashboard until something is changed
+    h("div", { class: "mini-cards" }, ["Navidrome", "Immich", "Beszel"].map(n => h("div", { class: "mini-card" }, h("b", {}, n), h("span", { class: "small muted" }, "Sample Card"), h("i", {})))));
+  setTimeout(() => { lookPreview(!lookDirty()); refreshLookBar(); }, 0);       // nothing is sent to the dashboard until something is changed
   return h("div", {},
-    h("div", { class: "card" }, h("h2", {}, "Ready-made looks"), h("p", { class: "muted" }, "Pick one to try it. Nothing is saved until you press “Save this look”."),
+    h("div", { class: "card" }, h("h2", {}, "Ready-Made Looks"), h("p", { class: "muted" }, "Pick one to try it. Nothing is saved until you press “Save This Look”."),
       h("div", { class: "chips" }, S.look.presets.map(p => h("button", { class: "chip", onclick: () => {
         const base = clone(def); base.tabs = Object.assign({}, def.tabs);
+        for (const k of PAINT_KEYS) base[k] = clone(lookW[k]);              // the colors you gave single cards and labels stay
         const pl = clone(p.look); const tabs = Object.assign({}, base.tabs, pl.tabs || {}); delete pl.tabs;
         lookW = Object.assign(base, pl, { tabs });
-        render();
+        render(); lookChanged();
       } }, h("span", { class: "dot", style: { background: p.look.accent || def.accent } }), p.name)))),
-    h("div", { class: "grid cols2" },
-      h("div", { class: "card" }, h("h2", {}, "Colours"),
-        colorField("Main colour", "accent", "The colour of the active tab, bars, icons and the edge of a card you point at.", ["#8ab4ff", "#5ec8ff", "#7ee0a0", "#ffa66b", "#ff8fb5", "#c9a0ff", "#ffd36b", "#c3cad6"]),
-        colorField("Glass colour", "glass", "The tint of every card and tile.", ["#0d121e", "#06141f", "#07150d", "#1c0f12", "#1a0c16", "#111214"]),
-        h("div", { class: "field" }, h("div", { class: "lab" }, "Colour of each tab"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Each tab can have its own accent colour."), tabRows)),
-      h("div", { class: "card" }, h("h2", {}, "Shapes and space"),
-        slider("How solid the glass is", "glassOpacity", 0, 100, 1, "%", "Low shows the picture through the cards. High makes them solid."),
-        slider("How round the corners are", "radius", 0, 40, 1, " px"),
-        slider("Brightness of the card edge", "edge", 0, 40, 0.5, "%"),
-        slider("Space at the left and right", "side", 0, 120, 2, " px"),
-        slider("Height of the music player", "playerHeight", 240, 1000, 10, " px", "The player is on the Home tab.")),
-    ),
-    h("div", { class: "card" }, h("h2", {}, "Preview"), h("p", { class: "muted" }, framed ? "The dashboard around this panel changes while you move things, so you can see the real result." : "A small sample of how cards and tabs look."), mock),
-    bar);
+    h("div", { class: "card" }, h("h2", {}, "Colors"),
+      h("div", { class: "grid cols2" },
+        h("div", {},
+          colorField("Main Color", "accent", "The color of the active tab, bars, icons and the edge of a card you point at.", ["#8ab4ff", "#5ec8ff", "#7ee0a0", "#ffa66b", "#ff8fb5", "#c9a0ff", "#ffd36b", "#c3cad6"]),
+          colorField("Glass Color", "glass", "The tint of every card and tile.", ["#0d121e", "#06141f", "#07150d", "#1c0f12", "#1a0c16", "#111214"]),
+          glass),
+        h("div", { class: "field" }, h("div", { class: "lab" }, "Color of Each Tab"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Each tab can have its own accent color."), tabRows)),
+      h("p", { class: "muted small" }, "Want other colors for single cards, tiles, bookmarks or labels? Open the Colors screen.")),
+    h("div", { class: "grid cols2 lookrow" },
+      h("div", { class: "card sticky" }, h("h2", {}, "Preview"), h("p", { class: "muted" }, framed ? "The dashboard around this panel changes while you move things, so you can see the real result." : "A small sample of how cards and tabs look."), mock),
+      h("div", { class: "card" }, h("h2", {}, "Shapes and Space"),
+        lookSlider("How Round the Corners Are", "radius", 0, 40, 1, " px"),
+        lookSlider("Brightness of the Card Edge", "edge", 0, 40, 0.5, "%"),
+        lookSlider("Space at the Left and Right", "side", 0, 120, 2, " px"),
+        h("p", { class: "muted small" }, "The height of the music player is changed on the dashboard itself: use the small arrows button next to the shrink button on the player."))),
+    lookBarEl);
+}
+
+function labelIconSample(style) {
+  return h("span", { class: "lis lis-" + style }, h("img", { src: iconInfo("mdi-movie-open").url, class: "mdi", alt: "" }));
+}
+
+function viewColors() {
+  if (!lookW) lookW = startLook();
+  const L = lookW, P = S.paint;
+  lookBarEl = h("div", {});
+  setTimeout(() => { lookPreview(!lookDirty()); refreshLookBar(); }, 0);
+
+  function colorInput(value, label, onset) {
+    const inp = h("input", { type: "color", value: value || "#8ab4ff", "aria-label": label });
+    inp.addEventListener("input", () => onset(inp.value));
+    return inp;
+  }
+  // one row per card, tile or bookmark: the color, and a button to go back to the default
+  function itemRow(map, key, name, sub) {
+    const row = h("div", { class: "prow" });
+    const draw = () => {
+      const set = !!map[key];
+      put(row, h("div", { class: "txt" }, h("b", {}, name), sub ? h("span", {}, sub) : null),
+        h("span", { class: "badge" + (set ? "" : " dim") }, set ? "Custom" : (L.paintAll ? "All Color" : "Default")),
+        colorInput(map[key] || L.paintAll || "#8ab4ff", "Color of " + name, v => { map[key] = v; lookChanged(); draw(); }),
+        h("button", { class: "small", disabled: !set, onclick: () => { delete map[key]; lookChanged(); draw(); } }, "Reset"));
+    };
+    draw();
+    return row;
+  }
+  // a list of items with "one color for all of these"
+  function section(title, hint, items, map, keyOf, subOf, open) {
+    if (!items.length) return null;
+    let bulk = "#8ab4ff";
+    const rows = h("div", {});
+    const draw = () => put(rows, items.map(it => itemRow(map, keyOf(it), it.name, subOf(it))));
+    draw();
+    return h("details", { class: "card", open: open }, h("summary", {}, h("b", {}, title), h("span", { class: "badge" }, String(items.length))),
+      h("p", { class: "muted small" }, hint),
+      h("div", { class: "row bulk" }, h("span", { class: "lab" }, "One Color for All Below:"), colorInput(bulk, "One color for all in " + title, v => { bulk = v; }),
+        h("button", { class: "small", onclick: () => { for (const it of items) map[keyOf(it)] = bulk; lookChanged(); draw(); } }, "Apply"),
+        h("button", { class: "small", onclick: () => { for (const it of items) delete map[keyOf(it)]; lookChanged(); draw(); } }, "Set All to Default")),
+      rows);
+  }
+
+  // labels: the text and the icon of a group name
+  const labelRows = h("div", {});
+  function drawLabels() {
+    put(labelRows, P.labels.map(name => {
+      const d = L.labels[name] || {};
+      const part = (key, text) => {
+        const set = !!d[key];
+        return h("span", { class: "lpart" }, h("span", { class: "small muted" }, text),
+          colorInput(d[key] || (key === "text" ? "#eef2f9" : "#c9d6f2"), text + " of " + name, v => { (L.labels[name] = L.labels[name] || {})[key] = v; lookChanged(); drawLabels(); }),
+          h("button", { class: "small", disabled: !set, "aria-label": "Reset " + text.toLowerCase() + " of " + name, onclick: () => { delete L.labels[name][key]; if (!Object.keys(L.labels[name]).length) delete L.labels[name]; lookChanged(); drawLabels(); } }, "Reset"));
+      };
+      return h("div", { class: "prow" }, h("div", { class: "txt" }, h("b", {}, name)), part("text", "Text"), part("icon", "Icon"));
+    }));
+  }
+  drawLabels();
+  let bulkText = "#eef2f9", bulkIcon = "#c9d6f2";
+  const styles = h("div", { class: "chips" });
+  function drawStyles() {
+    put(styles, [["plain", "Plain Icon"], ["circle", "Circle Badge"], ["square", "Rounded Square Badge"], ["ring", "Glowing Ring"]].map(([id, text]) =>
+      h("button", { class: "chip styl", "aria-pressed": String(L.labelIcon === id), onclick: () => { L.labelIcon = id; lookChanged(); drawStyles(); } }, labelIconSample(id), text)));
+  }
+  drawStyles();
+
+  const paintAll = h("div", {});
+  function drawAll() {
+    put(paintAll,
+      h("div", { class: "row" }, colorInput(L.paintAll || "#8ab4ff", "One color for everything", v => { L.paintAll = v; lookChanged(); drawAll(); }),
+        h("span", { class: "badge" + (L.paintAll ? "" : " dim") }, L.paintAll ? "On" : "Off"),
+        h("button", { class: "small", disabled: !L.paintAll, onclick: () => { L.paintAll = ""; lookChanged(); drawAll(); } }, "Turn Off")),
+      h("div", { class: "hint" }, "Pick a color to give every card, tile and bookmark the same color. A color you pick for a single one below still wins."));
+  }
+  drawAll();
+
+  return h("div", {},
+    h("div", { class: "card" }, h("h2", {}, "Colors of Cards, Tiles and Bookmarks"),
+      h("p", { class: "muted" }, "Give single service cards, the calendar, the tiles of the Stats tab and the bookmarks of the Links tab their own color: a tint, a colored edge and a soft glow. It looks best with Transparent Glass on the Look screen."),
+      h("p", { class: "muted small" }, "To see a color on the dashboard, open the tab that has it (Home, Stats or Links). The preview stays there. Come back here to keep it with Save This Look."),
+      lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "Higher makes the tint, the edge and the glow stronger."),
+      h("div", { class: "field" }, h("div", { class: "lab" }, "One Color for Everything"), paintAll)),
+    section("Service Cards", "The cards of the Home tab, such as Portainer or Downtify.", P.cards, L.cards, it => it.id, it => it.group, true),
+    section("Stats Tiles", "The tiles of the Stats tab.", P.stats, L.cards, it => it.id, it => it.group, false),
+    section("Calendar", "The calendar and the list of coming events.", P.calendar, L.cards, it => it.id, it => it.group, false),
+    section("Bookmarks", "The bookmarks of the Links tab.", P.links, L.links, it => it.name, it => it.group, false),
+    h("div", { class: "card" }, h("h2", {}, "Labels"),
+      h("p", { class: "muted" }, "The names above each row of cards, such as Media & Entertainment. Choose a color for the text and for the little icon next to it."),
+      h("div", { class: "row bulk" }, h("span", { class: "lab" }, "One Color for All Labels:"),
+        h("span", { class: "lpart" }, h("span", { class: "small muted" }, "Text"), colorInput(bulkText, "Text color for all labels", v => { bulkText = v; })),
+        h("span", { class: "lpart" }, h("span", { class: "small muted" }, "Icon"), colorInput(bulkIcon, "Icon color for all labels", v => { bulkIcon = v; })),
+        h("button", { class: "small", onclick: () => { for (const n of P.labels) L.labels[n] = { text: bulkText, icon: bulkIcon }; lookChanged(); drawLabels(); } }, "Apply"),
+        h("button", { class: "small", onclick: () => { L.labels = {}; lookChanged(); drawLabels(); } }, "Set All to Default")),
+      labelRows,
+      h("div", { class: "field", style: { marginTop: "14px" } }, h("div", { class: "lab" }, "Icon Style"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "How the little icon next to every label looks."), styles)),
+    lookBarEl);
 }
 
 // ---------------------------------------------------------------- Background
@@ -327,7 +487,7 @@ function viewBackground() {
   drawPic();
   const bar = h("div", {});
   const dirty = () => B.url !== "" || B.blur !== (b.blur || "none") || B.saturate !== b.saturate || B.brightness !== b.brightness || B.opacity !== b.opacity;
-  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { discardPreview(); render(); }, "Save", h("button", { onclick: reset }, "Back to the shipped sliders")));
+  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { discardPreview(); render(); }, "Save", h("button", { onclick: reset }, "Back to the Shipped Sliders")));
   const preview = () => { send({ type: "bg", image: B.url || b.image, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); refreshBar(); };
   async function save() {
     try { await api("POST", "/api/background", { url: B.url || undefined, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); toast("Background saved."); await afterChange(false); }
@@ -360,18 +520,18 @@ function viewBackground() {
   setTimeout(refreshBar, 0);
   return h("div", {},
     h("div", { class: "grid cols2" },
-      h("div", { class: "card" }, h("h2", {}, "The picture"), pic,
-        h("div", { class: "row", style: { marginTop: "12px" } }, file, h("button", { class: "primary", onclick: () => file.click() }, "Upload a picture…")),
+      h("div", { class: "card" }, h("h2", {}, "The Picture"), pic,
+        h("div", { class: "row", style: { marginTop: "12px" } }, file, h("button", { class: "primary", onclick: () => file.click() }, "Upload a Picture…")),
         h("p", { class: "hint muted small" }, "JPG, PNG, WebP, GIF or AVIF, up to 14 MB. After a new picture the dashboard restarts for about 10 seconds."),
         b.mounted === false ? h("p", { class: "small", style: { color: "var(--bad)" } }, "The dashboard cannot see its pictures folder yet, so an uploaded picture will not show. Run: sudo homelab-setup upgrade") : null,
-        h("div", { class: "field", style: { marginTop: "12px" } }, h("label", {}, "Or use a picture from the web"), h("div", { class: "row" }, h("div", { class: "grow" }, url),
-          h("button", { onclick: () => { B.url = url.value.trim(); if (!B.url) return toast("Type a web address first.", true); preview(); toast("Press Save to keep it."); } }, "Use this address")))),
-      h("div", { class: "card" }, h("h2", {}, "How it looks behind the cards"),
+        h("div", { class: "field", style: { marginTop: "12px" } }, h("label", {}, "Or Use a Picture from the Web"), h("div", { class: "row" }, h("div", { class: "grow" }, url),
+          h("button", { onclick: () => { B.url = url.value.trim(); if (!B.url) return toast("Type a web address first.", true); preview(); toast("Press Save to keep it."); } }, "Use This Address")))),
+      h("div", { class: "card" }, h("h2", {}, "How It Looks Behind the Cards"),
         h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Blur"), blurVal,
           h("input", { type: "range", min: 0, max: 6, step: 1, value: BLURS.indexOf(B.blur) < 0 ? 2 : BLURS.indexOf(B.blur), "aria-label": "Blur",
             oninput: ev => { B.blur = BLURS[Number(ev.target.value)]; blurVal.textContent = B.blur; preview(); } })), h("div", { class: "hint" }, "none is sharp. 3xl is very soft.")),
         slider("Brightness", "brightness", "Low makes the picture darker, so the text is easy to read."),
-        slider("Colour", "saturate", "Low turns the picture towards grey."),
+        slider("Color", "saturate", "Low turns the picture toward gray."),
         slider("Strength", "opacity", "How much of the picture shows through the dark cover."))),
     bar);
 }
@@ -382,7 +542,7 @@ function viewLayout() {
   const T = layW;
   const dirty = () => !same(T, S.layout.tabs);
   const bar = h("div", {});
-  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { layW = null; render(); }, "Save the layout"));
+  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { layW = null; render(); }, "Save the Layout"));
   async function save() {
     try { await api("POST", "/api/layout", { tabs: T.filter(t => t.groups.length) }); toast("Layout saved."); await afterChange(true); } catch (e) { fail(e); }
   }
@@ -448,14 +608,14 @@ function viewLayout() {
   const board = h("div", { class: "grid" }, T.map(tabCol));
   setTimeout(refreshBar, 0);
   return h("div", {},
-    h("div", { class: "card" }, h("h2", {}, "Tabs and groups"),
+    h("div", { class: "card" }, h("h2", {}, "Tabs and Groups"),
       h("p", { class: "muted" }, "Each box is a tab of the dashboard. Drag a group (or use the arrows) to change the order, pick another tab to move it there, and choose how its cards are laid out. “Cards in a row” puts the cards side by side."),
       h("div", { class: "row", style: { marginBottom: "12px" } }, h("button", { onclick: async () => {
         const n = (await askText("Add a tab", "Name of the new tab", "")) || "";
         if (!n) return;
         if (T.some(x => x.name === n)) return toast("There is already a tab with that name.", true);
         T.push({ name: n, groups: [] }); redraw();
-      } }, "+ Add a tab"), h("span", { class: "muted small" }, "Then move a group into it.")),
+      } }, "+ Add a Tab"), h("span", { class: "muted small" }, "Then move a group into it.")),
       board),
     bar);
 }
@@ -481,8 +641,13 @@ function viewItems(kind) {
     const before = d < 0 ? arr[i - 1] : arr[i + 2];
     await op({ op: "move", group: g.group, name: it.name, to: g.group, before: before ? before.name : undefined }, "Order saved.");
   }
+  async function quickIcon(g, it) {                       // change only the icon of a card
+    const pick = await pickIcon(it.icon);
+    if (pick === it.icon) return;
+    await op({ op: "edit", group: g.group, old: it.name, name: it.name, href: it.href, icon: pick, description: it.description, dot: !!it.siteMonitor }, "Icon saved.");
+  }
   async function remove(g, it) {
-    if (!await confirmBox("Remove “" + it.name + "”?", "It disappears from the dashboard. Undo can bring it back.", "Remove it", true)) return;
+    if (!await confirmBox("Remove “" + it.name + "”?", "It disappears from the dashboard. Undo can bring it back.", "Remove It", true)) return;
     await op({ op: "remove", group: g.group, name: it.name }, "Removed.");
   }
 
@@ -531,7 +696,7 @@ function viewItems(kind) {
   }
 
   async function groupMenu(g) {
-    const n = (await askText("Rename the group", "New name for the group “" + g.group + "”", g.group)) || "";
+    const n = (await askText("Rename the Group", "New name for the group “" + g.group + "”", g.group)) || "";
     if (!n || n === g.group) return;
     try {
       await api("POST", isCards ? "/api/group" : "/api/link", isCards ? { op: "rename", group: g.group, to: n } : { op: "group-rename", group: g.group, to: n });
@@ -539,7 +704,7 @@ function viewItems(kind) {
     } catch (e) { fail(e); }
   }
   async function groupRemove(g) {
-    if (!await confirmBox("Remove the whole group “" + g.group + "”?", "This removes the group and its " + items(g).length + " " + word + (items(g).length === 1 ? "" : "s") + ". Undo can bring them back.", "Remove the group", true)) return;
+    if (!await confirmBox("Remove the Whole Group “" + g.group + "”?", "This removes the group and its " + items(g).length + " " + word + (items(g).length === 1 ? "" : "s") + ". Undo can bring them back.", "Remove the Group", true)) return;
     try {
       await api("POST", isCards ? "/api/group" : "/api/link", isCards ? { op: "remove", group: g.group } : { op: "group-remove", group: g.group });
       toast("Removed."); await afterChange(true);
@@ -548,21 +713,22 @@ function viewItems(kind) {
 
   const cards = groups.map(g => h("div", { class: "card group-card" },
     h("header", {}, h("h2", {}, g.group), h("span", { class: "badge" }, items(g).length + (items(g).length === 1 ? " " + word : " " + word + "s")),
-      h("button", { class: "small", onclick: () => groupMenu(g) }, "Rename"), h("button", { class: "small danger", onclick: () => groupRemove(g) }, "Remove group")),
+      h("button", { class: "small", onclick: () => groupMenu(g) }, "Rename"), h("button", { class: "small danger", onclick: () => groupRemove(g) }, "Remove Group")),
     items(g).map((it, i) => h("div", { class: "item" }, iconEl(it.icon),
       h("div", { class: "txt" }, h("b", {}, it.name), h("span", {}, [it.description, it.href].filter(Boolean).join("  ·  ") || "No address")),
       isCards && it.managed ? h("span", { class: "badge", title: "Made by the lab; it keeps the address right" }, "lab card") : null,
       h("button", { class: "small icon", "aria-label": "Move " + it.name + " up", disabled: i === 0, onclick: () => reorder(g, i, -1) }, "↑"),
       h("button", { class: "small icon", "aria-label": "Move " + it.name + " down", disabled: i === items(g).length - 1, onclick: () => reorder(g, i, 1) }, "↓"),
+      isCards && !it.locked ? h("button", { class: "small", onclick: () => quickIcon(g, it) }, "Icon…") : null,
       h("button", { class: "small", onclick: () => editor(g, it) }, "Change"),
       h("button", { class: "small danger", onclick: () => remove(g, it) }, "Remove"))),
-    h("div", { style: { marginTop: "10px" } }, h("button", { class: "small", onclick: () => editor(g, null) }, "+ Add a " + word + " here"))));
+    h("div", { style: { marginTop: "10px" } }, h("button", { class: "small", onclick: () => editor(g, null) }, "+ Add a " + (word === "card" ? "Card" : "Link") + " here"))));
 
   return h("div", {},
-    h("div", { class: "card" }, h("h2", {}, isCards ? "Cards on the dashboard" : "Links (bookmarks)"),
+    h("div", { class: "card" }, h("h2", {}, isCards ? "Cards on the Dashboard" : "Links (Bookmarks)"),
       h("p", { class: "muted" }, isCards ? "The cards of Home. Add your own cards for any web page, change a name or text, put them in another order or group, or remove them."
         : "The bookmarks of the Links tab, in groups. Add your own sites with their icons."),
-      h("button", { class: "primary", onclick: () => editor(groups[0] || null, null) }, "+ Add a " + word)),
+      h("button", { class: "primary", onclick: () => editor(groups[0] || null, null) }, "+ Add a " + (word === "card" ? "Card" : "Link"))),
     cards.length ? cards : h("p", { class: "muted" }, "There is nothing here yet."),
     locked.length ? h("details", { class: "card" }, h("summary", {}, "Kept up to date by the lab (" + locked.map(g => g.group).join(", ") + ")"),
       h("p", { class: "muted small" }, "These groups are filled in by the lab itself (numbers, calendar). You can move them to another tab on the Layout screen, but not change their cards.")) : null);
