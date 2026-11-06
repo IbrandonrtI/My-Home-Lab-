@@ -40,7 +40,7 @@ lay = re.findall(r"(?m)^  ([^\s:][^:\n]*):\s*$", S[S.index("\nlayout:"):])
 check("every shipped service group is on a tab", all(g in lay for g in svc_groups), str(svc_groups))
 stat_groups = list(m.STATS_GROUPS)
 check("the STATS groups of the code are the groups of the shipped block",
-      stat_groups == [g for g in svc_groups if g in m.STATS_GROUPS] and len(svc_groups) - len(stat_groups) - len(m.CALENDAR_GROUPS) == 4, str(svc_groups))
+      stat_groups == [g for g in svc_groups if g in m.STATS_GROUPS] and len(svc_groups) - len(stat_groups) - len(m.CALENDAR_GROUPS) == 5, str(svc_groups))
 for g in stat_groups:
     blk = re.search(r"(?m)^  %s:\n((?:    .*\n)+)" % re.escape(g), S).group(0)
     ok = "tab: Stats" in blk and "icon: %s" % m.STATS_GROUPS[g][0] in blk and "columns: %d" % m.STATS_GROUPS[g][1] in blk

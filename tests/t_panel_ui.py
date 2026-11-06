@@ -41,8 +41,9 @@ def host_page(panel_port):
     return ("""<!doctype html><html><head><title>host</title><style>#inner_wrapper{--lk-accent:138, 180, 255;--lk-radius:16px}</style></head><body>
 <div id="background" style="background-image:url('/x.jpg')"></div>
 <div id="inner_wrapper"><ul><li id="customize-card"><iframe id="panel" src="http://localhost:%d/" style="width:1000px;height:760px;border:0"></iframe></li></ul></div>
+<ul><li id="linkedit-card"><iframe id="linkpanel" src="http://localhost:%d/?only=links" style="width:1000px;height:760px;border:0"></iframe></li></ul>
 <iframe id="stranger" src="about:blank" style="width:10px;height:10px"></iframe>
-<script src="/custom.js"></script></body></html>""" % panel_port).encode()
+<script src="/custom.js"></script></body></html>""" % (panel_port, panel_port)).encode()
 
 
 def serve_host(port_holder, panel_port):
@@ -79,7 +80,7 @@ def main():
     try:
         with sync_playwright() as pw:
             b = pw.chromium.launch()
-            ctx = b.new_context(viewport={"width": 1300, "height": 900})
+            ctx = b.new_context(viewport={"width": 1300, "height": 1700})
             ctx.add_init_script("try { if (location.port != '%d') localStorage.setItem('hlp-auto', '0'); } catch (e) {}" % holder[0])     # the panel does not reload the dashboard by itself (tested at the end)
             pg = ctx.new_page()
             errs = []
@@ -87,13 +88,13 @@ def main():
             pg.goto("http://localhost:%d/" % holder[0])
             fr = pg.frame_locator("#panel")
             fr.locator("input[type=password]").fill("not the password")
-            fr.get_by_role("button", name="Log in").click()
+            fr.get_by_role("button", name="Log In").click()
             pg.wait_for_timeout(500)
             check("login: a wrong password shows a message", "not the password" in fr.locator(".err").inner_text(), fr.locator(".err").inner_text())
             fr.locator("input[type=password]").fill(tp.PW)
-            fr.get_by_role("button", name="Log in").click()
+            fr.get_by_role("button", name="Log In").click()
             fr.locator("nav.tabs").wait_for(timeout=5000)
-            check("login: the right password shows the panel inside the dashboard's frame", fr.get_by_role("heading", name="Customize your dashboard").count() == 1)
+            check("login: the right password shows the panel inside the dashboard's frame", fr.get_by_role("heading", name="Customize Your Dashboard").count() == 1)
 
             # ---- the look
             acc = lambda: pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-accent').trim()")
@@ -101,21 +102,52 @@ def main():
             fr.get_by_role("button", name="Sunset").click()
             pg.wait_for_timeout(300)
             check("look: a ready-made look is previewed on the dashboard around the panel", acc() == "255, 166, 107", acc())
-            check("look: the preview also carries the tab colours", "Stats" in pg.evaluate("document.getElementById('hl-live-look').textContent"))
-            fr.locator('input[aria-label="How round the corners are"]').fill("33")
+            check("look: the preview also carries the tab colors", "Stats" in pg.evaluate("document.getElementById('hl-live-look').textContent"))
+            fr.locator('input[aria-label="How Round the Corners Are"]').fill("33")
             pg.wait_for_timeout(200)
             check("look: a slider changes the dashboard at once", pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-radius').trim()") == "33px")
             check("look: the css file is not touched by a preview", "homelab look" not in p.read("custom.css"))
-            fr.get_by_role("button", name="Throw away").click()
+            fr.get_by_role("button", name="Throw Away").click()
             pg.wait_for_timeout(300)
             check("look: throw away brings the saved look back", acc() == "138, 180, 255" and pg.evaluate("document.getElementById('hl-live-look')") is None, acc())
             fr.get_by_role("button", name="Ocean").click()
-            fr.locator('input[aria-label="How round the corners are"]').fill("8")
-            fr.get_by_role("button", name="Save this look").click()
+            fr.locator('input[aria-label="How Round the Corners Are"]').fill("8")
+            fr.get_by_role("button", name="Save This Look").click()
             pg.wait_for_timeout(800)
             css = p.read("custom.css")
             check("look: Save writes the block to custom.css", "--lk-accent: 94, 200, 255;" in css and "--lk-radius: 8px;" in css, css[-500:])
             check("look: Undo is offered with what it would undo", fr.get_by_role("button", name="↶ Undo (Look changed)").count() == 1)
+
+            # ---- transparent glass and the Colors screen
+            ga = lambda: pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-glass-a').trim()")
+            fr.get_by_role("button", name="Transparent", exact=True).click()
+            pg.wait_for_timeout(300)
+            check("transparent: the level slider replaces the solid slider", fr.locator('input[aria-label="How Transparent"]').count() == 1 and fr.locator('input[aria-label="How Solid the Glass Is"]').count() == 0)
+            fr.get_by_role("button", name="Very", exact=True).click()
+            pg.wait_for_timeout(300)
+            check("transparent: a level button changes the dashboard glass at once (80% -> 0.08)", ga() == "0.08", ga())
+            fr.locator('input[aria-label="How Transparent"]').fill("100")
+            pg.wait_for_timeout(200)
+            check("transparent: 100% is fully clear", ga() == "0", ga())
+            fr.locator("nav.tabs").get_by_text("Colors", exact=True).click()
+            pg.wait_for_timeout(300)
+            check("colors: the screen lists service cards and bookmarks", fr.get_by_text("Service Cards", exact=True).count() >= 1 and fr.get_by_text("Bookmarks", exact=True).count() >= 1)
+            fr.locator('input[aria-label="One color for everything"]').fill("#336699")
+            pg.wait_for_timeout(300)
+            live = pg.evaluate("(document.getElementById('hl-live-look') || {}).textContent || ''")
+            check("colors: one color for everything is previewed", "51, 102, 153" in live and ".service-card" in live, live[-400:])
+            fr.get_by_role("button", name="Circle Badge").click()
+            pg.wait_for_timeout(300)
+            live = pg.evaluate("(document.getElementById('hl-live-look') || {}).textContent || ''")
+            check("colors: a label icon style is previewed", "border-radius:50%" in live, live[-400:])
+            fr.get_by_role("button", name="Save This Look").click()
+            pg.wait_for_timeout(800)
+            css = p.read("custom.css")
+            check("colors: Save writes the colors and the transparent glass", "51, 102, 153" in css and "--lk-glass-a: 0;" in css, css[-700:])
+            fr.get_by_role("button", name="Turn Off").first.click()
+            fr.get_by_role("button", name="Throw Away").click()
+            pg.wait_for_timeout(300)
+            p.req("POST", "/api/look", {"look": {"accent": "#5ec8ff", "radius": 8}})        # back to the look the next checks expect
 
             # ---- the background
             fr.locator("nav.tabs").get_by_text("Background", exact=True).click()
@@ -123,6 +155,13 @@ def main():
             pg.wait_for_timeout(300)
             bf = pg.evaluate("document.getElementById('inner_wrapper').style.backdropFilter")
             check("background: a slider changes the dashboard's backdrop at once", "brightness(0.2)" in bf and "blur(12px)" in bf, bf)
+            fr.locator('input[aria-label="Blur"]').fill("0")
+            pg.wait_for_timeout(300)
+            bf = pg.evaluate("document.getElementById('inner_wrapper').style.backdropFilter")
+            check("background: blur set to none is really no blur", "blur(0px)" in bf, bf)
+            fr.locator('input[aria-label="Blur"]').fill("3")
+            fr.locator('input[aria-label="Brightness"]').fill("20")
+            pg.wait_for_timeout(300)
             fr.get_by_role("button", name="Save", exact=True).click()
             pg.wait_for_timeout(600)
             check("background: Save writes the sliders to settings.yaml", p.state_now()["background"]["brightness"] == 20)
@@ -130,7 +169,7 @@ def main():
             pg.wait_for_timeout(1000)
             check("background: an uploaded picture becomes the background", p.state_now()["background"]["image"].startswith("/images/background-"), p.state_now()["background"])
             fr.locator('input[type=url]').fill("https://example.com/a.jpg")
-            fr.get_by_role("button", name="Use this address").click()
+            fr.get_by_role("button", name="Use This Address").click()
             fr.get_by_role("button", name="Save", exact=True).click()
             pg.wait_for_timeout(600)
             check("background: a web address can be used", p.state_now()["background"]["image"] == "https://example.com/a.jpg")
@@ -139,16 +178,16 @@ def main():
             fr.locator("nav.tabs").get_by_text("Layout", exact=True).click()
             sel = fr.locator('select[aria-label="Move Files & Photos to a tab"]')
             sel.select_option("Stats")
-            fr.get_by_role("button", name="Save the layout").click()
+            fr.get_by_role("button", name="Save the Layout").click()
             pg.wait_for_timeout(800)
             check("layout: a group is moved to another tab with a click", "  Files & Photos:\n    tab: Stats" in p.read("settings.yaml"), p.read("settings.yaml")[-900:])
             fr.locator('button[aria-label="Move Calendar up"]').click()
-            fr.get_by_role("button", name="Throw away").click()
-            check("layout: throw away forgets the change in progress", fr.get_by_role("button", name="Save the layout").is_disabled())
+            fr.get_by_role("button", name="Throw Away").click()
+            check("layout: throw away forgets the change in progress", fr.get_by_role("button", name="Save the Layout").is_disabled())
 
             # ---- cards
             fr.locator("nav.tabs").get_by_text("Cards", exact=True).click()
-            fr.get_by_role("button", name="+ Add a card", exact=True).click()
+            fr.get_by_role("button", name="+ Add a Card", exact=True).click()
             fr.locator('dialog input[aria-label="Name"]').fill("Router")
             fr.locator('dialog input[aria-label="Address"]').fill("http://192.168.1.1")
             fr.locator('dialog input[aria-label="Description"]').fill("Home router")
@@ -164,13 +203,17 @@ def main():
             pg.wait_for_timeout(800)
             check("cards: a card is renamed", "    - Main router:" in p.read("services.yaml") and "    - Router:" not in p.read("services.yaml"))
             fr.locator(".item", has_text="Main router").get_by_role("button", name="Remove").click()
-            fr.locator("dialog").get_by_role("button", name="Remove it").click()
+            fr.locator("dialog").get_by_role("button", name="Remove It").click()
             pg.wait_for_timeout(800)
             check("cards: a card is removed after the question", "Main router" not in p.read("services.yaml"))
 
-            # ---- links
-            fr.locator("nav.tabs").get_by_text("Links", exact=True).click()
-            fr.get_by_role("button", name="+ Add a link", exact=True).click()
+            # ---- links (the link editor is its own frame: the drop-down card on the Links tab of the dashboard)
+            check("links: the main panel no longer has a Links screen", fr.locator("nav.tabs").get_by_text("Links", exact=True).count() == 0)
+            pg.evaluate("document.getElementById('linkpanel').src = document.getElementById('linkpanel').src")
+            fr = pg.frame_locator("#linkpanel")
+            fr.get_by_role("button", name="+ Add a Link", exact=True).wait_for(timeout=5000)
+            check("links: the editor frame shows only the links (no tabs, no header)", fr.locator("nav.tabs").count() == 0 and fr.get_by_role("heading", name="Customize Your Dashboard").count() == 0)
+            fr.get_by_role("button", name="+ Add a Link", exact=True).click()
             fr.locator('dialog input[aria-label="Name"]').fill("Indeed")
             fr.locator('dialog input[aria-label="Address"]').fill("https://www.indeed.com")
             fr.locator('dialog select[aria-label="Group"]').select_option("__new")
@@ -180,23 +223,28 @@ def main():
             check("links: a link in a new group is added", "- Job Hunt:" in p.read("bookmarks.yaml") and "href: https://www.indeed.com" in p.read("bookmarks.yaml"))
             check("links: the new group is on the Links tab", "  Job Hunt:\n    tab: Links" in p.read("settings.yaml"), p.read("settings.yaml")[-300:])
 
-            # ---- undo
+            # ---- undo (the Undo button is in the main panel)
             before = p.read("bookmarks.yaml")
+            fr = pg.frame_locator("#panel")
+            pg.evaluate("document.getElementById('panel').src = document.getElementById('panel').src")
+            fr.get_by_role("button", name="↶ Undo (Link added)").wait_for(timeout=5000)
             fr.get_by_role("button", name="↶ Undo (Link added)").click()
             pg.wait_for_timeout(800)
             check("undo: the button brings the last change back", p.read("bookmarks.yaml") != before and "Job Hunt" not in p.read("bookmarks.yaml"))
 
             # ---- the dashboard refreshes by itself after a change when that is on
             pg.evaluate("window.__marker = 1")
-            fr.locator("#auto").check()
-            fr.locator("nav.tabs").get_by_text("Links", exact=True).click()
-            fr.get_by_role("button", name="+ Add a link", exact=True).click()
+            pg.evaluate("document.getElementById('linkpanel').src = document.getElementById('linkpanel').src")
+            fr = pg.frame_locator("#linkpanel")
+            fr.get_by_role("button", name="+ Add a Link", exact=True).wait_for(timeout=5000)
+            [f for f in pg.frames if "only=links" in f.url][0].evaluate("localStorage.setItem('hlp-auto', '1')")      # (the setting of the main panel's checkbox, which this frame shares)
+            fr.get_by_role("button", name="+ Add a Link", exact=True).click()
             fr.locator('dialog input[aria-label="Name"]').fill("Glassdoor")
             fr.locator('dialog input[aria-label="Address"]').fill("https://www.glassdoor.com")
             fr.locator("dialog").get_by_role("button", name="Add", exact=True).click()
             pg.wait_for_timeout(2500)
-            check("refresh: after a change the dashboard page reloads itself (and the panel is back on the same screen)",
-                  pg.evaluate("window.__marker") is None and pg.frame_locator("#panel").get_by_role("heading", name="Links (bookmarks)").count() == 1)
+            check("refresh: after a change the dashboard page reloads itself (and the link editor is back)",
+                  pg.evaluate("window.__marker") is None and pg.frame_locator("#linkpanel").get_by_role("heading", name="Links (Bookmarks)").count() == 1)
 
             # ---- a frame that is not the panel cannot change the page
             pg.evaluate("document.getElementById('stranger').contentWindow.eval(\"parent.postMessage({hlp:1,type:'css',css:'body{display:none}'},'*')\")")
@@ -208,9 +256,9 @@ def main():
             ph = b.new_context(viewport={"width": 390, "height": 800}, is_mobile=True, has_touch=True).new_page()
             ph.goto("http://localhost:%d/" % p.port)
             ph.locator("input[type=password]").fill(tp.PW)
-            ph.get_by_role("button", name="Log in").click()
+            ph.get_by_role("button", name="Log In").click()
             ph.locator("nav.tabs").wait_for(timeout=5000)
-            for v in ("Look", "Background", "Layout", "Cards", "Links"):
+            for v in ("Look", "Colors", "Background", "Layout", "Cards"):
                 ph.locator("nav.tabs").get_by_text(v, exact=True).click()
                 ph.wait_for_timeout(250)
                 w = ph.evaluate("[document.documentElement.scrollWidth, window.innerWidth]")

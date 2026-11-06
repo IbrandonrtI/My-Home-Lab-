@@ -176,7 +176,7 @@ def main():
         l = p.state_now()["look"]
         check("look: read back", l["custom"]["accent"] == "#ff8fb5" and l["values"]["radius"] == 22 and l["values"]["glass"] == "#0d121e", l)
         st, js, _, _ = p.req("POST", "/api/look", {"look": {"accent": "red"}})
-        check("look: a bad colour is refused in plain words", st == 400 and "colour" in js["error"], js)
+        check("look: a bad color is refused in plain words", st == 400 and "color" in js["error"], js)
         st, js, _, _ = p.req("POST", "/api/look", {"look": {"radius": 400}})
         check("look: a number out of range is refused", st == 400, js)
         st, js, _, _ = p.req("POST", "/api/look", {"look": {"tabs": {"x\"}body{display:none}": "#ffffff"}}})
@@ -193,6 +193,72 @@ def main():
         p.req("POST", "/api/look/reset", {})
         css = p.read("custom.css")
         check("look: reset removes the block and keeps the rest", "homelab look" not in css and css.endswith(theme), css[-400:])
+
+        # ---- transparent glass, colors for cards / bookmarks / labels, label icons
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"glassClear": True, "glassLevel": 100}})
+        css = p.read("custom.css")
+        check("transparent: fully clear glass writes an alpha of 0", st == 200 and "--lk-glass-a: 0;" in css, css[-500:])
+        p.req("POST", "/api/look", {"look": {"glassClear": True, "glassLevel": 0}})
+        check("transparent: level 0 is the least clear (0.4)", "--lk-glass-a: 0.4;" in p.read("custom.css"))
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"glassLevel": 120}})
+        check("transparent: a level out of range is refused", st == 400, js)
+        paint = p.state_now()["paint"]
+        check("paint: lists cards, stats, calendar, links and labels", all(paint.get(k) for k in ("cards", "stats", "links", "labels")), {k: len(v) for k, v in paint.items()})
+        check("paint: the panel's own cards are never listed", not any(c["id"] in ("customize-card", "navidrome-card", "linkedit-card") for c in paint["cards"] + paint["stats"] + paint["calendar"]), paint["cards"])
+        cid, stat = paint["cards"][0]["id"], paint["stats"][0]["id"]
+        bm, label = paint["links"][0]["name"], paint["labels"][0]
+        slug = re.sub(r"^-+|-+$", "", re.sub(r"[^a-z0-9]+", "-", label.lower()))
+        full = {"paintAll": "#112233", "paintStrength": 55, "labelIcon": "circle", "cards": {cid: "#ff0000", stat: "#00ff00"}, "links": {bm: "#0000ff"},
+                "labels": {label: {"text": "#ffffff", "icon": "#ffcc00"}}}
+        st, js, _, _ = p.req("POST", "/api/look", {"look": full})
+        css = p.read("custom.css")
+        check("colors: saved (all, cards, stats, bookmark, label)", st == 200 and "homelab look >>>" in css, js)
+        check("colors: a card gets a tint, a border and a glow", "#%s .service-card{background-image:linear-gradient(rgba(255, 0, 0," % cid in css and "box-shadow:0 0 0 1px rgba(255, 0, 0," in css, css[-1500:])
+        check("colors: one color for everything leaves out the panel's cards", ":not(#customize-card):not(#navidrome-card):not(#linkedit-card)" in css and "17, 34, 51" in css, css[-1500:])
+        check("colors: a bookmark is found by its name tag", 'a[data-bm="' in css and "0, 0, 255" in css, css[-1500:])
+        check("colors: a label has its own text and icon colors", 'data-group="%s"' % slug in css and "color:#ffffff!important" in css and "--icon-color:#ffcc00" in css, css[-1500:])
+        check("colors: the circle label icon style is written", "border-radius:50%;background:rgba(var(--hl-label,var(--lk-accent)),.20)" in css, css[-1500:])
+        check("colors: read back", p.state_now()["look"]["custom"]["cards"] == {cid: "#ff0000", stat: "#00ff00"}, p.state_now()["look"]["custom"])
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"cards": {"bad id!": "#ff0000"}}})
+        check("colors: a card id with odd characters is refused", st == 400, js)
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"links": {"x": "blue"}}})
+        check("colors: a bad bookmark color is refused", st == 400, js)
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"labelIcon": "star"}})
+        check("colors: an unknown label icon style is refused", st == 400, js)
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"labels": {label: {"text": "</style>"}}}})
+        check("colors: a label color cannot carry CSS", st == 400, js)
+        # preview rules for a look that drops colors: the page puts everything back at once
+        st, js, _, _ = p.req("POST", "/api/look/css", {"look": {"cards": {stat: "#00ff00"}, "labelIcon": "ring"}})
+        pc = (js or {}).get("css", "")
+        check("preview: a removed card color is reset", st == 200 and "#%s{--accent:" % cid in pc and "background-image:none!important" in pc, pc[:900])
+        check("preview: a removed bookmark color is reset", 'data-bm="' in pc and "--accent:inherit" in pc, pc[:900])
+        check("preview: a removed label color is reset", "color:var(--lk-text)!important" in pc and "--icon-color:#c9d6f2" in pc, pc[:1500])
+        check("preview: the full set of values is written", "--lk-accent:" in pc and "--lk-radius:" in pc, pc[:600])
+        check("preview: the ring style replaces the circle one", "border:1.5px solid" in pc, pc[:1500])
+        st, js, _, _ = p.req("POST", "/api/look/css", {"look": {"accent": "nope"}})
+        check("preview: a bad look is refused", st == 400, js)
+        p.req("POST", "/api/look/reset", {})
+        check("colors: reset removes it all", "homelab look" not in p.read("custom.css"))
+
+        # the icon library (lists given by a file, so the test needs no internet)
+        tree = os.path.join(tmp, "tree.json")
+        mdi = os.path.join(tmp, "mdi.json")
+        with open(tree, "w") as f:
+            json.dump({"svg": ["plex.svg", "portainer.svg", "bad name.svg", "<x>.svg"], "png": ["plex.png", "old-app.png"]}, f)
+        with open(mdi, "w") as f:
+            json.dump([{"name": "home-outline"}, {"name": "Bad Name"}, {"name": "server"}], f)
+        p2 = Panel(os.path.join(tmp, "icons"), {"HLP_ICON_TREE": tree, "HLP_ICON_MDI": mdi})
+        p2.set_password()
+        p2.start()
+        try:
+            st, js, _, _ = p2.req("GET", "/api/icons", cookie=False)
+            check("icons: need a login", st == 401, st)
+            p2.login()
+            st, js, _, _ = p2.req("GET", "/api/icons")
+            check("icons: apps (svg first, png only if there is no svg) and mdi names, bad names dropped",
+                  st == 200 and js["apps"] == ["old-app.png", "plex.svg", "portainer.svg"] and js["mdi"] == ["home-outline", "server"], js)
+        finally:
+            p2.stop()
 
         # ---- the background
         st, js, _, _ = p.req("POST", "/api/background", {"blur": "xl", "brightness": 30, "saturate": 90, "opacity": 70})
