@@ -124,6 +124,12 @@ try:
             pg.evaluate("showHome()")
             pg.wait_for_timeout(300)
         check("quick tab changes leave one player", pg.locator("#hl-player").count() == 1 and len(players(pg)) == 1)
+        pg.evaluate("document.getElementById('root').classList.add('hl-folded')")
+        pg.wait_for_timeout(700)
+        check("a folded group (its cards hidden) takes the player out of sight", "hl-away" in (pg.locator("#hl-player-box").get_attribute("class") or ""))
+        pg.evaluate("document.getElementById('root').classList.remove('hl-folded')")
+        pg.wait_for_timeout(700)
+        check("opened again, the player lies over the card", *over(pg))
         check("no script errors", not errors, errors)
         # when the page's own scrolling box moves (not the whole page), the player must follow at once, not half a second later
         pg2 = browser.new_page(viewport={"width": 1000, "height": 900})
