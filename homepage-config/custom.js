@@ -75,7 +75,7 @@
         src = u;
       }
       if (real(cf.getAttribute("src"))) cf.setAttribute("src", "about:blank");
-      if (cf.parentElement && !cf.closest(".hl-folded")) { host = cf.parentElement.getBoundingClientRect(); sc = scroller(cf.parentElement); }      // (a folded group hides its cards)
+      if (cf.parentElement && !cf.closest(".hl-folded") && !document.documentElement.classList.contains("hl-sliding")) { host = cf.parentElement.getBoundingClientRect(); sc = scroller(cf.parentElement); }      // (a folded group hides its cards)
     }
     if (!box) return;
     if (host && host.width > 0 && host.height > 0) {
@@ -103,44 +103,21 @@
 /* <<< homelab player <<< */
 
 /* >>> homelab extras >>> managed by the installer: an upgrade replaces everything between this line and the closing marker.
-   Small helpers for the look of the dashboard: the health line above the tabs, the shrink button of the music player, the fold button and the
+   Small helpers for the look of the dashboard: the red edge of a card whose service does not answer, the shrink button of the music player, the fold button and the
    count of every group, the search button on a phone, the colour of the tab you are on, bars for the percentages of the Stats tab, and a slightly
    darker background late at night. Nothing here changes what Homepage does; without it the page still works, it just looks plainer. */
 (function () {
-  var root = document.documentElement, queued = false, lastHealth = null;
+  var root = document.documentElement, queued = false;
   function store(key, value) { try { if (value === undefined) return window.localStorage.getItem(key); window.localStorage.setItem(key, value); } catch (e) { /* no storage: fine */ } return null; }
   function all(sel, from) { return Array.prototype.slice.call((from || document).querySelectorAll(sel)); }
 
-  // ---- the health line: how many of the services on the page answer (the dots Homepage already shows on every card)
+  // ---- a card whose service does not answer gets a red edge (the dot Homepage shows on the card already says it; this makes it easy to see)
   function health() {
-    var ok = 0, bad = [], dots = all(".service .site-monitor-status > div");
     all(".service.hl-down").forEach(function (li) { li.classList.remove("hl-down"); });
-    dots.forEach(function (d) {
+    all(".service .site-monitor-status > div").forEach(function (d) {
       var li = d.closest(".service");
-      if (/emerald|green/.test(d.className)) ok++;
-      else if (/rose|red/.test(d.className)) { bad.push((li && li.getAttribute("data-name")) || "?"); if (li) li.classList.add("hl-down"); }
+      if (li && /rose|red/.test(d.className)) li.classList.add("hl-down");
     });
-    if (ok + bad.length > 0) lastHealth = { ok: ok, bad: bad };            // on a tab without cards the last answer stays
-    var tabs = document.getElementById("tabs");
-    if (!tabs || !tabs.parentNode) return;
-    var el = document.getElementById("hl-health");
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "hl-health";
-      el.setAttribute("role", "status");
-      el.appendChild(document.createElement("i"));
-      el.appendChild(document.createElement("span"));
-    }
-    if (el.parentNode !== tabs.parentNode || el.nextSibling !== tabs) tabs.parentNode.insertBefore(el, tabs);
-    var h = lastHealth, text, cls;
-    if (!h) { text = "Checking services…"; cls = "hl-wait"; }
-    else if (!h.bad.length) { text = h.ok === 1 ? "The service is running" : "All " + h.ok + " services running"; cls = "hl-ok"; }
-    else {
-      text = h.bad.length + " of " + (h.ok + h.bad.length) + " not answering: " + h.bad.slice(0, 3).join(", ") + (h.bad.length > 3 ? "…" : "");
-      cls = "hl-bad";
-    }
-    if (el.className !== cls) el.className = cls;
-    if (el.lastChild.textContent !== text) el.lastChild.textContent = text;
   }
 
   // ---- the shrink button on the Navidrome card: the card folds to its title bar, the music keeps playing
@@ -172,6 +149,29 @@
 
   // ---- every group: a count behind its name and a button that folds it (the choice is remembered by name)
   function folded() { try { return JSON.parse(store("hl-folded") || "[]"); } catch (e) { return []; } }
+  // The group slides shut or open (the height is animated from the real height to 0 and back). While it moves, the player block is told to
+  // look again on every frame, so the music frame follows the card.
+  function slide(g, fold) {
+    var panel = g.querySelector(":scope > div"), still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!panel || still) { g.classList.toggle("hl-folded", fold); window.dispatchEvent(new Event("resize")); return; }
+    var music = !!g.querySelector("#navidrome-card"), until = Date.now() + 450;
+    if (music) root.classList.add("hl-sliding");                     // the player frame waits (out of sight) until the card has stopped moving
+    (function follow() { window.dispatchEvent(new Event("resize")); if (Date.now() < until) window.requestAnimationFrame(follow); })();
+    function done() { panel.style.maxHeight = ""; panel.removeEventListener("transitionend", ended); root.classList.remove("hl-sliding"); window.dispatchEvent(new Event("resize")); }
+    function ended(ev) { if (ev.target === panel && ev.propertyName === "max-height") done(); }
+    panel.addEventListener("transitionend", ended);
+    window.setTimeout(done, 600);
+    if (fold) {
+      panel.style.maxHeight = panel.scrollHeight + "px";               // start from the real height ...
+      void panel.offsetHeight;
+      g.classList.add("hl-folded");                                  // ... and the folded rule takes it to 0
+    } else {
+      panel.style.maxHeight = "0px";
+      g.classList.remove("hl-folded");
+      void panel.offsetHeight;
+      panel.style.maxHeight = panel.scrollHeight + "px";             // grow to the real height, then the limit is taken off again
+    }
+  }
   function groups() {
     var list = folded();
     all(".services-group, .bookmark-group").forEach(function (g) {
@@ -189,9 +189,8 @@
         var cur = folded(), i = cur.indexOf(name);
         if (i >= 0) cur.splice(i, 1); else cur.push(name);
         store("hl-folded", JSON.stringify(cur));
-        g.classList.toggle("hl-folded", i < 0);
         b.setAttribute("aria-expanded", i >= 0 ? "true" : "false");
-        window.dispatchEvent(new Event("resize"));
+        slide(g, i < 0);
       });
       b.setAttribute("aria-expanded", list.indexOf(name) >= 0 ? "false" : "true");
       g.appendChild(b);

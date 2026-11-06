@@ -611,32 +611,7 @@ li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-colo
 li[id^="stat-"] .service-block-value { font-size: 1rem !important; font-weight: 600 !important; color: #f4f6fa; }
 li[id^="stat-"] .service-block-label { opacity: 0.7; }
 
-/* ---- Health line above the tabs (made by custom.js): green when every service answers, red with the names when one does not */
-#hl-health {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: fit-content;
-  max-width: calc(100% - 2 * var(--lk-side));
-  margin: 18px auto 0;
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-size: 0.8rem;
-  letter-spacing: 0.01em;
-  color: var(--lk-muted);
-  background: rgba(var(--lk-glass), 0.5);
-  border: 1px solid var(--lk-line);
-  -webkit-backdrop-filter: blur(12px);
-  backdrop-filter: blur(12px);
-}
-#hl-health i { flex: none; width: 8px; height: 8px; border-radius: 50%; background: #8793a8; }
-#hl-health.hl-ok i { background: #34d399; box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.5); animation: hl-pulse 2.6s ease-out infinite; }
-#hl-health.hl-ok { color: #cfe9de; }
-#hl-health.hl-bad { color: #ffd1d1; border-color: rgba(248, 113, 113, 0.4); background: rgba(90, 20, 28, 0.45); }
-#hl-health.hl-bad i { background: #f87171; }
-@keyframes hl-pulse { 0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.45); } 70%, 100% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); } }
-#inner_wrapper #tabs { margin-top: 14px !important; }
-/* a card whose service does not answer gets a red edge */
+/* ---- A card whose service does not answer gets a red edge (custom.js marks it) */
 #inner_wrapper .service.hl-down .service-card { border-color: rgba(248, 113, 113, 0.55) !important; }
 
 /* ---- Shrink button on the music player (made by custom.js) and the folded state */
@@ -714,8 +689,14 @@ html.hl-player-min #inner_wrapper #navidrome-card .service-card { height: auto !
 }
 #inner_wrapper .hl-gfold:hover, #inner_wrapper .hl-gfold:focus-visible { opacity: 1; background: rgba(255, 255, 255, 0.08); outline: none; }
 #inner_wrapper .hl-folded > .hl-gfold::before { transform: translate(-50%, -30%) rotate(-135deg); }
-#inner_wrapper .hl-folded > div:not(:first-child) { max-height: 0 !important; min-height: 0 !important; margin: 0 !important; opacity: 0; visibility: hidden; pointer-events: none; }      /* (not display:none: Homepage's own rule says display:block!important and wins) */
+#inner_wrapper .services-group > div:not(:first-child), #inner_wrapper .bookmark-group > div:not(:first-child) { transition: max-height 0.35s ease, opacity 0.3s ease 0.05s, margin 0.35s ease, visibility 0s; }
+#inner_wrapper .hl-folded > div:not(:first-child) {
+  max-height: 0 !important; min-height: 0 !important; margin-top: 0 !important; margin-bottom: 0 !important;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: max-height 0.35s ease, opacity 0.2s ease, margin 0.35s ease, visibility 0s linear 0.35s;      /* (not display:none: Homepage's own rule says display:block!important and wins) */
+}
 #inner_wrapper .hl-folded { padding-bottom: 4px !important; }
+@media (prefers-reduced-motion: reduce) { #inner_wrapper .services-group > div:not(:first-child), #inner_wrapper .bookmark-group > div:not(:first-child) { transition: none !important; } }
 
 /* ---- Cards come up one after the other when a tab opens, and lift a little when you point at one (not the music player: the frame lies over it) */
 @keyframes hl-rise { from { opacity: 0; transform: translateY(8px); } }
@@ -729,7 +710,7 @@ html.hl-player-min #inner_wrapper #navidrome-card .service-card { height: auto !
 #inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { transform: translateY(-2px); }
 #inner_wrapper #navidrome-card .service-card:hover { transform: none; }
 @media (prefers-reduced-motion: reduce) {
-  #inner_wrapper .services-list > li, #inner_wrapper .bookmark-list > li, #hl-health i { animation: none !important; }
+  #inner_wrapper .services-list > li, #inner_wrapper .bookmark-list > li { animation: none !important; }
   #inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { transform: none; }
 }
 
@@ -845,7 +826,6 @@ li[id^="stat-"] .service-block.hl-bar.hl-red .service-block-value, li[id^="stat-
   }
   #inner_wrapper #myTab { pointer-events: auto; box-shadow: 0 -8px 28px -10px rgba(0, 0, 0, 0.7); }
   #inner_wrapper #footer { order: 6; padding: 8px !important; }
-  #hl-health { margin-top: 12px; }
   #hl-search-btn {
     display: flex;
     order: 20;
