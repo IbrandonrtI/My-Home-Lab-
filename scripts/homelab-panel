@@ -29,7 +29,9 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -248,10 +250,10 @@ def clean_icon(s):
     return s
 
 
-def hex_rgb(s, what="colour"):
+def hex_rgb(s, what="color"):
     m = re.fullmatch(r"#?([0-9a-fA-F]{6})", (s or "").strip()) if isinstance(s, str) else None
     if not m:
-        raise Fail("The %s must be a colour like #8ab4ff." % what)
+        raise Fail("The %s must be a color like #8ab4ff." % what)
     h = m.group(1)
     return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
 
@@ -270,19 +272,43 @@ def number(v, what, lo, hi):
     return int(n) if n == int(n) else n
 
 
-# ================================================================ the look (colours, glass, shapes) -> a block in custom.css
-SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}       # the shipped colour of two tabs (see the tabs block of custom.css)
-LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "radius": 16, "edge": 7.5, "side": 28, "playerHeight": 600, "tabs": {}}
+# ================================================================ the look (colors, glass, shapes) -> a block in custom.css
+SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}       # the shipped color of two tabs (see the tabs block of custom.css)
+LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "glassClear": False, "glassLevel": 70, "radius": 16, "edge": 7.5,
+                "side": 28, "playerHeight": 600, "paintStrength": 40, "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}}
+LABEL_ICONS = ("plain", "circle", "square", "ring")
+NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card")        # the panel's own cards and the music player are never painted
 LOOK_PRESETS = [
-    {"id": "calm", "name": "Calm night", "look": {}},
+    {"id": "calm", "name": "Calm Night", "look": {}},
     {"id": "ocean", "name": "Ocean", "look": {"accent": "#5ec8ff", "glass": "#06141f", "glassOpacity": 58, "tabs": {"Stats": "#5ee0c8", "Links": "#9db4ff"}}},
     {"id": "forest", "name": "Forest", "look": {"accent": "#7ee0a0", "glass": "#07150d", "glassOpacity": 58, "tabs": {"Stats": "#c8e07e", "Links": "#7ee0d0"}}},
     {"id": "sunset", "name": "Sunset", "look": {"accent": "#ffa66b", "glass": "#1c0f12", "glassOpacity": 58, "tabs": {"Stats": "#ffd36b", "Links": "#ff7fa8"}}},
     {"id": "rose", "name": "Rose", "look": {"accent": "#ff8fb5", "glass": "#1a0c16", "glassOpacity": 60, "radius": 22, "tabs": {"Stats": "#ffb38f", "Links": "#c9a0ff"}}},
     {"id": "graphite", "name": "Graphite", "look": {"accent": "#c3cad6", "glass": "#111214", "glassOpacity": 64, "radius": 10, "tabs": {"Stats": "#c3cad6", "Links": "#c3cad6"}}},
-    {"id": "clear", "name": "Clear glass", "look": {"glassOpacity": 22, "radius": 20, "edge": 14}},
-    {"id": "sharp", "name": "Sharp and solid", "look": {"glassOpacity": 88, "radius": 4, "edge": 10}},
+    {"id": "clear", "name": "Clear Glass", "look": {"glassClear": True, "glassLevel": 70, "radius": 20, "edge": 14}},
+    {"id": "sharp", "name": "Sharp and Solid", "look": {"glassOpacity": 88, "radius": 4, "edge": 10}},
 ]
+
+
+def slugify(text):
+    """The name tag custom.js gives a group or a bookmark (data-group, data-bm)."""
+    return re.sub(r"^-+|-+$", "", re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()))
+
+
+def clean_map(raw, what, limit, key_ok, value_fn):
+    if raw is None or raw == {}:
+        return {}
+    if not isinstance(raw, dict) or len(raw) > limit:
+        raise Fail("%s are not understood (too many?)." % what)
+    out = {}
+    for k, val in raw.items():
+        k = clean_text(k, "A name", 60)
+        if not key_ok(k):
+            raise Fail("The name '%s' has characters that are not allowed here." % k)
+        got = value_fn(val, k)
+        if got:
+            out[k] = got
+    return out
 
 
 def look_clean(raw):
@@ -291,11 +317,15 @@ def look_clean(raw):
         raise Fail("The look is missing.")
     out = {}
     if "accent" in raw:
-        out["accent"] = rgb_hex(hex_rgb(raw["accent"], "main colour"))
+        out["accent"] = rgb_hex(hex_rgb(raw["accent"], "main color"))
     if "glass" in raw:
-        out["glass"] = rgb_hex(hex_rgb(raw["glass"], "glass colour"))
+        out["glass"] = rgb_hex(hex_rgb(raw["glass"], "glass color"))
     if "glassOpacity" in raw:
         out["glassOpacity"] = number(raw["glassOpacity"], "How solid the glass is", 0, 100)
+    if "glassClear" in raw:
+        out["glassClear"] = bool(raw["glassClear"])
+    if "glassLevel" in raw:
+        out["glassLevel"] = number(raw["glassLevel"], "How transparent the glass is", 0, 100)
     if "radius" in raw:
         out["radius"] = number(raw["radius"], "How round the corners are", 0, 40)
     if "edge" in raw:
@@ -304,59 +334,195 @@ def look_clean(raw):
         out["side"] = number(raw["side"], "The space at the sides", 0, 120)
     if "playerHeight" in raw:
         out["playerHeight"] = number(raw["playerHeight"], "The height of the music player", 240, 1000)
+    if "paintStrength" in raw:
+        out["paintStrength"] = number(raw["paintStrength"], "How strong the colors are", 0, 100)
+    if "labelIcon" in raw:
+        if raw["labelIcon"] not in LABEL_ICONS:
+            raise Fail("The label icon style is not understood.")
+        out["labelIcon"] = raw["labelIcon"]
+    if raw.get("paintAll"):
+        out["paintAll"] = rgb_hex(hex_rgb(raw["paintAll"], "color for everything"))
     tabs = raw.get("tabs") or {}
     if not isinstance(tabs, dict) or len(tabs) > 30:
-        raise Fail("The tab colours are not understood.")
+        raise Fail("The tab colors are not understood.")
     tt = {}
     for name, col in tabs.items():
         name = clean_text(name, "A tab name", 40)
         if not re.fullmatch(r"[^\"'\\{};<>/*]+", name):
             raise Fail("The tab name '%s' has characters that are not allowed." % name)
         if col:
-            tt[name] = rgb_hex(hex_rgb(col, "colour of the tab " + name))
+            tt[name] = rgb_hex(hex_rgb(col, "color of the tab " + name))
     if tt:
         out["tabs"] = tt
-    return {k: v for k, v in out.items() if k != "tabs" and v != LOOK_DEFAULT[k] or k == "tabs"}
+    color_of = lambda val, k: rgb_hex(hex_rgb(val, "color of " + k)) if val else ""
+    cards = clean_map(raw.get("cards"), "The card colors", 200, lambda k: re.fullmatch(r"[A-Za-z0-9_-]{1,60}", k) is not None, color_of)
+    links = clean_map(raw.get("links"), "The bookmark colors", 400, lambda k: slugify(k) != "", color_of)
+
+    def label_of(val, k):
+        if not isinstance(val, dict):
+            raise Fail("The colors of the label '%s' are not understood." % k)
+        d = {}
+        for part in ("text", "icon"):
+            if val.get(part):
+                d[part] = rgb_hex(hex_rgb(val[part], "%s color of the label %s" % (part, k)))
+        return d
+    labels = clean_map(raw.get("labels"), "The label colors", 60, lambda k: slugify(k) != "", label_of)
+    for key, val in (("cards", cards), ("links", links), ("labels", labels)):
+        if val:
+            out[key] = val
+    keep = ("tabs", "cards", "links", "labels", "paintAll")
+    return {k: v for k, v in out.items() if k in keep or v != LOOK_DEFAULT[k]}
 
 
 def look_full(custom):
     v = dict(LOOK_DEFAULT)
-    v.update({k: x for k, x in custom.items() if k != "tabs"})
+    v.update({k: x for k, x in custom.items() if k not in ("tabs", "cards", "links", "labels")})
     tabs = dict(SHIPPED_TAB_COLORS)
     tabs.update(custom.get("tabs") or {})
     v["tabs"] = tabs
+    for k in ("cards", "links", "labels"):
+        v[k] = dict(custom.get(k) or {})
     return v
 
 
-def look_css(custom):
-    """The rules of the look block for a look (only what differs from the default)."""
-    if not custom:
+def num(x, places=3):
+    return ("%.*f" % (places, x)).rstrip("0").rstrip(".") or "0"
+
+
+def glass_alpha(v):
+    """How solid the glass is: the slider, or, when the glass is set to transparent, a level (100 = clear)."""
+    if v["glassClear"]:
+        return 0.4 * (1 - v["glassLevel"] / 100.0)
+    return v["glassOpacity"] / 100.0
+
+
+def shipped_accent(css, key):
+    """The --accent a card or tile has in the part of custom.css that is not the look block (the shipped colors), or None."""
+    before, _block, after = css_look_split(css)
+    for text in (before, after):
+        for m in re.finditer(r"(?m)^([^{}\n/]*)\{\s*--accent:\s*(\d+,\s*\d+,\s*\d+)\s*;?\s*\}", text):
+            if "#" + key in [x.strip() for x in m.group(1).split(",")]:
+                return m.group(2)
+    return None
+
+
+WRAP = "html body #inner_wrapper"
+
+
+def paint_decl(rgbs, t):
+    """The look of one painted card: a tint over the glass, a colored edge and a soft glow around it."""
+    return ("background-image:linear-gradient(rgba(%s,%s),rgba(%s,%s))!important;border-color:rgba(%s,%s)!important;"
+            "box-shadow:0 0 0 1px rgba(%s,%s),0 0 24px -6px rgba(%s,%s),0 14px 30px -20px rgba(0,0,0,.75)!important;" % (
+                rgbs, num(0.06 + 0.5 * t), rgbs, num(0.06 + 0.5 * t), rgbs, num(0.30 + 0.5 * t), rgbs, num(0.10 + 0.25 * t), rgbs, num(0.15 + 0.6 * t)))
+
+
+PLAIN_DECL = "background-image:none!important;border-color:var(--lk-line)!important;box-shadow:0 14px 30px -20px rgba(0,0,0,.75)!important;"
+
+
+def paint_rules(v, saved, css):
+    """Rules for the colors of cards, tiles and bookmarks. With `saved` (the look on the page now) the things that were painted and are not any more
+    get rules that put them back, so a preview shows a removed color at once."""
+    t = v["paintStrength"] / 100.0
+    rules = []
+    if v.get("paintAll"):
+        c = "%d, %d, %d" % hex_rgb(v["paintAll"])
+        cards = WRAP + " .service" + "".join(":not(#%s)" % x for x in NO_PAINT)
+        rules.append("%s{--accent:%s}%s .service-card{%s}" % (cards, c, cards, paint_decl(c, t)))
+        rules.append("%s .bookmark>a{--accent:%s;%s}" % (WRAP, c, paint_decl(c, t)))
+    for cid in sorted(v["cards"]):
+        c = "%d, %d, %d" % hex_rgb(v["cards"][cid])
+        rules.append("%s #%s{--accent:%s}%s #%s .service-card{%s}" % (WRAP, cid, c, WRAP, cid, paint_decl(c, t)))
+    for name in sorted(v["links"]):
+        sl = slugify(name)
+        c = "%d, %d, %d" % hex_rgb(v["links"][name])
+        rules.append('%s .bookmark>a[data-bm="%s"]{--accent:%s;%s}' % (WRAP, sl, c, paint_decl(c, t)))
+    if saved is not None:
+        was = look_full(saved)
+        for cid in sorted(set(was["cards"]) - set(v["cards"])):
+            if v.get("paintAll"):
+                acc, decl = "%d, %d, %d" % hex_rgb(v["paintAll"]), paint_decl("%d, %d, %d" % hex_rgb(v["paintAll"]), t)
+            else:
+                acc, decl = shipped_accent(css, cid) or ("148, 163, 184" if cid.startswith(("stat-", "cal-")) else "var(--lk-accent)"), PLAIN_DECL
+            rules.append("%s #%s{--accent:%s}%s #%s .service-card{%s}" % (WRAP, cid, acc, WRAP, cid, decl))
+        have = {slugify(n) for n in v["links"]}
+        for name in sorted(was["links"]):
+            if slugify(name) not in have:
+                if v.get("paintAll"):
+                    c = "%d, %d, %d" % hex_rgb(v["paintAll"])
+                    rules.append('%s .bookmark>a[data-bm="%s"]{--accent:%s;%s}' % (WRAP, slugify(name), c, paint_decl(c, t)))
+                else:
+                    rules.append('%s .bookmark>a[data-bm="%s"]{--accent:inherit;%s}' % (WRAP, slugify(name), PLAIN_DECL))
+        if was.get("paintAll") and not v.get("paintAll"):
+            cards = WRAP + " .service" + "".join(":not(#%s)" % x for x in NO_PAINT)
+            rules.append("%s .service-card{%s}%s .bookmark>a{%s}" % (cards, PLAIN_DECL, WRAP, PLAIN_DECL))
+    return rules
+
+
+def label_rules(v, saved):
+    rules = []
+    for name in sorted(v["labels"]):
+        sl = slugify(name)
+        d = v["labels"][name]
+        sel = '%s [data-group="%s"]' % (WRAP, sl)
+        if d.get("text"):
+            rules.append("%s .service-group-name,%s .bookmark-group-name{color:%s!important}" % (sel, sel, d["text"]))
+        if d.get("icon"):
+            rules.append("%s{--icon-color:%s;--hl-label:%d, %d, %d}" % ((sel, d["icon"]) + hex_rgb(d["icon"])))
+    if saved is not None:
+        for name in sorted(look_full(saved)["labels"]):
+            now = v["labels"].get(name, {})
+            sel = '%s [data-group="%s"]' % (WRAP, slugify(name))
+            was = look_full(saved)["labels"][name]
+            if was.get("text") and not now.get("text"):
+                rules.append("%s .service-group-name,%s .bookmark-group-name{color:var(--lk-text)!important}" % (sel, sel))
+            if was.get("icon") and not now.get("icon"):
+                rules.append("%s{--icon-color:#c9d6f2;--hl-label:var(--lk-accent)}" % sel)
+    style = v["labelIcon"]
+    icons = ".service-group-icon,%s .bookmark-group-icon" % WRAP
+    ring = "rgba(var(--hl-label,var(--lk-accent)),"
+    if style == "circle":
+        rules.append("%s %s{box-sizing:content-box;padding:6px;border-radius:50%%;background:%s.20)}" % (WRAP, icons, ring))
+    elif style == "square":
+        rules.append("%s %s{box-sizing:content-box;padding:6px;border-radius:10px;background:%s.20)}" % (WRAP, icons, ring))
+    elif style == "ring":
+        rules.append("%s %s{box-sizing:content-box;padding:5px;border-radius:50%%;border:1.5px solid %s.75);box-shadow:0 0 12px %s.45)}" % (WRAP, icons, ring, ring))
+    elif saved is not None and look_full(saved)["labelIcon"] != "plain":
+        rules.append("%s %s{padding:0;border-radius:0;background:none;border:0;box-shadow:none}" % (WRAP, icons))
+    return rules
+
+
+def look_css(custom, full=False, saved=None, css=""):
+    """The rules of the look block for a look (only what differs from the default). `full` writes every value, for a preview in front of a saved look
+    (then `saved` is the look on the page now and `css` its custom.css)."""
+    if not custom and not full and saved is None:
         return ""
     v = look_full(custom)
     rules = []
     tok = []
-    if "accent" in custom:
+    if full or "accent" in custom:
         tok.append("--lk-accent: %d, %d, %d;" % hex_rgb(v["accent"]))
-    if "glass" in custom:
+    if full or "glass" in custom:
         tok.append("--lk-glass: %d, %d, %d;" % hex_rgb(v["glass"]))
-    if "glassOpacity" in custom:
-        tok.append("--lk-glass-a: %s;" % (("%.2f" % (v["glassOpacity"] / 100.0)).rstrip("0").rstrip(".") or "0"))
-    if "radius" in custom:
+    if full or "glassOpacity" in custom or "glassClear" in custom or "glassLevel" in custom:
+        tok.append("--lk-glass-a: %s;" % num(glass_alpha(v)))
+    if full or "radius" in custom:
         tok.append("--lk-radius: %dpx;" % v["radius"])
-    if "edge" in custom:
-        tok.append("--lk-line: rgba(255, 255, 255, %s);" % (("%.3f" % (v["edge"] / 100.0)).rstrip("0").rstrip(".") or "0"))
-    if "side" in custom:
+    if full or "edge" in custom:
+        tok.append("--lk-line: rgba(255, 255, 255, %s);" % num(v["edge"] / 100.0))
+    if full or "side" in custom:
         tok.append("--lk-side: %dpx;" % v["side"])
-    if "playerHeight" in custom:
+    if full or "playerHeight" in custom:
         tok.append("--lk-player-h: %dpx;" % v["playerHeight"])
     if tok:
         rules.append("html body #inner_wrapper { %s }" % " ".join(tok))
-    # a colour for a tab: the tab rules of the tabs block are more specific than the one above, so each tab gets its own line
-    for name in sorted(custom.get("tabs") or {}):
-        rules.append('html[data-tab="%s"] body #inner_wrapper { --lk-accent: %d, %d, %d; }' % ((name,) + hex_rgb(custom["tabs"][name])))
-    if "playerHeight" in custom:
+    # a color for a tab: the tab rules of the tabs block are more specific than the one above, so each tab gets its own line
+    tabs = v["tabs"] if full else (custom.get("tabs") or {})
+    for name in sorted(tabs):
+        rules.append('html[data-tab="%s"] body #inner_wrapper { --lk-accent: %d, %d, %d; }' % ((name,) + hex_rgb(tabs[name])))
+    if full or "playerHeight" in custom:
         ph = max(240, v["playerHeight"] - 40)
         rules.append("@media (max-width: 700px) { html body #inner_wrapper { --lk-player-h: %dpx; } }" % ph)
+    rules += paint_rules(v, saved, css) + label_rules(v, saved)
     return "\n".join(rules)
 
 
@@ -425,6 +591,13 @@ def api_look_save(body):
     tx.put(CSS, css_with_look(tx.get(CSS), custom))
     tx.commit()
     return {}
+
+
+def api_look_css(body):
+    """The rules for a preview of a look that is not saved yet (the page puts them over the saved look)."""
+    custom = look_clean(body.get("look"))
+    css = read(CSS)
+    return {"css": look_css(custom, full=True, saved=look_get(css), css=css)}
 
 
 def api_look_reset(body):
@@ -590,7 +763,7 @@ def api_bg_upload(data):
 
 # ================================================================ layout: tabs, groups, their order (settings.yaml: layout:)
 AUTOMATIC = {"At a Glance", "Music Library", "Library Totals", "Storage", "Backup & Updates", "Folder Sizes", "Calendar"}     # made by the lab's scripts
-PROTECTED = {"Customize"}          # the panel itself: it can be moved, but not removed
+PROTECTED = {"Customize", "Edit Links"}          # the panel itself (the Customize tab and the link editor of the Links tab): it can be moved, but not removed
 
 
 def layout_span(lines):
@@ -1251,11 +1424,84 @@ def session_ok(tok):
     return True
 
 
+# ================================================================ what can get a color, and the icon library
+def paint_state():
+    """The cards, tiles and bookmarks and the group labels the Colors screen lists."""
+    lines = read(SERVICES).split("\n")
+    cards, stats, cal, labels = [], [], [], []
+    for g in services_parse(lines):
+        if g["name"] not in PROTECTED and g["name"] not in labels:
+            labels.append(g["name"])
+        for c in g["cards"]:
+            cid = card_fields(lines, c).get("id", "")
+            if not cid or cid in NO_PAINT or not re.fullmatch(r"[A-Za-z0-9_-]+", cid):
+                continue
+            (stats if cid.startswith("stat-") else cal if cid.startswith("cal-") else cards).append({"id": cid, "name": c["name"], "group": g["name"]})
+    links = []
+    for g in marks_parse(read(BOOKMARKS))[1]:
+        if g["name"] not in labels:
+            labels.append(g["name"])
+        links += [{"name": e["name"], "group": g["name"]} for e in g["links"]]
+    return {"cards": cards, "stats": stats, "calendar": cal, "links": links, "labels": labels}
+
+
+ICON_CACHE_DAYS = 30
+ICON_TREE_URLS = [os.environ["HLP_ICON_TREE"]] if os.environ.get("HLP_ICON_TREE") else [
+    "https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/tree.json", "https://raw.githubusercontent.com/homarr-labs/dashboard-icons/main/tree.json"]
+ICON_MDI_URLS = [os.environ["HLP_ICON_MDI"]] if os.environ.get("HLP_ICON_MDI") else [
+    "https://cdn.jsdelivr.net/npm/@mdi/svg@7.4.47/meta.json", "https://raw.githubusercontent.com/Templarian/MaterialDesign-SVG/master/meta.json"]
+
+
+def fetch_json(urls):
+    for u in urls:
+        try:
+            if u.startswith("/"):
+                with open(u, "rb") as f:
+                    raw = f.read(8_000_000)
+            else:
+                req = urllib.request.Request(u, headers={"User-Agent": "homelab-panel"})
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    raw = r.read(8_000_000)
+            return json.loads(raw.decode("utf-8"))
+        except (OSError, ValueError, urllib.error.URLError):
+            continue
+    return None
+
+
+def icon_index():
+    """{"apps": [names like plex.svg], "mdi": [names like home-outline]} from the icon lists the dashboard's own icons come from. The lists are downloaded once
+    and kept for a month; without internet the last copy (or nothing) is used and the page falls back to its short list."""
+    cache = os.path.join(STATE_DIR, "icons.json")
+    try:
+        with open(cache, encoding="utf-8") as f:
+            have = json.load(f)
+    except (OSError, ValueError):
+        have = None
+    if have and time.time() - have.get("time", 0) < ICON_CACHE_DAYS * 86400:
+        return have["data"]
+    tree, meta = fetch_json(ICON_TREE_URLS), fetch_json(ICON_MDI_URLS)
+    data = {"apps": (have or {}).get("data", {}).get("apps", []), "mdi": (have or {}).get("data", {}).get("mdi", [])}
+    if isinstance(tree, dict):
+        svg = [x for x in tree.get("svg", []) if isinstance(x, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,80}\.svg", x)]
+        have_svg = {x[:-4] for x in svg}
+        png = [x for x in tree.get("png", []) if isinstance(x, str) and re.fullmatch(r"[A-Za-z0-9._-]{1,80}\.png", x) and x[:-4] not in have_svg]
+        data["apps"] = sorted(svg + png)
+    if isinstance(meta, list):
+        data["mdi"] = sorted({m["name"] for m in meta if isinstance(m, dict) and isinstance(m.get("name"), str) and re.fullmatch(r"[a-z0-9-]{1,60}", m["name"])})
+    if data["apps"] or data["mdi"]:
+        try:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            write_atomic(cache, json.dumps({"time": time.time(), "data": data}), 0o600)
+        except OSError:
+            pass
+    return data
+
+
 # ================================================================ the state the page shows
 def full_state():
     h = history_last()
     return {"version": VERSION, "look": look_state(), "background": bg_state(), "layout": layout_state(), "services": services_state(),
-            "links": marks_state(), "undo": (h[1]["label"] if h else ""), "automatic": sorted(AUTOMATIC), "protected": sorted(PROTECTED)}
+            "links": marks_state(), "paint": paint_state(), "undo": (h[1]["label"] if h else ""), "automatic": sorted(AUTOMATIC), "protected": sorted(PROTECTED)}
 
 
 # ================================================================ the web server
@@ -1343,6 +1589,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise Fail("Please log in again.", 401)
                 with LOCK:
                     return self.send(200, full_state())
+            if path == "/api/icons":
+                if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
+                    raise Fail("Please log in again.", 401)
+                return self.send(200, icon_index())
             if path.startswith("/api/"):
                 raise Fail("Unknown address.", 404)
             self.static(path)
@@ -1388,7 +1638,7 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.read_body(1 << 20) or b"{}")
             if not isinstance(body, dict):
                 raise Fail("The request is not understood.")
-            routes = {"/api/look": api_look_save, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
+            routes = {"/api/look": api_look_save, "/api/look/css": api_look_css, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
                       "/api/layout": api_layout_save, "/api/card": api_card, "/api/link": api_link, "/api/group": api_group,
                       "/api/undo": lambda b: {"undone": undo()}}
             fn = routes.get(path)
