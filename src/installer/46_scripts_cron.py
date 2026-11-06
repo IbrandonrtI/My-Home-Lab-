@@ -2,7 +2,7 @@
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
            ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"),
            ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"), ("homelab-selftest", "/usr/local/sbin"),
-           ("homelab", "/usr/local/bin"), ("homelab-repocheck", "/usr/local/bin")]
+           ("homelab", "/usr/local/bin"), ("homelab-repocheck", "/usr/local/bin"), ("homelab-panel", "/usr/local/sbin")]
 # commands that were renamed or removed: an upgrade deletes the old copies so they do not linger on the server
 RETIRED_SCRIPTS = ["/usr/local/bin/hdd-recover", "/usr/local/bin/homelab-check"]
 
@@ -29,7 +29,7 @@ class ScriptsInstalled(Step):
     needs = ("packages",)
 
     def _wanted(self):
-        items = [(n, d, render_script(n)) for n, d in SCRIPTS]
+        items = [(n, d, render_script(n)) for n, d in SCRIPTS if n != "homelab-panel" or panel_applies()]   # a hand-built server has no panel
         me = repo_file("installer", "homelab-setup")
         items.append(("homelab-setup", "/usr/local/sbin", read_file(me)))
         return items

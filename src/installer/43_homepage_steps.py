@@ -76,6 +76,8 @@ class HomepageTabs(Step):
                 svc = services_stats_block(svc, shipped_svc)
             if not State.ran("homepage-calendar") or CAL_BEGIN in svc:
                 svc = services_calendar_block(svc, shipped_svc)
+            if not State.ran("homepage-customize") or CUSTOM_BEGIN in svc:         # the control panel's card: offered once, then kept up to date
+                svc = services_customize_block(svc, shipped_svc)
         sett = layout_renamed(sett)
         sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
         if re.search(r"(?m)^layout:", sett):
@@ -101,7 +103,7 @@ class HomepageTabs(Step):
             return "todo"
         if not Opt.dry:
             self.remember(seen)                  # already in place (a new machine): a later removal of a group or of the tabs is respected
-            for k in ("homepage-tabs", "homepage-stats", "homepage-calendar"):
+            for k in ("homepage-tabs", "homepage-stats", "homepage-calendar", "homepage-customize"):
                 if not State.ran(k):
                     State.mark(k)
         return "done"
@@ -123,6 +125,7 @@ class HomepageTabs(Step):
         State.mark("homepage-tabs")
         State.mark("homepage-stats")
         State.mark("homepage-calendar")
+        State.mark("homepage-customize")
         stats_file = hp_path("images/stats.json")
         if not FAKE and not os.path.exists(stats_file) and os.path.exists(P("/usr/local/sbin/homelab-stats")):
             # Homepage only serves a file that was there when it started, so the first stats.json is made now, before the restart below
@@ -137,6 +140,8 @@ class HomepageTabs(Step):
         out("      Reload the dashboard (Ctrl+Shift+R). The old files are saved as settings.yaml.before-tabs, custom.css.before-tabs, custom.js.before-tabs and services.yaml.before-tabs")
         if STATS_BEGIN in svc:
             out("      The Stats tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
+        if CUSTOM_BEGIN in svc:
+            out("      The Customize tab is the control panel: change the look, the layout, the cards and the links by clicking. Choose its password with:  homelab panel password")
         if CAL_BEGIN in svc:
             out("      The Calendar is at the bottom of the Home tab, under the service cards. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
 

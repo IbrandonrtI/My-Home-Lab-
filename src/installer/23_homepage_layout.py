@@ -51,7 +51,8 @@ def css_tabs_block(live, shipped):
 JS_BEGIN, JS_END = "/* >>> homelab groups >>>", "/* <<< homelab groups <<< */"      # the block in the shipped custom.js
 PLAYER_JS_BEGIN, PLAYER_JS_END = "/* >>> homelab player >>>", "/* <<< homelab player <<< */"      # the second block: keeps the music playing
 EXTRAS_JS_BEGIN, EXTRAS_JS_END = "/* >>> homelab extras >>>", "/* <<< homelab extras <<< */"      # the third block: health line, fold and shrink buttons, Stats bars
-JS_BLOCKS = [(JS_BEGIN, JS_END), (PLAYER_JS_BEGIN, PLAYER_JS_END), (EXTRAS_JS_BEGIN, EXTRAS_JS_END)]
+PANEL_JS_BEGIN, PANEL_JS_END = "/* >>> homelab panel >>>", "/* <<< homelab panel <<< */"      # the fourth block: the live preview of the control panel (Customize tab)
+JS_BLOCKS = [(JS_BEGIN, JS_END), (PLAYER_JS_BEGIN, PLAYER_JS_END), (EXTRAS_JS_BEGIN, EXTRAS_JS_END), (PANEL_JS_BEGIN, PANEL_JS_END)]
 
 
 def js_put_block(live, shipped, begin, end):
@@ -93,6 +94,8 @@ OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
 
 
 CAL_BEGIN, CAL_END = "# >>> homelab calendar >>>", "# <<< homelab calendar <<<"      # the block with the Calendar group in the shipped services.yaml
+CUSTOM_BEGIN, CUSTOM_END = "# >>> homelab customize >>>", "# <<< homelab customize <<<"      # the block with the Customize group (the control panel) in the shipped services.yaml
+CUSTOMIZE_GROUPS = {"Customize": ("mdi-tune", 1)}      # name -> (icon, columns): a tab of its own, after the others, one big card
 CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Home tab, in a row of its own, last
 
 
@@ -114,6 +117,11 @@ def services_block(live, shipped, begin, end):
 def services_stats_block(live, shipped):
     """The STATS groups (see services_block)."""
     return services_block(live, shipped, STATS_BEGIN, STATS_END)
+
+
+def services_customize_block(live, shipped):
+    """The Customize group, the control panel's card (see services_block)."""
+    return services_block(live, shipped, CUSTOM_BEGIN, CUSTOM_END)
 
 
 def services_calendar_block(live, shipped):
@@ -233,6 +241,9 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
         if tab == "Stats":
             icon_g, cols_g = STATS_GROUPS[g]
             new = ["  %s:" % yaml_key(g), "    tab: Stats", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
+        elif g in CUSTOMIZE_GROUPS:                              # the control panel has a tab of its own, after the others
+            icon_g, cols_g = CUSTOMIZE_GROUPS[g]
+            new = ["  %s:" % yaml_key(g), "    tab: Customize", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
         elif g in CALENDAR_GROUPS:                               # the Calendar is on the Home tab, in a row of its own, last
             icon_g, cols_g = CALENDAR_GROUPS[g]
             new = ["  %s:" % yaml_key(g), "    tab: Home", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
