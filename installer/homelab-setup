@@ -1711,6 +1711,7 @@ OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
 CAL_BEGIN, CAL_END = "# >>> homelab calendar >>>", "# <<< homelab calendar <<<"      # the block with the Calendar group in the shipped services.yaml
 CUSTOM_BEGIN, CUSTOM_END = "# >>> homelab customize >>>", "# <<< homelab customize <<<"      # the block with the Customize group (the control panel) in the shipped services.yaml
 CUSTOMIZE_GROUPS = {"Customize": ("mdi-tune", 1)}      # name -> (icon, columns): a tab of its own, after the others, one big card
+LINKEDIT_GROUPS = {"Edit Links": ("mdi-pencil-box-multiple", 1)}      # name -> (icon, columns): on the Links tab, above the bookmarks, one drop-down card
 CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Home tab, in a row of its own, last
 
 
@@ -1859,6 +1860,9 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
         elif g in CUSTOMIZE_GROUPS:                              # the control panel has a tab of its own, after the others
             icon_g, cols_g = CUSTOMIZE_GROUPS[g]
             new = ["  %s:" % yaml_key(g), "    tab: Customize", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
+        elif g in LINKEDIT_GROUPS:                               # the link editor is on the Links tab
+            icon_g, cols_g = LINKEDIT_GROUPS[g]
+            new = ["  %s:" % yaml_key(g), "    tab: Links", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
         elif g in CALENDAR_GROUPS:                               # the Calendar is on the Home tab, in a row of its own, last
             icon_g, cols_g = CALENDAR_GROUPS[g]
             new = ["  %s:" % yaml_key(g), "    tab: Home", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
