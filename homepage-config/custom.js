@@ -83,6 +83,7 @@
   soon();
   new MutationObserver(soon).observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("resize", soon);
+  window.addEventListener("scroll", soon, true);                 // any scrolling box (not only the page) moves the card, so the player follows at once
   window.setInterval(soon, 500);
 })();
 /* <<< homelab player <<< */
