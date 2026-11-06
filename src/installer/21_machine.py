@@ -287,6 +287,11 @@ def stack_env(name):
                 ("AUDIOMUSE_USER", Ctx.admin), ("AUDIOMUSE_PASSWORD", Secrets.get("AUDIOMUSE_PASSWORD")),
                 ("AUDIOMUSE_TOKEN", Secrets.get("AUDIOMUSE_TOKEN")), ("AUDIOMUSE_JWT_SECRET", Secrets.get("AUDIOMUSE_JWT_SECRET")),
                 ("AUDIOMUSE_MEM", audiomuse_mem()), ("AUDIOMUSE_CPUS", str(audiomuse_cpus()))]
+    if name == "navilist":
+        return [("TZ", Ctx.tz), ("NAVILIST_NAVIDROME_URL", "http://%s:%d" % (svc_host(), PORTS["navidrome"])),
+                ("NAVILIST_NAVIDROME_USER", NAVILIST_ND_USER), ("NAVILIST_NAVIDROME_PASSWORD", Secrets.get("NAVILIST_ND_PASSWORD")),
+                ("NAVILIST_LASTFM_KEY", Secrets.get("LASTFM_APIKEY")), ("NAVILIST_LASTFM_USER", Secrets.get("NAVILIST_LASTFM_USER")),
+                ("NAVILIST_LB_TOKEN", Secrets.get("NAVILIST_LB_TOKEN")), ("NAVILIST_LB_USER", Secrets.get("NAVILIST_LB_USER"))]
     return []
 
 
@@ -296,6 +301,15 @@ AUDIOMUSE_SECRETS = {"AUDIOMUSE_DB_PASSWORD": lambda: rand_alnum(28), "AUDIOMUSE
                      "AUDIOMUSE_PASSWORD": lambda: rand_alnum(20), "AUDIOMUSE_TOKEN": lambda: rand_hex(24),
                      "AUDIOMUSE_JWT_SECRET": lambda: rand_hex(32)}
 NAVIDROME_AGENTS_WITH = "audiomuseai,deezer,lastfm,listenbrainz"      # audiomuseai must be first: Navidrome asks the first agent that knows similar songs
+
+
+# ---------------------------------------------------------------- naviList (optional: `homelab-setup navilist`)
+NAVILIST_ND_USER = "navilist"                         # the small Navidrome login naviList uses to read the library and make playlists
+
+
+def navilist_wanted():
+    """True when the person asked for naviList (`homelab-setup navilist`) on a machine the installer built."""
+    return bool(State.data.get("navilist")) and not Mode.existing
 
 
 def audiomuse_wanted():

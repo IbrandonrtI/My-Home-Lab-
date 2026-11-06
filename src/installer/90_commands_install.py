@@ -275,6 +275,10 @@ def added_services():
         found["audiomuse-flask"] = ("AudioMuse-AI", "audiomuse-flask", PORTS["audiomuse"], 0)
     if "audiomuse-flask" in found:
         found["audiomuse-flask"] = ("AudioMuse-AI",) + found["audiomuse-flask"][1:]
+    if navilist_wanted() and navidrome_wanted() and "navilist" not in found:
+        found["navilist"] = ("naviList", "navilist", PORTS["navilist"], 0)
+    if "navilist" in found:
+        found["navilist"] = ("naviList",) + found["navilist"][1:]
     return sorted(found.values(), key=lambda x: x[0].lower())
 
 
@@ -287,6 +291,8 @@ def system_check():
         names.append("navidrome")
     if audiomuse_wanted() and navidrome_wanted():
         names += [c for c in STACKS["audiomuse"][1] if c != "audiomuse-worker" or not State.data.get("audiomuse_paused")]
+    if navilist_wanted() and navidrome_wanted():
+        names += STACKS["navilist"][1]
     up = containers_running()
     missing = [c for c in names if c not in up]
     if missing:
@@ -326,8 +332,9 @@ def system_check():
             st = http("GET", link, timeout=10)[0]
             if 0 < st < 500:
                 out("  %s%s%s %-18s %s" % (G, S_OK, N, label, mark(link)))
-            elif container in ("navidrome", "audiomuse-flask") and (container == "navidrome" or audiomuse_wanted()):
-                # the installer owns Navidrome and AudioMuse-AI, so a silent one is a problem
+            elif container in ("navidrome", "audiomuse-flask", "navilist") and (
+                    container == "navidrome" or (container == "audiomuse-flask" and audiomuse_wanted()) or (container == "navilist" and navilist_wanted())):
+                # the installer owns Navidrome, AudioMuse-AI and naviList, so a silent one is a problem
                 out("  %s%s%s %-18s %s  (no answer)" % (R, S_BAD, N, label, mark(link)))
                 problems.append(container)
             else:                                             # a service the person added: stopping it can be on purpose

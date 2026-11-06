@@ -231,6 +231,140 @@ class AudioMusePlugin(Step):
             url("audiomuse"), Ctx.admin))
 
 
+# ================================================================ naviList (playlists from ListenBrainz and Last.fm; only after `homelab-setup navilist`)
+NAVILIST_NAME_WANTED = re.compile(r"jams|exploration", re.I)          # the playlists ListenBrainz makes for you
+NAVILIST_LASTFM_WANTED = ("weekly", "top_1month")                       # this week's chart and the chart of the month
+
+
+def navilist_applies():
+    return navilist_wanted() and BY_ID["stack-navidrome"].applies()
+
+
+@step
+class NaviListUser(Step):
+    id, group = "navilist-user", "Services"
+    title = "naviList has its own small Navidrome login (a normal login with a generated password)"
+    needs = ("stack-navidrome", "navidrome-card")
+
+    def applies(self):
+        return navilist_applies()
+
+    def probe(self):
+        return "done" if State.data.get("navilist_user") and Secrets.get("NAVILIST_ND_PASSWORD") else "todo"
+
+    def run(self):
+        if Opt.dry:
+            out("      would make the Navidrome login '%s' for naviList (a normal login, not an admin)" % NAVILIST_ND_USER)
+            return
+        if not Secrets.get("NAVILIST_ND_PASSWORD"):
+            Secrets.vals["NAVILIST_ND_PASSWORD"] = rand_alnum(28)
+            Secrets.save()
+        mine = {"username": NAVILIST_ND_USER, "password": Secrets.get("NAVILIST_ND_PASSWORD")}
+        if http("POST", url("navidrome", "/auth/login"), body=mine, timeout=30)[0] != 200:       # not made yet (or by an earlier try)
+            pw = need_password("to make the naviList login in Navidrome")
+            st, js, _ = http("POST", url("navidrome", "/auth/login"), body={"username": Ctx.admin, "password": pw}, timeout=30)
+            if st != 200 or not isinstance(js, dict) or not js.get("token"):
+                raise Abort("Navidrome did not accept the login %s with the shared admin password, so the naviList login could not be made. "
+                            "Open Navidrome and check the login, then run `sudo homelab-setup refresh`." % Ctx.admin)
+            st, js, _ = http("POST", url("navidrome", "/api/user"), headers={"X-ND-Authorization": "Bearer " + js["token"]}, timeout=30,
+                             body={"userName": NAVILIST_ND_USER, "name": "naviList", "password": mine["password"], "isAdmin": False})
+            if st not in (200, 201):
+                raise Abort("Navidrome refused to make the login '%s' (HTTP %s). If a login with that name is already there, delete it in Navidrome "
+                            "(Users page), then run `sudo homelab-setup refresh`. Navidrome said: %s" % (NAVILIST_ND_USER, st, str(js)[:200]))
+            out("      Made the Navidrome login '%s' for naviList. Its password is saved in the root-only file (sudo homelab-setup secrets)." % NAVILIST_ND_USER)
+        State.data["navilist_user"] = True
+        State.save()
+
+
+class NaviListStack(StackStep):
+    """naviList's one container. Only after `homelab-setup navilist`."""
+
+    def applies(self):
+        return navilist_applies()
+
+    def detail(self):
+        return "port %d" % PORTS["navilist"]
+
+    def stamp(self):
+        env = "|".join("%s=%s" % kv for kv in stack_env("navilist"))           # a new token or user name deploys the stack once more
+        return hashlib.md5((stack_text("navilist") + env).encode()).hexdigest()
+
+    def probe(self):
+        return "done" if "navilist" in containers_running() and State.data.get("navilist_stack") == self.stamp() else "todo"
+
+    def run(self):
+        if not Opt.dry:
+            for folder in (Ctx.home + "/navilist", Ctx.home + "/navilist/data"):
+                os.makedirs(P(folder), exist_ok=True)
+                chown(P(folder), Ctx.uid, Ctx.gid)
+        StackStep.run(self)
+        if Opt.dry:
+            return
+        if not wait_for(lambda: http("GET", url("navilist", "/health"), timeout=10)[0] == 200, "naviList to answer", 180):
+            raise Abort("naviList does not answer on port %d. Look at its log:  docker logs navilist" % PORTS["navilist"])
+        navilist_apply_settings()
+        State.data["navilist_stack"] = self.stamp()
+        State.save()
+        if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
+            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)       # the dashboard card of naviList, now
+
+
+register(NaviListStack("navilist", ("portainer-env", "folders", "stack-navidrome", "navilist-user"),
+                       "naviList stack (makes Navidrome playlists from your ListenBrainz and Last.fm listening)", 300))
+
+
+def navilist_apply_settings():
+    """Put the saved logins into a running naviList. It only reads its environment the first time it starts, so a later change
+    (a new token, a new user name) is sent to its settings page the same way the page does it. Settings the person changed there stay."""
+    base = lambda path: url("navilist", path)
+    cur = http("GET", base("/settings/api"), timeout=20)[1]
+    cur = cur.get("settings", {}) if isinstance(cur, dict) else {}
+    st, js, _ = http("POST", base("/settings/test-navidrome"), timeout=60, body={
+        "navidrome_url": "http://%s:%d" % (svc_host(), PORTS["navidrome"]), "navidrome_user": NAVILIST_ND_USER,
+        "navidrome_password": Secrets.get("NAVILIST_ND_PASSWORD")})
+    if st != 200 or not isinstance(js, dict) or not js.get("ok"):
+        warn("naviList could not log in to Navidrome (%s). Open %s, go to Settings and press Test Connection." % (
+            js.get("error") if isinstance(js, dict) else "no answer", base("")))
+    http("POST", base("/settings"), timeout=30, body={
+        "music_folder_ids": cur.get("music_folder_ids", ""),               # the page blanks this when it is left out
+        "lastfm_api_key": Secrets.get("LASTFM_APIKEY"), "lastfm_username": Secrets.get("NAVILIST_LASTFM_USER"),
+        "listenbrainz_token": Secrets.get("NAVILIST_LB_TOKEN"), "listenbrainz_username": Secrets.get("NAVILIST_LB_USER")})
+    http("POST", base("/sync/library"), body={}, timeout=30)                 # read the songs of Navidrome now
+
+
+def navilist_subscribe():
+    """Subscribe naviList to the playlists ListenBrainz makes for you (Weekly Jams, Weekly Exploration, Daily Jams) and to two Last.fm charts.
+    Returns (names newly subscribed, names that are not there yet). ListenBrainz makes its playlists only after it has some of your listens."""
+    base = lambda path: url("navilist", path)
+    done, waiting = [], []
+    if Secrets.get("NAVILIST_LB_TOKEN") and Secrets.get("NAVILIST_LB_USER"):
+        http("POST", base("/sync/lb-playlists"), body={}, timeout=240)         # fetch the list from ListenBrainz
+        js = http("GET", base("/sync/lb-playlists/cached"), timeout=60)[1]
+        lists = js.get("playlists", []) if isinstance(js, dict) else []
+        mine = [p for p in lists if NAVILIST_NAME_WANTED.search("%s %s" % (p.get("title", ""), p.get("source_patch") or ""))]
+        if not mine:
+            waiting.append("the ListenBrainz playlists (Weekly Jams, Weekly Exploration, Daily Jams)")
+        for p in mine:
+            if p.get("enabled"):
+                continue
+            r = http("POST", base("/sync/lb-playlists/%s/import" % p["lb_mbid"]), body={}, timeout=240)[1]
+            if isinstance(r, dict) and r.get("ok"):
+                done.append(p.get("title", p["lb_mbid"]))
+    if Secrets.get("LASTFM_APIKEY") and Secrets.get("NAVILIST_LASTFM_USER"):
+        http("POST", base("/sync/lfm-playlists"), body={}, timeout=240)        # fetch the charts from Last.fm
+        js = http("GET", base("/sync/lfm-playlists/cached"), timeout=60)[1]
+        lists = {p["lfm_id"]: p for p in (js.get("playlists", []) if isinstance(js, dict) else [])}
+        for lid in NAVILIST_LASTFM_WANTED:
+            p = lists.get(lid)
+            if not p:
+                waiting.append("the Last.fm chart '%s'" % lid)
+            elif not p.get("enabled"):
+                r = http("POST", base("/sync/lfm-playlists/%s/import" % lid), body={}, timeout=240)[1]
+                if isinstance(r, dict) and r.get("ok"):
+                    done.append(p.get("title", lid))
+    return done, waiting
+
+
 # ================================================================ AdGuard Home
 def adguard_yaml():
     """Contents of AdGuard Home's settings file."""
