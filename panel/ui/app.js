@@ -252,7 +252,7 @@ function saveBar(dirty, onSave, onRevert, saveLabel, extra) {
 
 // ---------------------------------------------------------------- Look and Colors (one look, two screens)
 function rgb(hex) { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ""); const n = m ? parseInt(m[1], 16) : 0; return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
-const PAINT_KEYS = ["paintAll", "paintStrength", "cards", "links", "labels", "labelIcon"];
+const PAINT_KEYS = ["paintAll", "paintStrength", "paintStyle", "cards", "links", "labels", "labelIcon"];
 let lookBarEl = null, pvTimer = null, pvSeq = 0;
 
 function lookOut() {                       // what is sent to the server: the look, with only the tab colors that differ from the shipped ones
@@ -393,26 +393,32 @@ function viewColors() {
     inp.addEventListener("input", () => onset(inp.value));
     return inp;
   }
-  // one row per card, tile or bookmark: the color, and a button to go back to the default
-  function itemRow(map, key, name, sub) {
-    const row = h("div", { class: "prow" });
-    const draw = () => {
+  // everything that shows "Default" or "All Color" and has to follow a change of the one color for everything
+  const followers = [];
+  // one row per card, tile or bookmark: the color, and a button to go back to the default. A change is made in place (a new picker would close the open one).
+  function itemRow(map, key, name, sub, def) {
+    const badge = h("span", { class: "badge" }), reset = h("button", { class: "small" }, "Reset");
+    const base = () => L.paintAll || def || "#8ab4ff";
+    const inp = colorInput(map[key] || base(), "Color of " + name, v => { map[key] = v; lookChanged(); refresh(); });
+    function refresh() {
       const set = !!map[key];
-      put(row, h("div", { class: "txt" }, h("b", {}, name), sub ? h("span", {}, sub) : null),
-        h("span", { class: "badge" + (set ? "" : " dim") }, set ? "Custom" : (L.paintAll ? "All Color" : "Default")),
-        colorInput(map[key] || L.paintAll || "#8ab4ff", "Color of " + name, v => { map[key] = v; lookChanged(); draw(); }),
-        h("button", { class: "small", disabled: !set, onclick: () => { delete map[key]; lookChanged(); draw(); } }, "Reset"));
-    };
-    draw();
-    return row;
+      badge.textContent = set ? "Custom" : (L.paintAll ? "All Color" : "Default");
+      badge.className = "badge" + (set ? "" : " dim");
+      reset.disabled = !set;
+      if (!set && inp.value !== base()) inp.value = base();
+    }
+    reset.addEventListener("click", () => { delete map[key]; lookChanged(); refresh(); });
+    refresh();
+    return h("div", { class: "prow" }, h("div", { class: "txt" }, h("b", {}, name), sub ? h("span", {}, sub) : null), badge, inp, reset);
   }
   // a list of items with "one color for all of these"
   function section(title, hint, items, map, keyOf, subOf, open) {
     if (!items.length) return null;
     let bulk = "#8ab4ff";
     const rows = h("div", {});
-    const draw = () => put(rows, items.map(it => itemRow(map, keyOf(it), it.name, subOf(it))));
+    const draw = () => put(rows, items.map(it => itemRow(map, keyOf(it), it.name, subOf(it), it.color)));
     draw();
+    followers.push(draw);
     return h("details", { class: "card", open: open }, h("summary", {}, h("b", {}, title), h("span", { class: "badge" }, String(items.length))),
       h("p", { class: "muted small" }, hint),
       h("div", { class: "row bulk" }, h("span", { class: "lab" }, "One Color for All Below:"), colorInput(bulk, "One color for all in " + title, v => { bulk = v; }),
@@ -425,14 +431,18 @@ function viewColors() {
   const labelRows = h("div", {});
   function drawLabels() {
     put(labelRows, P.labels.map(name => {
-      const d = L.labels[name] || {};
-      const part = (key, text) => {
-        const set = !!d[key];
-        return h("span", { class: "lpart" }, h("span", { class: "small muted" }, text),
-          colorInput(d[key] || (key === "text" ? "#eef2f9" : "#c9d6f2"), text + " of " + name, v => { (L.labels[name] = L.labels[name] || {})[key] = v; lookChanged(); drawLabels(); }),
-          h("button", { class: "small", disabled: !set, "aria-label": "Reset " + text.toLowerCase() + " of " + name, onclick: () => { delete L.labels[name][key]; if (!Object.keys(L.labels[name]).length) delete L.labels[name]; lookChanged(); drawLabels(); } }, "Reset"));
+      const part = (key, text, def) => {
+        const reset = h("button", { class: "small", "aria-label": "Reset " + text.toLowerCase() + " of " + name }, "Reset");
+        const inp = colorInput((L.labels[name] || {})[key] || def, text + " of " + name, v => { (L.labels[name] = L.labels[name] || {})[key] = v; lookChanged(); refresh(); });
+        const refresh = () => { reset.disabled = !(L.labels[name] || {})[key]; };
+        reset.addEventListener("click", () => {
+          if (L.labels[name]) { delete L.labels[name][key]; if (!Object.keys(L.labels[name]).length) delete L.labels[name]; }
+          inp.value = def; lookChanged(); refresh();
+        });
+        refresh();
+        return h("span", { class: "lpart" }, h("span", { class: "small muted" }, text), inp, reset);
       };
-      return h("div", { class: "prow" }, h("div", { class: "txt" }, h("b", {}, name)), part("text", "Text"), part("icon", "Icon"));
+      return h("div", { class: "prow" }, h("div", { class: "txt" }, h("b", {}, name)), part("text", "Text", "#eef2f9"), part("icon", "Icon", "#c9d6f2"));
     }));
   }
   drawLabels();
@@ -444,21 +454,35 @@ function viewColors() {
   }
   drawStyles();
 
-  const paintAll = h("div", {});
-  function drawAll() {
-    put(paintAll,
-      h("div", { class: "row" }, colorInput(L.paintAll || "#8ab4ff", "One color for everything", v => { L.paintAll = v; lookChanged(); drawAll(); }),
-        h("span", { class: "badge" + (L.paintAll ? "" : " dim") }, L.paintAll ? "On" : "Off"),
-        h("button", { class: "small", disabled: !L.paintAll, onclick: () => { L.paintAll = ""; lookChanged(); drawAll(); } }, "Turn Off")),
-      h("div", { class: "hint" }, "Pick a color to give every card, tile and bookmark the same color. A color you pick for a single one below still wins."));
+  // one color for everything: changed in place too, and the rows below follow it
+  const allBadge = h("span", { class: "badge" }), allOff = h("button", { class: "small" }, "Turn Off");
+  const allInp = colorInput(L.paintAll || "#8ab4ff", "One color for everything", v => { L.paintAll = v; lookChanged(); refreshAll(); });
+  function refreshAll() {
+    allBadge.textContent = L.paintAll ? "On" : "Off";
+    allBadge.className = "badge" + (L.paintAll ? "" : " dim");
+    allOff.disabled = !L.paintAll;
+    for (const f of followers) f();
   }
-  drawAll();
+  allOff.addEventListener("click", () => { L.paintAll = ""; lookChanged(); refreshAll(); });
+  refreshAll();
+  const paintAll = h("div", {},
+    h("div", { class: "row" }, allInp, allBadge, allOff),
+    h("div", { class: "hint" }, "Pick a color to give every card, tile and bookmark the same color. A color you pick for a single one below still wins."));
+
+  const styleChips = h("div", { class: "chips" });
+  function drawPaintStyle() {
+    put(styleChips, [["gradient", "Gradient"], ["solid", "Solid"]].map(([id, text]) =>
+      h("button", { class: "chip", "aria-pressed": String(L.paintStyle === id), onclick: () => { L.paintStyle = id; lookChanged(); drawPaintStyle(); } }, text)));
+  }
+  drawPaintStyle();
 
   return h("div", {},
     h("div", { class: "card" }, h("h2", {}, "Colors of Cards, Tiles and Bookmarks"),
       h("p", { class: "muted" }, "Give single service cards, the calendar, the tiles of the Stats tab and the bookmarks of the Links tab their own color: a tint, a colored edge and a soft glow. It looks best with Transparent Glass on the Look screen."),
       h("p", { class: "muted small" }, "To see a color on the dashboard, open the tab that has it (Home, Stats or Links). The preview stays there. Come back here to keep it with Save This Look."),
-      lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "Higher makes the tint, the edge and the glow stronger."),
+      h("div", { class: "field" }, h("div", { class: "lab" }, "Color Style"), styleChips,
+        h("div", { class: "hint" }, "Gradient: the color is strong on one side and fades out across the card. Solid: the same color across the whole card.")),
+      lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "Higher makes the color, the edge and the glow stronger, so the color is not washed out."),
       h("div", { class: "field" }, h("div", { class: "lab" }, "One Color for Everything"), paintAll)),
     section("Service Cards", "The cards of the Home tab, such as Portainer or Downtify.", P.cards, L.cards, it => it.id, it => it.group, true),
     section("Stats Tiles", "The tiles of the Stats tab.", P.stats, L.cards, it => it.id, it => it.group, false),
