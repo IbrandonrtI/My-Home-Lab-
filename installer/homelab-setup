@@ -59,7 +59,7 @@ SECRET_DIR = P("/root/.homelab-setup")
 SECRET_FILE = SECRET_DIR + "/secrets.env"
 LOG_FILE = P("/var/log/homelab-setup.log")
 
-# ---------------------------------------------------------------- the nine stacks (and Navidrome and AudioMuse-AI, two optional ones)
+# ---------------------------------------------------------------- the nine stacks (and Navidrome, AudioMuse-AI and naviList, three optional ones)
 # name -> (file in stacks/, containers that must run)
 STACKS = {
     "adguard": ("adguard.yaml", ["adguardhome"]),
@@ -73,13 +73,14 @@ STACKS = {
     "beszel-agent": ("beszel-agent.yaml", ["beszel-agent"]),
     "navidrome": ("navidrome.yaml", ["navidrome"]),        # optional: only on a machine with a music folder (see NavidromeStack)
     "audiomuse": ("audiomuse.yaml", ["audiomuse-postgres", "audiomuse-flask", "audiomuse-worker"]),   # optional: `homelab-setup audiomuse` (see AudioMuseStack)
+    "navilist": ("navilist.yaml", ["navilist"]),           # optional: `homelab-setup navilist` (see NaviListStack)
 }
 STACK_ORDER = ["adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
                "immich", "nextcloud", "homepage", "beszel-agent"]
 
 # local port of each service, and the HTTPS port Tailscale Serve uses for it
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,
-         "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999, "navidrome": 4533, "audiomuse": 8100}
+         "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999, "navidrome": 4533, "audiomuse": 8100, "navilist": 8200}
 SERVE = [(1000, "homepage"), (1001, "portainer"), (1002, "immich"), (1003, "beszel"), (1004, "adguard"),
          (1005, "nextcloud"), (1006, "filebrowser"), (1007, "speedtest"), (1008, "netdata")]
 
@@ -1221,6 +1222,11 @@ def stack_env(name):
                 ("AUDIOMUSE_USER", Ctx.admin), ("AUDIOMUSE_PASSWORD", Secrets.get("AUDIOMUSE_PASSWORD")),
                 ("AUDIOMUSE_TOKEN", Secrets.get("AUDIOMUSE_TOKEN")), ("AUDIOMUSE_JWT_SECRET", Secrets.get("AUDIOMUSE_JWT_SECRET")),
                 ("AUDIOMUSE_MEM", audiomuse_mem()), ("AUDIOMUSE_CPUS", str(audiomuse_cpus()))]
+    if name == "navilist":
+        return [("TZ", Ctx.tz), ("NAVILIST_NAVIDROME_URL", "http://%s:%d" % (svc_host(), PORTS["navidrome"])),
+                ("NAVILIST_NAVIDROME_USER", NAVILIST_ND_USER), ("NAVILIST_NAVIDROME_PASSWORD", Secrets.get("NAVILIST_ND_PASSWORD")),
+                ("NAVILIST_LASTFM_KEY", Secrets.get("LASTFM_APIKEY")), ("NAVILIST_LASTFM_USER", Secrets.get("NAVILIST_LASTFM_USER")),
+                ("NAVILIST_LB_TOKEN", Secrets.get("NAVILIST_LB_TOKEN")), ("NAVILIST_LB_USER", Secrets.get("NAVILIST_LB_USER"))]
     return []
 
 
@@ -1230,6 +1236,15 @@ AUDIOMUSE_SECRETS = {"AUDIOMUSE_DB_PASSWORD": lambda: rand_alnum(28), "AUDIOMUSE
                      "AUDIOMUSE_PASSWORD": lambda: rand_alnum(20), "AUDIOMUSE_TOKEN": lambda: rand_hex(24),
                      "AUDIOMUSE_JWT_SECRET": lambda: rand_hex(32)}
 NAVIDROME_AGENTS_WITH = "audiomuseai,deezer,lastfm,listenbrainz"      # audiomuseai must be first: Navidrome asks the first agent that knows similar songs
+
+
+# ---------------------------------------------------------------- naviList (optional: `homelab-setup navilist`)
+NAVILIST_ND_USER = "navilist"                         # the small Navidrome login naviList uses to read the library and make playlists
+
+
+def navilist_wanted():
+    """True when the person asked for naviList (`homelab-setup navilist`) on a machine the installer built."""
+    return bool(State.data.get("navilist")) and not Mode.existing
 
 
 def audiomuse_wanted():
@@ -3975,6 +3990,140 @@ class AudioMusePlugin(Step):
             url("audiomuse"), Ctx.admin))
 
 
+# ================================================================ naviList (playlists from ListenBrainz and Last.fm; only after `homelab-setup navilist`)
+NAVILIST_NAME_WANTED = re.compile(r"jams|exploration", re.I)          # the playlists ListenBrainz makes for you
+NAVILIST_LASTFM_WANTED = ("weekly", "top_1month")                       # this week's chart and the chart of the month
+
+
+def navilist_applies():
+    return navilist_wanted() and BY_ID["stack-navidrome"].applies()
+
+
+@step
+class NaviListUser(Step):
+    id, group = "navilist-user", "Services"
+    title = "naviList has its own small Navidrome login (a normal login with a generated password)"
+    needs = ("stack-navidrome", "navidrome-card")
+
+    def applies(self):
+        return navilist_applies()
+
+    def probe(self):
+        return "done" if State.data.get("navilist_user") and Secrets.get("NAVILIST_ND_PASSWORD") else "todo"
+
+    def run(self):
+        if Opt.dry:
+            out("      would make the Navidrome login '%s' for naviList (a normal login, not an admin)" % NAVILIST_ND_USER)
+            return
+        if not Secrets.get("NAVILIST_ND_PASSWORD"):
+            Secrets.vals["NAVILIST_ND_PASSWORD"] = rand_alnum(28)
+            Secrets.save()
+        mine = {"username": NAVILIST_ND_USER, "password": Secrets.get("NAVILIST_ND_PASSWORD")}
+        if http("POST", url("navidrome", "/auth/login"), body=mine, timeout=30)[0] != 200:       # not made yet (or by an earlier try)
+            pw = need_password("to make the naviList login in Navidrome")
+            st, js, _ = http("POST", url("navidrome", "/auth/login"), body={"username": Ctx.admin, "password": pw}, timeout=30)
+            if st != 200 or not isinstance(js, dict) or not js.get("token"):
+                raise Abort("Navidrome did not accept the login %s with the shared admin password, so the naviList login could not be made. "
+                            "Open Navidrome and check the login, then run `sudo homelab-setup refresh`." % Ctx.admin)
+            st, js, _ = http("POST", url("navidrome", "/api/user"), headers={"X-ND-Authorization": "Bearer " + js["token"]}, timeout=30,
+                             body={"userName": NAVILIST_ND_USER, "name": "naviList", "password": mine["password"], "isAdmin": False})
+            if st not in (200, 201):
+                raise Abort("Navidrome refused to make the login '%s' (HTTP %s). If a login with that name is already there, delete it in Navidrome "
+                            "(Users page), then run `sudo homelab-setup refresh`. Navidrome said: %s" % (NAVILIST_ND_USER, st, str(js)[:200]))
+            out("      Made the Navidrome login '%s' for naviList. Its password is saved in the root-only file (sudo homelab-setup secrets)." % NAVILIST_ND_USER)
+        State.data["navilist_user"] = True
+        State.save()
+
+
+class NaviListStack(StackStep):
+    """naviList's one container. Only after `homelab-setup navilist`."""
+
+    def applies(self):
+        return navilist_applies()
+
+    def detail(self):
+        return "port %d" % PORTS["navilist"]
+
+    def stamp(self):
+        env = "|".join("%s=%s" % kv for kv in stack_env("navilist"))           # a new token or user name deploys the stack once more
+        return hashlib.md5((stack_text("navilist") + env).encode()).hexdigest()
+
+    def probe(self):
+        return "done" if "navilist" in containers_running() and State.data.get("navilist_stack") == self.stamp() else "todo"
+
+    def run(self):
+        if not Opt.dry:
+            for folder in (Ctx.home + "/navilist", Ctx.home + "/navilist/data"):
+                os.makedirs(P(folder), exist_ok=True)
+                chown(P(folder), Ctx.uid, Ctx.gid)
+        StackStep.run(self)
+        if Opt.dry:
+            return
+        if not wait_for(lambda: http("GET", url("navilist", "/health"), timeout=10)[0] == 200, "naviList to answer", 180):
+            raise Abort("naviList does not answer on port %d. Look at its log:  docker logs navilist" % PORTS["navilist"])
+        navilist_apply_settings()
+        State.data["navilist_stack"] = self.stamp()
+        State.save()
+        if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
+            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)       # the dashboard card of naviList, now
+
+
+register(NaviListStack("navilist", ("portainer-env", "folders", "stack-navidrome", "navilist-user"),
+                       "naviList stack (makes Navidrome playlists from your ListenBrainz and Last.fm listening)", 300))
+
+
+def navilist_apply_settings():
+    """Put the saved logins into a running naviList. It only reads its environment the first time it starts, so a later change
+    (a new token, a new user name) is sent to its settings page the same way the page does it. Settings the person changed there stay."""
+    base = lambda path: url("navilist", path)
+    cur = http("GET", base("/settings/api"), timeout=20)[1]
+    cur = cur.get("settings", {}) if isinstance(cur, dict) else {}
+    st, js, _ = http("POST", base("/settings/test-navidrome"), timeout=60, body={
+        "navidrome_url": "http://%s:%d" % (svc_host(), PORTS["navidrome"]), "navidrome_user": NAVILIST_ND_USER,
+        "navidrome_password": Secrets.get("NAVILIST_ND_PASSWORD")})
+    if st != 200 or not isinstance(js, dict) or not js.get("ok"):
+        warn("naviList could not log in to Navidrome (%s). Open %s, go to Settings and press Test Connection." % (
+            js.get("error") if isinstance(js, dict) else "no answer", base("")))
+    http("POST", base("/settings"), timeout=30, body={
+        "music_folder_ids": cur.get("music_folder_ids", ""),               # the page blanks this when it is left out
+        "lastfm_api_key": Secrets.get("LASTFM_APIKEY"), "lastfm_username": Secrets.get("NAVILIST_LASTFM_USER"),
+        "listenbrainz_token": Secrets.get("NAVILIST_LB_TOKEN"), "listenbrainz_username": Secrets.get("NAVILIST_LB_USER")})
+    http("POST", base("/sync/library"), body={}, timeout=30)                 # read the songs of Navidrome now
+
+
+def navilist_subscribe():
+    """Subscribe naviList to the playlists ListenBrainz makes for you (Weekly Jams, Weekly Exploration, Daily Jams) and to two Last.fm charts.
+    Returns (names newly subscribed, names that are not there yet). ListenBrainz makes its playlists only after it has some of your listens."""
+    base = lambda path: url("navilist", path)
+    done, waiting = [], []
+    if Secrets.get("NAVILIST_LB_TOKEN") and Secrets.get("NAVILIST_LB_USER"):
+        http("POST", base("/sync/lb-playlists"), body={}, timeout=240)         # fetch the list from ListenBrainz
+        js = http("GET", base("/sync/lb-playlists/cached"), timeout=60)[1]
+        lists = js.get("playlists", []) if isinstance(js, dict) else []
+        mine = [p for p in lists if NAVILIST_NAME_WANTED.search("%s %s" % (p.get("title", ""), p.get("source_patch") or ""))]
+        if not mine:
+            waiting.append("the ListenBrainz playlists (Weekly Jams, Weekly Exploration, Daily Jams)")
+        for p in mine:
+            if p.get("enabled"):
+                continue
+            r = http("POST", base("/sync/lb-playlists/%s/import" % p["lb_mbid"]), body={}, timeout=240)[1]
+            if isinstance(r, dict) and r.get("ok"):
+                done.append(p.get("title", p["lb_mbid"]))
+    if Secrets.get("LASTFM_APIKEY") and Secrets.get("NAVILIST_LASTFM_USER"):
+        http("POST", base("/sync/lfm-playlists"), body={}, timeout=240)        # fetch the charts from Last.fm
+        js = http("GET", base("/sync/lfm-playlists/cached"), timeout=60)[1]
+        lists = {p["lfm_id"]: p for p in (js.get("playlists", []) if isinstance(js, dict) else [])}
+        for lid in NAVILIST_LASTFM_WANTED:
+            p = lists.get(lid)
+            if not p:
+                waiting.append("the Last.fm chart '%s'" % lid)
+            elif not p.get("enabled"):
+                r = http("POST", base("/sync/lfm-playlists/%s/import" % lid), body={}, timeout=240)[1]
+                if isinstance(r, dict) and r.get("ok"):
+                    done.append(p.get("title", lid))
+    return done, waiting
+
+
 # ================================================================ AdGuard Home
 def adguard_yaml():
     """Contents of AdGuard Home's settings file."""
@@ -5332,6 +5481,10 @@ def added_services():
         found["audiomuse-flask"] = ("AudioMuse-AI", "audiomuse-flask", PORTS["audiomuse"], 0)
     if "audiomuse-flask" in found:
         found["audiomuse-flask"] = ("AudioMuse-AI",) + found["audiomuse-flask"][1:]
+    if navilist_wanted() and navidrome_wanted() and "navilist" not in found:
+        found["navilist"] = ("naviList", "navilist", PORTS["navilist"], 0)
+    if "navilist" in found:
+        found["navilist"] = ("naviList",) + found["navilist"][1:]
     return sorted(found.values(), key=lambda x: x[0].lower())
 
 
@@ -5344,6 +5497,8 @@ def system_check():
         names.append("navidrome")
     if audiomuse_wanted() and navidrome_wanted():
         names += [c for c in STACKS["audiomuse"][1] if c != "audiomuse-worker" or not State.data.get("audiomuse_paused")]
+    if navilist_wanted() and navidrome_wanted():
+        names += STACKS["navilist"][1]
     up = containers_running()
     missing = [c for c in names if c not in up]
     if missing:
@@ -5383,8 +5538,9 @@ def system_check():
             st = http("GET", link, timeout=10)[0]
             if 0 < st < 500:
                 out("  %s%s%s %-18s %s" % (G, S_OK, N, label, mark(link)))
-            elif container in ("navidrome", "audiomuse-flask") and (container == "navidrome" or audiomuse_wanted()):
-                # the installer owns Navidrome and AudioMuse-AI, so a silent one is a problem
+            elif container in ("navidrome", "audiomuse-flask", "navilist") and (
+                    container == "navidrome" or (container == "audiomuse-flask" and audiomuse_wanted()) or (container == "navilist" and navilist_wanted())):
+                # the installer owns Navidrome, AudioMuse-AI and naviList, so a silent one is a problem
                 out("  %s%s%s %-18s %s  (no answer)" % (R, S_BAD, N, label, mark(link)))
                 problems.append(container)
             else:                                             # a service the person added: stopping it can be on purpose
@@ -5978,6 +6134,160 @@ def cmd_audiomuse(rest):
         warn("The setup did not finish. Read the message above, then run `sudo homelab-setup refresh` to continue.")
 
 
+LB_TOKEN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+SERVICE_USER = re.compile(r"^[^\s/?#&:@]{1,64}$")               # a Last.fm or ListenBrainz user name: no spaces, slashes or other address characters
+NAVILIST_SECRETS = ("NAVILIST_LASTFM_USER", "NAVILIST_LB_USER", "NAVILIST_LB_TOKEN")
+
+
+def cmd_navilist(rest):
+    """`navilist`: set up naviList (Navidrome playlists from your ListenBrainz and Last.fm listening); also subscribe, status, remove."""
+    load_all()
+    if Mode.existing:
+        say("This machine was built by hand, so the installer only reads it. naviList is set up with its own compose file; see its page on GitHub.")
+        return
+    if not State.exists():
+        raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    word = rest[0] if rest else ""
+    if word == "subscribe":
+        return navilist_subscribe_now()
+    if word == "status":
+        return navilist_status()
+    if word == "remove":
+        return navilist_remove()
+    if rest:
+        raise Abort("Unknown word '%s'. Use: homelab-setup navilist   or   navilist subscribe | status | remove" % word)
+    if not navidrome_wanted():
+        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome (it needs a music folder). Nothing was changed.")
+    other = "" if State.data.get("navilist") else port_taken_by(PORTS["navilist"], mine=("navilist",))
+    if other:
+        raise Abort("Port %d is already used by the container %s, and naviList needs it for its web page. Nothing was changed." % (PORTS["navilist"], other))
+    out("")
+    say("naviList makes playlists in Navidrome from what you listen to. ListenBrainz makes Weekly Jams, Weekly Exploration and Daily Jams for you, "
+        "and Last.fm has your charts. naviList turns them into Navidrome playlists, using only songs you already have.")
+    say("What this does:\n"
+        "  - adds one small container (its web page is on port %d) and makes a small Navidrome login for it\n"
+        "  - asks for your ListenBrainz user name and token (and your Last.fm user name if you saved a Last.fm key)\n"
+        "  - refreshes by itself: Navidrome every 5 minutes, ListenBrainz and Last.fm every 30 minutes\n"
+        "  - never downloads anything\n"
+        "  - ListenBrainz makes your playlists only after it has some of your listens, so the first ones can take a few days" % PORTS["navilist"])
+    if State.data.get("navilist"):
+        say("naviList is already set up; this changes the saved names and token, or checks it again. Press Enter to keep what is saved.")
+    elif Opt.dry:
+        say("This is a dry run: nothing was changed.")
+        return
+    elif not yesno("Set up naviList now?", True):
+        say("Nothing was changed.")
+        return
+    if Opt.dry:
+        say("This is a dry run: nothing was changed.")
+        return
+    say("Your ListenBrainz token is on https://listenbrainz.org/settings/ (sign in, then copy the User token). Your user name is the name you sign in with.")
+    lb_user = ask("ListenBrainz user name", Secrets.get("NAVILIST_LB_USER")).strip()
+    lb_token = ask_secret("ListenBrainz token (Enter keeps the saved one)").strip() or Secrets.get("NAVILIST_LB_TOKEN")
+    if lb_user and not SERVICE_USER.match(lb_user):
+        raise Abort("'%s' does not look like a ListenBrainz user name. Nothing was saved." % lb_user)
+    if bool(lb_user) != bool(lb_token):
+        raise Abort("ListenBrainz needs both the user name and the token. Nothing was saved.")
+    if lb_token and not LB_TOKEN.match(lb_token):
+        raise Abort("That does not look like a ListenBrainz token: it is 36 characters with dashes, like 1b2c3d4e-0000-1111-2222-333344445555. Nothing was saved.")
+    fm_user = ""
+    if Secrets.get("LASTFM_APIKEY"):
+        fm_user = ask("Last.fm user name (Enter to skip the Last.fm charts)", Secrets.get("NAVILIST_LASTFM_USER")).strip()
+        if fm_user and not SERVICE_USER.match(fm_user):
+            raise Abort("'%s' does not look like a Last.fm user name. Nothing was saved." % fm_user)
+    else:
+        say("No Last.fm key is saved, so the Last.fm charts are left out. (`sudo homelab-setup lastfm` saves the key; run this again afterwards.)")
+    if not lb_user and not fm_user:
+        raise Abort("naviList needs at least ListenBrainz or Last.fm to make playlists from. Nothing was saved.")
+    for key, val in (("NAVILIST_LB_USER", lb_user), ("NAVILIST_LB_TOKEN", lb_token), ("NAVILIST_LASTFM_USER", fm_user)):
+        if val:
+            Secrets.set(key, val)
+        else:
+            Secrets.vals.pop(key, None)
+    Secrets.save()
+    State.data["navilist"] = True
+    State.save()
+    cmd_refresh()
+    if not State.data.get("navilist_stack"):
+        warn("The setup did not finish. Read the message above, then run `sudo homelab-setup refresh` to continue.")
+        return
+    good("naviList is set up.")
+    navilist_report_subscribe()
+    say("Last step, once: Navidrome has to tell ListenBrainz (and Last.fm) what you play, or they have nothing to recommend from.\n"
+        "  1. Open Navidrome, click your name at the top right, then Personal.\n"
+        "  2. Switch on Scrobble to ListenBrainz and paste the same token. If you use Last.fm, link your Last.fm account there too.\n"
+        "  3. Play music as usual. In a few days ListenBrainz makes your playlists; they appear in Navidrome by themselves.\n"
+        "naviList's own page is %s. Check on it with `sudo homelab-setup navilist status`." % url("navilist"))
+
+
+def navilist_report_subscribe():
+    done, waiting = navilist_subscribe()
+    for name in done:
+        good("Subscribed: %s. It is in Navidrome's Playlists now." % name)
+    if waiting:
+        say("Not there yet: %s. This is normal at first; they appear after a few days of listening. "
+            "`sudo homelab-setup navilist subscribe` tries again (or tick them on naviList's page)." % "; ".join(waiting))
+    elif not done:
+        say("Everything is subscribed already.")
+
+
+def navilist_subscribe_now():
+    if not navilist_wanted():
+        raise Abort("naviList is not set up on this machine. Run `sudo homelab-setup navilist`.")
+    if "navilist" not in containers_running():
+        raise Abort("The naviList container is not running. Run `sudo homelab-setup refresh` first.")
+    if Opt.dry:
+        say("This is a dry run: it would subscribe naviList to the ListenBrainz playlists and the Last.fm charts. Nothing was changed.")
+        return
+    navilist_report_subscribe()
+
+
+def navilist_status():
+    out("")
+    if not navilist_wanted():
+        say("naviList is not set up on this machine. `sudo homelab-setup navilist` sets it up.")
+        return
+    up = containers_running()
+    say("Web page: %s" % url("navilist"))
+    out("      %-20s %s" % ("navilist", "running" if "navilist" in up else "NOT running"))
+    out("      %-20s %s" % ("ListenBrainz", Secrets.get("NAVILIST_LB_USER") or "not used"))
+    out("      %-20s %s" % ("Last.fm", (Secrets.get("NAVILIST_LASTFM_USER") or "not used") if Secrets.get("LASTFM_APIKEY") else "no Last.fm key saved"))
+    if "navilist" in up:
+        js = http("GET", url("navilist", "/sync/lb-playlists/cached"), timeout=30)[1]
+        lb = [p.get("title", "") for p in (js.get("playlists", []) if isinstance(js, dict) else []) if p.get("enabled")]
+        js = http("GET", url("navilist", "/sync/lfm-playlists/cached"), timeout=30)[1]
+        fm = [p.get("title", "") for p in (js.get("playlists", []) if isinstance(js, dict) else []) if p.get("enabled")]
+        for name in lb + fm:
+            out("      subscribed: %s" % name)
+        if not lb and not fm:
+            out("      no playlist is subscribed yet (sudo homelab-setup navilist subscribe)")
+
+
+def navilist_remove():
+    """`navilist remove`: remove the container. The playlists it made stay in Navidrome."""
+    if not navilist_wanted():
+        say("naviList is not set up. Nothing to remove.")
+        return
+    if Opt.dry:
+        say("This is a dry run: it would remove the naviList container and forget the ListenBrainz and Last.fm names. Nothing was changed.")
+        return
+    if not yesno("Remove naviList (the playlists it made stay in Navidrome)?", False):
+        say("Nothing was changed.")
+        return
+    if not Portainer.delete("navilist"):
+        raise Abort("Portainer could not remove the stack 'navilist'. Remove it in Portainer (Stacks), then run this again.")
+    for k in ("navilist", "navilist_stack"):
+        State.data.pop(k, None)
+    State.save()
+    for k in NAVILIST_SECRETS:
+        Secrets.vals.pop(k, None)
+    Secrets.save()
+    good("naviList is removed.")
+    say("The playlists it made are still in Navidrome (you can delete them there). Its data is still in %s/navilist/data; to free the space: sudo rm -rf %s/navilist\n"
+        "The Navidrome login called %s stays too; you can delete it on Navidrome's Users page." % (Ctx.home, Ctx.home, NAVILIST_ND_USER))
+    cmd_refresh()
+
+
 def cmd_cards(rest):
     """`cards`: look for new services (containers with a web page) and give each its Homepage card; also move, ignore, list."""
     prog = installed_copy("homelab-cards", "/usr/local/sbin")
@@ -6293,6 +6603,7 @@ Commands:
   cards                    give every new service (a container with a web page) its Homepage card; also: cards list | move | ignore
   lastfm                   save your free Last.fm key so Navidrome can suggest similar songs; also: lastfm remove
   audiomuse                set up AudioMuse-AI (Navidrome suggests songs that sound alike); also: audiomuse memory | pause | resume | status | remove
+  navilist                 set up naviList (Navidrome playlists from your ListenBrainz and Last.fm listening); also: navilist subscribe | status | remove
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -6353,7 +6664,7 @@ def main(argv):
             pos.append(a)
         i += 1
     cmd = pos[0] if pos else "checklist"
-    if cmd not in COMMANDS and cmd not in ("done", "skip", "cards", "lastfm", "audiomuse"):
+    if cmd not in COMMANDS and cmd not in ("done", "skip", "cards", "lastfm", "audiomuse", "navilist"):
         out("Unknown command '%s'. Try: homelab-setup help" % cmd)
         return 1
     ensure_root()
@@ -6369,6 +6680,8 @@ def main(argv):
             return cmd_lastfm(pos[1:])
         elif cmd == "audiomuse":
             return cmd_audiomuse(pos[1:])
+        elif cmd == "navilist":
+            return cmd_navilist(pos[1:])
         else:
             COMMANDS[cmd]()
     except Abort as e:
