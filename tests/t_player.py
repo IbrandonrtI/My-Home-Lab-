@@ -138,6 +138,19 @@ try:
             if not ok_:
                 late.append((top, detail))
         check("inner scrolling box: the player follows the card within a moment of every scroll", not late, late[:1])
+        # the player sits inside the scrolling box, so the browser moves it together with the cards: even in the very same instant as the scroll
+        check("inner scrolling box: the player frame lives inside the scrolling box", pg2.evaluate("document.getElementById('hl-player-box').parentNode.id") == "scroller")
+        same_instant = pg2.evaluate("""() => { var s = document.getElementById('scroller'); s.scrollTop = 333;
+            var c = document.querySelector('#navidrome-card .w').getBoundingClientRect(), b = document.getElementById('hl-player-box').getBoundingClientRect();
+            return Math.abs(c.top - b.top) < 1 && Math.abs(c.left - b.left) < 1; }""")
+        check("inner scrolling box: the player moves in the same instant as the cards (nothing is left to catch up)", same_instant)
+        id_before = players(pg2)[0].evaluate("window.__id")
+        pg2.evaluate("showStats()")
+        pg2.wait_for_timeout(800)
+        pg2.evaluate("showHome()")
+        pg2.wait_for_timeout(1200)
+        check("inner scrolling box: a tab change still does not reload the player", len(players(pg2)) == 1 and players(pg2)[0].evaluate("window.__id") == id_before)
+        check("inner scrolling box: after the tab change it lies over the card", *over(pg2))
         browser.close()
 finally:
     srv.shutdown()

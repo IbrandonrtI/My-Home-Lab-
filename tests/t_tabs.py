@@ -133,7 +133,7 @@ check("rules after the block are kept", "/* mine */\n.x { y: z; }" in r3)
 check("no shipped block: the file is left alone", m.css_tabs_block(BASE, "") == BASE)
 
 # ---- groups of this machine that the layout does not know yet
-check("the tabs css keeps the side margins of the tab bar", re.search(r"#tabs\s*\{[^}]*margin:\s*[\d.]+px 0", C) is None and "margin-top: 6px" in C)
+check("the tabs css keeps the side margins of the tab bar", re.search(r"#tabs\s*\{[^}]*margin:\s*[\d.]+px 0", C) is None and re.search(r"#tabs\s*\{[^}]*var\(--lk-side\)", C) is not None)
 base = "title: X\nlayout:\n  Network & DNS:\n    tab: Home\n    icon: mdi-lan\n  Productivity:\n    tab: Links\n"
 r, seen = m.layout_complete(base, ["Network & DNS", "My Apps"], ["Productivity", "Others"], [])
 check("a new service group goes on Home and a new bookmark group on Links",
