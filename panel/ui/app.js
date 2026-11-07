@@ -190,7 +190,7 @@ function iconField(initial, getHref) {
       const u = siteIcon(getHref());
       if (!u) return toast("Type the address first.", true);
       inp.value = u; redraw();
-    } }, "Use the site's icon") : null);
+    } }, "Use the Site's Icon") : null);
   return { input: inp, el: h("div", { class: "field" }, h("label", {}, "Icon"), row, h("div", { class: "hint" }, "Optional. Leave it empty for no icon.")) };
 }
 
@@ -225,7 +225,7 @@ function render() {
   put(root,
     h("div", { class: "stickytop" },
       h("header", { class: "top" },
-        h("div", { class: "grow" }, h("h1", {}, "Customize Your Dashboard"), h("div", { class: "sub" }, "Changes are saved to your dashboard files. Undo brings the last change back."))),
+        h("div", { class: "grow" }, h("h1", {}, "Customize Your Dashboard"), h("div", { class: "sub" }, "Changes are saved to your dashboard files. Use Undo to reverse the most recent change."))),
       h("nav", { class: "tabs", role: "tablist" }, VIEWS.map(([id, label]) =>
         h("button", { role: "tab", "aria-selected": String(view === id), onclick: () => { if (view !== id) { if (!(LOOKVIEWS.includes(view) && LOOKVIEWS.includes(id))) discardPreview(); view = id; render(); window.scrollTo(0, 0); } } }, label)))),
     fns[view](),
@@ -249,11 +249,11 @@ function drawFoot(dirty, onSave, onRevert, extra) {
   if (!footEl) return;
   put(footEl,
     h("div", { class: "state" + (dirty ? " dirty" : "") }, onSave ? (dirty ? "You have changes that are not saved yet." : "Everything shown is saved.") : ""),
-    onRevert ? h("button", { disabled: !dirty, onclick: onRevert }, "Throw Away") : null,
+    onRevert ? h("button", { disabled: !dirty, onclick: onRevert }, "Discard Changes") : null,
     extra || null,
     h("button", { disabled: !S.undo, onclick: doUndo, title: S.undo ? "Undo: " + S.undo : "Nothing to undo" }, "Undo"),
     h("button", { class: "primary", disabled: !onSave || !dirty, onclick: onSave || (() => {}) }, "Save"),
-    framed ? h("a", { class: "btn", href: location.href, target: "_blank", rel: "noopener" }, "Open in Tab") : null,
+    framed ? h("a", { class: "btn", href: location.href, target: "_blank", rel: "noopener" }, "Open in New Tab") : null,
     h("button", { class: "ghost", onclick: async () => { try { await api("POST", "/api/logout", {}); } catch (e) { /* already out */ } S = null; showLogin(); } }, "Log Out"));
 }
 function saveBar(dirty, onSave, onRevert, saveLabel, extra) {      // (kept for the screens: they hand over what the bottom bar shows)
@@ -263,7 +263,7 @@ function saveBar(dirty, onSave, onRevert, saveLabel, extra) {      // (kept for 
 
 // ---------------------------------------------------------------- Look and Colors (one look, two screens)
 function rgb(hex) { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ""); const n = m ? parseInt(m[1], 16) : 0; return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
-const PAINT_KEYS = ["paintAll", "paintStrength", "paintStyle", "cards", "links", "labels", "labelIcon", "names", "logo"];       // (what a ready-made look leaves as it is)
+const PAINT_KEYS = ["paintAll", "paintStrength", "paintStyle", "cards", "links", "labels", "labelIcon", "names", "logo"];       // (what a built-in look leaves as it is)
 let lookBarEl = null, pvTimer = null, pvSeq = 0;
 
 function lookOut() {                       // what is sent to the server: the look, with only the tab colors that differ from the shipped ones
@@ -309,11 +309,11 @@ function startLook() {
   return clone(S.look.values);
 }
 async function saveLook() {
-  try { await api("POST", "/api/look", { look: lookOut() }); toast("Look saved."); await afterChange(false); } catch (e) { fail(e); }
+  try { clearTimeout(pvTimer); pvSeq++; await api("POST", "/api/look", { look: lookOut() }); clearTimeout(pvTimer); pvSeq++; send({ type: "saved" }); toast("Look saved."); await afterChange(false); } catch (e) { fail(e); }
 }
 async function resetLook() {
   if (!await confirmBox("Reset All Settings?", "The colors, glass, shapes, names, logo and the colors of cards and labels go back to how the dashboard came. Your picture, cards and layout stay as they are. Undo can bring this change back.", "Reset All Settings")) return;
-  try { await api("POST", "/api/look/reset", {}); send({ type: "clear" }); toast("The shipped look is back."); await afterChange(true); } catch (e) { fail(e); }
+  try { await api("POST", "/api/look/reset", {}); send({ type: "saved" }); toast("All settings are back to the defaults."); await afterChange(false); } catch (e) { fail(e); }
 }
 function lookSlider(label, key, lo, hi, step, unit, hint) {
   const L = lookW;
@@ -401,69 +401,76 @@ function namesCard() {
       oninput: ev => { const v = ev.target.value.replace(/\s+/g, " ").trim(); if (v && v !== shipped) L.names[key] = v; else delete L.names[key]; lookChanged(); } });
     return [key, inp, h("div", { class: "field" }, h("div", { class: "lab" }, label), inp, h("div", { class: "hint" }, hint))];
   });
-  const logoBox = h("div", {});
+  const now = h("span", { class: "logo-now" }), nowName = h("span", { class: "small muted" });
+  const status = h("div", {});                                  // the logo in use, the On/Off button, the link and the size
+  const tiles = [];                                             // the ready-made drawings (made once, so an open color picker stays open)
   const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp,image/gif,image/svg+xml", hidden: true, onchange: async () => {
     const f = file.files[0]; file.value = "";
     if (!f) return;
-    if (f.size > 15 * 1024 * 1024) return toast("That picture is bigger than 15 MB. Choose a smaller one.", true);
-    try { L.logo.src = await shrinkLogo(f); delete L.logo.off; logoPick.i = -1; lookChanged(); drawLogo(); toast("Logo ready. Press Save to keep it."); } catch (e) { fail(e); }
+    if (f.size > 15 * 1024 * 1024) return toast("That picture is larger than 15 MB. Choose a smaller one.", true);
+    try { L.logo.src = await shrinkLogo(f); delete L.logo.off; logoPick.i = -1; lookChanged(); refresh(); toast("The logo is ready. Press Save to keep it."); } catch (e) { fail(e); }
   } });
-  function drawLogo() {
+  const color = logoPick.color || L.accent;
+  LOGO_ART.forEach(([name], i) => tiles.push(h("button", { class: "logo-tile", title: name, "aria-label": "Use the " + name + " logo",
+    onclick: async () => {
+      try {
+        L.logo.src = await logoPicture(i, logoPick.color || L.accent); delete L.logo.off;
+        logoPick = { i, color: logoPick.color, src: L.logo.src };
+        lookChanged(); refresh(); toast("The logo is ready. Press Save to keep it.");
+      } catch (e) { fail(e); }
+    } }, h("img", { src: logoArt(i, color, 40), alt: "", width: 40, height: 40 }))));
+  const pick = h("input", { type: "color", value: color, "aria-label": "Color of the built-in logos" });
+  pick.addEventListener("input", async () => {
+    logoPick.color = pick.value;
+    tiles.forEach((t, i) => { t.firstChild.src = logoArt(i, pick.value, 40); });
+    if (logoPick.i >= 0 && logoPick.src === L.logo.src) {
+      try { L.logo.src = await logoPicture(logoPick.i, pick.value); logoPick.src = L.logo.src; lookChanged(); refresh(); } catch (e) { /* the next change tries again */ }
+    }
+  });
+  const url = h("input", { type: "url", placeholder: "https://…", "aria-label": "Address of a logo picture on the web" });
+  const menu = h("details", { class: "logo-menu" },
+    h("summary", {}, now, h("b", {}, "Choose a Logo"), nowName),
+    h("div", { class: "field" }, h("div", { class: "lab" }, "Built-In Logos"),
+      h("div", { class: "logo-tiles" }, tiles),
+      h("div", { class: "row", style: { marginTop: "8px", alignItems: "center" } }, pick, h("span", { class: "small muted" }, "Color of the built-in logos"))),
+    h("div", { class: "field" }, h("div", { class: "lab" }, "Your Own Picture"),
+      h("div", { class: "row" }, h("button", { class: "primary", onclick: () => file.click() }, "Choose a Picture from This Computer…"), file),
+      h("div", { class: "row", style: { marginTop: "8px" } }, h("div", { class: "grow" }, url), h("button", { onclick: () => {
+        const v = url.value.trim();
+        if (!/^https?:\/\/\S+$/.test(v)) return toast("Type a web address that starts with https:// first.", true);
+        L.logo.src = v; delete L.logo.off; logoPick.i = -1; lookChanged(); refresh(); toast("Press Save to keep it.");
+      } }, "Use This Address")),
+      h("div", { class: "hint" }, "A picture from the web needs an address that starts with https://.")));
+  function refresh() {
     const has = !!L.logo.src, on = has && !L.logo.off;
-    const url = h("input", { type: "url", placeholder: "https://…", "aria-label": "Logo picture address" });
-    const link = h("input", { type: "url", placeholder: "https://… (optional)", value: L.logo.link || "", "aria-label": "Where the logo leads",
+    const shown = has && logoPick.i >= 0 && logoPick.src === L.logo.src;
+    put(now, has ? h("img", { src: L.logo.src, alt: "", style: { opacity: on ? 1 : 0.4 } }) : h("span", { class: "small muted" }, "None"));
+    nowName.textContent = !has ? "No logo chosen" : (shown ? LOGO_ART[logoPick.i][0] + (on ? "" : " (off)") : (on ? "Your picture" : "Your picture (off)"));
+    tiles.forEach((t, i) => t.setAttribute("aria-pressed", String(on && logoPick.i === i && logoPick.src === L.logo.src)));
+    const link = h("input", { type: "url", placeholder: "https://… (optional)", value: L.logo.link || "", "aria-label": "Web address the logo opens",
       oninput: ev => { const v = ev.target.value.trim(); if (v) L.logo.link = v; else delete L.logo.link; lookChanged(); } });
-    const color = logoPick.color || L.accent;
-    const tiles = LOGO_ART.map(([name], i) => h("button", { class: "logo-tile", title: name, "aria-label": "Use the " + name + " logo", "aria-pressed": String(on && logoPick.i === i && logoPick.src === L.logo.src),
-      onclick: async () => {
-        try {
-          const c = logoPick.color || L.accent;
-          L.logo.src = await logoPicture(i, c); delete L.logo.off;
-          logoPick = { i, color: logoPick.color, src: L.logo.src };
-          lookChanged(); drawLogo(); toast("Logo ready. Press Save to keep it.");
-        } catch (e) { fail(e); }
-      } }, h("img", { src: logoArt(i, color, 40), alt: "", width: 40, height: 40 })));
-    const pick = h("input", { type: "color", value: color, "aria-label": "Color of the ready-made logos" });
-    pick.addEventListener("input", async () => {                       // (the boxes are not drawn again, so the color picker stays open)
-      logoPick.color = pick.value;
-      tiles.forEach((t, i) => { t.firstChild.src = logoArt(i, pick.value, 40); });
-      if (logoPick.i >= 0 && logoPick.src === L.logo.src) {
-        try { L.logo.src = await logoPicture(logoPick.i, pick.value); logoPick.src = L.logo.src; lookChanged(); } catch (e) { /* the next change tries again */ }
-      }
-    });
-    put(logoBox,
-      has ? h("div", { class: "row", style: { marginBottom: "10px", alignItems: "center", flexWrap: "wrap" } },
-        h("img", { src: L.logo.src, alt: "Your logo", style: { maxHeight: "56px", maxWidth: "180px", borderRadius: "6px", background: "rgba(255,255,255,0.06)", padding: "4px", opacity: on ? 1 : 0.35 } }),
-        h("div", { class: "chips", role: "group", "aria-label": "Show the logo" },
-          h("button", { class: "chip", "aria-pressed": String(on), onclick: () => { delete L.logo.off; lookChanged(); drawLogo(); } }, "Logo On"),
-          h("button", { class: "chip", "aria-pressed": String(!on), onclick: () => { L.logo.off = true; lookChanged(); drawLogo(); } }, "Logo Off")),
-        h("button", { onclick: () => { L.logo = {}; logoPick = { i: -1, color: logoPick.color, src: "" }; lookChanged(); drawLogo(); } }, "Remove Logo"))
-        : h("p", { class: "muted small" }, "No logo yet. Pick one below."),
-      h("div", { class: "field" }, h("div", { class: "lab" }, "Ready-Made Logos"),
-        h("div", { class: "logo-tiles" }, tiles),
-        h("div", { class: "row", style: { marginTop: "8px", alignItems: "center" } }, pick, h("span", { class: "small muted" }, "Color of the ready-made logos"))),
-      h("div", { class: "row", style: { marginBottom: "10px" } }, h("button", { class: "primary", onclick: () => file.click() }, "Choose a Picture from This Computer…")),
-      h("div", { class: "field" }, h("div", { class: "lab" }, "Or Use a Picture from the Web"),
-        h("div", { class: "row" }, h("div", { class: "grow" }, url), h("button", { onclick: () => {
-          const v = url.value.trim();
-          if (!/^https?:\/\/\S+$/.test(v)) return toast("Type a web address that starts with https:// first.", true);
-          L.logo.src = v; delete L.logo.off; logoPick.i = -1; lookChanged(); drawLogo(); toast("Press Save to keep it.");
-        } }, "Use This Address"))),
-      has ? [h("div", { class: "field" }, h("div", { class: "lab" }, "Where the Logo Leads"), link, h("div", { class: "hint" }, "A web address that opens when the logo is clicked. Leave it empty for a logo that only shows.")),
-        (() => {
-          const val = h("span", { class: "val" }, (L.logo.size || 48) + " px");
-          return h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Logo Size"), val,
-            h("input", { type: "range", min: 24, max: 96, step: 2, value: L.logo.size || 48, "aria-label": "Logo size",
-              oninput: ev => { const n = Number(ev.target.value); if (n === 48) delete L.logo.size; else L.logo.size = n; val.textContent = n + " px"; lookChanged(); } })));
-        })()] : null);
+    const val = h("span", { class: "val" }, (L.logo.size || 48) + " px");
+    put(status,
+      h("div", { class: "lab" }, "Logo"),
+      has ? [
+        h("div", { class: "row logo-state" },
+          h("button", { class: "chip logo-switch", "aria-pressed": String(on), onclick: () => { if (L.logo.off) delete L.logo.off; else L.logo.off = true; lookChanged(); refresh(); } }, on ? "Logo: On" : "Logo: Off"),
+          h("span", { class: "small muted" }, on ? "Shown at the top left of the dashboard." : "Hidden. It is kept, so you can turn it back on.")),
+        h("div", { class: "field" }, h("div", { class: "lab" }, "Web Address the Logo Opens"), link,
+          h("div", { class: "hint" }, "Optional. Leave it empty for a logo that only shows.")),
+        h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Logo Size"), val,
+          h("input", { type: "range", min: 24, max: 96, step: 2, value: L.logo.size || 48, "aria-label": "Logo size",
+            oninput: ev => { const n = Number(ev.target.value); if (n === 48) delete L.logo.size; else L.logo.size = n; val.textContent = n + " px"; lookChanged(); } })))
+      ] : h("p", { class: "muted small" }, "There is no logo yet. Open “Choose a Logo” below to pick one."));
   }
-  drawLogo();
+  refresh();
   return h("div", { class: "card" }, h("h2", {}, "Names and Logo"),
-    h("p", { class: "muted" }, "Give the server and the two drives your own names, and put your own logo at the top left of the dashboard. Nothing is saved until you press “Save”."),
+    h("p", { class: "muted" }, "Give the server and the two drives your own names, and show your own logo at the top left of the dashboard. Nothing is saved until you press “Save”."),
     h("div", { class: "grid cols2" },
       h("div", {}, inputs.map(x => x[2]),
-        h("div", { class: "row" }, h("button", { class: "small", onclick: () => { L.names = {}; inputs.forEach(x => { x[1].value = ""; }); lookChanged(); } }, "Use the Original Names"))),
-      h("div", {}, h("div", { class: "lab", style: { marginBottom: "6px" } }, "Logo"), file, logoBox)));
+        h("div", { class: "row" }, h("button", { class: "small", onclick: () => { L.names = {}; inputs.forEach(x => { x[1].value = ""; }); lookChanged(); } }, "Restore Original Names"))),
+      status),
+    menu);
 }
 
 function viewLook() {
@@ -490,7 +497,7 @@ function viewLook() {
     const pick = h("input", { type: "color", value: cur(), "aria-label": "Color of the tab " + name });
     pick.addEventListener("input", () => { L.tabs[name] = pick.value; lookChanged(); });
     return h("div", { class: "row", style: { marginBottom: "6px" } }, pick, h("span", { class: "grow" }, name),
-      h("button", { class: "small", onclick: () => { L.tabs[name] = L.accent; pick.value = L.accent; lookChanged(); } }, "Same as Main Color"));
+      h("button", { class: "small", onclick: () => { L.tabs[name] = L.accent; pick.value = L.accent; lookChanged(); } }, "Use Main Color"));
   });
   const mock = h("div", { class: "preview", id: "mock" },
     h("div", { class: "mini-tabs" }, h("span", { class: "on" }, "Home"), h("span", {}, "Stats"), h("span", {}, "Links")),
@@ -498,29 +505,31 @@ function viewLook() {
   setTimeout(() => { lookPreview(!lookDirty()); refreshLookBar(); }, 0);       // nothing is sent to the dashboard until something is changed
   return h("div", {},
     namesCard(),
-    h("div", { class: "card" }, h("h2", {}, "Ready-Made Looks"), h("p", { class: "muted" }, "Pick one to try it. Nothing is saved until you press “Save”."),
-      h("div", { class: "chips" }, S.look.presets.map(p => h("button", { class: "chip", onclick: () => {
-        const base = clone(def); base.tabs = Object.assign({}, def.tabs);
-        for (const k of PAINT_KEYS) base[k] = clone(lookW[k]);              // the colors you gave single cards and labels stay
-        const pl = clone(p.look); const tabs = Object.assign({}, base.tabs, pl.tabs || {}); delete pl.tabs;
-        lookW = Object.assign(base, pl, { tabs });
-        render(); lookChanged();
-      } }, h("span", { class: "dot", style: { background: p.look.accent || def.accent } }), p.name)))),
-    h("div", { class: "card" }, h("h2", {}, "Colors"),
+    h("div", { class: "card" }, h("h2", {}, "Colors and Built-In Looks"),
+      h("div", { class: "field" }, h("div", { class: "lab" }, "Built-In Looks"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Pick one to try it. Nothing is saved until you press “Save”."),
+        h("div", { class: "chips" }, S.look.presets.map(p => h("button", { class: "chip", onclick: () => {
+          const base = clone(def); base.tabs = Object.assign({}, def.tabs);
+          for (const k of PAINT_KEYS) base[k] = clone(lookW[k]);              // the colors you gave single cards and labels stay
+          const pl = clone(p.look); const tabs = Object.assign({}, base.tabs, pl.tabs || {}); delete pl.tabs;
+          lookW = Object.assign(base, pl, { tabs });
+          render(); lookChanged();
+        } }, h("span", { class: "dot", style: { background: p.look.accent || def.accent } }), p.name)))),
       h("div", { class: "grid cols2" },
         h("div", {},
           colorField("Main Color", "accent", "The color of the active tab, bars, icons and the edge of a card you point at.", ["#8ab4ff", "#5ec8ff", "#7ee0a0", "#ffa66b", "#ff8fb5", "#c9a0ff", "#ffd36b", "#c3cad6"]),
-          colorField("Glass Color", "glass", "The tint of every card and tile.", ["#0d121e", "#06141f", "#07150d", "#1c0f12", "#1a0c16", "#111214"]),
-          glass),
-        h("div", { class: "field" }, h("div", { class: "lab" }, "Color of Each Tab"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Each tab can have its own accent color."), tabRows)),
-      h("p", { class: "muted small" }, "Want other colors for single cards, tiles, bookmarks or labels? Open the Colors screen.")),
-    h("div", { class: "grid cols2 lookrow" },
-      h("div", { class: "card sticky" }, h("h2", {}, "Preview"), h("p", { class: "muted" }, framed ? "The dashboard around this panel changes while you move things, so you can see the real result." : "A small sample of how cards and tabs look."), mock),
-      h("div", { class: "card" }, h("h2", {}, "Shapes and Space"),
-        lookSlider("How Round the Corners Are", "radius", 0, 40, 1, " px"),
-        lookSlider("Brightness of the Card Edge", "edge", 0, 40, 0.5, "%"),
-        lookSlider("Space at the Left and Right", "side", 0, 120, 2, " px"),
-        h("p", { class: "muted small" }, "The height of the music player is changed on the dashboard itself: use the small arrows button next to the shrink button on the player."))),
+          colorField("Glass Color", "glass", "The tint of every card and tile.", ["#0d121e", "#06141f", "#07150d", "#1c0f12", "#1a0c16", "#111214"])),
+        glass),
+      h("div", { class: "field" }, h("div", { class: "lab" }, "Color of Each Tab"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Each tab can have its own accent color."),
+        h("div", { class: "grid cols2 tabcolors" }, tabRows)),
+      h("p", { class: "muted small" }, "To give single cards, tiles, bookmarks or labels their own colors, open the Colors screen.")),
+    h("div", { class: "card" }, h("h2", {}, "Preview, Shapes and Space"),
+      h("div", { class: "grid cols2" },
+        h("div", {}, h("p", { class: "muted" }, framed ? "The dashboard around this panel changes while you move the sliders, so you can see the real result." : "A small sample of how cards and tabs look."), mock),
+        h("div", {},
+          lookSlider("How Round the Corners Are", "radius", 0, 40, 1, " px"),
+          lookSlider("Brightness of the Card Edge", "edge", 0, 40, 0.5, "%"),
+          lookSlider("Space at the Left and Right", "side", 0, 120, 2, " px"),
+          h("p", { class: "muted small" }, "The height of the music player is changed on the dashboard itself, with the small arrows button next to the shrink button on the player.")))),
     lookBarEl);
 }
 
@@ -634,15 +643,15 @@ function viewColors() {
     section("Stats Tiles", "The tiles of the Stats tab.", P.stats, L.cards, it => it.id, it => it.group, false),
     section("Calendar", "The calendar and the list of coming events.", P.calendar, L.cards, it => it.id, it => it.group, false),
     section("Bookmarks", "The bookmarks of the Links tab.", P.links, L.links, it => it.name, it => it.group, false),
-    h("div", { class: "card" }, h("h2", {}, "Labels"),
-      h("p", { class: "muted" }, "The names above each row of cards, such as Media & Entertainment. Choose a color for the text and for the little icon next to it."),
+    h("details", { class: "card" }, h("summary", {}, h("b", {}, "Labels"), h("span", { class: "badge" }, String(P.labels.length))),
+      h("p", { class: "muted small" }, "The names above each row of cards, such as Media & Entertainment. Choose a color for the text and for the small icon next to it."),
       h("div", { class: "row bulk" }, h("span", { class: "lab" }, "One Color for All Labels:"),
         h("span", { class: "lpart" }, h("span", { class: "small muted" }, "Text"), colorInput(bulkText, "Text color for all labels", v => { bulkText = v; })),
         h("span", { class: "lpart" }, h("span", { class: "small muted" }, "Icon"), colorInput(bulkIcon, "Icon color for all labels", v => { bulkIcon = v; })),
         h("button", { class: "small", onclick: () => { for (const n of P.labels) L.labels[n] = { text: bulkText, icon: bulkIcon }; lookChanged(); drawLabels(); } }, "Apply"),
         h("button", { class: "small", onclick: () => { L.labels = {}; lookChanged(); drawLabels(); } }, "Set All to Default")),
       labelRows,
-      h("div", { class: "field", style: { marginTop: "14px" } }, h("div", { class: "lab" }, "Icon Style"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "How the little icon next to every label looks."), styles)),
+      h("div", { class: "field", style: { marginTop: "14px" } }, h("div", { class: "lab" }, "Icon Style"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "How the small icon next to every label looks."), styles)),
     lookBarEl);
 }
 
@@ -657,14 +666,14 @@ function viewBackground() {
   drawPic();
   const bar = h("div", {});
   const dirty = () => B.url !== "" || B.blur !== (b.blur || "none") || B.saturate !== b.saturate || B.brightness !== b.brightness || B.opacity !== b.opacity;
-  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { discardPreview(); render(); }, "Save", h("button", { onclick: reset }, "Back to the Shipped Sliders")));
+  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { discardPreview(); render(); }, "Save", h("button", { onclick: reset }, "Restore Default Sliders")));
   const preview = () => { send({ type: "bg", image: B.url || b.image, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); refreshBar(); };
   async function save() {
     try { await api("POST", "/api/background", { url: B.url || undefined, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); toast("Background saved."); await afterChange(false); }
     catch (e) { fail(e); }
   }
   async function reset() {
-    try { await api("POST", "/api/background/reset", {}); send({ type: "clear" }); toast("The sliders are back to the shipped values."); await afterChange(true); } catch (e) { fail(e); }
+    try { await api("POST", "/api/background/reset", {}); send({ type: "clear" }); toast("The sliders are back to their default values."); await afterChange(true); } catch (e) { fail(e); }
   }
   function slider(label, key, hint) {
     const val = h("span", { class: "val" }, B[key] + "%");

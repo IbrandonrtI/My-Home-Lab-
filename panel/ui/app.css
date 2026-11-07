@@ -175,3 +175,14 @@ dialog.wide { width: min(720px, calc(100vw - 24px)); }
 .logo-tile:hover { background: rgba(255, 255, 255, 0.09); }
 .logo-tile[aria-pressed="true"] { border-color: rgb(var(--accent)); background: rgba(var(--accent), 0.16); }
 .logo-tile img { display: block; }
+.logo-menu { margin-top: 14px; border: 1px solid var(--line); border-radius: 12px; padding: 4px 12px; background: rgba(255, 255, 255, 0.03); }
+.logo-menu > summary { display: flex; align-items: center; gap: 10px; cursor: pointer; min-height: 48px; list-style: none; }
+.logo-menu > summary::-webkit-details-marker { display: none; }
+.logo-menu > summary::before { content: "▸"; color: var(--muted); transition: transform 0.15s; }
+.logo-menu[open] > summary::before { transform: rotate(90deg); }
+.logo-menu[open] { padding-bottom: 12px; }
+.logo-now { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border-radius: 8px; background: rgba(255, 255, 255, 0.06); }
+.logo-now img { max-width: 36px; max-height: 36px; display: block; }
+.logo-switch { min-width: 96px; }
+.logo-state { align-items: center; margin-bottom: 12px; }
+#mock { min-height: 250px; }
