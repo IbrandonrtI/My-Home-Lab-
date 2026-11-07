@@ -263,7 +263,7 @@ function saveBar(dirty, onSave, onRevert, saveLabel, extra) {      // (kept for 
 
 // ---------------------------------------------------------------- Look and Colors (one look, two screens)
 function rgb(hex) { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ""); const n = m ? parseInt(m[1], 16) : 0; return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
-const PAINT_KEYS = ["paintAll", "paintStrength", "paintStyle", "cards", "links", "labels", "labelIcon"];
+const PAINT_KEYS = ["paintAll", "paintStrength", "paintStyle", "cards", "links", "labels", "labelIcon", "names", "logo"];       // (what a ready-made look leaves as it is)
 let lookBarEl = null, pvTimer = null, pvSeq = 0;
 
 function lookOut() {                       // what is sent to the server: the look, with only the tab colors that differ from the shipped ones
@@ -284,6 +284,7 @@ function lookPreview(quiet) {
   }
   applyAccent();
   if (quiet) return;
+  send({ type: "names", names: lookW.names || {}, logo: lookW.logo || {} });       // the names and the logo do not go through the CSS of the preview
   clearTimeout(pvTimer);                    // the server writes the rules, so the preview is exactly what Save keeps
   pvTimer = setTimeout(async () => {
     const n = ++pvSeq;
@@ -291,7 +292,7 @@ function lookPreview(quiet) {
   }, 120);
 }
 function lookDirty() { return !same(lookNorm(lookW), lookNorm(S.look.values)); }
-function lookNorm(v) { const o = clone(v); o.tabs = o.tabs || {}; return o; }
+function lookNorm(v) { const o = clone(v); o.tabs = o.tabs || {}; o.names = o.names || {}; o.logo = o.logo || {}; return o; }
 function refreshLookBar() {
   if (!lookBarEl) return;
   put(lookBarEl, saveBar(lookDirty(), saveLook, () => { discardPreview(); render(); }, "Save",
@@ -311,7 +312,7 @@ async function saveLook() {
   try { await api("POST", "/api/look", { look: lookOut() }); toast("Look saved."); await afterChange(false); } catch (e) { fail(e); }
 }
 async function resetLook() {
-  if (!await confirmBox("Reset All Settings?", "The colors, glass, shapes and the colors of cards and labels go back to how the dashboard came. Your picture, cards and layout stay as they are. Undo can bring this change back.", "Reset All Settings")) return;
+  if (!await confirmBox("Reset All Settings?", "The colors, glass, shapes, names, logo and the colors of cards and labels go back to how the dashboard came. Your picture, cards and layout stay as they are. Undo can bring this change back.", "Reset All Settings")) return;
   try { await api("POST", "/api/look/reset", {}); send({ type: "clear" }); toast("The shipped look is back."); await afterChange(true); } catch (e) { fail(e); }
 }
 function lookSlider(label, key, lo, hi, step, unit, hint) {
@@ -330,6 +331,83 @@ function colorField(label, key, hint, swatches) {
   return h("div", { class: "field" }, h("div", { class: "lab" }, label),
     h("div", { class: "row" }, pick, hex, h("div", { class: "swatches" }, (swatches || []).map(c => h("button", { class: "swatch", style: { background: c }, title: c, "aria-label": "Use " + c, onclick: () => set(c) })))),
     hint ? h("div", { class: "hint" }, hint) : null);
+}
+
+// ---- Names and Logo (the top card of the Look screen)
+const SHIPPED_NAMES = [["homelab", "HomeLab", "Server Name", "The name under the big tile at the top left (and anywhere else it is shown)."],
+  ["main", "Main Pool", "Main Pool Name", "The first drive: on its tile at the top and in the Stats tab."],
+  ["backup", "Backup Pool", "Backup Pool Name", "The second drive. When it is not plugged in, its tile says “Connect” and then this name, then “Drive”."]];
+function shrinkLogo(file) {                  // the picture is made small (256 px) in the browser, so the dashboard loads it fast
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error("That file could not be read."));
+    fr.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That file could not be read as a picture. Choose a PNG, JPG, WebP, GIF or SVG file."));
+      img.onload = () => {
+        const w = img.naturalWidth || 256, ht = img.naturalHeight || 256, big = Math.max(w, ht);
+        let scale = file.type === "image/svg+xml" ? 256 / big : Math.min(1, 256 / big);
+        for (let i = 0; i < 8; i++) {
+          const c = document.createElement("canvas");
+          c.width = Math.max(1, Math.round(w * scale)); c.height = Math.max(1, Math.round(ht * scale));
+          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          const out = c.toDataURL("image/png");
+          if (out.length <= 140000) return resolve(out);
+          scale *= 0.7;
+        }
+        reject(new Error("That picture is too detailed to use as a logo. Try a simpler or smaller one."));
+      };
+      img.src = fr.result;
+    };
+    fr.readAsDataURL(file);
+  });
+}
+function namesCard() {
+  const L = lookW;
+  L.names = L.names || {}; L.logo = L.logo || {};
+  const inputs = SHIPPED_NAMES.map(([key, shipped, label, hint]) => {
+    const inp = h("input", { type: "text", maxlength: 24, value: L.names[key] || "", placeholder: shipped, "aria-label": label,
+      oninput: ev => { const v = ev.target.value.replace(/\s+/g, " ").trim(); if (v && v !== shipped) L.names[key] = v; else delete L.names[key]; lookChanged(); } });
+    return [key, inp, h("div", { class: "field" }, h("div", { class: "lab" }, label), inp, h("div", { class: "hint" }, hint))];
+  });
+  const logoBox = h("div", {});
+  const file = h("input", { type: "file", accept: "image/png,image/jpeg,image/webp,image/gif,image/svg+xml", hidden: true, onchange: async () => {
+    const f = file.files[0]; file.value = "";
+    if (!f) return;
+    if (f.size > 15 * 1024 * 1024) return toast("That picture is bigger than 15 MB. Choose a smaller one.", true);
+    try { L.logo.src = await shrinkLogo(f); lookChanged(); drawLogo(); toast("Logo ready. Press Save to keep it."); } catch (e) { fail(e); }
+  } });
+  function drawLogo() {
+    const has = !!L.logo.src;
+    const url = h("input", { type: "url", placeholder: "https://…", "aria-label": "Logo picture address" });
+    const link = h("input", { type: "url", placeholder: "https://… (optional)", value: L.logo.link || "", "aria-label": "Where the logo leads",
+      oninput: ev => { const v = ev.target.value.trim(); if (v) L.logo.link = v; else delete L.logo.link; lookChanged(); } });
+    put(logoBox,
+      has ? h("div", { class: "row", style: { marginBottom: "10px", alignItems: "center" } },
+        h("img", { src: L.logo.src, alt: "Your logo", style: { maxHeight: "56px", maxWidth: "180px", borderRadius: "6px", background: "rgba(255,255,255,0.06)", padding: "4px" } }),
+        h("button", { onclick: () => { L.logo = {}; lookChanged(); drawLogo(); } }, "Remove Logo")) : h("p", { class: "muted small" }, "No logo yet."),
+      h("div", { class: "row", style: { marginBottom: "10px" } }, h("button", { class: "primary", onclick: () => file.click() }, "Choose a Picture from This Computer…")),
+      h("div", { class: "field" }, h("div", { class: "lab" }, "Or Use a Picture from the Web"),
+        h("div", { class: "row" }, h("div", { class: "grow" }, url), h("button", { onclick: () => {
+          const v = url.value.trim();
+          if (!/^https?:\/\/\S+$/.test(v)) return toast("Type a web address that starts with https:// first.", true);
+          L.logo.src = v; lookChanged(); drawLogo(); toast("Press Save to keep it.");
+        } }, "Use This Address"))),
+      has ? [h("div", { class: "field" }, h("div", { class: "lab" }, "Where the Logo Leads"), link, h("div", { class: "hint" }, "A web address that opens when the logo is clicked. Leave it empty for a logo that only shows.")),
+        (() => {
+          const val = h("span", { class: "val" }, (L.logo.size || 48) + " px");
+          return h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Logo Size"), val,
+            h("input", { type: "range", min: 24, max: 96, step: 2, value: L.logo.size || 48, "aria-label": "Logo size",
+              oninput: ev => { const n = Number(ev.target.value); if (n === 48) delete L.logo.size; else L.logo.size = n; val.textContent = n + " px"; lookChanged(); } })));
+        })()] : null);
+  }
+  drawLogo();
+  return h("div", { class: "card" }, h("h2", {}, "Names and Logo"),
+    h("p", { class: "muted" }, "Give the server and the two drives your own names, and put your own logo at the top left of the dashboard. Nothing is saved until you press “Save”."),
+    h("div", { class: "grid cols2" },
+      h("div", {}, inputs.map(x => x[2]),
+        h("div", { class: "row" }, h("button", { class: "small", onclick: () => { L.names = {}; inputs.forEach(x => { x[1].value = ""; }); lookChanged(); } }, "Use the Original Names"))),
+      h("div", {}, h("div", { class: "lab", style: { marginBottom: "6px" } }, "Logo"), file, logoBox)));
 }
 
 function viewLook() {
@@ -363,6 +441,7 @@ function viewLook() {
     h("div", { class: "mini-cards" }, ["Navidrome", "Immich", "Beszel"].map(n => h("div", { class: "mini-card" }, h("b", {}, n), h("span", { class: "small muted" }, "Sample Card"), h("i", {})))));
   setTimeout(() => { lookPreview(!lookDirty()); refreshLookBar(); }, 0);       // nothing is sent to the dashboard until something is changed
   return h("div", {},
+    namesCard(),
     h("div", { class: "card" }, h("h2", {}, "Ready-Made Looks"), h("p", { class: "muted" }, "Pick one to try it. Nothing is saved until you press “Save”."),
       h("div", { class: "chips" }, S.look.presets.map(p => h("button", { class: "chip", onclick: () => {
         const base = clone(def); base.tabs = Object.assign({}, def.tabs);
