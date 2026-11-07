@@ -57,6 +57,8 @@ HLS_LIVE=1 hls refresh > $SIM_DIR/s1b.out 2>&1
 ok "S1 live mode reserves the bottom row and paints the n of m bar there and still prints the result" 'grep -q $'"'"'\033\[1;[0-9]*r'"'"' $SIM_DIR/s1b.out && grep -qE "[0-9]+ of [0-9]+  " $SIM_DIR/s1b.out && grep -q "✓" $SIM_DIR/s1b.out'
 ok "S1 refresh sets the 10 Tailscale Serve addresses (the panel on 1100 included)" '[ "$(wj "len(w[\"ts\"][\"serve\"])")" = 10 ]'
 ok "S1 the control panel: page files and the unit are installed" 'for f in index.html app.js app.css icon.svg; do [ -s $HLS_ROOT/usr/local/share/homelab-panel/ui/$f ] || exit 1; done; grep -q "HLP_PORT=8300" $HLS_ROOT/etc/systemd/system/homelab-panel.service && grep -q "^User=testuser" $HLS_ROOT/etc/systemd/system/homelab-panel.service'
+ok "S1 the web terminal: ttyd is installed and its unit runs as the lab user on a socket file (no network port)" 'wj "\"ttyd\" in w[\"pkgs\"]" | grep -q True && U=$HLS_ROOT/etc/systemd/system/homelab-terminal.service && grep -q "^User=testuser" $U && grep -q "ttyd --writable --interface /run/homelab-terminal/ttyd.sock --base-path /terminal" $U && grep -q "^RuntimeDirectoryMode=0700" $U && ! grep -q -- "--port\|--interface 0\|NoNewPrivileges" $U'
+ok "S1 the Terminal card is on the Links tab, after Edit Links" 'grep -q "terminal-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && ST=$HLS_ROOT/home/testuser/homepage-config/settings.yaml && E=$(grep -n "^  Edit Links:" $ST | cut -d: -f1) && T=$(grep -n "^  Terminal:" $ST | cut -d: -f1) && [ -n "$E" ] && [ -n "$T" ] && [ "$T" -gt "$E" ] && sed -n "$((T+1))p" $ST | grep -q "tab: Links"'
 ok "S1 the control panel has its Tailscale address 1100, pointing at 127.0.0.1:8300" 'wj "w[\"ts\"][\"serve\"][\"1100\"]" | grep -q "http://127.0.0.1:8300"'
 ok "S1 the Customize tab and its card are on the dashboard" 'grep -q "customize-card" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "Customize" $HLS_ROOT/home/testuser/homepage-config/settings.yaml'
 ok "S1 serve targets use the LAN address" 'wj "w[\"ts\"][\"serve\"][\"1005\"]" | grep -q "http://192.168.50.23:8082"'
@@ -207,7 +209,7 @@ unset HLS_FETCH_FAIL
 ok "S6 Docker step is reported failed with the reason" 'hls 2>&1 | grep -q "✗ Docker installed" && hls 2>&1 | grep -q "signing key"'
 ok "S6 Tailscale install failure is reported with the manual fallback" 'hls 2>&1 | grep -q "Install Tailscale manually"'
 ok "S6 nothing that needs Docker was attempted" '[ "$(wj "len(w[\"containers\"])")" = 0 ]'
-ok "S6 the steps that do not need Docker finished (9 of 59)" 'hls 2>&1 | grep -q "9 of 59"'
+ok "S6 the steps that do not need Docker finished (9 of 60)" 'hls 2>&1 | grep -q "9 of 60"'
 ok "S6 retry after the network is back finishes the job" '(printf "yes\n\ny\n$PW\n$PW\n" | hls install >/dev/null 2>&1; [ "$(wj "len([c for c in w[\"containers\"].values() if c[\"running\"]])")" = 16 ])'
 echo "### S6b apt update fails"
 fresh

@@ -112,6 +112,9 @@ class Panel:
 def main():
     tmp = tempfile.mkdtemp(prefix="hlpanel-")
     p = Panel(tmp)
+    tsock = os.path.join(tmp, "t.sock")
+    p.env["HLP_TERM_SOCK"] = tsock
+    fake = subprocess.Popen([sys.executable, os.path.join(HERE, "fake_ttyd.py"), tsock])
     try:
         # ---- before a password exists
         p.start()
@@ -206,7 +209,7 @@ def main():
         check("paint: lists cards, stats, calendar, links and labels", all(paint.get(k) for k in ("cards", "stats", "links", "labels")), {k: len(v) for k, v in paint.items()})
         check("paint: every item lists its default color", all(re.fullmatch(r"#[0-9a-f]{6}", x.get("color", "")) for k in ("cards", "stats", "calendar", "links") for x in paint[k]), paint["cards"][:2])
         check("paint: a card shows the color the shipped CSS gives it", any(x["id"] == "portainer-card" and x["color"] == "#171514" for x in paint["cards"]))
-        check("paint: the panel's own cards are never listed", not any(c["id"] in ("customize-card", "navidrome-card", "linkedit-card") for c in paint["cards"] + paint["stats"] + paint["calendar"]), paint["cards"])
+        check("paint: the panel's own cards are never listed", not any(c["id"] in ("customize-card", "navidrome-card", "linkedit-card", "terminal-card") for c in paint["cards"] + paint["stats"] + paint["calendar"]), paint["cards"])
         cid, stat = paint["cards"][0]["id"], paint["stats"][0]["id"]
         bm, label = paint["links"][0]["name"], paint["labels"][0]
         slug = re.sub(r"^-+|-+$", "", re.sub(r"[^a-z0-9]+", "-", label.lower()))
@@ -217,7 +220,7 @@ def main():
         check("colors: saved (all, cards, stats, bookmark, label)", st == 200 and "homelab look >>>" in css, js)
         check("colors: a card gets a color (strong to faint gradient), a border and a glow", "#%s{--accent:255, 0, 0;--hl-a1:0.558;--hl-a2:0.136;}" % cid in css, css[-1500:])
         check("colors: the border and glow are on the card", "box-shadow:0 0 0 1px rgba(255, 0, 0," in css and "#%s .service-card{border-color:rgba(255, 0, 0," % cid in css, css[-1500:])
-        check("colors: one color for everything leaves out the panel's cards", ':not([id="customize-card"]):not([id="navidrome-card"]):not([id="linkedit-card"])' in css and "17, 34, 51" in css, css[-1500:])
+        check("colors: one color for everything leaves out the panel's cards", ':not([id="customize-card"]):not([id="navidrome-card"]):not([id="linkedit-card"]):not([id="terminal-card"])' in css and "17, 34, 51" in css, css[-1500:])
         check("colors: a bookmark is found by its name tag", 'a[data-bm="' in css and "0, 0, 255" in css, css[-1500:])
         check("colors: a label has its own text and icon colors", 'data-group="%s"' % slug in css and "color:#ffffff!important" in css and "--icon-color:#ffcc00" in css, css[-1500:])
         check("colors: the circle label icon style is written", "border-radius:50%;background:rgba(var(--hl-label,var(--lk-accent)),.20)" in css, css[-1500:])
@@ -289,6 +292,76 @@ def main():
                   st == 200 and js["apps"] == ["old-app.png", "plex.svg", "portainer.svg"] and js["mdi"] == ["home-outline", "server"], js)
         finally:
             p2.stop()
+
+        # ---- the web terminal (ttyd on a socket, behind the panel's login)
+        for _ in range(50):
+            if os.path.exists(tsock):
+                break
+            time.sleep(0.05)
+
+        def ws(cookie=True, origin="http://localhost:%d" % p.port, send=b"hello"):
+            """A WebSocket handshake to /terminal/ws by hand. Returns (the head of the answer, the bytes that came back after it)."""
+            c = socket.create_connection(("127.0.0.1", p.port), timeout=5)
+            lines = ["GET /terminal/ws HTTP/1.1", "Host: localhost:%d" % p.port, "Upgrade: websocket", "Connection: Upgrade",
+                     "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==", "Sec-WebSocket-Version: 13"]
+            if origin:
+                lines.append("Origin: " + origin)
+            if cookie and p.cookie:
+                lines.append("Cookie: " + p.cookie)
+            c.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                d = c.recv(4096)
+                if not d:
+                    break
+                buf += d
+            head, _, rest = buf.partition(b"\r\n\r\n")
+            if head.startswith(b"HTTP/1.1 101"):
+                c.sendall(send)
+                while len(rest) < len(b"echo:" + send):
+                    d = c.recv(4096)
+                    if not d:
+                        break
+                    rest += d
+            c.close()
+            return head.decode("latin-1"), rest
+
+        st, js, txt, hd = p.req("GET", "/terminal/", cookie=False)
+        check("terminal: without the login the page says to log in (and nothing from the terminal is passed)", st == 401 and b"log in" in txt and b"fake ttyd" not in txt, (st, txt[:200]))
+        head, _ = ws(cookie=False)
+        check("terminal: without the login the WebSocket is refused", head.startswith("HTTP/1.1 401"), head[:80])
+        st, js, txt, hd = p.req("GET", "/terminal/")
+        csp = hd.get("Content-Security-Policy", "")
+        check("terminal: with the login the terminal's page comes through", st == 200 and b"fake ttyd" in txt and "text/html" in hd.get("Content-Type", ""), (st, txt[:100]))
+        check("terminal: its page may run its own script and may be framed only by the dashboard", "script-src 'self' 'unsafe-inline'" in csp and "frame-ancestors 'self' https://lab.example.ts.net:1000" in csp, csp)
+        check("terminal: the panel's login cookie is not given to the terminal", "X-Seen-Cookie" not in hd and b"hlpanel" not in txt)
+        st, js, txt, hd = p.req("GET", "/terminal/token")
+        check("terminal: the token address comes through", st == 200 and js == {"token": ""}, (st, txt))
+        st, js, txt, hd = p.req("GET", "/terminal")
+        check("terminal: /terminal goes to /terminal/", st == 302 and hd.get("Location") == "/terminal/", (st, hd))
+        st, js, txt, hd = p.req("GET", "/terminal/nothing-here")
+        check("terminal: an address the terminal does not have is not found", st == 404, st)
+        st, js, txt, hd = p.req("GET", "/terminal/", host="evil.example.com")
+        check("terminal: another host name is refused", st == 421, st)
+        st, js, txt, hd = p.req("POST", "/terminal/", body={})
+        check("terminal: only GET goes through (a POST does not reach the terminal)", st != 200 and b"fake ttyd" not in txt, st)
+        head, _ = ws(origin="https://evil.example.com")
+        check("terminal: a WebSocket from another website is refused", head.startswith("HTTP/1.1 403"), head[:80])
+        head, _ = ws(origin=None)
+        check("terminal: a WebSocket with no origin is refused", head.startswith("HTTP/1.1 403"), head[:80])
+        head, back = ws(origin="https://lab.example.ts.net:1100")
+        check("terminal: a WebSocket from the panel's own address is passed on, and bytes go both ways", head.startswith("HTTP/1.1 101") and back == b"echo:hello", (head[:60], back))
+        check("terminal: the login cookie is not given to the terminal here either", "X-Seen-Cookie: \r\n" in head + "\r\n" and "hlpanel" not in head, head)
+        fake.terminate()
+        fake.wait(5)
+        try:
+            os.unlink(tsock)
+        except OSError:
+            pass
+        st, js, txt, hd = p.req("GET", "/terminal/")
+        check("terminal: when it is not running the card says so in plain words", st == 502 and b"homelab-terminal" in txt, (st, txt[:200]))
+        head, _ = ws()
+        check("terminal: ... and so does the WebSocket", head.startswith("HTTP/1.1 502"), head[:80])
 
         # ---- the background
         st, js, _, _ = p.req("POST", "/api/background", {"blur": "xl", "brightness": 30, "saturate": 90, "opacity": 70})
@@ -469,6 +542,7 @@ def main():
         check("login: the wait also applies to the right password", st == 429, st)
     finally:
         p.stop()
+        fake.terminate()
         shutil.rmtree(tmp, ignore_errors=True)
     ok = all(results)
     print("OK" if ok else "FAIL")

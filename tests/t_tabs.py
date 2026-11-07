@@ -40,7 +40,7 @@ lay = re.findall(r"(?m)^  ([^\s:][^:\n]*):\s*$", S[S.index("\nlayout:"):])
 check("every shipped service group is on a tab", all(g in lay for g in svc_groups), str(svc_groups))
 stat_groups = list(m.STATS_GROUPS)
 check("the STATS groups of the code are the groups of the shipped block",
-      stat_groups == [g for g in svc_groups if g in m.STATS_GROUPS] and len(svc_groups) - len(stat_groups) - len(m.CALENDAR_GROUPS) == 5, str(svc_groups))
+      stat_groups == [g for g in svc_groups if g in m.STATS_GROUPS] and len(svc_groups) - len(stat_groups) - len(m.CALENDAR_GROUPS) == 6, str(svc_groups))
 for g in stat_groups:
     blk = re.search(r"(?m)^  %s:\n((?:    .*\n)+)" % re.escape(g), S).group(0)
     ok = "tab: Stats" in blk and "icon: %s" % m.STATS_GROUPS[g][0] in blk and "columns: %d" % m.STATS_GROUPS[g][1] in blk
@@ -264,6 +264,15 @@ check("Edit Links moves in front of the bookmark groups on the Links tab", le1.i
 check("the Edit Links move happens once; a later order is left alone", m.layout_linkedit_first(LE, ls1)[0] == LE)
 check("without an Edit Links entry or a layout nothing changes", m.layout_linkedit_first("title: X\n", [])[0] == "title: X\n" and m.layout_linkedit_first("layout:\n  A:\n    tab: Home\n", [])[0] == "layout:\n  A:\n    tab: Home\n")
 new_lay, _ = m.layout_complete("layout:\n  Network:\n    tab: Home\n  Entertainment:\n    tab: Links\n", ["Network", "Edit Links"], ["Entertainment"], ["Network", "Entertainment"])
+LT = "layout:\n  Network:\n    tab: Home\n  Edit Links:\n    tab: Links\n  Entertainment:\n    tab: Links\n"
+lt1, _ = m.layout_complete(LT, ["Network", "Edit Links", "Terminal"], ["Entertainment"], ["Network", "Edit Links", "Entertainment"])
+check("a new Terminal card goes right after Edit Links, in front of the bookmark groups", lt1.index("  Edit Links:") < lt1.index("  Terminal:") < lt1.index("  Entertainment:") and "mdi-console" in lt1, lt1)
+lt2, _ = m.layout_complete("layout:\n  Network:\n    tab: Home\n  Entertainment:\n    tab: Links\n", ["Network", "Edit Links", "Terminal"], ["Entertainment"], ["Network", "Entertainment"])
+check("with neither card on the layout yet, Edit Links comes first and then Terminal", lt2.index("  Edit Links:") < lt2.index("  Terminal:") < lt2.index("  Entertainment:"), lt2)
+lt3, _ = m.layout_linkedit_first("layout:\n  A:\n    tab: Links\n  Terminal:\n    tab: Links\n  Edit Links:\n    tab: Links\n", [])
+check("the move keeps Edit Links before Terminal", lt3.index("  Edit Links:") < lt3.index("  Terminal:") < lt3.index("  A:"), lt3)
+check("the Terminal card is in the shipped services block, inside the panel's managed block, and its address is the panel's /terminal/ on port 1100",
+      "id: terminal-card" in V and "1100/terminal/" in V and V.index("id: terminal-card") > V.index(m.CUSTOM_BEGIN) and V.index("id: terminal-card") < V.index(m.CUSTOM_END), "")
 check("a new Edit Links card is added in front of the bookmark groups", new_lay.index("  Edit Links:") < new_lay.index("  Entertainment:") and "    tab: Links" in new_lay.split("  Edit Links:")[1].split("  Entertainment:")[0], new_lay)
 check("the Calendar cards share the stats card look in the css", all(x in C for x in ('li[id^="cal-"]::before', 'li[id^="cal-"]::after', "#cal-month", "#cal-agenda")))
 check("the calendar cards have ids that start with cal-", re.findall(r"(?m)^        id: (cal-[\w-]+)$", V) == ["cal-month", "cal-agenda"])
