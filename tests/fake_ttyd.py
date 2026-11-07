@@ -35,7 +35,7 @@ class H(socketserver.StreamRequestHandler):
                     return
                 self.request.sendall(b"echo:" + data)
         if path == "/terminal/":
-            body = b"<html><body>fake ttyd<script>var x=1;</script></body></html>"
+            body = b"<html><head><title>t</title></head><body>fake ttyd<script>var x=1;</script></body></html>"
             ctype = "text/html"
         elif path == "/terminal/token":
             body, ctype = b'{"token": ""}', "application/json"

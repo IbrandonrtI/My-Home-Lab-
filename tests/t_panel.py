@@ -273,6 +273,33 @@ def main():
         p.req("POST", "/api/look/reset", {})
         check("colors: reset removes it all", "homelab look" not in p.read("custom.css"))
 
+        # ---- names and logo
+        import base64 as b64
+        png = "data:image/png;base64," + b64.b64encode(b"\x89PNG\r\n\x1a\n" + b"0" * 40).decode()
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"names": {"homelab": "  Vault   One ", "main": "Main Pool", "backup": "Cold Copy"}, "logo": {"src": png, "link": "https://example.com/x", "size": 60}}})
+        css = p.read("custom.css")
+        check("names: saved as page values, the shipped name is not written", st == 200 and '--hl-name-homelab: "Vault One";' in css and '--hl-name-backup: "Cold Copy";' in css and "--hl-name-main" not in css, css[-900:])
+        check("names: the logo and its link and size are written", '--hl-logo-src: "data:image/png;base64,' in css and '--hl-logo-link: "https://example.com/x";' in css and "--hl-logo-size: 60px;" in css, css[-900:])
+        cs = p.state_now()["look"]["custom"]
+        check("names: read back", cs["names"] == {"homelab": "Vault One", "backup": "Cold Copy"} and cs["logo"]["link"] == "https://example.com/x" and cs["logo"]["size"] == 60, cs)
+        st, js, _, _ = p.req("POST", "/api/look/css", {"look": {"names": {"homelab": "X"}}})
+        check("names: a preview leaves them out of the CSS (the page gets them as a message)", st == 200 and "--hl-name" not in js["css"], js)
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"logo": {"src": "https://example.com/logo.png"}}})
+        css = p.read("custom.css")
+        check("names: a web address works as a logo, without link, at the default size", st == 200 and '--hl-logo-src: "https://example.com/logo.png";' in css and "--hl-logo-link" not in css and "--hl-logo-size: 48px;" in css, css[-500:])
+        for bad, why in (({"names": {"homelab": 'a"b'}}, "a quote in a name"), ({"names": {"main": "x" * 25}}, "a long name"), ({"names": {"other": "x"}}, "an unknown name"),
+                         ({"names": {"main": "a\\b"}}, "a backslash"), ({"logo": {"src": "javascript:alert(1)"}}, "a script address"),
+                         ({"logo": {"src": "https://a.b/c.png", "link": "ftp://x"}}, "a link that is not a web address"), ({"logo": {"src": "data:image/png;base64,AAAA"}}, "a picture that is not a picture"),
+                         ({"logo": {"src": "data:image/svg+xml;base64,AAAA"}}, "an svg data address"), ({"logo": {"src": "https://a.b/c\\d.png"}}, "a backslash in the address"),
+                         ({"logo": {"src": png, "size": 500}}, "a huge size"), ({"logo": {"src": "data:image/png;base64," + "A" * 200000}}, "a huge picture")):
+            st, js, _, _ = p.req("POST", "/api/look", {"look": bad})
+            check("names: refused: " + why, st == 400, (st, js))
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"names": {"main": ""}, "logo": {"link": "https://example.com/only-link"}}})
+        check("names: a link without a picture is dropped", st == 200 and "--hl-logo" not in p.read("custom.css") and "--hl-name" not in p.read("custom.css"), p.read("custom.css")[-300:])
+        p.req("POST", "/api/look", {"look": {"names": {"backup": "Cold Copy"}}})
+        p.req("POST", "/api/look/reset", {})
+        check("names: the reset takes them away", "--hl-name" not in p.read("custom.css") and p.state_now()["look"]["custom"] == {})
+
         # the icon library (lists given by a file, so the test needs no internet)
         tree = os.path.join(tmp, "tree.json")
         mdi = os.path.join(tmp, "mdi.json")
@@ -334,6 +361,7 @@ def main():
         csp = hd.get("Content-Security-Policy", "")
         check("terminal: with the login the terminal's page comes through", st == 200 and b"fake ttyd" in txt and "text/html" in hd.get("Content-Type", ""), (st, txt[:100]))
         check("terminal: its page may run its own script and may be framed only by the dashboard", "script-src 'self' 'unsafe-inline'" in csp and "frame-ancestors 'self' https://lab.example.ts.net:1000" in csp, csp)
+        check("terminal: a line is added to its page so the dashboard does not move when it reaches its top or bottom", b"overscroll-behavior:contain" in txt and b"fake ttyd" in txt, txt[:300])
         check("terminal: the panel's login cookie is not given to the terminal", "X-Seen-Cookie" not in hd and b"hlpanel" not in txt)
         st, js, txt, hd = p.req("GET", "/terminal/token")
         check("terminal: the token address comes through", st == 200 and js == {"token": ""}, (st, txt))

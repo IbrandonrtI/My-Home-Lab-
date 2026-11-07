@@ -264,11 +264,16 @@ check("Edit Links moves in front of the bookmark groups on the Links tab", le1.i
 check("the Edit Links move happens once; a later order is left alone", m.layout_linkedit_first(LE, ls1)[0] == LE)
 check("without an Edit Links entry or a layout nothing changes", m.layout_linkedit_first("title: X\n", [])[0] == "title: X\n" and m.layout_linkedit_first("layout:\n  A:\n    tab: Home\n", [])[0] == "layout:\n  A:\n    tab: Home\n")
 new_lay, _ = m.layout_complete("layout:\n  Network:\n    tab: Home\n  Entertainment:\n    tab: Links\n", ["Network", "Edit Links"], ["Entertainment"], ["Network", "Entertainment"])
-LT = "layout:\n  Network:\n    tab: Home\n  Edit Links:\n    tab: Links\n  Entertainment:\n    tab: Links\n"
-lt1, _ = m.layout_complete(LT, ["Network", "Edit Links", "Terminal"], ["Entertainment"], ["Network", "Edit Links", "Entertainment"])
-check("a new Terminal card goes right after Edit Links, in front of the bookmark groups", lt1.index("  Edit Links:") < lt1.index("  Terminal:") < lt1.index("  Entertainment:") and "mdi-console" in lt1, lt1)
+LT = "layout:\n  Network:\n    tab: Home\n  Edit Links:\n    tab: Links\n  Entertainment:\n    tab: Links\n  Customize:\n    tab: Customize\n"
+lt1, _ = m.layout_complete(LT, ["Network", "Edit Links", "Customize", "Terminal"], ["Entertainment"], ["Network", "Edit Links", "Entertainment", "Customize"])
+check("a new Terminal card goes to the bottom of the Customize tab, after the Customize card", lt1.index("  Customize:") < lt1.index("  Terminal:") and "mdi-console" in lt1 and "    tab: Customize" in lt1.split("  Terminal:")[1], lt1)
 lt2, _ = m.layout_complete("layout:\n  Network:\n    tab: Home\n  Entertainment:\n    tab: Links\n", ["Network", "Edit Links", "Terminal"], ["Entertainment"], ["Network", "Entertainment"])
-check("with neither card on the layout yet, Edit Links comes first and then Terminal", lt2.index("  Edit Links:") < lt2.index("  Terminal:") < lt2.index("  Entertainment:"), lt2)
+check("with neither card on the layout yet, Edit Links is in front of the bookmark groups and Terminal is last, on the Customize tab", lt2.index("  Edit Links:") < lt2.index("  Entertainment:") < lt2.index("  Terminal:") and "tab: Customize" in lt2.split("  Terminal:")[1], lt2)
+TM = "layout:\n  Network:\n    tab: Home\n  Edit Links:\n    tab: Links\n  Terminal:\n    tab: Links\n    icon: mdi-console\n  Entertainment:\n    tab: Links\n  Customize:\n    tab: Customize\n    icon: mdi-tune\nbackground:\n  x: 1\n"
+tm1, ts1 = m.layout_terminal_to_customize(TM, [])
+check("the Terminal card moves from the Links tab to the bottom of the Customize tab, once", tm1.index("  Customize:") < tm1.index("  Terminal:") and tm1.count("  Terminal:") == 1 and "icon: mdi-console" in tm1 and tm1.split("  Terminal:")[1].lstrip("\n").startswith("    tab: Customize") and "    tab: Links\n    icon: mdi-console" not in tm1 and m.TERMINAL_MOVED in ts1 and tm1.endswith("background:\n  x: 1\n"), tm1)
+check("the Terminal move happens once; a later order is left alone", m.layout_terminal_to_customize(tm1.replace("  Terminal:", "  Terminal:", 1), ts1)[0] == tm1)
+check("a Terminal card on another tab, or no layout, is not touched", m.layout_terminal_to_customize(TM.replace("  Terminal:\n    tab: Links", "  Terminal:\n    tab: Stats"), [])[0] == TM.replace("  Terminal:\n    tab: Links", "  Terminal:\n    tab: Stats") and m.layout_terminal_to_customize("title: X\n", [])[0] == "title: X\n")
 lt3, _ = m.layout_linkedit_first("layout:\n  A:\n    tab: Links\n  Terminal:\n    tab: Links\n  Edit Links:\n    tab: Links\n", [])
 check("the move keeps Edit Links before Terminal", lt3.index("  Edit Links:") < lt3.index("  Terminal:") < lt3.index("  A:"), lt3)
 check("the Terminal card is in the shipped services block, inside the panel's managed block, and its address is the panel's /terminal/ on port 1100",

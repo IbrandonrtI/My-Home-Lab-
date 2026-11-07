@@ -41,7 +41,7 @@ PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08
 def host_page(panel_port):
     return ("""<!doctype html><html><head><title>host</title><style>#inner_wrapper{--lk-accent:138, 180, 255;--lk-radius:16px}</style></head><body>
 <div id="background" style="background-image:url('/x.jpg')"></div>
-<div id="inner_wrapper"><ul><li id="customize-card"><iframe id="panel" src="http://localhost:%d/" style="width:1000px;height:760px;border:0"></iframe></li></ul></div>
+<div id="inner_wrapper"><div id="widgets-wrap"><div class="widget-container"><div>CPU 31</div><div>HomeLab</div></div><div class="widget-container"><div>Main Pool</div></div><div class="widget-container"><div>Connect Backup Drive</div></div></div><ul><li id="customize-card"><iframe id="panel" src="http://localhost:%d/" style="width:1000px;height:760px;border:0"></iframe></li></ul></div>
 <ul><li id="linkedit-card"><iframe id="linkpanel" src="http://localhost:%d/?only=links" style="width:1000px;height:760px;border:0"></iframe></li></ul>
 <iframe id="stranger" src="about:blank" style="width:10px;height:10px"></iframe>
 <script src="/custom.js"></script></body></html>""" % (panel_port, panel_port)).encode()
@@ -124,6 +124,43 @@ def main():
             check("bar: it has the Reset All Settings button on the Look screen", "Reset All Settings" in names, names)
             check("top: the title and tabs are in a section that stays in place", fr.locator(".stickytop nav.tabs").count() == 1 and fr.locator("header.top button").count() == 0
                   and fr.locator(".stickytop").evaluate("e => getComputedStyle(e).position") == "sticky")
+
+            # ---- names and logo (the top card of the Look screen)
+            wrap = lambda: pg.evaluate("document.getElementById('widgets-wrap').textContent")
+            fr.locator('input[aria-label="Server Name"]').fill("Vault")
+            fr.locator('input[aria-label="Main Pool Name"]').fill("Data")
+            fr.locator('input[aria-label="Backup Pool Name"]').fill("Spare")
+            pg.wait_for_timeout(300)
+            check("names: typed names show on the dashboard at once, also in 'Connect ... Drive'", "Vault" in wrap() and "HomeLab" not in wrap() and "Data" in wrap() and "Connect Spare Drive" in wrap() and "Main Pool" not in wrap(), wrap())
+            check("names: an unsaved name is not written to the css", "--hl-name" not in p.read("custom.css"))
+            fr.locator('input[aria-label="Logo picture address"]').fill("https://example.com/l.png")
+            fr.get_by_role("button", name="Use This Address").click()
+            pg.wait_for_timeout(300)
+            lg = "(() => { const e = document.getElementById('hl-logo'); return e ? [e.tagName, e.firstChild.getAttribute('src'), document.getElementById('widgets-wrap').firstElementChild === e, e.firstChild.style.height] : null; })()"
+            check("logo: a web address shows as the first thing of the top bar, without a link", pg.evaluate(lg) == ["SPAN", "https://example.com/l.png", True, "48px"], pg.evaluate(lg))
+            fr.locator('input[aria-label="Where the logo leads"]').fill("https://example.com/home")
+            fr.locator('input[aria-label="Logo size"]').fill("70")
+            pg.wait_for_timeout(300)
+            got = pg.evaluate(lg)
+            check("logo: a link makes it a link that opens in a new tab, and the size slider changes the height", got and got[0] == "A" and got[3] == "70px" and pg.evaluate("document.getElementById('hl-logo').getAttribute('target')") == "_blank", got)
+            fr.get_by_role("button", name="Throw Away").click()
+            pg.wait_for_timeout(300)
+            check("names: throw away brings the shipped names back and takes the logo off", "HomeLab" in wrap() and "Vault" not in wrap() and "Main Pool" in wrap() and "Connect Backup Drive" in wrap() and pg.evaluate(lg) is None, wrap())
+            fr.locator('input[type=file]').first.set_input_files(files=[{"name": "l.png", "mimeType": "image/png", "buffer": PNG}])
+            pg.wait_for_timeout(800)
+            got = pg.evaluate(lg)
+            check("logo: a picture from the computer is made small in the browser and shown", got and got[1].startswith("data:image/png;base64,"), got)
+            fr.locator('input[aria-label="Server Name"]').fill("Vault")
+            fr.get_by_role("button", name="Save", exact=True).click()
+            pg.wait_for_timeout(800)
+            css = p.read("custom.css")
+            check("names: Save writes the names and the logo to custom.css", '--hl-name-homelab: "Vault";' in css and '--hl-logo-src: "data:image/png;base64,' in css, css[-400:])
+            fr.get_by_role("button", name="Remove Logo").click()
+            fr.get_by_role("button", name="Use the Original Names").click()
+            fr.get_by_role("button", name="Save", exact=True).click()
+            pg.wait_for_timeout(800)
+            check("names: removing them and saving takes them out of custom.css again", "--hl-name" not in p.read("custom.css") and "--hl-logo" not in p.read("custom.css"), p.read("custom.css")[-300:])
+            check("names: the shipped names are back on the dashboard", "HomeLab" in wrap() and pg.evaluate(lg) is None, wrap())
 
             # ---- transparent glass and the Colors screen
             ga = lambda: pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-glass-a').trim()")
