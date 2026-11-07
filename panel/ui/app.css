@@ -25,6 +25,7 @@ p { margin: 0 0 10px; }
 a { color: rgb(var(--accent)); }
 
 #app { max-width: 1100px; margin: 0 auto; padding: 14px 16px 90px; }
+.stickytop { position: sticky; top: 0; z-index: 6; background: var(--bg); margin: 0 -16px; padding: 0 16px; }
 header.top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 6px 0 12px; }
 header.top .grow { flex: 1 1 200px; }
 header.top .sub { color: var(--muted); font-size: 13px; }
@@ -122,11 +123,13 @@ dialog .actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap
 #toast.bad { border-color: var(--bad); }
 .login { max-width: 420px; margin: 8vh auto 0; }
 .login .err { color: var(--bad); min-height: 22px; margin: 6px 0; }
-.savebar { position: sticky; bottom: 0; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; padding: 10px 0; background: linear-gradient(transparent, var(--bg) 40%); }
+.savebar { position: sticky; bottom: 0; z-index: 5; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 14px -16px 0; padding: 10px 16px; background: var(--bg); border-top: 1px solid var(--line); }
 .savebar .state { color: var(--muted); font-size: 14px; flex: 1 1 160px; }
 .savebar .state.dirty { color: #ffd78a; }
 @media (max-width: 560px) {
   #app { padding: 10px 10px 90px; }
+  .stickytop { margin: 0 -10px; padding: 0 10px; }
+  .savebar { margin: 14px -10px 0; padding: 8px 10px; }
   .card { padding: 13px; }
   .grp input.icon-in { width: 120px; }
 }

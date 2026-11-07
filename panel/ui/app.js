@@ -219,17 +219,18 @@ function render() {
   try { sessionStorage.setItem("hlp-view", view); } catch (e) { /* storage may be blocked */ }
   const fns = { look: viewLook, colors: viewColors, background: viewBackground, layout: viewLayout, cards: viewCards, links: viewLinks };
   if (ONLY === "links") { put(root, viewLinks()); applyAccent(); return; }
+  footEl = h("div", { class: "savebar" });
+  drawFoot(false, null, null);
   const auto = h("input", { type: "checkbox", checked: autoReload(), id: "auto", onchange: ev => { try { localStorage.setItem("hlp-auto", ev.target.checked ? "1" : "0"); } catch (e) { /* ignore */ } } });
   put(root,
-    h("header", { class: "top" },
-      h("div", { class: "grow" }, h("h1", {}, "Customize Your Dashboard"), h("div", { class: "sub" }, "Changes are saved to your dashboard files. Undo brings the last change back.")),
-      h("button", { disabled: !S.undo, onclick: doUndo, title: S.undo ? "Undo: " + S.undo : "Nothing to undo" }, "↶ Undo" + (S.undo ? " (" + S.undo + ")" : "")),
-      framed ? h("a", { class: "btn", href: location.href, target: "_blank", rel: "noopener" }, "Open in Its Own Tab") : null,
-      h("button", { class: "ghost", onclick: async () => { try { await api("POST", "/api/logout", {}); } catch (e) { /* already out */ } S = null; showLogin(); } }, "Log Out")),
-    h("nav", { class: "tabs", role: "tablist" }, VIEWS.map(([id, label]) =>
-      h("button", { role: "tab", "aria-selected": String(view === id), onclick: () => { if (view !== id) { if (!(LOOKVIEWS.includes(view) && LOOKVIEWS.includes(id))) discardPreview(); view = id; render(); window.scrollTo(0, 0); } } }, label))),
+    h("div", { class: "stickytop" },
+      h("header", { class: "top" },
+        h("div", { class: "grow" }, h("h1", {}, "Customize Your Dashboard"), h("div", { class: "sub" }, "Changes are saved to your dashboard files. Undo brings the last change back."))),
+      h("nav", { class: "tabs", role: "tablist" }, VIEWS.map(([id, label]) =>
+        h("button", { role: "tab", "aria-selected": String(view === id), onclick: () => { if (view !== id) { if (!(LOOKVIEWS.includes(view) && LOOKVIEWS.includes(id))) discardPreview(); view = id; render(); window.scrollTo(0, 0); } } }, label)))),
     fns[view](),
-    framed ? h("p", { class: "muted small" }, h("label", { for: "auto" }, auto, " Refresh the dashboard by itself after I change layout, cards or links")) : null);
+    framed ? h("p", { class: "muted small" }, h("label", { for: "auto" }, auto, " Refresh the dashboard by itself after I change layout, cards or links")) : null,
+    footEl);
   applyAccent();
 }
 function applyAccent() {
@@ -242,12 +243,22 @@ async function doUndo() {
 }
 function discardPreview() { send({ type: "clear" }); lookW = bgW = layW = null; clearDraft(); }
 
-function saveBar(dirty, onSave, onRevert, saveLabel, extra) {
-  return h("div", { class: "savebar" },
-    h("div", { class: "state" + (dirty ? " dirty" : "") }, dirty ? "You have changes that are not saved yet." : "Everything shown is saved."),
+// the bar at the bottom of every screen: what is not saved yet, then Undo, Save and (in the dashboard's frame) Open in Tab, or Log Out
+let footEl = null;
+function drawFoot(dirty, onSave, onRevert, extra) {
+  if (!footEl) return;
+  put(footEl,
+    h("div", { class: "state" + (dirty ? " dirty" : "") }, onSave ? (dirty ? "You have changes that are not saved yet." : "Everything shown is saved.") : ""),
+    onRevert ? h("button", { disabled: !dirty, onclick: onRevert }, "Throw Away") : null,
     extra || null,
-    h("button", { disabled: !dirty, onclick: onRevert }, "Throw Away"),
-    h("button", { class: "primary", disabled: !dirty, onclick: onSave }, saveLabel || "Save"));
+    h("button", { disabled: !S.undo, onclick: doUndo, title: S.undo ? "Undo: " + S.undo : "Nothing to undo" }, "Undo"),
+    h("button", { class: "primary", disabled: !onSave || !dirty, onclick: onSave || (() => {}) }, "Save"),
+    framed ? h("a", { class: "btn", href: location.href, target: "_blank", rel: "noopener" }, "Open in Tab") : null,
+    h("button", { class: "ghost", onclick: async () => { try { await api("POST", "/api/logout", {}); } catch (e) { /* already out */ } S = null; showLogin(); } }, "Log Out"));
+}
+function saveBar(dirty, onSave, onRevert, saveLabel, extra) {      // (kept for the screens: they hand over what the bottom bar shows)
+  drawFoot(dirty, onSave, onRevert, extra);
+  return null;
 }
 
 // ---------------------------------------------------------------- Look and Colors (one look, two screens)
@@ -283,8 +294,8 @@ function lookDirty() { return !same(lookNorm(lookW), lookNorm(S.look.values)); }
 function lookNorm(v) { const o = clone(v); o.tabs = o.tabs || {}; return o; }
 function refreshLookBar() {
   if (!lookBarEl) return;
-  put(lookBarEl, saveBar(lookDirty(), saveLook, () => { discardPreview(); render(); }, "Save This Look",
-    h("button", { onclick: resetLook }, "Back to the Shipped Look")));
+  put(lookBarEl, saveBar(lookDirty(), saveLook, () => { discardPreview(); render(); }, "Save",
+    h("button", { onclick: resetLook }, "Reset All Settings")));
 }
 function lookChanged() { lookPreview(); refreshLookBar(); try { sessionStorage.setItem("hlp-draft", JSON.stringify(lookW)); } catch (e) { /* storage may be blocked */ } }
 function clearDraft() { try { sessionStorage.removeItem("hlp-draft"); } catch (e) { /* ignore */ } }
@@ -300,7 +311,7 @@ async function saveLook() {
   try { await api("POST", "/api/look", { look: lookOut() }); toast("Look saved."); await afterChange(false); } catch (e) { fail(e); }
 }
 async function resetLook() {
-  if (!await confirmBox("Go Back to the Shipped Look?", "The colors, glass, shapes and the colors of cards and labels go back to how the dashboard came. Your cards and layout stay as they are. Undo can bring this change back.", "Reset the Look")) return;
+  if (!await confirmBox("Reset All Settings?", "The colors, glass, shapes and the colors of cards and labels go back to how the dashboard came. Your picture, cards and layout stay as they are. Undo can bring this change back.", "Reset All Settings")) return;
   try { await api("POST", "/api/look/reset", {}); send({ type: "clear" }); toast("The shipped look is back."); await afterChange(true); } catch (e) { fail(e); }
 }
 function lookSlider(label, key, lo, hi, step, unit, hint) {
@@ -352,7 +363,7 @@ function viewLook() {
     h("div", { class: "mini-cards" }, ["Navidrome", "Immich", "Beszel"].map(n => h("div", { class: "mini-card" }, h("b", {}, n), h("span", { class: "small muted" }, "Sample Card"), h("i", {})))));
   setTimeout(() => { lookPreview(!lookDirty()); refreshLookBar(); }, 0);       // nothing is sent to the dashboard until something is changed
   return h("div", {},
-    h("div", { class: "card" }, h("h2", {}, "Ready-Made Looks"), h("p", { class: "muted" }, "Pick one to try it. Nothing is saved until you press “Save This Look”."),
+    h("div", { class: "card" }, h("h2", {}, "Ready-Made Looks"), h("p", { class: "muted" }, "Pick one to try it. Nothing is saved until you press “Save”."),
       h("div", { class: "chips" }, S.look.presets.map(p => h("button", { class: "chip", onclick: () => {
         const base = clone(def); base.tabs = Object.assign({}, def.tabs);
         for (const k of PAINT_KEYS) base[k] = clone(lookW[k]);              // the colors you gave single cards and labels stay
@@ -479,7 +490,7 @@ function viewColors() {
   return h("div", {},
     h("div", { class: "card" }, h("h2", {}, "Colors of Cards, Tiles and Bookmarks"),
       h("p", { class: "muted" }, "Give single service cards, the calendar, the tiles of the Stats tab and the bookmarks of the Links tab their own color: a tint, a colored edge and a soft glow. It looks best with Transparent Glass on the Look screen."),
-      h("p", { class: "muted small" }, "To see a color on the dashboard, open the tab that has it (Home, Stats or Links). The preview stays there. Come back here to keep it with Save This Look."),
+      h("p", { class: "muted small" }, "To see a color on the dashboard, open the tab that has it (Home, Stats or Links). The preview stays there. Come back here to keep it with Save."),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Color Style"), styleChips,
         h("div", { class: "hint" }, "Gradient: the color is strong on one side and fades out across the card. Solid: the same color across the whole card.")),
       lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "Higher makes the color, the edge and the glow stronger, so the color is not washed out."),
@@ -566,7 +577,7 @@ function viewLayout() {
   const T = layW;
   const dirty = () => !same(T, S.layout.tabs);
   const bar = h("div", {});
-  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { layW = null; render(); }, "Save the Layout"));
+  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { layW = null; render(); }, "Save"));
   async function save() {
     try { await api("POST", "/api/layout", { tabs: T.filter(t => t.groups.length) }); toast("Layout saved."); await afterChange(true); } catch (e) { fail(e); }
   }
