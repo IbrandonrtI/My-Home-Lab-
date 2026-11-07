@@ -18,6 +18,7 @@ What the panel is:
 Written with the Python standard library only (PyYAML is used when it is installed, to check a file before it is saved).
 """
 import base64
+import binascii
 import getpass
 import hashlib
 import hmac
@@ -281,7 +282,7 @@ def number(v, what, lo, hi):
 # ================================================================ the look (colors, glass, shapes) -> a block in custom.css
 SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}       # the shipped color of two tabs (see the tabs block of custom.css)
 LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "glassClear": False, "glassLevel": 70, "radius": 16, "edge": 7.5,
-                "side": 28, "playerHeight": 600, "paintStrength": 40, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}}
+                "side": 28, "playerHeight": 600, "paintStrength": 40, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}, "names": {}, "logo": {}}
 LABEL_ICONS = ("plain", "circle", "square", "ring")
 PAINT_STYLES = ("gradient", "solid")
 NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card", "terminal-card")        # the panel's own cards and the music player are never painted
@@ -315,6 +316,70 @@ def clean_map(raw, what, limit, key_ok, value_fn):
         got = value_fn(val, k)
         if got:
             out[k] = got
+    return out
+
+
+NAME_KEYS = {"homelab": "HomeLab", "main": "Main Pool", "backup": "Backup Pool"}       # what a person can rename (the key -> the shipped name)
+LOGO_DATA_MAX = 150_000                                                              # the size of an uploaded logo, as text (the browser shrinks the picture first)
+LOGO_SIZE = (24, 96)
+
+
+def names_clean(raw):
+    if raw in (None, {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise Fail("The names are not understood.")
+    out = {}
+    for k, val in raw.items():
+        if k not in NAME_KEYS:
+            raise Fail("The name '%s' is not one that can be changed." % k)
+        val = re.sub(r"\s+", " ", val.strip()) if isinstance(val, str) else ""
+        if not val or val == NAME_KEYS[k]:
+            continue
+        if len(val) > 24:
+            raise Fail("A name can have up to 24 characters.")
+        if re.search(r"[\x00-\x1f\x7f\"\\<>{}`]", val):
+            raise Fail("A name cannot have these characters:  \" \\ < > { } `  or line breaks.")
+        out[k] = val
+    return out
+
+
+def logo_clean(raw):
+    """The logo: `src` (a web address of a picture, or the picture itself as a data: address that the browser made), `link` (optional) and `size` (height in pixels)."""
+    if raw in (None, {}):
+        return {}
+    if not isinstance(raw, dict):
+        raise Fail("The logo is not understood.")
+    src = raw.get("src") or ""
+    if not isinstance(src, str):
+        raise Fail("The logo picture is not understood.")
+    src = src.strip()
+    if not src:
+        return {}
+    if src.startswith("data:"):
+        m = re.fullmatch(r"data:image/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/]+={0,2})", src)
+        if not m or len(src) > LOGO_DATA_MAX:
+            raise Fail("That logo picture is too big or not a picture the dashboard can show. Choose a smaller PNG, JPG, WebP or GIF.")
+        try:
+            data = base64.b64decode(m.group(2), validate=True)
+        except (ValueError, binascii.Error):
+            raise Fail("That logo picture is damaged. Choose it again.") from None
+        if sniff_image(data) not in (".png", ".jpg", ".webp", ".gif"):
+            raise Fail("That file is not a picture I can use as a logo.")
+    else:
+        src = clean_url(src, "The logo address", False)
+        if "\\" in src:
+            raise Fail("The logo address has a character that is not allowed.")
+    out = {"src": src}
+    link = clean_url(raw.get("link"), "The logo link")
+    if link:
+        if "\\" in link:
+            raise Fail("The logo link has a character that is not allowed.")
+        out["link"] = link
+    if raw.get("size") not in (None, ""):
+        size = number(raw["size"], "The logo size", LOGO_SIZE[0], LOGO_SIZE[1])
+        if size != 48:
+            out["size"] = size
     return out
 
 
@@ -353,6 +418,10 @@ def look_clean(raw):
         out["labelIcon"] = raw["labelIcon"]
     if raw.get("paintAll"):
         out["paintAll"] = rgb_hex(hex_rgb(raw["paintAll"], "color for everything"))
+    for key, fn in (("names", names_clean), ("logo", logo_clean)):
+        got = fn(raw.get(key))
+        if got:
+            out[key] = got
     tabs = raw.get("tabs") or {}
     if not isinstance(tabs, dict) or len(tabs) > 30:
         raise Fail("The tab colors are not understood.")
@@ -381,17 +450,17 @@ def look_clean(raw):
     for key, val in (("cards", cards), ("links", links), ("labels", labels)):
         if val:
             out[key] = val
-    keep = ("tabs", "cards", "links", "labels", "paintAll")
+    keep = ("tabs", "cards", "links", "labels", "paintAll", "names", "logo")
     return {k: v for k, v in out.items() if k in keep or v != LOOK_DEFAULT[k]}
 
 
 def look_full(custom):
     v = dict(LOOK_DEFAULT)
-    v.update({k: x for k, x in custom.items() if k not in ("tabs", "cards", "links", "labels")})
+    v.update({k: x for k, x in custom.items() if k not in ("tabs", "cards", "links", "labels", "names", "logo")})
     tabs = dict(SHIPPED_TAB_COLORS)
     tabs.update(custom.get("tabs") or {})
     v["tabs"] = tabs
-    for k in ("cards", "links", "labels"):
+    for k in ("cards", "links", "labels", "names", "logo"):
         v[k] = dict(custom.get(k) or {})
     return v
 
@@ -562,6 +631,15 @@ def look_css(custom, full=False, saved=None, css=""):
         tok.append("--lk-side: %dpx;" % v["side"])
     if full or "playerHeight" in custom:
         tok.append("--lk-player-h: %dpx;" % v["playerHeight"])
+    if not full:                       # (a preview of names and logo is sent to the dashboard as its own message: the page cannot take them as CSS)
+        for k, val in sorted((custom.get("names") or {}).items()):
+            tok.append('--hl-name-%s: "%s";' % (k, val))
+        lg = custom.get("logo") or {}
+        if lg.get("src"):
+            tok.append('--hl-logo-src: "%s";' % lg["src"])
+            if lg.get("link"):
+                tok.append('--hl-logo-link: "%s";' % lg["link"])
+            tok.append("--hl-logo-size: %spx;" % num(lg.get("size", 48)))
     if tok:
         rules.append("html body #inner_wrapper { %s }" % " ".join(tok))
     # a color for a tab: the tab rules of the tabs block are more specific than the one above, so each tab gets its own line
@@ -1698,8 +1776,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.terminal_socket()
         try:
             conn = UnixConn(TERM_SOCK)
+            page = urllib.parse.urlparse(self.path).path.rstrip("/") in ("/terminal", "")      # the page itself (not its scripts): plain, so a line can be added to it
             conn.request("GET", self.terminal_target(), headers={"Host": "localhost", "Accept": self.headers.get("Accept") or "*/*",
-                                                    "Accept-Encoding": self.headers.get("Accept-Encoding") or "identity"})
+                                                    "Accept-Encoding": "identity" if page else (self.headers.get("Accept-Encoding") or "identity")})
             r = conn.getresponse()
             body = r.read(TERM_MAX + 1)
             ctype, enc, status = r.getheader("Content-Type") or "application/octet-stream", r.getheader("Content-Encoding"), r.status
@@ -1708,6 +1787,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.terminal_page(502, "The terminal is not running. On the server, look at:  sudo systemctl status homelab-terminal")
         if len(body) > TERM_MAX or status not in (200, 304, 401, 404):
             return self.terminal_page(502, "The terminal gave an answer the panel does not understand.")
+        if status == 200 and ctype.startswith("text/html") and not enc and b"</head>" in body:
+            # the dashboard card must not move when the terminal reaches its top or bottom while you scroll
+            body = body.replace(b"</head>", b"<style>html,body{overscroll-behavior:contain}</style></head>", 1)
         anc = " ".join(["'self'"] + FRAME)
         csp = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
                "connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors " + anc)
