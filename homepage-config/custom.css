@@ -92,7 +92,7 @@ div[id$="-card"] > div {
   z-index: 0;
   border-radius: 14px !important;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.30)), rgba(var(--accent), var(--hl-a2, 0.04)) 55%) !important;
+  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.432)), rgba(var(--accent), var(--hl-a2, 0.106)) 55%) !important;
 }
 
 /* Thin accent rail on the left edge */
@@ -537,7 +537,7 @@ body { --icon-color: #c9d6f2; }
   z-index: 0;
   border-radius: 14px !important;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent, var(--lk-accent)), var(--hl-a1, 0.10)), rgba(var(--accent, var(--lk-accent)), var(--hl-a2, 0)) 55%) !important;
+  background: linear-gradient(135deg, rgba(var(--accent, var(--lk-accent)), var(--hl-a1, 0.432)), rgba(var(--accent, var(--lk-accent)), var(--hl-a2, 0.106)) 55%) !important;
 }
 #inner_wrapper [id$="-card"]::after, #inner_wrapper li[id^="stat-"]::after, #inner_wrapper li[id^="cal-"]::after { display: none !important; }
 #inner_wrapper [id$="-card"] { position: relative !important; background-color: transparent !important; }
@@ -580,7 +580,7 @@ body { --icon-color: #c9d6f2; }
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.10)), rgba(var(--accent), var(--hl-a2, 0)) 55%);
+  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.432)), rgba(var(--accent), var(--hl-a2, 0.106)) 55%);
 }
 .bookmark > a::after {
   content: "";
