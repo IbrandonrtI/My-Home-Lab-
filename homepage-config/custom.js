@@ -283,12 +283,22 @@
     held = null;
     root.classList.remove("hl-lock");
   }
+  // The page behind is held only after you have clicked inside the framed page (then the frame has the keyboard focus) and while the pointer stays over it. Before the click,
+  // the page scrolls as usual, so a big player never traps the wheel.
+  var hovered = null;
+  function sync() {
+    if (hovered && document.activeElement === hovered) lock(hovered); else unlock();
+  }
   if (window.matchMedia && window.matchMedia("(hover: hover)").matches) {
     document.addEventListener("mouseover", function (ev) {
       var over = ev.target && ev.target.closest ? ev.target.closest(LOCKED) : null;
-      if (over) lock(over); else unlock();
+      hovered = over ? (over.tagName === "IFRAME" ? over : over.querySelector("iframe")) : null;
+      sync();
     });
-    root.addEventListener("mouseleave", unlock);
+    root.addEventListener("mouseleave", function () { hovered = null; sync(); });
+    window.addEventListener("blur", function () { window.setTimeout(sync, 0); });          // the keyboard focus moved into a frame (a click in it)
+    window.addEventListener("focus", function () { window.setTimeout(sync, 0); });         // ... and back to the page (a click outside)
+    document.addEventListener("mousedown", function () { window.setTimeout(sync, 0); }, true);
   }
 
   function groups() {
@@ -418,9 +428,15 @@
   var logoShown = "";
   function logo() {
     var N = theNames(), wrap = document.getElementById("widgets-wrap"), el = document.getElementById("hl-logo");
+    var tile = wrap ? wrap.querySelector(":scope > .widget-container:has(.information-widget-resource)") || wrap.querySelector(":scope > .widget-container") : null;
     var ok = N.src && /^(https?:\/\/[^\s"'()\\<>]+|data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+\/]+={0,2})$/.test(N.src);
     var link = N.link && /^https?:\/\/[^\s"'()\\<>]+$/.test(N.link) ? N.link : "";
-    if (!wrap || !ok) { if (el) el.remove(); logoShown = ""; return; }
+    if (!tile || !ok) {
+      if (el) el.remove();
+      logoShown = "";
+      all(".hl-has-logo").forEach(function (t) { t.classList.remove("hl-has-logo"); });
+      return;
+    }
     var key = N.src + "|" + link;
     if (el && (el.tagName === "A") !== !!link) { el.remove(); el = null; }
     if (!el) {
@@ -436,7 +452,8 @@
     if (logoShown !== key) { el.firstChild.src = N.src; logoShown = key; }
     var h = Math.max(24, Math.min(96, N.size || 48)) + "px";
     if (el.firstChild.style.height !== h) el.firstChild.style.height = h;
-    if (wrap.firstElementChild !== el) wrap.insertBefore(el, wrap.firstChild);
+    if (tile.firstElementChild !== el) tile.insertBefore(el, tile.firstChild);       // the logo is the first thing in the server tile
+    if (!tile.classList.contains("hl-has-logo")) tile.classList.add("hl-has-logo");
   }
   window.addEventListener("hl-names", function (e) { namesPreview = e.detail || null; rename(); logo(); });
 
@@ -568,12 +585,27 @@
     var n = d.names || {}, lg = d.logo || {}, size = typeof lg.size === "number" && lg.size >= 24 && lg.size <= 96 ? lg.size : 48;
     window.dispatchEvent(new CustomEvent("hl-names", { detail: { homelab: t(n.homelab, 24), main: t(n.main, 24), backup: t(n.backup, 24), src: t(lg.src, 150000), link: t(lg.link, 600), size: size } }));
   }
+  // The look was saved in the panel (only custom.css changed): Homepage would reload the whole page when it notices the new file, so it is told that this version is known,
+  // and the new style sheet is loaded in place of the old one (then the preview is not needed any more).
+  function saved() {
+    try {
+      fetch("/api/hash", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (j) { if (j && j.hash) window.localStorage.setItem("hash", j.hash); }).catch(function () { /* the page may reload then: nothing is lost */ });
+    } catch (e) { /* no storage */ }
+    var prevSheet = document.querySelector('link[rel="stylesheet"][href*="custom.css"]');
+    if (!prevSheet) { clearAll(); return; }
+    var fresh = prevSheet.cloneNode();
+    fresh.setAttribute("href", prevSheet.getAttribute("href").replace(/[?&]hl=\d+/, "") + (prevSheet.getAttribute("href").indexOf("?") < 0 ? "?" : "&") + "hl=" + Date.now());
+    fresh.onload = function () { prevSheet.remove(); clearAll(); };
+    fresh.onerror = function () { fresh.remove(); };
+    prevSheet.parentNode.insertBefore(fresh, prevSheet.nextSibling);
+  }
   window.addEventListener("message", function (e) {
     var d = e.data;
     if (!d || d.hlp !== 1 || typeof d.type !== "string" || !fromPanel(e)) return;
     if (d.type === "css") look(d.css);
     else if (d.type === "bg") background(d);
     else if (d.type === "names") names(d);
+    else if (d.type === "saved") saved();
     else if (d.type === "clear") clearAll();
     else if (d.type === "reload") window.location.reload();
   });

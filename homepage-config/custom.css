@@ -428,10 +428,14 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   backdrop-filter: blur(14px) saturate(125%);
 }
 #inner_wrapper .widget-container:has(.information-widget-resource) { flex-direction: column !important; justify-content: center !important; gap: 3px !important; }
-/* the logo (made by custom.js when you give one in the control panel): the first thing of the top bar, from the left */
-#inner_wrapper #hl-logo { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; align-self: center; padding: 0 6px; text-decoration: none; }
-#inner_wrapper #hl-logo[hidden] { display: none; }
+/* the logo (made by custom.js when you give one in the control panel): the first thing in the server tile. On a wide screen it stands at the left of the numbers; on a phone it is above them, in the middle. */
+#inner_wrapper #hl-logo { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; padding: 0 4px; text-decoration: none; }
 #inner_wrapper #hl-logo img { display: block; width: auto; height: 48px; max-width: min(260px, 45vw); object-fit: contain; border-radius: 6px; }
+@media (min-width: 701px) {
+  #inner_wrapper .widget-container.hl-has-logo { display: grid !important; grid-template-columns: auto minmax(0, 1fr); column-gap: 18px; row-gap: 3px; align-items: center; }
+  #inner_wrapper .widget-container.hl-has-logo > #hl-logo { grid-column: 1; grid-row: 1 / span 2; margin-left: 4px; }
+  #inner_wrapper .widget-container.hl-has-logo > div { grid-column: 2; }
+}
 #inner_wrapper #widgets-wrap > .widget-container:first-of-type { flex: 1 1 auto !important; }      /* the server tile takes the free space */
 #inner_wrapper .widget-container:has(.information-widget-resource) > div:last-child {
   margin: 0 !important;
@@ -859,15 +863,17 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper .information-widget-logo,
   #inner_wrapper [class*="information-widget-glances"] { width: auto !important; min-width: 0 !important; padding: 8px 12px !important; flex: none !important; justify-content: center !important; }
   #inner_wrapper #widgets-wrap > .widget-container:first-of-type { grid-column: 1 / -1; }
-  #inner_wrapper #hl-logo { grid-column: 1 / -1; justify-self: start; padding: 0 2px; }
+  #inner_wrapper .widget-container.hl-has-logo { display: flex !important; }
+  #inner_wrapper .widget-container.hl-has-logo > #hl-logo { align-self: center; padding: 0 0 2px; }
   #inner_wrapper #hl-logo img { max-height: 44px; }
   #inner_wrapper #widgets-wrap > .widget-container, #inner_wrapper #information-widgets-right > * { flex: none !important; }
   #inner_wrapper #information-widgets-right > .information-widget-search, #inner_wrapper #information-widgets-right > [class*="information-widget-openmeteo"] { grid-column: 1 / -1; }
   #inner_wrapper .widget-container:has(.information-widget-resource) { flex-direction: column !important; flex-wrap: nowrap !important; }
-  #inner_wrapper .widget-container:has(.information-widget-resource) > div:first-child { flex-wrap: wrap; justify-content: center; row-gap: 6px; }
-  #inner_wrapper #widgets-wrap > .widget-container:first-of-type > div:first-child { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; width: 100%; }
+  #inner_wrapper .widget-container:has(.information-widget-resource) > div:first-of-type { flex-wrap: wrap; justify-content: center; row-gap: 6px; }
+  #inner_wrapper #widgets-wrap > .widget-container:first-of-type > div:first-of-type { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; width: 100%; }
   #inner_wrapper #widgets-wrap > .widget-container:first-of-type .information-widget-resource { border-right: 0 !important; padding-right: 0 !important; margin-right: 0 !important; }
   #inner_wrapper .information-widget-resource { margin-right: 0 !important; padding-right: 0 !important; border-right: 0 !important; }
+  #inner_wrapper #widgets-wrap > .widget-container:first-of-type .information-widget-resource { justify-content: center; }
   #inner_wrapper .information-widget-resource > div { min-width: 0 !important; }
   #inner_wrapper [class*="information-widget-datetime"] { margin-left: 0 !important; }
   #inner_wrapper #information-widgets .information-widget-search { grid-column: 1 / -1; max-width: none !important; margin: 2px 0 0 !important; }
@@ -925,4 +931,30 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
 #inner_wrapper #customize-card iframe, #inner_wrapper #linkedit-card iframe, #inner_wrapper #terminal-card iframe { display: block; width: 100% !important; max-width: none !important; height: var(--hl-h-customize, min(88vh, 1200px)) !important; min-height: 520px; border: 0 !important; border-radius: 0 !important; background: #0a0f19; }
 #inner_wrapper #linkedit-card iframe { height: var(--hl-h-linkedit, min(78vh, 900px)) !important; min-height: 420px; }          /* the link editor: the Links tab, a drop-down card above the bookmarks */
 #inner_wrapper #terminal-card iframe { height: var(--hl-h-terminal, min(70vh, 720px)) !important; min-height: 240px; background: #0a0f19 !important; }          /* the web terminal: a drop-down card on the Links tab */
+/* ---- Wide screens (1080p and bigger): the page uses the whole width, a little smaller, and the groups sit side by side */
+@media (min-width: 1500px) {
+  #inner_wrapper { --lk-side: 24px; --lk-player-h: clamp(420px, 54vh, 680px); }
+  #inner_wrapper > .container { max-width: 2400px; }
+  #inner_wrapper #tabs { margin-top: 16px !important; }
+  #inner_wrapper #myTab { width: min(100%, 460px); }
+  #inner_wrapper button[id$="-tab"] { padding: 7px 10px !important; font-size: 15px !important; letter-spacing: 0.05em; }
+  #inner_wrapper .service-group-name, #inner_wrapper .bookmark-group-name { font-size: 0.92rem !important; }
+  /* Home: the music group on the left, the other groups on the right beside it, the Calendar across the bottom */
+  #inner_wrapper #layout-groups:has(#navidrome-card) { display: grid !important; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); column-gap: 18px; row-gap: 8px; align-items: start; }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group { grid-column: 2; min-width: 0 !important; max-width: none !important; width: auto !important; }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { grid-column: 1; grid-row: 1 / span 3; }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { grid-column: 1 / -1; grid-row: auto; }
+  /* Stats and Links: the groups flow down two columns (a group is never cut); the panel cards (link editor) run across both */
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) { display: block !important; column-count: 2; column-gap: 18px; }
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .services-group,
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .bookmark-group { break-inside: avoid; width: 100% !important; max-width: none !important; min-width: 0 !important; margin-bottom: 8px; }
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > :has(#linkedit-card) { column-span: all; }
+}
+@media (min-width: 2200px) {
+  #inner_wrapper #layout-groups:has(#navidrome-card) { grid-template-columns: minmax(0, 6fr) minmax(0, 3fr) minmax(0, 3fr); }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group { grid-column: auto; }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { grid-column: 1; grid-row: 1 / span 2; }
+  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { grid-column: 1 / -1; }
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) { column-count: 3; }
+}
 /* <<< homelab tabs <<< */
