@@ -949,12 +949,28 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .services-group,
   #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .bookmark-group { break-inside: avoid; width: 100% !important; max-width: none !important; min-width: 0 !important; margin-bottom: 8px; }
   #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > :has(#linkedit-card) { column-span: all; }
+  /* Stats: more air, and the At a Glance row runs across the whole width so its four cards have room for their words */
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):has(li[id^="stat-"]) { column-gap: 36px; }
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .services-group { margin-bottom: 18px; }
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .services-group:has(#stat-library) { column-span: all; }
+  #inner_wrapper li[id^="stat-"] .service-block { padding: 10px 6px !important; min-width: 0; }
+  #inner_wrapper li[id^="stat-"] .service-block-label { overflow-wrap: break-word; line-height: 1.25; }
+  #inner_wrapper li[id^="stat-"] .service-block-value { font-size: 1.08rem !important; }
+  /* the Calendar fills the room under the music group (the script sets the class and the height): A = month and Coming Up side by side, B = only the month there, Coming Up across the bottom */
+  #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { grid-column: 1; grid-row: 1 / span 3; align-self: end; }
+  #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) .services-list { grid-template-rows: minmax(0, var(--hl-cal-h)); }
+  #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { display: contents !important; }
+  #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) > :not([id^="headlessui-disclosure-panel"]) { display: none !important; }
+  #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) .services-list { display: contents !important; }
+  /* (the fold panel has Tailwind's "block!", an important rule inside a layer, which only an important rule in an earlier layer can beat) */
+  @layer theme { #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) > [id^="headlessui-disclosure-panel"] { display: contents !important; } }
+  #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) li#cal-month { grid-column: 1; grid-row: 1 / span 3; align-self: end; height: var(--hl-cal-h); margin: 0 !important; }
+  #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) li#cal-agenda { grid-column: 1 / -1; grid-row: 4; margin: 0 !important; }
+  #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) li[id^="cal-"] { min-height: 0; overflow: hidden; }
+  #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) li#cal-agenda .service-container { overflow-y: auto; max-height: calc(var(--hl-cal-h) - 52px); }
+  #inner_wrapper #layout-groups:is(.hl-cal-a, .hl-cal-b) li#cal-month button[style*="14%"] { height: var(--hl-cal-cell, 36px) !important; }
 }
 @media (min-width: 2200px) {
-  #inner_wrapper #layout-groups:has(#navidrome-card) { grid-template-columns: minmax(0, 6fr) minmax(0, 3fr) minmax(0, 3fr); }
-  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group { grid-column: auto; }
-  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { grid-column: 1; grid-row: 1 / span 2; }
-  #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { grid-column: 1 / -1; }
-  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) { column-count: 3; }
+  #inner_wrapper #layout-groups:has(#navidrome-card) { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
 }
 /* <<< homelab tabs <<< */

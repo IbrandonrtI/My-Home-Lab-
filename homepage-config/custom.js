@@ -290,12 +290,16 @@
     if (hovered && document.activeElement === hovered) lock(hovered); else unlock();
   }
   if (window.matchMedia && window.matchMedia("(hover: hover)").matches) {
+    function leave(was) {                           // the pointer left the frame: the page is free again, and the frame lets go of the keyboard focus, so the next hold needs a new click
+      if (was && document.activeElement === was) { try { was.blur(); } catch (e) { /* ignore */ } }
+    }
     document.addEventListener("mouseover", function (ev) {
-      var over = ev.target && ev.target.closest ? ev.target.closest(LOCKED) : null;
-      hovered = over ? (over.tagName === "IFRAME" ? over : over.querySelector("iframe")) : null;
+      var over = ev.target && ev.target.closest ? ev.target.closest(LOCKED) : null, now = over ? (over.tagName === "IFRAME" ? over : over.querySelector("iframe")) : null, was = hovered;
+      hovered = now;
+      if (was && was !== now) leave(was);
       sync();
     });
-    root.addEventListener("mouseleave", function () { hovered = null; sync(); });
+    root.addEventListener("mouseleave", function () { var was = hovered; hovered = null; leave(was); sync(); });
     window.addEventListener("blur", function () { window.setTimeout(sync, 0); });          // the keyboard focus moved into a frame (a click in it)
     window.addEventListener("focus", function () { window.setTimeout(sync, 0); });         // ... and back to the page (a click outside)
     document.addEventListener("mousedown", function () { window.setTimeout(sync, 0); }, true);
@@ -502,13 +506,55 @@
     root.style.setProperty("--hl-night", n.toFixed(2));
   }
 
+  // ---- wide screens, Home tab: the Calendar fills the empty room under the music group, in three steps as the room gets smaller
+  //      A: the month and Coming Up side by side under the music group; B: only the month there, Coming Up in a row at the bottom; C: both in the row at the bottom
+  var calWatch = null, calChrome = 70;
+  function calendar() {
+    var lg = document.getElementById("layout-groups");
+    if (!lg) return;
+    var cal = lg.querySelector(":scope > .services-group:has(li[id^='cal-'])"), media = lg.querySelector(":scope > .services-group:has(#navidrome-card)");
+    var off = !cal || !media || !window.matchMedia("(min-width: 1500px)").matches;
+    if (off) {
+      if (lg.classList.contains("hl-cal-a") || lg.classList.contains("hl-cal-b")) { lg.classList.remove("hl-cal-a", "hl-cal-b"); lg.style.removeProperty("--hl-cal-h"); lg.style.removeProperty("--hl-cal-cell"); }
+      return;
+    }
+    var others = Array.prototype.filter.call(lg.children, function (g) { return g !== cal && g !== media && g.classList.contains("services-group") && g.offsetHeight > 0; });
+    if (calWatch !== lg && window.ResizeObserver) {                       // the room changes when the music group or another group changes its height
+      if (calWatch && calWatch.ro) calWatch.ro.disconnect();
+      var ro = new ResizeObserver(function () { soon(); });
+      ro.observe(media); others.forEach(function (g) { ro.observe(g); });
+      lg.ro = ro; calWatch = lg;
+    }
+    var cols = Math.max(1, getComputedStyle(lg).gridTemplateColumns.split(" ").length - 1), gap = parseFloat(getComputedStyle(lg).rowGap) || 8;
+    var rows = [];
+    others.forEach(function (g, i) { var r = Math.floor(i / cols); rows[r] = Math.max(rows[r] || 0, g.offsetHeight); });
+    var right = rows.reduce(function (a, b) { return a + b; }, 0) + gap * Math.max(0, rows.length - 1);
+    var avail = right - media.offsetHeight - gap;                         // the room under the music group
+    var state = lg.classList.contains("hl-cal-a") ? "a" : lg.classList.contains("hl-cal-b") ? "b" : "c";
+    var toA = state === "a" ? 380 : 392, toB = state === "c" ? 282 : 270;   // (a little more is needed to go back up, so it does not flicker)
+    var next = avail >= toA ? "a" : avail >= toB ? "b" : "c";
+    var ul = cal.querySelector(".services-list"), month = document.getElementById("cal-month");
+    if (state !== "b" && ul && cal.offsetHeight > 0) calChrome = cal.offsetHeight - ul.offsetHeight;
+    lg.classList.toggle("hl-cal-a", next === "a"); lg.classList.toggle("hl-cal-b", next === "b");
+    if (next === "c" || !month) { lg.style.removeProperty("--hl-cal-h"); lg.style.removeProperty("--hl-cal-cell"); return; }
+    var h = Math.floor(next === "a" ? avail - calChrome : avail);
+    lg.style.setProperty("--hl-cal-h", h + "px");
+    var days = month.querySelectorAll("button[style*='14%']"), box = month.querySelector(".service-container");   // the month: the day rows get less high when there is less room
+    if (days.length >= 28 && box) {
+      var rowsN = Math.round(days.length / 7), cell = days[0].offsetHeight, title = month.querySelector(".service-title");
+      var fixed = (title ? title.offsetHeight : 0) + box.offsetHeight + 8 - rowsN * cell;
+      lg.style.setProperty("--hl-cal-cell", Math.max(18, Math.min(44, Math.floor((h - fixed) / rowsN))) + "px");
+    }
+  }
+
   function run() {
     queued = false;
-    health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); searchButton(); tabName(); bars(); sharp();
+    health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); searchButton(); tabName(); bars(); sharp();
   }
   function soon() { if (!queued) { queued = true; window.requestAnimationFrame(run); } }
   night(); soon();
   new MutationObserver(soon).observe(document.documentElement, { childList: true, subtree: true });
+  window.addEventListener("resize", soon);
   window.setInterval(soon, 3000);
   window.setInterval(night, 600000);
 })();
