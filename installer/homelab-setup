@@ -1711,7 +1711,7 @@ OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
 CAL_BEGIN, CAL_END = "# >>> homelab calendar >>>", "# <<< homelab calendar <<<"      # the block with the Calendar group in the shipped services.yaml
 CUSTOM_BEGIN, CUSTOM_END = "# >>> homelab customize >>>", "# <<< homelab customize <<<"      # the block with the Customize group (the control panel) in the shipped services.yaml
 CUSTOMIZE_GROUPS = {"Customize": ("mdi-tune", 1)}      # name -> (icon, columns): a tab of its own, after the others, one big card
-LINKEDIT_GROUPS = {"Edit Links": ("mdi-pencil-box-multiple", 1)}      # name -> (icon, columns): on the Links tab, above the bookmarks, one drop-down card
+LINKEDIT_GROUPS = {"Edit Links": ("mdi-pencil-box-multiple", 1), "Terminal": ("mdi-console", 1)}      # name -> (icon, columns): on the Links tab, above the bookmarks, one drop-down card each
 CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Home tab, in a row of its own, last
 
 
@@ -1828,6 +1828,29 @@ def layout_renamed(settings):
     return head + "\n".join(lines)
 
 
+def linkedit_at(lines, start, end, g, default):
+    """Where the line block of a new Links-tab panel group goes in the layout lines: Edit Links in front of the first group of the Links tab,
+    Terminal right after Edit Links (or, without it, in front of the first group of the Links tab). `default` when there is no Links group."""
+    keys = [i for i in range(start + 1, end) if re.match(r"^  \S", lines[i])]
+
+    def block_end(i):
+        n = [k for k in keys if k > i]
+        return n[0] if n else end
+
+    def tab_of(i):
+        for j in range(i + 1, block_end(i)):
+            m = re.match(r"^    tab:\s*(\S+)\s*$", lines[j])
+            if m:
+                return m.group(1)
+        return None
+    if g != "Edit Links":
+        mine = next((i for i in keys if re.match(r"^  '?Edit Links'?:\s*$", lines[i]) and tab_of(i) == "Links"), None)
+        if mine is not None:
+            return block_end(mine)
+    first = next((i for i in keys if tab_of(i) == "Links"), None)
+    return default if first is None else first
+
+
 def layout_complete(settings, service_groups, bookmark_groups, seen):
     """Put the groups of this machine that the layout: block does not know yet on a tab (a service group on Home, a bookmark group on
     Links), so they do not show up on every tab. Only groups that were never offered before (not in `seen`) are added, so a group
@@ -1869,17 +1892,8 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
         else:
             new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
         at = end
-        if g in LINKEDIT_GROUPS:                                 # on the Links tab it comes first, so it is seen without scrolling
-            for i in range(start + 1, end):
-                if re.match(r"^  \S", lines[i]):
-                    j = i + 1
-                    while j < end and not re.match(r"^  \S", lines[j]):
-                        if re.match(r"^    tab:\s*Links\s*$", lines[j]):
-                            at = i
-                            break
-                        j += 1
-                    if at != end:
-                        break
+        if g in LINKEDIT_GROUPS:                                 # on the Links tab they come first (Edit Links, then Terminal), so they are seen without scrolling
+            at = linkedit_at(lines, start, end, g, at)
         after = STATS_AFTER.get(g)
         if tab == "Stats" and after:
             for i in range(start + 1, end):
@@ -2024,6 +2038,7 @@ def layout_linkedit_first(settings, seen):
     mine = [e for e in entries if _entry_name(e) in LINKEDIT_GROUPS and _entry_tab(e) == "Links"]
     if not mine:
         return settings, seen
+    mine.sort(key=lambda e: list(LINKEDIT_GROUPS).index(_entry_name(e)))
     others = [e for e in entries if e not in mine]
     first = next((i for i, e in enumerate(others) if _entry_tab(e) == "Links"), None)
     if first is None:
@@ -5461,6 +5476,67 @@ class PanelPassword(Step):
 
     def fill(self):
         return panel_ask_password()
+
+
+# ================================================================ the web terminal (the Terminal card of the Links tab)
+# ttyd runs a shell in the browser. It is its own service, as the lab's own user, and listens on a socket FILE (not a network port) that only
+# that user can open. The only thing that talks to it is the control panel, which checks the login first and then passes the terminal
+# through on the panel's own Tailscale address (port 1100). So the terminal is exactly as private as the panel: your tailnet only.
+TERMINAL_UNIT = "/etc/systemd/system/homelab-terminal.service"
+TERMINAL_SOCK = "/run/homelab-terminal/ttyd.sock"
+
+
+def terminal_unit_text():
+    """The systemd unit. It cannot be locked down like the panel's unit: a shell needs sudo to work, and sudo needs what a lock-down takes away."""
+    theme = '{"background":"#0a0f19","foreground":"#dbe4f5","cursor":"#8ab4ff"}'
+    return "\n".join([
+        "# Written by homelab-setup. The web terminal of the dashboard (the Terminal card on the Links tab). Change nothing here: an upgrade puts it back.",
+        "[Unit]",
+        "Description=Homelab web terminal (the Terminal card of the Links tab)",
+        "After=network.target",
+        "",
+        "[Service]",
+        "Type=simple",
+        "User=%s" % Ctx.user,
+        "WorkingDirectory=%s" % Ctx.home,
+        "Environment=HOME=%s" % Ctx.home,
+        "RuntimeDirectory=homelab-terminal",
+        "RuntimeDirectoryMode=0700",
+        "ExecStart=/usr/bin/ttyd --writable --interface %s --base-path /terminal --ping-interval 30 -t fontSize=15 -t cursorBlink=true -t 'theme=%s' /bin/bash -l" % (TERMINAL_SOCK, theme),
+        "Restart=on-failure",
+        "RestartSec=3",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        ""])
+
+
+@step
+class TerminalFiles(Step):
+    id, group = "terminal", "Homepage"
+    title = "The web terminal (Terminal card, Links tab): ttyd installed and the service running"
+    needs = ("panel-files",)
+
+    def applies(self):
+        return panel_applies()
+
+    def probe(self):
+        if not pkg_installed("ttyd") or read_file(P(TERMINAL_UNIT)) != terminal_unit_text():
+            return "todo"
+        return "done" if run(["systemctl", "is-active", "homelab-terminal"])[1].strip() == "active" else "todo"
+
+    def run(self):
+        if not pkg_installed("ttyd"):
+            rc, txt = act(["apt-get", "install", "-y", "-q", "ttyd"], env=apt_env(), timeout=900)
+            if rc != 0 and not Opt.dry:
+                raise Abort("The terminal program (ttyd) could not be installed: %s\n      Try it by hand: sudo apt-get install ttyd" % txt.strip()[-200:])
+        changed = read_file(P(TERMINAL_UNIT)) != terminal_unit_text()
+        if changed:
+            write_file(P(TERMINAL_UNIT), terminal_unit_text(), 0o644)
+        act(["systemctl", "daemon-reload"])
+        act(["systemctl", "enable", "--now", "homelab-terminal"])
+        if changed and not Opt.dry and run(["systemctl", "is-active", "homelab-terminal"])[1].strip() == "active":
+            act(["systemctl", "restart", "homelab-terminal"])
 # ================================================================ commands: install, refresh, verify, checklist, growdisk
 def ensure_root():
     """Start the installer again under sudo when it was not started as root."""
