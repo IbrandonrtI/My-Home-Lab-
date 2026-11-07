@@ -66,7 +66,7 @@
   function scroller(el) {
     for (var e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
       var o = window.getComputedStyle(e).overflowY;
-      if ((o === "auto" || o === "scroll")) return e;
+      if (o === "auto" || o === "scroll" || e.hasAttribute("data-hl-locked")) return e;       // (a box held by the scroll lock below is still the scrolling box)
     }
     return null;
   }
@@ -254,13 +254,41 @@
 
   // ---- while the pointer is over a framed page (music player, Customize, link editor, terminal) the page behind does not scroll: without this, reaching the top or bottom of the
   // framed page makes the whole dashboard move. (A framed page from another address cannot be told about this from outside, so the page behind is held still instead.)
-  var LOCKED = "#hl-player-box, #customize-card iframe, #linkedit-card iframe, #terminal-card iframe";
+  // Only the one box that really scrolls is held (its scrollbar's space stays, so nothing on the page moves), and it carries a mark so the music player's code still finds it.
+  var LOCKED = "#hl-player-box, #customize-card iframe, #linkedit-card iframe, #terminal-card iframe", held = null;
+  function scrolling(el) {
+    for (var e = el; e && e !== document.body && e !== document.documentElement; e = e.parentElement) {
+      if (e.hasAttribute("data-hl-locked")) return e;
+      var o = window.getComputedStyle(e).overflowY;
+      if (o === "auto" || o === "scroll") return e;
+    }
+    return null;
+  }
+  function lock(el) {
+    if (held) return;
+    var box = scrolling(el), t = box || root;
+    var bar = box ? box.offsetWidth - box.clientWidth - (parseFloat(window.getComputedStyle(box).borderLeftWidth) || 0) - (parseFloat(window.getComputedStyle(box).borderRightWidth) || 0)
+                  : window.innerWidth - root.clientWidth;
+    held = { el: t, overflow: t.style.overflowY, gutter: t.style.scrollbarGutter };
+    t.setAttribute("data-hl-locked", "");
+    if (bar > 0) t.style.scrollbarGutter = "stable";
+    t.style.overflowY = "hidden";
+    root.classList.add("hl-lock");
+  }
+  function unlock() {
+    if (!held) return;
+    held.el.style.overflowY = held.overflow;
+    held.el.style.scrollbarGutter = held.gutter;
+    held.el.removeAttribute("data-hl-locked");
+    held = null;
+    root.classList.remove("hl-lock");
+  }
   if (window.matchMedia && window.matchMedia("(hover: hover)").matches) {
     document.addEventListener("mouseover", function (ev) {
-      var over = !!(ev.target && ev.target.closest && ev.target.closest(LOCKED));
-      if (over !== root.classList.contains("hl-lock")) root.classList.toggle("hl-lock", over);
+      var over = ev.target && ev.target.closest ? ev.target.closest(LOCKED) : null;
+      if (over) lock(over); else unlock();
     });
-    root.addEventListener("mouseleave", function () { root.classList.remove("hl-lock"); });
+    root.addEventListener("mouseleave", unlock);
   }
 
   function groups() {
