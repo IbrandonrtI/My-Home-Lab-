@@ -547,9 +547,22 @@
     }
   }
 
+  // ---- wide screens, Links tab: two columns in rows. The first half of the groups go down the left side, the rest down the right, and groups in the same row start on the same line
+  function linkRows() {
+    var lg = document.getElementById("layout-groups");
+    if (!lg) return;
+    var items = Array.prototype.filter.call(lg.children, function (g) { return g.classList.contains("bookmark-group"); });
+    var on = items.length > 0 && window.matchMedia("(min-width: 1500px)").matches && !lg.querySelector("#navidrome-card, #customize-card, li[id^='stat-']");
+    var half = Math.ceil(items.length / 2);
+    items.forEach(function (g, k) {
+      var want = on ? String(k < half ? 2 * k : 2 * (k - half) + 1) : "";
+      if (g.style.order !== want) g.style.order = want;
+    });
+  }
+
   function run() {
     queued = false;
-    health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); searchButton(); tabName(); bars(); sharp();
+    health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); linkRows(); searchButton(); tabName(); bars(); sharp();
   }
   function soon() { if (!queued) { queued = true; window.requestAnimationFrame(run); } }
   night(); soon();
