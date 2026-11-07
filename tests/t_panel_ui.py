@@ -105,6 +105,14 @@ def main():
             fr.locator("nav.tabs").wait_for(timeout=5000)
             check("login: the right password shows the panel inside the dashboard's frame", fr.get_by_role("heading", name="Customize Your Dashboard").count() == 1)
 
+            # ---- one Look screen: the order of its parts, and no separate Colors and Background screens
+            tabs_now = fr.locator("nav.tabs button").all_inner_texts()
+            check("screens: Look, Layout and Cards only (Colors and Background are part of Look)", tabs_now == ["Look", "Layout", "Cards"], tabs_now)
+            heads = fr.locator(".card h2, details.card > summary b").all_inner_texts()
+            want = ["Preview, Shapes and Space", "Names and Logo", "Background Picture", "How the Background Looks Behind the Cards", "Colors and Built-In Looks", "Colors of Cards, Tiles and Bookmarks", "Service Cards"]
+            pos = [heads.index(x) if x in heads else -1 for x in want]
+            check("look: Preview and Shapes first, then Names and Logo, the background, Colors and Built-In Looks, and the colors of cards below", -1 not in pos and pos == sorted(pos), heads)
+
             # ---- the look
             acc = lambda: pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-accent').trim()")
             check("look: the dashboard starts with the shipped accent", acc() == "138, 180, 255", acc())
@@ -150,7 +158,7 @@ def main():
             check("names: an unsaved name is not written to the css", "--hl-name" not in p.read("custom.css"))
             openmenu()
             fr.locator('input[aria-label="Address of a logo picture on the web"]').fill("https://example.com/l.png")
-            fr.get_by_role("button", name="Use This Address").click()
+            fr.get_by_role("button", name="Use This Address").first.click()
             pg.wait_for_timeout(300)
             lg = "(() => { const e = document.getElementById('hl-logo'); return e ? [e.tagName, e.firstChild.getAttribute('src'), document.querySelector('#widgets-wrap > .widget-container').firstElementChild === e, e.firstChild.style.height] : null; })()"
             check("logo: a web address shows as the first thing of the top bar, without a link", pg.evaluate(lg) == ["SPAN", "https://example.com/l.png", True, "48px"], pg.evaluate(lg))
@@ -203,7 +211,6 @@ def main():
             fr.locator('input[aria-label="How Transparent"]').fill("100")
             pg.wait_for_timeout(200)
             check("transparent: 100% is fully clear", ga() == "0", ga())
-            fr.locator("nav.tabs").get_by_text("Colors", exact=True).click()
             pg.wait_for_timeout(300)
             check("colors: the screen lists service cards and bookmarks", fr.get_by_text("Service Cards", exact=True).count() >= 1 and fr.get_by_text("Bookmarks", exact=True).count() >= 1)
             tsc = fr.locator('input[aria-label="Color of Tailscale"]')
@@ -255,7 +262,6 @@ def main():
             p.req("POST", "/api/look", {"look": {"accent": "#5ec8ff", "radius": 8}})        # back to the look the next checks expect
 
             # ---- the background
-            fr.locator("nav.tabs").get_by_text("Background", exact=True).click()
             fr.locator('input[aria-label="Brightness"]').fill("20")
             pg.wait_for_timeout(300)
             bf = pg.evaluate("document.getElementById('inner_wrapper').style.backdropFilter")
@@ -270,11 +276,11 @@ def main():
             fr.get_by_role("button", name="Save", exact=True).click()
             pg.wait_for_timeout(600)
             check("background: Save writes the sliders to settings.yaml", p.state_now()["background"]["brightness"] == 20)
-            fr.locator('input[type=file]').set_input_files({"name": "night.png", "mimeType": "image/png", "buffer": PNG})
+            fr.locator('input[type=file]').last.set_input_files({"name": "night.png", "mimeType": "image/png", "buffer": PNG})
             pg.wait_for_timeout(1000)
             check("background: an uploaded picture becomes the background", p.state_now()["background"]["image"].startswith("/images/background-"), p.state_now()["background"])
-            fr.locator('input[type=url]').fill("https://example.com/a.jpg")
-            fr.get_by_role("button", name="Use This Address").click()
+            fr.locator('input[aria-label="Picture address"]').fill("https://example.com/a.jpg")
+            fr.get_by_role("button", name="Use This Address").last.click()
             fr.get_by_role("button", name="Save", exact=True).click()
             pg.wait_for_timeout(600)
             check("background: a web address can be used", p.state_now()["background"]["image"] == "https://example.com/a.jpg")
@@ -364,7 +370,7 @@ def main():
             ph.locator("input[type=password]").fill(tp.PW)
             ph.get_by_role("button", name="Log In").click()
             ph.locator("nav.tabs").wait_for(timeout=5000)
-            for v in ("Look", "Colors", "Background", "Layout", "Cards"):
+            for v in ("Look", "Layout", "Cards"):
                 ph.locator("nav.tabs").get_by_text(v, exact=True).click()
                 ph.wait_for_timeout(250)
                 w = ph.evaluate("[document.documentElement.scrollWidth, window.innerWidth]")
