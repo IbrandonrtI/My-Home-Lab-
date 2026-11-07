@@ -83,11 +83,6 @@ layout:
     icon: mdi-pencil-box-multiple
     style: row
     columns: 1
-  Terminal:
-    tab: Links
-    icon: mdi-console
-    style: row
-    columns: 1
   Entertainment:
     tab: Links
     icon: mdi-popcorn
@@ -100,5 +95,10 @@ layout:
   Customize:
     tab: Customize
     icon: mdi-tune
+    style: row
+    columns: 1
+  Terminal:
+    tab: Customize
+    icon: mdi-console
     style: row
     columns: 1

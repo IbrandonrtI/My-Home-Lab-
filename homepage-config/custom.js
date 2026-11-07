@@ -191,6 +191,78 @@
       panel.style.maxHeight = panel.scrollHeight + "px";             // grow to the real height, then the limit is taken off again
     }
   }
+  // ---- the height of the Customize and Terminal cards: the same small slider as the music player has, in the title bar left of the fold button (kept in this browser only)
+  var FRAMES = {
+    "Customize": { key: "hl-h-customize", css: "--hl-h-customize", min: 400, max: 1600, vh: 0.88, top: 1200, label: "Customize Height", sel: "#customize-card iframe" },
+    "Terminal": { key: "hl-h-terminal", css: "--hl-h-terminal", min: 240, max: 1400, vh: 0.7, top: 720, label: "Terminal Height", sel: "#terminal-card iframe" }
+  };
+  function frameHeights() {
+    var w = document.getElementById("inner_wrapper");
+    if (!w) return;
+    Object.keys(FRAMES).forEach(function (n) {
+      var f = FRAMES[n], v = parseInt(store(f.key) || "", 10);
+      if (v >= f.min && v <= f.max) { if (w.style.getPropertyValue(f.css) !== v + "px") w.style.setProperty(f.css, v + "px"); }
+      else if (w.style.getPropertyValue(f.css)) w.style.removeProperty(f.css);
+    });
+  }
+  function groupHeight(g, name) {
+    var f = FRAMES[name];
+    if (!f || g.querySelector(":scope > .hl-gheight")) return;
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "hl-height hl-gheight";
+    b.setAttribute("aria-label", "Change the height of " + name);
+    b.setAttribute("title", "Change the height");
+    b.setAttribute("aria-expanded", "false");
+    var pop = document.createElement("aside");
+    pop.className = "hl-height-pop";
+    pop.hidden = true;
+    var lab = document.createElement("label");
+    lab.textContent = f.label;
+    var val = document.createElement("span");
+    var rng = document.createElement("input");
+    rng.type = "range"; rng.min = String(f.min); rng.max = String(f.max); rng.step = "20";
+    rng.setAttribute("aria-label", f.label);
+    var back = document.createElement("button");
+    back.type = "button";
+    back.textContent = "Default";
+    function current() {
+      var v = parseInt(store(f.key) || "", 10);
+      if (v >= f.min && v <= f.max) return v;
+      var fr = document.querySelector(f.sel);
+      if (fr && fr.offsetHeight > 100) return Math.min(f.max, Math.max(f.min, Math.round(fr.offsetHeight)));
+      return Math.min(f.max, Math.max(f.min, Math.round(Math.min(window.innerHeight * f.vh, f.top))));
+    }
+    function show() { var v = current(); rng.value = String(v); val.textContent = v + " px"; }
+    function changed() { frameHeights(); show(); window.dispatchEvent(new Event("resize")); }
+    rng.addEventListener("input", function () { store(f.key, rng.value); changed(); });
+    back.addEventListener("click", function () { store(f.key, ""); changed(); });
+    ["click", "mousedown", "pointerdown", "touchstart"].forEach(function (t) { pop.addEventListener(t, function (ev) { ev.stopPropagation(); }); });
+    function close() { pop.hidden = true; b.setAttribute("aria-expanded", "false"); }
+    b.addEventListener("click", function (ev) {
+      ev.preventDefault(); ev.stopPropagation();
+      pop.hidden = !pop.hidden;
+      b.setAttribute("aria-expanded", pop.hidden ? "false" : "true");
+      if (!pop.hidden) show();
+    });
+    document.addEventListener("click", function (ev) { if (!pop.hidden && !pop.contains(ev.target) && ev.target !== b) close(); });
+    document.addEventListener("keydown", function (ev) { if (ev.key === "Escape" && !pop.hidden) { close(); b.focus(); } });
+    pop.appendChild(lab); pop.appendChild(rng); pop.appendChild(val); pop.appendChild(back);
+    g.appendChild(b);
+    g.appendChild(pop);
+  }
+
+  // ---- while the pointer is over a framed page (music player, Customize, link editor, terminal) the page behind does not scroll: without this, reaching the top or bottom of the
+  // framed page makes the whole dashboard move. (A framed page from another address cannot be told about this from outside, so the page behind is held still instead.)
+  var LOCKED = "#hl-player-box, #customize-card iframe, #linkedit-card iframe, #terminal-card iframe";
+  if (window.matchMedia && window.matchMedia("(hover: hover)").matches) {
+    document.addEventListener("mouseover", function (ev) {
+      var over = !!(ev.target && ev.target.closest && ev.target.closest(LOCKED));
+      if (over !== root.classList.contains("hl-lock")) root.classList.toggle("hl-lock", over);
+    });
+    root.addEventListener("mouseleave", function () { root.classList.remove("hl-lock"); });
+  }
+
   function groups() {
     all(".services-group, .bookmark-group").forEach(function (g) {
       var h = g.querySelector(".service-group-name, .bookmark-group-name");
@@ -198,6 +270,7 @@
       var name = h.textContent.replace(/\s*·\s*\d+$/, "").trim(), n = g.querySelectorAll("li.service, li.bookmark").length;
       if (n && h.getAttribute("data-count") !== String(n)) h.setAttribute("data-count", String(n));
       g.classList.toggle("hl-folded", isFolded(name));
+      groupHeight(g, name);
       if (g.querySelector(":scope > .hl-gfold")) return;
       var b = document.createElement("button");
       b.type = "button";
@@ -272,6 +345,73 @@
     title.appendChild(pop);
   }
 
+  // ---- your own names for the server and the two pools, and your logo (set in the control panel, Look screen). The names are CSS values on the page box
+  // (--hl-name-homelab, --hl-name-main, --hl-name-backup) and the dashboard shows them wherever the shipped name is: the top bar, the Stats tab, "Connect Backup Drive".
+  // While the control panel is open, it sends the not yet saved names too (a "preview"), which are shown instead.
+  var namesPreview = null, textWas = new WeakMap(), textSet = new WeakMap(), renamed = false;
+  function cssText(name) {
+    var w = document.getElementById("inner_wrapper");
+    var v = w ? (window.getComputedStyle(w).getPropertyValue(name) || "").trim() : "";
+    return v.length >= 2 && v.charAt(0) === '"' && v.charAt(v.length - 1) === '"' ? v.slice(1, -1) : "";
+  }
+  function theNames() {
+    if (namesPreview) return namesPreview;
+    var w = document.getElementById("inner_wrapper");
+    return { homelab: cssText("--hl-name-homelab"), main: cssText("--hl-name-main"), backup: cssText("--hl-name-backup"), src: cssText("--hl-logo-src"), link: cssText("--hl-logo-link"),
+             size: w ? parseFloat(window.getComputedStyle(w).getPropertyValue("--hl-logo-size")) || 48 : 48 };
+  }
+  function nameOf(text, N) {
+    var t = text;
+    t = t.replace(/^(\s*)connect (main|backup) drive(\s*)$/i, function (all, a, k, z) { var n = N[k.toLowerCase()]; return n ? a + "Connect " + n + " Drive" + z : all; });
+    t = t.replace(/^(\s*)homelab(\s*)$/i, function (all, a, z) { return N.homelab ? a + N.homelab + z : all; });
+    t = t.replace(/\bmain pool\b/gi, function (all) { return N.main || all; });
+    t = t.replace(/\bbackup pool\b/gi, function (all) { return N.backup || all; });
+    return t;
+  }
+  var NAMED = /homelab|main pool|backup pool|connect (main|backup) drive/i;
+  function rename() {
+    var N = theNames(), w = document.getElementById("inner_wrapper");
+    if (!w || !(N.homelab || N.main || N.backup || renamed)) return;
+    var walk = document.createTreeWalker(w, NodeFilter.SHOW_TEXT, null), n;
+    while ((n = walk.nextNode())) {
+      var cur = n.nodeValue, mine = textWas.has(n);
+      if (!mine && !NAMED.test(cur)) continue;
+      var orig = mine && textSet.get(n) === cur ? textWas.get(n) : cur;      // a text the page wrote itself (not our change) is the new original
+      var next = nameOf(orig, N);
+      if (next !== orig) {
+        textWas.set(n, orig); textSet.set(n, next); renamed = true;
+        if (cur !== next) n.nodeValue = next;
+      } else if (mine) {
+        if (cur !== orig && textSet.get(n) === cur) n.nodeValue = orig;
+        textWas.delete(n); textSet.delete(n);
+      }
+    }
+  }
+  var logoShown = "";
+  function logo() {
+    var N = theNames(), wrap = document.getElementById("widgets-wrap"), el = document.getElementById("hl-logo");
+    var ok = N.src && /^(https?:\/\/[^\s"'()\\<>]+|data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+\/]+={0,2})$/.test(N.src);
+    var link = N.link && /^https?:\/\/[^\s"'()\\<>]+$/.test(N.link) ? N.link : "";
+    if (!wrap || !ok) { if (el) el.remove(); logoShown = ""; return; }
+    var key = N.src + "|" + link;
+    if (el && (el.tagName === "A") !== !!link) { el.remove(); el = null; }
+    if (!el) {
+      el = document.createElement(link ? "a" : "span");
+      el.id = "hl-logo";
+      var img = document.createElement("img");
+      img.alt = "";
+      img.setAttribute("decoding", "async");
+      el.appendChild(img);
+      logoShown = "";
+    }
+    if (link) { el.setAttribute("href", link); el.setAttribute("target", "_blank"); el.setAttribute("rel", "noopener noreferrer"); el.setAttribute("aria-label", "Logo (opens a link)"); }
+    if (logoShown !== key) { el.firstChild.src = N.src; logoShown = key; }
+    var h = Math.max(24, Math.min(96, N.size || 48)) + "px";
+    if (el.firstChild.style.height !== h) el.firstChild.style.height = h;
+    if (wrap.firstElementChild !== el) wrap.insertBefore(el, wrap.firstChild);
+  }
+  window.addEventListener("hl-names", function (e) { namesPreview = e.detail || null; rename(); logo(); });
+
   // ---- phone: a search button next to the weather opens the search bar
   function searchButton() {
     var host = document.getElementById("information-widgets-right");
@@ -319,7 +459,7 @@
 
   function run() {
     queued = false;
-    health(); shrinkButton(); heightButton(); playerHeight(); groups(); searchButton(); tabName(); bars(); sharp();
+    health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); searchButton(); tabName(); bars(); sharp();
   }
   function soon() { if (!queued) { queued = true; window.requestAnimationFrame(run); } }
   night(); soon();
@@ -369,6 +509,7 @@
       put(b, "background-image", kept.image);
       kept = null;
     }
+    window.dispatchEvent(new CustomEvent("hl-names", { detail: null }));
     window.dispatchEvent(new Event("hl-look-changed"));
   }
   function look(css) {
@@ -393,11 +534,18 @@
     }
     window.dispatchEvent(new Event("hl-look-changed"));
   }
+  // the names and the logo that are typed in the panel but not saved yet: only text of a plain kind passes (the page shows them as text, and a picture only from a web address or a data: address)
+  function names(d) {
+    function t(v, n) { return typeof v === "string" && v.length <= n && !/[\u0000-\u001f"\\<>{}`]/.test(v) ? v : ""; }
+    var n = d.names || {}, lg = d.logo || {}, size = typeof lg.size === "number" && lg.size >= 24 && lg.size <= 96 ? lg.size : 48;
+    window.dispatchEvent(new CustomEvent("hl-names", { detail: { homelab: t(n.homelab, 24), main: t(n.main, 24), backup: t(n.backup, 24), src: t(lg.src, 150000), link: t(lg.link, 600), size: size } }));
+  }
   window.addEventListener("message", function (e) {
     var d = e.data;
     if (!d || d.hlp !== 1 || typeof d.type !== "string" || !fromPanel(e)) return;
     if (d.type === "css") look(d.css);
     else if (d.type === "bg") background(d);
+    else if (d.type === "names") names(d);
     else if (d.type === "clear") clearAll();
     else if (d.type === "reload") window.location.reload();
   });

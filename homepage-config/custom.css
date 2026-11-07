@@ -428,7 +428,11 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   backdrop-filter: blur(14px) saturate(125%);
 }
 #inner_wrapper .widget-container:has(.information-widget-resource) { flex-direction: column !important; justify-content: center !important; gap: 3px !important; }
-#inner_wrapper #widgets-wrap > .widget-container:first-child { flex: 1 1 auto !important; }      /* the server tile takes the free space */
+/* the logo (made by custom.js when you give one in the control panel): the first thing of the top bar, from the left */
+#inner_wrapper #hl-logo { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; align-self: center; padding: 0 6px; text-decoration: none; }
+#inner_wrapper #hl-logo[hidden] { display: none; }
+#inner_wrapper #hl-logo img { display: block; width: auto; height: 48px; max-width: min(260px, 45vw); object-fit: contain; border-radius: 6px; }
+#inner_wrapper #widgets-wrap > .widget-container:first-of-type { flex: 1 1 auto !important; }      /* the server tile takes the free space */
 #inner_wrapper .widget-container:has(.information-widget-resource) > div:last-child {
   margin: 0 !important;
   padding: 0 !important;
@@ -444,7 +448,7 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   border-radius: 10px !important;
 }
 #inner_wrapper .information-widget-resource svg { color: rgb(var(--lk-accent)) !important; opacity: 0.9; }
-#inner_wrapper #widgets-wrap > .widget-container:first-child .information-widget-resource:nth-of-type(3) svg { color: #f2b05e !important; }      /* the temperature keeps a warm colour */
+#inner_wrapper #widgets-wrap > .widget-container:first-of-type .information-widget-resource:nth-of-type(3) svg { color: #f2b05e !important; }      /* the temperature keeps a warm colour */
 #inner_wrapper [class*="information-widget-datetime"] { margin-left: auto !important; }
 #inner_wrapper #information-widgets .information-widget-search {
   position: static !important;
@@ -687,6 +691,14 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
 #inner_wrapper .hl-height-pop[hidden] { display: none; }
 #inner_wrapper .hl-height-pop input { flex: 1 1 auto; min-width: 60px; accent-color: rgb(var(--lk-accent)); }
 #inner_wrapper .hl-height-pop button { flex: none; padding: 2px 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.06); color: inherit; cursor: pointer; }
+/* the same button and slider on the Customize and Terminal groups: in the group's title bar, left of the fold button */
+#inner_wrapper .hl-gheight { top: 6px; right: 40px; width: 26px; height: 26px; opacity: 0.55; }
+#inner_wrapper .hl-gheight:hover, #inner_wrapper .hl-gheight:focus-visible, #inner_wrapper .hl-gheight[aria-expanded="true"] { opacity: 1; }
+#inner_wrapper .hl-gheight::before { top: 4px; } #inner_wrapper .hl-gheight::after { bottom: 4px; }
+#inner_wrapper .hl-gheight + .hl-height-pop { top: 3px; right: 74px; z-index: 40; width: min(360px, calc(100% - 130px)); min-width: 0; }
+@media (max-width: 520px) { #inner_wrapper .hl-gheight + .hl-height-pop { right: 8px; top: 38px; width: calc(100% - 16px); } }
+/* the pointer is over a framed page (music player, Customize, terminal): the page behind it does not scroll along when the framed page reaches its top or bottom */
+html.hl-lock, html.hl-lock body, html.hl-lock #inner_wrapper { overflow-y: hidden !important; scrollbar-gutter: stable; }
 html.hl-player-min #inner_wrapper .hl-shrink::before { transform: translate(-50%, -25%) rotate(-135deg); }
 #inner_wrapper #navidrome-card div:has(> iframe) { max-height: calc(var(--lk-player-h) + 8px); transition: max-height 0.35s ease, opacity 0.25s ease 0.05s; }
 html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height: 0 !important; opacity: 0; transition: max-height 0.35s ease, opacity 0.2s ease; }
@@ -760,6 +772,12 @@ html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height
 #inner_wrapper .service-card, #inner_wrapper .bookmark > a { transition: border-color 0.2s ease, transform 0.2s ease; }
 #inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { transform: translateY(-2px); }
 #inner_wrapper #navidrome-card .service-card:hover { transform: none; }
+/* the framed pages (Customize, the link editor, the terminal) do not lift, do not rise in and have no blur layer behind them: any of these turns the page inside into a moving layer, and its text turns soft while the pointer is over it */
+#inner_wrapper .services-list > li#customize-card, #inner_wrapper .services-list > li#linkedit-card, #inner_wrapper .services-list > li#terminal-card { animation: none !important; }
+#inner_wrapper #customize-card .service-card, #inner_wrapper #linkedit-card .service-card, #inner_wrapper #terminal-card .service-card,
+#inner_wrapper #customize-card .service-card:hover, #inner_wrapper #linkedit-card .service-card:hover, #inner_wrapper #terminal-card .service-card:hover {
+  transform: none !important; transition: border-color 0.2s ease; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; will-change: auto;
+}
 @media (prefers-reduced-motion: reduce) {
   #inner_wrapper .services-list > li, #inner_wrapper .bookmark-list > li { animation: none !important; }
   #inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { transform: none; }
@@ -841,13 +859,15 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper .widget-container,
   #inner_wrapper .information-widget-logo,
   #inner_wrapper [class*="information-widget-glances"] { width: auto !important; min-width: 0 !important; padding: 8px 12px !important; flex: none !important; justify-content: center !important; }
-  #inner_wrapper #widgets-wrap > .widget-container:first-child { grid-column: 1 / -1; }
+  #inner_wrapper #widgets-wrap > .widget-container:first-of-type { grid-column: 1 / -1; }
+  #inner_wrapper #hl-logo { grid-column: 1 / -1; justify-self: start; padding: 0 2px; }
+  #inner_wrapper #hl-logo img { max-height: 44px; }
   #inner_wrapper #widgets-wrap > .widget-container, #inner_wrapper #information-widgets-right > * { flex: none !important; }
   #inner_wrapper #information-widgets-right > .information-widget-search, #inner_wrapper #information-widgets-right > [class*="information-widget-openmeteo"] { grid-column: 1 / -1; }
   #inner_wrapper .widget-container:has(.information-widget-resource) { flex-direction: column !important; flex-wrap: nowrap !important; }
   #inner_wrapper .widget-container:has(.information-widget-resource) > div:first-child { flex-wrap: wrap; justify-content: center; row-gap: 6px; }
-  #inner_wrapper #widgets-wrap > .widget-container:first-child > div:first-child { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; width: 100%; }
-  #inner_wrapper #widgets-wrap > .widget-container:first-child .information-widget-resource { border-right: 0 !important; padding-right: 0 !important; margin-right: 0 !important; }
+  #inner_wrapper #widgets-wrap > .widget-container:first-of-type > div:first-child { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 14px; width: 100%; }
+  #inner_wrapper #widgets-wrap > .widget-container:first-of-type .information-widget-resource { border-right: 0 !important; padding-right: 0 !important; margin-right: 0 !important; }
   #inner_wrapper .information-widget-resource { margin-right: 0 !important; padding-right: 0 !important; border-right: 0 !important; }
   #inner_wrapper .information-widget-resource > div { min-width: 0 !important; }
   #inner_wrapper [class*="information-widget-datetime"] { margin-left: 0 !important; }
@@ -903,7 +923,7 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
 /* ---- The Customize tab: the control panel (a page of its own, shown in an iframe) fills one big card */
 #inner_wrapper #customize-card .service-title, #inner_wrapper #linkedit-card .service-title, #inner_wrapper #terminal-card .service-title { display: none !important; }
 #inner_wrapper #customize-card div:has(> iframe), #inner_wrapper #linkedit-card div:has(> iframe), #inner_wrapper #terminal-card div:has(> iframe) { margin: 0 !important; width: 100%; max-width: none !important; background: transparent !important; overflow: hidden; border-radius: calc(var(--lk-radius) - 2px); }
-#inner_wrapper #customize-card iframe, #inner_wrapper #linkedit-card iframe, #inner_wrapper #terminal-card iframe { display: block; width: 100% !important; max-width: none !important; height: min(88vh, 1200px) !important; min-height: 520px; border: 0 !important; border-radius: 0 !important; background: #0a0f19; }
-#inner_wrapper #linkedit-card iframe { height: min(78vh, 900px) !important; min-height: 420px; }          /* the link editor: the Links tab, a drop-down card above the bookmarks */
-#inner_wrapper #terminal-card iframe { height: min(70vh, 720px) !important; min-height: 380px; background: #0a0f19 !important; }          /* the web terminal: a drop-down card on the Links tab */
+#inner_wrapper #customize-card iframe, #inner_wrapper #linkedit-card iframe, #inner_wrapper #terminal-card iframe { display: block; width: 100% !important; max-width: none !important; height: var(--hl-h-customize, min(88vh, 1200px)) !important; min-height: 520px; border: 0 !important; border-radius: 0 !important; background: #0a0f19; }
+#inner_wrapper #linkedit-card iframe { height: var(--hl-h-linkedit, min(78vh, 900px)) !important; min-height: 420px; }          /* the link editor: the Links tab, a drop-down card above the bookmarks */
+#inner_wrapper #terminal-card iframe { height: var(--hl-h-terminal, min(70vh, 720px)) !important; min-height: 240px; background: #0a0f19 !important; }          /* the web terminal: a drop-down card on the Links tab */
 /* <<< homelab tabs <<< */
