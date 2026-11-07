@@ -168,3 +168,10 @@ dialog.wide { width: min(720px, calc(100vw - 24px)); }
 .picker button { min-height: 84px; }
 .picker img { width: 34px; height: 34px; filter: none; object-fit: contain; }
 .picker img.mdi { filter: invert(1) opacity(0.9); }
+
+/* the ready-made logos */
+.logo-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 8px; }
+.logo-tile { display: flex; align-items: center; justify-content: center; padding: 8px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.04); cursor: pointer; }
+.logo-tile:hover { background: rgba(255, 255, 255, 0.09); }
+.logo-tile[aria-pressed="true"] { border-color: rgb(var(--accent)); background: rgba(var(--accent), 0.16); }
+.logo-tile img { display: block; }

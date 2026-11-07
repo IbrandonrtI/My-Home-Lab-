@@ -284,7 +284,7 @@ function lookPreview(quiet) {
   }
   applyAccent();
   if (quiet) return;
-  send({ type: "names", names: lookW.names || {}, logo: lookW.logo || {} });       // the names and the logo do not go through the CSS of the preview
+  send({ type: "names", names: lookW.names || {}, logo: (lookW.logo && !lookW.logo.off) ? lookW.logo : {} });       // the names and the logo do not go through the CSS of the preview
   clearTimeout(pvTimer);                    // the server writes the rules, so the preview is exactly what Save keeps
   pvTimer = setTimeout(async () => {
     const n = ++pvSeq;
@@ -362,6 +362,37 @@ function shrinkLogo(file) {                  // the picture is made small (256 p
     fr.readAsDataURL(file);
   });
 }
+// ready-made logos: simple line drawings that are painted in the color you choose and made into a picture (like an uploaded one) when you pick one
+const LOGO_ART = [
+  ["Server", '<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M12 6.5h5M12 17.5h5"/><circle cx="7" cy="6.5" r="1" fill="#C"/><circle cx="7" cy="17.5" r="1" fill="#C"/>'],
+  ["House", '<path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v10h13V10"/><path d="M10 20v-5.5h4V20"/>'],
+  ["Cloud", '<path d="M7 18.5h10.5a4 4 0 0 0 .5-7.97A6 6 0 0 0 6.4 9.1 4.7 4.7 0 0 0 7 18.5z"/>'],
+  ["Shield", '<path d="M12 3 4.5 6v6c0 4.5 3.2 7.8 7.5 9 4.3-1.2 7.5-4.5 7.5-9V6z"/><path d="m9 12 2.2 2.2L15.5 10"/>'],
+  ["Bolt", '<path d="M13 2.5 5 13.5h6l-1 8 8-11h-6z"/>'],
+  ["Database", '<ellipse cx="12" cy="5.5" rx="7.5" ry="2.8"/><path d="M4.5 5.5v13c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8v-13"/><path d="M4.5 12c0 1.5 3.4 2.8 7.5 2.8s7.5-1.3 7.5-2.8"/>'],
+  ["Cube", '<path d="M12 2.8 20 7.4v9.2l-8 4.6-8-4.6V7.4z"/><path d="M4 7.4l8 4.6 8-4.6M12 12v9.2"/>'],
+  ["Music", '<path d="M9 18V5.5l11-2V16"/><circle cx="6.5" cy="18" r="2.5"/><circle cx="17.5" cy="16" r="2.5"/>'],
+  ["Movie", '<rect x="3" y="4.5" width="18" height="15" rx="3"/><path d="m10 9 5 3-5 3z"/>'],
+  ["Terminal", '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m7 9 3 3-3 3M12.5 15H17"/>'],
+];
+function logoArt(i, color, px) {
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="' + px + '" height="' + px + '" fill="none" stroke="' + color + '" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + LOGO_ART[i][1].replace(/#C/g, color) + "</svg>";
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+function logoPicture(i, color) {            // the drawing as a PNG (256 px), the same kind of picture as an uploaded one
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onerror = () => reject(new Error("The logo could not be drawn."));
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 256;
+      c.getContext("2d").drawImage(img, 0, 0, 256, 256);
+      resolve(c.toDataURL("image/png"));
+    };
+    img.src = logoArt(i, color, 256);
+  });
+}
+let logoPick = { i: -1, color: "", src: "" };
 function namesCard() {
   const L = lookW;
   L.names = L.names || {}; L.logo = L.logo || {};
@@ -375,23 +406,48 @@ function namesCard() {
     const f = file.files[0]; file.value = "";
     if (!f) return;
     if (f.size > 15 * 1024 * 1024) return toast("That picture is bigger than 15 MB. Choose a smaller one.", true);
-    try { L.logo.src = await shrinkLogo(f); lookChanged(); drawLogo(); toast("Logo ready. Press Save to keep it."); } catch (e) { fail(e); }
+    try { L.logo.src = await shrinkLogo(f); delete L.logo.off; logoPick.i = -1; lookChanged(); drawLogo(); toast("Logo ready. Press Save to keep it."); } catch (e) { fail(e); }
   } });
   function drawLogo() {
-    const has = !!L.logo.src;
+    const has = !!L.logo.src, on = has && !L.logo.off;
     const url = h("input", { type: "url", placeholder: "https://…", "aria-label": "Logo picture address" });
     const link = h("input", { type: "url", placeholder: "https://… (optional)", value: L.logo.link || "", "aria-label": "Where the logo leads",
       oninput: ev => { const v = ev.target.value.trim(); if (v) L.logo.link = v; else delete L.logo.link; lookChanged(); } });
+    const color = logoPick.color || L.accent;
+    const tiles = LOGO_ART.map(([name], i) => h("button", { class: "logo-tile", title: name, "aria-label": "Use the " + name + " logo", "aria-pressed": String(on && logoPick.i === i && logoPick.src === L.logo.src),
+      onclick: async () => {
+        try {
+          const c = logoPick.color || L.accent;
+          L.logo.src = await logoPicture(i, c); delete L.logo.off;
+          logoPick = { i, color: logoPick.color, src: L.logo.src };
+          lookChanged(); drawLogo(); toast("Logo ready. Press Save to keep it.");
+        } catch (e) { fail(e); }
+      } }, h("img", { src: logoArt(i, color, 40), alt: "", width: 40, height: 40 })));
+    const pick = h("input", { type: "color", value: color, "aria-label": "Color of the ready-made logos" });
+    pick.addEventListener("input", async () => {                       // (the boxes are not drawn again, so the color picker stays open)
+      logoPick.color = pick.value;
+      tiles.forEach((t, i) => { t.firstChild.src = logoArt(i, pick.value, 40); });
+      if (logoPick.i >= 0 && logoPick.src === L.logo.src) {
+        try { L.logo.src = await logoPicture(logoPick.i, pick.value); logoPick.src = L.logo.src; lookChanged(); } catch (e) { /* the next change tries again */ }
+      }
+    });
     put(logoBox,
-      has ? h("div", { class: "row", style: { marginBottom: "10px", alignItems: "center" } },
-        h("img", { src: L.logo.src, alt: "Your logo", style: { maxHeight: "56px", maxWidth: "180px", borderRadius: "6px", background: "rgba(255,255,255,0.06)", padding: "4px" } }),
-        h("button", { onclick: () => { L.logo = {}; lookChanged(); drawLogo(); } }, "Remove Logo")) : h("p", { class: "muted small" }, "No logo yet."),
+      has ? h("div", { class: "row", style: { marginBottom: "10px", alignItems: "center", flexWrap: "wrap" } },
+        h("img", { src: L.logo.src, alt: "Your logo", style: { maxHeight: "56px", maxWidth: "180px", borderRadius: "6px", background: "rgba(255,255,255,0.06)", padding: "4px", opacity: on ? 1 : 0.35 } }),
+        h("div", { class: "chips", role: "group", "aria-label": "Show the logo" },
+          h("button", { class: "chip", "aria-pressed": String(on), onclick: () => { delete L.logo.off; lookChanged(); drawLogo(); } }, "Logo On"),
+          h("button", { class: "chip", "aria-pressed": String(!on), onclick: () => { L.logo.off = true; lookChanged(); drawLogo(); } }, "Logo Off")),
+        h("button", { onclick: () => { L.logo = {}; logoPick = { i: -1, color: logoPick.color, src: "" }; lookChanged(); drawLogo(); } }, "Remove Logo"))
+        : h("p", { class: "muted small" }, "No logo yet. Pick one below."),
+      h("div", { class: "field" }, h("div", { class: "lab" }, "Ready-Made Logos"),
+        h("div", { class: "logo-tiles" }, tiles),
+        h("div", { class: "row", style: { marginTop: "8px", alignItems: "center" } }, pick, h("span", { class: "small muted" }, "Color of the ready-made logos"))),
       h("div", { class: "row", style: { marginBottom: "10px" } }, h("button", { class: "primary", onclick: () => file.click() }, "Choose a Picture from This Computer…")),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Or Use a Picture from the Web"),
         h("div", { class: "row" }, h("div", { class: "grow" }, url), h("button", { onclick: () => {
           const v = url.value.trim();
           if (!/^https?:\/\/\S+$/.test(v)) return toast("Type a web address that starts with https:// first.", true);
-          L.logo.src = v; lookChanged(); drawLogo(); toast("Press Save to keep it.");
+          L.logo.src = v; delete L.logo.off; logoPick.i = -1; lookChanged(); drawLogo(); toast("Press Save to keep it.");
         } }, "Use This Address"))),
       has ? [h("div", { class: "field" }, h("div", { class: "lab" }, "Where the Logo Leads"), link, h("div", { class: "hint" }, "A web address that opens when the logo is clicked. Leave it empty for a logo that only shows.")),
         (() => {
