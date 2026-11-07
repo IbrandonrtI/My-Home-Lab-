@@ -11,6 +11,8 @@ What the panel is:
     devices (your tailnet) can reach. It is never opened to your home network, and has its own password (not the other logins).
   - it runs as the same user as the dashboard files, so it needs no sudo: it edits ~/homepage-config (settings.yaml, services.yaml,
     bookmarks.yaml and the look block of custom.css) and nothing else. The work is done by plain text edits, the same files you could edit by hand.
+  - the Terminal card of the Links tab is a web terminal (ttyd, its own service as the same user) that listens on a private socket only this
+    panel can reach. The panel checks the login before it passes anything through, so the terminal is as private as the panel: only your tailnet.
   - every change first saves a copy of the files it changes (.panel-history in the Homepage folder), so "Undo" brings the last state back.
 
 Written with the Python standard library only (PyYAML is used when it is installed, to check a file before it is saved).
@@ -19,12 +21,15 @@ import base64
 import getpass
 import hashlib
 import hmac
+import http.client
 import json
 import mimetypes
 import os
 import re
 import secrets
+import select
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -51,6 +56,7 @@ BIND = os.environ.get("HLP_BIND") or "127.0.0.1"
 HOSTS = [h.strip().lower() for h in (os.environ.get("HLP_HOSTS") or "").split(",") if h.strip()]
 FRAME = [h.strip() for h in (os.environ.get("HLP_FRAME") or "").split(",") if h.strip()]
 HOMEPAGE_URL = (os.environ.get("HLP_HOMEPAGE_URL") or "").rstrip("/")      # where the dashboard is (for the picture preview)
+TERM_SOCK = os.environ.get("HLP_TERM_SOCK") or "/run/homelab-terminal/ttyd.sock"      # where ttyd (the web terminal) listens: a socket, not a port
 COOKIE = "hlpanel" if os.environ.get("HLP_COOKIE_PLAIN") else "__Host-hlpanel"
 NO_DOCKER = bool(os.environ.get("HLP_NO_DOCKER"))
 
@@ -278,7 +284,7 @@ LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "gl
                 "side": 28, "playerHeight": 600, "paintStrength": 40, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}}
 LABEL_ICONS = ("plain", "circle", "square", "ring")
 PAINT_STYLES = ("gradient", "solid")
-NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card")        # the panel's own cards and the music player are never painted
+NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card", "terminal-card")        # the panel's own cards and the music player are never painted
 LOOK_PRESETS = [
     {"id": "calm", "name": "Calm Night", "look": {}},
     {"id": "ocean", "name": "Ocean", "look": {"accent": "#5ec8ff", "glass": "#06141f", "glassOpacity": 58, "tabs": {"Stats": "#5ee0c8", "Links": "#9db4ff"}}},
@@ -806,7 +812,7 @@ def api_bg_upload(data):
 
 # ================================================================ layout: tabs, groups, their order (settings.yaml: layout:)
 AUTOMATIC = {"At a Glance", "Music Library", "Library Totals", "Storage", "Backup & Updates", "Folder Sizes", "Calendar"}     # made by the lab's scripts
-PROTECTED = {"Customize", "Edit Links"}          # the panel itself (the Customize tab and the link editor of the Links tab): it can be moved, but not removed
+PROTECTED = {"Customize", "Edit Links", "Terminal"}          # the panel itself (the Customize tab and the link editor of the Links tab): it can be moved, but not removed
 
 
 def layout_span(lines):
@@ -1554,6 +1560,22 @@ def full_state():
 
 
 # ================================================================ the web server
+TERM_MAX = 6_000_000             # the biggest page the terminal may send (its own page is under 1 MB)
+TERM_IDLE = 600                  # a terminal connection with no traffic at all for this many seconds is closed (ttyd pings every few seconds)
+
+
+class UnixConn(http.client.HTTPConnection):
+    """An HTTP connection to a socket file (ttyd listens on one)."""
+    def __init__(self, path, timeout=20):
+        super().__init__("localhost", timeout=timeout)
+        self.sock_path = path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.sock_path)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "homelab-panel"
     sys_version = ""
@@ -1583,7 +1605,7 @@ class Handler(BaseHTTPRequestHandler):
                 return v
         return ""
 
-    def send(self, code, body, ctype="application/json", extra=None):
+    def send(self, code, body, ctype="application/json", extra=None, csp=None):
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode("utf-8")
         elif isinstance(body, str):
@@ -1595,8 +1617,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         anc = " ".join(["'self'"] + FRAME)
-        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; "
-                         "script-src 'self'; connect-src 'self'; frame-ancestors " + anc)
+        self.send_header("Content-Security-Policy", csp or ("default-src 'self'; img-src 'self' data: https: http:; style-src 'self' 'unsafe-inline'; "
+                                                           "script-src 'self'; connect-src 'self'; frame-ancestors " + anc))
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
@@ -1644,12 +1666,88 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, icon_index())
             if path.startswith("/api/"):
                 raise Fail("Unknown address.", 404)
+            if path == "/terminal":
+                return self.send(302, b"", "text/plain", {"Location": "/terminal/"})
+            if path.startswith("/terminal/"):
+                return self.terminal()
             self.static(path)
         except Fail as e:
             self.fail(e)
         except Exception as e:      # never show a stack trace to the browser
             sys.stderr.write("error: %r\n" % (e,))
             self.send(500, {"error": "Something went wrong inside the panel. Look at:  journalctl -u homelab-panel -n 30"})
+
+    # --- the web terminal: ttyd on a private socket, passed through after the login
+    def terminal_page(self, code, text):
+        page = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Terminal</title>"
+                "<body style='font:16px system-ui,sans-serif;background:#0a0f19;color:#dbe4f5;padding:24px'><p>%s</p>"
+                "<p><a style='color:#8ab4ff' target=_blank rel=noopener href='/'>Open the control panel</a></p>" % text)
+        return self.send(code, page, "text/html; charset=utf-8")
+
+    def terminal_target(self):
+        u = urllib.parse.urlparse(self.path)
+        return u.path + ("?" + u.query if u.query else "")
+
+    def terminal(self):
+        if not session_ok(self.cookie_token()):
+            return self.terminal_page(401, "Please log in to the control panel first (the Customize tab uses the same login), then reload this card.")
+        if (self.headers.get("Upgrade") or "").lower() == "websocket":
+            origin = self.headers.get("Origin")
+            if not origin or not self.origin_ok(origin):          # a page of another website must not be able to open the terminal
+                raise Fail("This request came from another website.", 403)
+            return self.terminal_socket()
+        try:
+            conn = UnixConn(TERM_SOCK)
+            conn.request("GET", self.terminal_target(), headers={"Host": "localhost", "Accept": self.headers.get("Accept") or "*/*",
+                                                    "Accept-Encoding": self.headers.get("Accept-Encoding") or "identity"})
+            r = conn.getresponse()
+            body = r.read(TERM_MAX + 1)
+            ctype, enc, status = r.getheader("Content-Type") or "application/octet-stream", r.getheader("Content-Encoding"), r.status
+            conn.close()
+        except (OSError, http.client.HTTPException):
+            return self.terminal_page(502, "The terminal is not running. On the server, look at:  sudo systemctl status homelab-terminal")
+        if len(body) > TERM_MAX or status not in (200, 304, 401, 404):
+            return self.terminal_page(502, "The terminal gave an answer the panel does not understand.")
+        anc = " ".join(["'self'"] + FRAME)
+        csp = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
+               "connect-src 'self' ws: wss:; worker-src 'self' blob:; frame-ancestors " + anc)
+        return self.send(status, body, ctype, {"Content-Encoding": enc} if enc else None, csp=csp)
+
+    def terminal_socket(self):
+        """The terminal's WebSocket: the handshake is passed on and then the bytes go both ways until one side closes."""
+        up = socket.socket(socket.AF_UNIX)
+        try:
+            up.settimeout(5)
+            up.connect(TERM_SOCK)
+        except OSError:
+            up.close()
+            return self.terminal_page(502, "The terminal is not running. On the server, look at:  sudo systemctl status homelab-terminal")
+        keep = ("Upgrade", "Connection", "Sec-WebSocket-Key", "Sec-WebSocket-Version", "Sec-WebSocket-Protocol", "Sec-WebSocket-Extensions")
+        head = ["GET %s HTTP/1.1" % self.terminal_target(), "Host: localhost"] + ["%s: %s" % (k, self.headers[k]) for k in keep if self.headers.get(k)]
+        try:
+            up.sendall(("\r\n".join(head) + "\r\n\r\n").encode("latin-1"))
+        except (OSError, UnicodeEncodeError):
+            up.close()
+            return self.terminal_page(502, "The terminal could not be reached.")
+        self.close_connection = True
+        client = self.connection
+        up.settimeout(None)
+        client.settimeout(None)
+        socks = [client, up]
+        try:
+            while True:
+                ready = select.select(socks, [], [], TERM_IDLE)[0]
+                if not ready:
+                    break
+                for x in ready:
+                    data = x.recv(65536)
+                    if not data:
+                        return
+                    (up if x is client else client).sendall(data)
+        except OSError:
+            pass
+        finally:
+            up.close()
 
     def static(self, path):
         names = {"/": "index.html", "/index.html": "index.html", "/app.js": "app.js", "/app.css": "app.css", "/icon.svg": "icon.svg"}
