@@ -97,6 +97,7 @@ CAL_BEGIN, CAL_END = "# >>> homelab calendar >>>", "# <<< homelab calendar <<<" 
 CUSTOM_BEGIN, CUSTOM_END = "# >>> homelab customize >>>", "# <<< homelab customize <<<"      # the block with the Customize group (the control panel) in the shipped services.yaml
 CUSTOMIZE_GROUPS = {"Customize": ("mdi-tune", 1)}      # name -> (icon, columns): a tab of its own, after the others, one big card
 LINKEDIT_GROUPS = {"Edit Links": ("mdi-pencil-box-multiple", 1), "Terminal": ("mdi-console", 1)}      # name -> (icon, columns): on the Links tab, above the bookmarks, one drop-down card each
+TERMINAL_GROUPS = {"Terminal": ("mdi-console", 1)}      # name -> (icon, columns): the web terminal is the last card of the Customize tab (it used to be on the Links tab: LINKEDIT_GROUPS still names it for that old move)
 CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Home tab, in a row of its own, last
 
 
@@ -236,6 +237,17 @@ def linkedit_at(lines, start, end, g, default):
     return default if first is None else first
 
 
+def terminal_at(lines, start, end, default):
+    """Where the terminal goes in the layout lines: after the last group of the Customize tab (the bottom of that tab). `default` when the tab has no group."""
+    keys = [i for i in range(start + 1, end) if re.match(r"^  \S", lines[i])]
+    last = None
+    for n, i in enumerate(keys):
+        stop = keys[n + 1] if n + 1 < len(keys) else end
+        if any(re.match(r"^    tab:\s*Customize\s*$", lines[j]) for j in range(i + 1, stop)):
+            last = stop
+    return default if last is None else last
+
+
 def layout_complete(settings, service_groups, bookmark_groups, seen):
     """Put the groups of this machine that the layout: block does not know yet on a tab (a service group on Home, a bookmark group on
     Links), so they do not show up on every tab. Only groups that were never offered before (not in `seen`) are added, so a group
@@ -268,6 +280,9 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
         elif g in CUSTOMIZE_GROUPS:                              # the control panel has a tab of its own, after the others
             icon_g, cols_g = CUSTOMIZE_GROUPS[g]
             new = ["  %s:" % yaml_key(g), "    tab: Customize", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
+        elif g in TERMINAL_GROUPS:                               # the terminal is the last card of the Customize tab
+            icon_g, cols_g = TERMINAL_GROUPS[g]
+            new = ["  %s:" % yaml_key(g), "    tab: Customize", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
         elif g in LINKEDIT_GROUPS:                               # the link editor is on the Links tab
             icon_g, cols_g = LINKEDIT_GROUPS[g]
             new = ["  %s:" % yaml_key(g), "    tab: Links", "    icon: %s" % icon_g, "    style: row", "    columns: %d" % cols_g]
@@ -277,7 +292,9 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
         else:
             new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
         at = end
-        if g in LINKEDIT_GROUPS:                                 # on the Links tab they come first (Edit Links, then Terminal), so they are seen without scrolling
+        if g in TERMINAL_GROUPS:
+            at = terminal_at(lines, start, end, at)
+        elif g in LINKEDIT_GROUPS:                               # the link editor comes first on the Links tab, so it is seen without scrolling
             at = linkedit_at(lines, start, end, g, at)
         after = STATS_AFTER.get(g)
         if tab == "Stats" and after:
@@ -429,6 +446,29 @@ def layout_linkedit_first(settings, seen):
     if first is None:
         return settings, seen
     entries = others[:first] + mine + others[first:]
+    return _entries_text((head, entries, tail, rest)), seen
+
+
+TERMINAL_MOVED = "~terminal-in-customize"               # the terminal was moved from the Links tab to the bottom of the Customize tab (done once)
+
+
+def layout_terminal_to_customize(settings, seen):
+    """The "Terminal" card moves from the Links tab to the bottom of the Customize tab, once. A terminal you put on another tab yourself, or an order
+    you chose later, is left alone. Returns (settings, seen)."""
+    if TERMINAL_MOVED in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {TERMINAL_MOVED})
+    parts = layout_entries(settings)
+    if not parts:
+        return settings, seen
+    head, entries, tail, rest = parts
+    mine = next((e for e in entries if _entry_name(e) in TERMINAL_GROUPS and _entry_tab(e) == "Links"), None)
+    if mine is None:
+        return settings, seen
+    mine = [("    tab: Customize" if re.match(r"^    tab:\s*Links\s*$", l) else l) for l in mine]
+    others = [e for e in entries if _entry_name(e) not in TERMINAL_GROUPS]
+    last = max((i for i, e in enumerate(others) if _entry_tab(e) == "Customize"), default=None)
+    entries = others + [mine] if last is None else others[:last + 1] + [mine] + others[last + 1:]
     return _entries_text((head, entries, tail, rest)), seen
 
 
