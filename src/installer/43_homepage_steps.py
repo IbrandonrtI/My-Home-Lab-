@@ -86,6 +86,7 @@ class HomepageTabs(Step):
             sett, seen = layout_calendar_on_stats(sett, seen)
             sett, seen = layout_calendar_on_home(sett, seen)
             sett, seen = layout_stats_before_links(sett, seen)
+            sett, seen = layout_linkedit_first(sett, seen)
         sett, seen = settings_quicklaunch(sett, seen)
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))

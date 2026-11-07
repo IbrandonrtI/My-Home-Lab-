@@ -254,6 +254,17 @@ def layout_complete(settings, service_groups, bookmark_groups, seen):
         else:
             new = ["  %s:" % yaml_key(g), "    tab: %s" % tab, "    icon: %s" % ("mdi-dots-horizontal-circle" if g.lower() == "others" else icon)]
         at = end
+        if g in LINKEDIT_GROUPS:                                 # on the Links tab it comes first, so it is seen without scrolling
+            for i in range(start + 1, end):
+                if re.match(r"^  \S", lines[i]):
+                    j = i + 1
+                    while j < end and not re.match(r"^  \S", lines[j]):
+                        if re.match(r"^    tab:\s*Links\s*$", lines[j]):
+                            at = i
+                            break
+                        j += 1
+                    if at != end:
+                        break
         after = STATS_AFTER.get(g)
         if tab == "Stats" and after:
             for i in range(start + 1, end):
@@ -379,6 +390,30 @@ def layout_stats_before_links(settings, seen):
         return settings, seen
     keep = [e for e in entries[first_links:] if _entry_tab(e) != "Stats"]
     entries = entries[:first_links] + later + keep
+    return _entries_text((head, entries, tail, rest)), seen
+
+
+LINKEDIT_FIRST = "~linkedit-first"                       # the link editor was put in front of the bookmark groups on the Links tab (done once)
+
+
+def layout_linkedit_first(settings, seen):
+    """The "Edit Links" card is moved to the top of the Links tab (in front of the bookmark groups), so a link can be edited without
+    scrolling down. Once; an order you chose later is left alone. Returns (settings, seen)."""
+    if LINKEDIT_FIRST in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {LINKEDIT_FIRST})
+    parts = layout_entries(settings)
+    if not parts:
+        return settings, seen
+    head, entries, tail, rest = parts
+    mine = [e for e in entries if _entry_name(e) in LINKEDIT_GROUPS and _entry_tab(e) == "Links"]
+    if not mine:
+        return settings, seen
+    others = [e for e in entries if e not in mine]
+    first = next((i for i, e in enumerate(others) if _entry_tab(e) == "Links"), None)
+    if first is None:
+        return settings, seen
+    entries = others[:first] + mine + others[first:]
     return _entries_text((head, entries, tail, rest)), seen
 
 
