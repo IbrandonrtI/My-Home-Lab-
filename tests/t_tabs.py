@@ -282,6 +282,11 @@ check("a new Edit Links card is added in front of the bookmark groups", new_lay.
 check("the Calendar cards share the stats card look in the css", all(x in C for x in ('li[id^="cal-"]::before', 'li[id^="cal-"]::after', "#cal-month", "#cal-agenda")))
 check("the calendar cards have ids that start with cal-", re.findall(r"(?m)^        id: (cal-[\w-]+)$", V) == ["cal-month", "cal-agenda"])
 
+# ---- wide screens: the Calendar fills the room under the music group in three steps
+C9 = rd("custom.css")
+check("the extras script has the calendar fitting code (three steps, with a margin so it does not flicker)", "function calendar()" in rd("custom.js") and "hl-cal-a" in rd("custom.js") and "hl-cal-b" in rd("custom.js") and "392" in rd("custom.js"))
+check("the css has the two calendar steps and the layer rule for the fold panel", all(x in C9 for x in ("hl-cal-a:has(#navidrome-card)", "hl-cal-b:has(#navidrome-card)", "@layer theme", "--hl-cal-cell")))
+check("the Stats row At a Glance runs across the whole width on wide screens", ":has(#stat-library) { column-span: all; }" in C9)
 # ---- custom.js (tags every bookmark group with its name) and the bookmark card styles
 J = rd("custom.js")
 check("the shipped custom.js has the managed block", m.JS_BEGIN in J and m.JS_END in J)

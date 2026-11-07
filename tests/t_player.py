@@ -188,6 +188,12 @@ try:
             pg3.mouse.move(5, 5)
             pg3.wait_for_timeout(400)
         check("scroll lock: in and out of the player again and again never reloads it", len(players(pg3)) == 1 and players(pg3)[0].evaluate("window.__id") == id3)
+        pg3.mouse.move(box["x"] + 100, box["y"] + 100)
+        pg3.wait_for_timeout(500)
+        check("scroll lock: after leaving, pointing at the player again does not hold the page until you click again", not pg3.evaluate("document.getElementById('scroller').hasAttribute('data-hl-locked')"))
+        pg3.mouse.click(box["x"] + 100, box["y"] + 100)
+        pg3.wait_for_timeout(800)
+        check("scroll lock: a new click in the player holds the page again", pg3.evaluate("document.getElementById('scroller').hasAttribute('data-hl-locked')"))
         b3.close()
         browser.close()
 finally:
