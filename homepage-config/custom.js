@@ -167,7 +167,7 @@
   // ---- every group: a count behind its name and a button that folds it (the choice is remembered by name)
   function folded() { try { return JSON.parse(store("hl-folded") || "[]"); } catch (e) { return []; } }
   function opened() { try { return JSON.parse(store("hl-opened") || "[]"); } catch (e) { return []; } }       // groups that start folded and that you opened
-  var FOLDED_AT_FIRST = ["Edit Links"];                                    // the link editor of the Links tab starts closed
+  var FOLDED_AT_FIRST = ["Edit Links", "Terminal"];                          // the link editor and the terminal of the Links tab start closed
   function isFolded(name) { return folded().indexOf(name) >= 0 || (FOLDED_AT_FIRST.indexOf(name) >= 0 && opened().indexOf(name) < 0); }
   // The group slides shut or open (the height is animated from the real height to 0 and back). While it moves, the player block is told to
   // look again on every frame, so the music frame follows the card.

@@ -901,8 +901,9 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper .hl-gfold { opacity: 0.8; }
 }
 /* ---- The Customize tab: the control panel (a page of its own, shown in an iframe) fills one big card */
-#inner_wrapper #customize-card .service-title, #inner_wrapper #linkedit-card .service-title { display: none !important; }
-#inner_wrapper #customize-card div:has(> iframe), #inner_wrapper #linkedit-card div:has(> iframe) { margin: 0 !important; width: 100%; max-width: none !important; background: transparent !important; overflow: hidden; border-radius: calc(var(--lk-radius) - 2px); }
-#inner_wrapper #customize-card iframe, #inner_wrapper #linkedit-card iframe { display: block; width: 100% !important; max-width: none !important; height: min(88vh, 1200px) !important; min-height: 520px; border: 0 !important; border-radius: 0 !important; background: #0a0f19; }
+#inner_wrapper #customize-card .service-title, #inner_wrapper #linkedit-card .service-title, #inner_wrapper #terminal-card .service-title { display: none !important; }
+#inner_wrapper #customize-card div:has(> iframe), #inner_wrapper #linkedit-card div:has(> iframe), #inner_wrapper #terminal-card div:has(> iframe) { margin: 0 !important; width: 100%; max-width: none !important; background: transparent !important; overflow: hidden; border-radius: calc(var(--lk-radius) - 2px); }
+#inner_wrapper #customize-card iframe, #inner_wrapper #linkedit-card iframe, #inner_wrapper #terminal-card iframe { display: block; width: 100% !important; max-width: none !important; height: min(88vh, 1200px) !important; min-height: 520px; border: 0 !important; border-radius: 0 !important; background: #0a0f19; }
 #inner_wrapper #linkedit-card iframe { height: min(78vh, 900px) !important; min-height: 420px; }          /* the link editor: the Links tab, a drop-down card above the bookmarks */
+#inner_wrapper #terminal-card iframe { height: min(70vh, 720px) !important; min-height: 380px; background: #0a0f19 !important; }          /* the web terminal: a drop-down card on the Links tab */
 /* <<< homelab tabs <<< */

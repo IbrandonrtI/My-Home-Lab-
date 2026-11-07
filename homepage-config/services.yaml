@@ -461,4 +461,20 @@
           allowScrolling: yes
           loadingStrategy: lazy
 
+# The Links tab: a drop-down card with a terminal (a shell on this machine, in the browser). It goes through the control panel, so it needs the
+# panel's login and is only reachable from your own devices (Tailscale).
+- Terminal:
+
+    - Web terminal:
+        id: terminal-card
+        icon: mdi-console
+        description: A shell on this machine, in your browser
+        widget:
+          type: iframe
+          name: web-terminal
+          src: https://pc.your-tailnet.ts.net:1100/terminal/
+          classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96
+          allowScrolling: no
+          loadingStrategy: lazy
+
 # <<< homelab customize <<<
