@@ -6,11 +6,11 @@ let S = null;                 // what the server says (look, background, layout,
 let view = "look";
 let lookW = null, bgW = null, layW = null;     // the changes in progress (not saved yet)
 const root = document.getElementById("app");
-const LOOKVIEWS = ["look", "colors"];                // these two screens work on the same look, so going from one to the other keeps the changes
+const LOOKVIEWS = ["look"];                           // (the screens that work on the look and the background: the changes are kept while you are on them)
 const BLURS = ["none", "sm", "md", "lg", "xl", "2xl", "3xl"];
 const ONLY = new URLSearchParams(location.search).get("only");       // "links": only the link editor, shown inside the Links tab of the dashboard
 const VIEWS = ONLY === "links" ? [["links", "Links"]]
-  : [["look", "Look"], ["colors", "Colors"], ["background", "Background"], ["layout", "Layout"], ["cards", "Cards"]];
+  : [["look", "Look"], ["layout", "Layout"], ["cards", "Cards"]];
 if (ONLY === "links") view = "links";
 
 try { const v = sessionStorage.getItem("hlp-view"); if (v && VIEWS.some(x => x[0] === v)) view = v; } catch (e) { /* storage may be blocked */ }
@@ -217,7 +217,7 @@ function showLogin(passwordSet = true, msg = "") {
 function render() {
   if (!S) return;
   try { sessionStorage.setItem("hlp-view", view); } catch (e) { /* storage may be blocked */ }
-  const fns = { look: viewLook, colors: viewColors, background: viewBackground, layout: viewLayout, cards: viewCards, links: viewLinks };
+  const fns = { look: viewLook, layout: viewLayout, cards: viewCards, links: viewLinks };
   if (ONLY === "links") { put(root, viewLinks()); applyAccent(); return; }
   footEl = h("div", { class: "savebar" });
   drawFoot(false, null, null);
@@ -293,9 +293,13 @@ function lookPreview(quiet) {
 }
 function lookDirty() { return !same(lookNorm(lookW), lookNorm(S.look.values)); }
 function lookNorm(v) { const o = clone(v); o.tabs = o.tabs || {}; o.names = o.names || {}; o.logo = o.logo || {}; return o; }
+function bgDirty() {
+  const b = S.background, B = bgW;
+  return !!B && (B.url !== "" || B.blur !== (b.blur || "none") || B.saturate !== b.saturate || B.brightness !== b.brightness || B.opacity !== b.opacity);
+}
 function refreshLookBar() {
   if (!lookBarEl) return;
-  put(lookBarEl, saveBar(lookDirty(), saveLook, () => { discardPreview(); render(); }, "Save",
+  put(lookBarEl, saveBar(lookDirty() || bgDirty(), saveLook, () => { discardPreview(); render(); }, "Save",
     h("button", { onclick: resetLook }, "Reset All Settings")));
 }
 function lookChanged() { lookPreview(); refreshLookBar(); try { sessionStorage.setItem("hlp-draft", JSON.stringify(lookW)); } catch (e) { /* storage may be blocked */ } }
@@ -308,8 +312,21 @@ function startLook() {
   } catch (e) { /* no draft */ }
   return clone(S.look.values);
 }
-async function saveLook() {
-  try { clearTimeout(pvTimer); pvSeq++; await api("POST", "/api/look", { look: lookOut() }); clearTimeout(pvTimer); pvSeq++; send({ type: "saved" }); toast("Look saved."); await afterChange(false); } catch (e) { fail(e); }
+async function saveLook() {                // saves what was changed on the Look screen: the look and the background together
+  try {
+    const both = lookDirty() && bgDirty();
+    if (bgDirty()) {
+      const B = bgW;
+      await api("POST", "/api/background", { url: B.url || undefined, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity });
+    }
+    if (lookDirty()) {
+      clearTimeout(pvTimer); pvSeq++;
+      await api("POST", "/api/look", { look: lookOut() });
+      clearTimeout(pvTimer); pvSeq++; send({ type: "saved" });
+    }
+    toast(both ? "Look and background saved." : (bgDirty() ? "Background saved." : "Look saved."));
+    await afterChange(false);
+  } catch (e) { fail(e); }
 }
 async function resetLook() {
   if (!await confirmBox("Reset All Settings?", "The colors, glass, shapes, names, logo and the colors of cards and labels go back to how the dashboard came. Your picture, cards and layout stay as they are. Undo can bring this change back.", "Reset All Settings")) return;
@@ -503,9 +520,17 @@ function viewLook() {
     h("div", { class: "mini-tabs" }, h("span", { class: "on" }, "Home"), h("span", {}, "Stats"), h("span", {}, "Links")),
     h("div", { class: "mini-cards" }, ["Navidrome", "Immich", "Beszel"].map(n => h("div", { class: "mini-card" }, h("b", {}, n), h("span", { class: "small muted" }, "Sample Card"), h("i", {})))));
   setTimeout(() => { lookPreview(!lookDirty()); refreshLookBar(); }, 0);       // nothing is sent to the dashboard until something is changed
-  return h("div", {},
-    namesCard(),
-    h("div", { class: "card" }, h("h2", {}, "Colors and Built-In Looks"),
+  const previewCard =
+h("div", { class: "card" }, h("h2", {}, "Preview, Shapes and Space"),
+  h("div", { class: "grid cols2" },
+        h("div", {}, h("p", { class: "muted" }, framed ? "The dashboard around this panel changes while you move the sliders, so you can see the real result." : "A small sample of how cards and tabs look."), mock),
+        h("div", {},
+          lookSlider("How Round the Corners Are", "radius", 0, 40, 1, " px"),
+          lookSlider("Brightness of the Card Edge", "edge", 0, 40, 0.5, "%"),
+          lookSlider("Space at the Left and Right", "side", 0, 120, 2, " px"),
+          h("p", { class: "muted small" }, "The height of the music player is changed on the dashboard itself, with the small arrows button next to the shrink button on the player."))));
+  const colorsCard =
+h("div", { class: "card" }, h("h2", {}, "Colors and Built-In Looks"),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Built-In Looks"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Pick one to try it. Nothing is saved until you press “Save”."),
         h("div", { class: "chips" }, S.look.presets.map(p => h("button", { class: "chip", onclick: () => {
           const base = clone(def); base.tabs = Object.assign({}, def.tabs);
@@ -521,15 +546,13 @@ function viewLook() {
         glass),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Color of Each Tab"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Each tab can have its own accent color."),
         h("div", { class: "grid cols2 tabcolors" }, tabRows)),
-      h("p", { class: "muted small" }, "To give single cards, tiles, bookmarks or labels their own colors, open the Colors screen.")),
-    h("div", { class: "card" }, h("h2", {}, "Preview, Shapes and Space"),
-      h("div", { class: "grid cols2" },
-        h("div", {}, h("p", { class: "muted" }, framed ? "The dashboard around this panel changes while you move the sliders, so you can see the real result." : "A small sample of how cards and tabs look."), mock),
-        h("div", {},
-          lookSlider("How Round the Corners Are", "radius", 0, 40, 1, " px"),
-          lookSlider("Brightness of the Card Edge", "edge", 0, 40, 0.5, "%"),
-          lookSlider("Space at the Left and Right", "side", 0, 120, 2, " px"),
-          h("p", { class: "muted small" }, "The height of the music player is changed on the dashboard itself, with the small arrows button next to the shrink button on the player.")))),
+      h("p", { class: "muted small" }, "Further down you can give single cards, tiles, bookmarks and labels their own colors."));
+  return h("div", {},
+    previewCard,
+    namesCard(),
+    backgroundCards(),
+    colorsCard,
+    colorOptions(),
     lookBarEl);
 }
 
@@ -537,11 +560,8 @@ function labelIconSample(style) {
   return h("span", { class: "lis lis-" + style }, h("img", { src: iconInfo("mdi-movie-open").url, class: "mdi", alt: "" }));
 }
 
-function viewColors() {
-  if (!lookW) lookW = startLook();
+function colorOptions() {                    // the colors of single cards, tiles, bookmarks and labels (the last part of the Look screen)
   const L = lookW, P = S.paint;
-  lookBarEl = h("div", {});
-  setTimeout(() => { lookPreview(!lookDirty()); refreshLookBar(); }, 0);
 
   function colorInput(value, label, onset) {
     const inp = h("input", { type: "color", value: value || "#8ab4ff", "aria-label": label });
@@ -633,7 +653,7 @@ function viewColors() {
 
   return h("div", {},
     h("div", { class: "card" }, h("h2", {}, "Colors of Cards, Tiles and Bookmarks"),
-      h("p", { class: "muted" }, "Give single service cards, the calendar, the tiles of the Stats tab and the bookmarks of the Links tab their own color: a tint, a colored edge and a soft glow. It looks best with Transparent Glass on the Look screen."),
+      h("p", { class: "muted" }, "Give single service cards, the calendar, the tiles of the Stats tab and the bookmarks of the Links tab their own color: a tint, a colored edge and a soft glow. It looks best with Transparent glass (set under Colors and Built-In Looks)."),
       h("p", { class: "muted small" }, "To see a color on the dashboard, open the tab that has it (Home, Stats or Links). The preview stays there. Come back here to keep it with Save."),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Color Style"), styleChips,
         h("div", { class: "hint" }, "Gradient: the color is strong on one side and fades out across the card. Solid: the same color across the whole card.")),
@@ -651,27 +671,19 @@ function viewColors() {
         h("button", { class: "small", onclick: () => { for (const n of P.labels) L.labels[n] = { text: bulkText, icon: bulkIcon }; lookChanged(); drawLabels(); } }, "Apply"),
         h("button", { class: "small", onclick: () => { L.labels = {}; lookChanged(); drawLabels(); } }, "Set All to Default")),
       labelRows,
-      h("div", { class: "field", style: { marginTop: "14px" } }, h("div", { class: "lab" }, "Icon Style"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "How the small icon next to every label looks."), styles)),
-    lookBarEl);
+      h("div", { class: "field", style: { marginTop: "14px" } }, h("div", { class: "lab" }, "Icon Style"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "How the small icon next to every label looks."), styles)));
 }
 
-// ---------------------------------------------------------------- Background
+// ---------------------------------------------------------------- Background (cards of the Look screen)
 function bgUrl(img) { return !img ? "" : (img.startsWith("/") && S.background.homepageUrl ? S.background.homepageUrl + img : (img.startsWith("/") ? "" : img)); }
-function viewBackground() {
+function backgroundCards() {
   const b = S.background;
   if (!bgW) bgW = { url: "", blur: b.blur || "none", saturate: b.saturate, brightness: b.brightness, opacity: b.opacity };
   const B = bgW;
   const pic = h("div", { class: "pic" });
   const drawPic = () => { const u = bgUrl(b.image); pic.style.backgroundImage = u ? 'url("' + u.replace(/"/g, "%22") + '")' : "none"; };
   drawPic();
-  const bar = h("div", {});
-  const dirty = () => B.url !== "" || B.blur !== (b.blur || "none") || B.saturate !== b.saturate || B.brightness !== b.brightness || B.opacity !== b.opacity;
-  const refreshBar = () => put(bar, saveBar(dirty(), save, () => { discardPreview(); render(); }, "Save", h("button", { onclick: reset }, "Restore Default Sliders")));
-  const preview = () => { send({ type: "bg", image: B.url || b.image, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); refreshBar(); };
-  async function save() {
-    try { await api("POST", "/api/background", { url: B.url || undefined, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); toast("Background saved."); await afterChange(false); }
-    catch (e) { fail(e); }
-  }
+  const preview = () => { send({ type: "bg", image: B.url || b.image, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); refreshLookBar(); };
   async function reset() {
     try { await api("POST", "/api/background/reset", {}); send({ type: "clear" }); toast("The sliders are back to their default values."); await afterChange(true); } catch (e) { fail(e); }
   }
@@ -696,23 +708,21 @@ function viewBackground() {
       if (r.restarting) setTimeout(() => send({ type: "reload" }), 12000);
     } catch (e) { fail(e); }
   }
-  setTimeout(refreshBar, 0);
-  return h("div", {},
-    h("div", { class: "grid cols2" },
-      h("div", { class: "card" }, h("h2", {}, "The Picture"), pic,
-        h("div", { class: "row", style: { marginTop: "12px" } }, file, h("button", { class: "primary", onclick: () => file.click() }, "Upload a Picture…")),
-        h("p", { class: "hint muted small" }, "JPG, PNG, WebP, GIF or AVIF, up to 14 MB. After a new picture the dashboard restarts for about 10 seconds."),
-        b.mounted === false ? h("p", { class: "small", style: { color: "var(--bad)" } }, "The dashboard cannot see its pictures folder yet, so an uploaded picture will not show. Run: sudo homelab-setup upgrade") : null,
-        h("div", { class: "field", style: { marginTop: "12px" } }, h("label", {}, "Or Use a Picture from the Web"), h("div", { class: "row" }, h("div", { class: "grow" }, url),
-          h("button", { onclick: () => { B.url = url.value.trim(); if (!B.url) return toast("Type a web address first.", true); preview(); toast("Press Save to keep it."); } }, "Use This Address")))),
-      h("div", { class: "card" }, h("h2", {}, "How It Looks Behind the Cards"),
-        h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Blur"), blurVal,
-          h("input", { type: "range", min: 0, max: 6, step: 1, value: BLURS.indexOf(B.blur) < 0 ? 2 : BLURS.indexOf(B.blur), "aria-label": "Blur",
-            oninput: ev => { B.blur = BLURS[Number(ev.target.value)]; blurVal.textContent = B.blur; preview(); } })), h("div", { class: "hint" }, "none is sharp. 3xl is very soft.")),
-        slider("Brightness", "brightness", "Low makes the picture darker, so the text is easy to read."),
-        slider("Color", "saturate", "Low turns the picture toward gray."),
-        slider("Strength", "opacity", "How much of the picture shows through the dark cover."))),
-    bar);
+  return h("div", { class: "grid cols2" },
+    h("div", { class: "card" }, h("h2", {}, "Background Picture"), pic,
+      h("div", { class: "row", style: { marginTop: "12px" } }, file, h("button", { class: "primary", onclick: () => file.click() }, "Upload a Picture…")),
+      h("p", { class: "hint muted small" }, "JPG, PNG, WebP, GIF or AVIF, up to 14 MB. After a new picture the dashboard restarts for about 10 seconds."),
+      b.mounted === false ? h("p", { class: "small", style: { color: "var(--bad)" } }, "The dashboard cannot see its pictures folder yet, so an uploaded picture will not show. Run: sudo homelab-setup upgrade") : null,
+      h("div", { class: "field", style: { marginTop: "12px" } }, h("label", {}, "Or Use a Picture from the Web"), h("div", { class: "row" }, h("div", { class: "grow" }, url),
+        h("button", { onclick: () => { B.url = url.value.trim(); if (!B.url) return toast("Type a web address first.", true); preview(); toast("Press Save to keep it."); } }, "Use This Address")))),
+    h("div", { class: "card" }, h("h2", {}, "How the Background Looks Behind the Cards"),
+      h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Blur"), blurVal,
+        h("input", { type: "range", min: 0, max: 6, step: 1, value: BLURS.indexOf(B.blur) < 0 ? 2 : BLURS.indexOf(B.blur), "aria-label": "Blur",
+          oninput: ev => { B.blur = BLURS[Number(ev.target.value)]; blurVal.textContent = B.blur; preview(); } })), h("div", { class: "hint" }, "“none” is sharp. “3xl” is very soft.")),
+      slider("Brightness", "brightness", "Low makes the picture darker, so the text is easy to read."),
+      slider("Color", "saturate", "Low turns the picture toward gray."),
+      slider("Strength", "opacity", "How much of the picture shows through the dark cover."),
+      h("div", { class: "row" }, h("button", { class: "small", onclick: reset }, "Restore Default Sliders"))));
 }
 
 // ---------------------------------------------------------------- Layout
