@@ -458,7 +458,14 @@ def paint_rules(v, saved, css):
     st = v["paintStyle"]
     rules = []
     allc = "%d, %d, %d" % hex_rgb(v["paintAll"]) if v.get("paintAll") else None
-    cards_all = WRAP + " .service" + "".join(":not(#%s)" % x for x in NO_PAINT)
+    cards_all = WRAP + " .service" + "".join(':not([id="%s"])' % x for x in NO_PAINT)     # (an attribute test is weaker than an id, so a card of its own color wins)
+    glob_was = saved is not None and (look_full(saved)["paintStrength"] != LOOK_DEFAULT["paintStrength"] or look_full(saved)["paintStyle"] != "gradient")
+    if v["paintStrength"] != LOOK_DEFAULT["paintStrength"] or st != "gradient":
+        # the strength and the style also work on the cards, tiles and bookmarks that keep their own default color
+        al = paint_vars("0", t, st).split(";", 1)[1]
+        rules.append("%s{%s}%s .bookmark>a{%s}" % (cards_all, al, WRAP, al))
+    elif glob_was:
+        rules.append("%s{%s}%s .bookmark>a{%s}" % (cards_all, RESET_VARS, WRAP, RESET_VARS))
 
     def card(cid, c):
         return "%s #%s{%s}%s #%s .service-card{%s}" % (WRAP, cid, paint_vars(c, t, st), WRAP, cid, paint_decl(c, t))
