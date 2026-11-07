@@ -345,7 +345,7 @@ def names_clean(raw):
 
 
 def logo_clean(raw):
-    """The logo: `src` (a web address of a picture, or the picture itself as a data: address that the browser made), `link` (optional) and `size` (height in pixels)."""
+    """The logo: `src` (a web address of a picture, or the picture itself as a data: address that the browser made), `link` (optional), `size` (height in pixels) and `off` (kept, not shown)."""
     if raw in (None, {}):
         return {}
     if not isinstance(raw, dict):
@@ -371,6 +371,8 @@ def logo_clean(raw):
         if "\\" in src:
             raise Fail("The logo address has a character that is not allowed.")
     out = {"src": src}
+    if raw.get("off"):
+        out["off"] = True                              # the logo is kept but not shown
     link = clean_url(raw.get("link"), "The logo link")
     if link:
         if "\\" in link:
@@ -635,7 +637,7 @@ def look_css(custom, full=False, saved=None, css=""):
         for k, val in sorted((custom.get("names") or {}).items()):
             tok.append('--hl-name-%s: "%s";' % (k, val))
         lg = custom.get("logo") or {}
-        if lg.get("src"):
+        if lg.get("src") and not lg.get("off"):
             tok.append('--hl-logo-src: "%s";' % lg["src"])
             if lg.get("link"):
                 tok.append('--hl-logo-link: "%s";' % lg["link"])
