@@ -170,3 +170,64 @@ class PanelPassword(Step):
 
     def fill(self):
         return panel_ask_password()
+
+
+# ================================================================ the web terminal (the Terminal card of the Links tab)
+# ttyd runs a shell in the browser. It is its own service, as the lab's own user, and listens on a socket FILE (not a network port) that only
+# that user can open. The only thing that talks to it is the control panel, which checks the login first and then passes the terminal
+# through on the panel's own Tailscale address (port 1100). So the terminal is exactly as private as the panel: your tailnet only.
+TERMINAL_UNIT = "/etc/systemd/system/homelab-terminal.service"
+TERMINAL_SOCK = "/run/homelab-terminal/ttyd.sock"
+
+
+def terminal_unit_text():
+    """The systemd unit. It cannot be locked down like the panel's unit: a shell needs sudo to work, and sudo needs what a lock-down takes away."""
+    theme = '{"background":"#0a0f19","foreground":"#dbe4f5","cursor":"#8ab4ff"}'
+    return "\n".join([
+        "# Written by homelab-setup. The web terminal of the dashboard (the Terminal card on the Links tab). Change nothing here: an upgrade puts it back.",
+        "[Unit]",
+        "Description=Homelab web terminal (the Terminal card of the Links tab)",
+        "After=network.target",
+        "",
+        "[Service]",
+        "Type=simple",
+        "User=%s" % Ctx.user,
+        "WorkingDirectory=%s" % Ctx.home,
+        "Environment=HOME=%s" % Ctx.home,
+        "RuntimeDirectory=homelab-terminal",
+        "RuntimeDirectoryMode=0700",
+        "ExecStart=/usr/bin/ttyd --writable --interface %s --base-path /terminal --ping-interval 30 -t fontSize=15 -t cursorBlink=true -t 'theme=%s' /bin/bash -l" % (TERMINAL_SOCK, theme),
+        "Restart=on-failure",
+        "RestartSec=3",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        ""])
+
+
+@step
+class TerminalFiles(Step):
+    id, group = "terminal", "Homepage"
+    title = "The web terminal (Terminal card, Links tab): ttyd installed and the service running"
+    needs = ("panel-files",)
+
+    def applies(self):
+        return panel_applies()
+
+    def probe(self):
+        if not pkg_installed("ttyd") or read_file(P(TERMINAL_UNIT)) != terminal_unit_text():
+            return "todo"
+        return "done" if run(["systemctl", "is-active", "homelab-terminal"])[1].strip() == "active" else "todo"
+
+    def run(self):
+        if not pkg_installed("ttyd"):
+            rc, txt = act(["apt-get", "install", "-y", "-q", "ttyd"], env=apt_env(), timeout=900)
+            if rc != 0 and not Opt.dry:
+                raise Abort("The terminal program (ttyd) could not be installed: %s\n      Try it by hand: sudo apt-get install ttyd" % txt.strip()[-200:])
+        changed = read_file(P(TERMINAL_UNIT)) != terminal_unit_text()
+        if changed:
+            write_file(P(TERMINAL_UNIT), terminal_unit_text(), 0o644)
+        act(["systemctl", "daemon-reload"])
+        act(["systemctl", "enable", "--now", "homelab-terminal"])
+        if changed and not Opt.dry and run(["systemctl", "is-active", "homelab-terminal"])[1].strip() == "active":
+            act(["systemctl", "restart", "homelab-terminal"])
