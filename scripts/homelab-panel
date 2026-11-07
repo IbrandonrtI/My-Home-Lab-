@@ -431,10 +431,11 @@ WRAP = "html body #inner_wrapper"
 def paint_vars(rgbs, t, style):
     """The color of one painted card, tile or bookmark: its color and how strong the fill is (the page's CSS draws the fill from these three values).
     A gradient is strong on one side and fades out; solid is the same strength everywhere."""
+    k = t ** 0.8                                       # 0 = no color at all; 40 is the strength the page's own CSS has when nothing is set
     if style == "solid":
-        a1 = a2 = num(0.12 + 0.6 * t)
+        a1 = a2 = num(0.72 * k)
     else:
-        a1, a2 = num(0.18 + 0.72 * t), num(0.02 + 0.2 * t)
+        a1, a2 = num(0.9 * k), num(0.22 * k)
     return "--accent:%s;--hl-a1:%s;--hl-a2:%s;" % (rgbs, a1, a2)
 
 
