@@ -258,6 +258,13 @@ check("no Calendar, or no layout block: nothing changes", m.layout_calendar_on_h
 check("a layout without Links groups, or without a Calendar, is not changed", m.layout_stats_before_links("layout:\n  A:\n    tab: Home\n  B:\n    tab: Stats\n", [])[0] == "layout:\n  A:\n    tab: Home\n  B:\n    tab: Stats\n"
       and m.layout_calendar_on_stats("layout:\n  A:\n    tab: Home\n", [])[0] == "layout:\n  A:\n    tab: Home\n")
 check("a file without a layout block is not changed", m.layout_calendar_on_stats("title: X\n", [])[0] == "title: X\n" and m.layout_stats_before_links("title: X\n", [])[0] == "title: X\n")
+LE = "layout:\n  Network:\n    tab: Home\n  Entertainment:\n    tab: Links\n  Productivity:\n    tab: Links\n  Edit Links:\n    tab: Links\n    icon: mdi-pencil-box-multiple\n"
+le1, ls1 = m.layout_linkedit_first(LE, [])
+check("Edit Links moves in front of the bookmark groups on the Links tab", le1.index("  Edit Links:") < le1.index("  Entertainment:") and m.LINKEDIT_FIRST in ls1 and le1.count("Edit Links") == 1, le1)
+check("the Edit Links move happens once; a later order is left alone", m.layout_linkedit_first(LE, ls1)[0] == LE)
+check("without an Edit Links entry or a layout nothing changes", m.layout_linkedit_first("title: X\n", [])[0] == "title: X\n" and m.layout_linkedit_first("layout:\n  A:\n    tab: Home\n", [])[0] == "layout:\n  A:\n    tab: Home\n")
+new_lay, _ = m.layout_complete("layout:\n  Network:\n    tab: Home\n  Entertainment:\n    tab: Links\n", ["Network", "Edit Links"], ["Entertainment"], ["Network", "Entertainment"])
+check("a new Edit Links card is added in front of the bookmark groups", new_lay.index("  Edit Links:") < new_lay.index("  Entertainment:") and "    tab: Links" in new_lay.split("  Edit Links:")[1].split("  Entertainment:")[0], new_lay)
 check("the Calendar cards share the stats card look in the css", all(x in C for x in ('li[id^="cal-"]::before', 'li[id^="cal-"]::after', "#cal-month", "#cal-agenda")))
 check("the calendar cards have ids that start with cal-", re.findall(r"(?m)^        id: (cal-[\w-]+)$", V) == ["cal-month", "cal-agenda"])
 
