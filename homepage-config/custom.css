@@ -384,10 +384,11 @@ div[id$="-card"] > div {
   --lk-radius: 16px;                   /* how round the cards are */
   --lk-text: #eef2f9;
   --lk-muted: #a9b4c7;
-  --lk-side: 28px;                     /* space left and right of the page */
+  --lk-side: 120px;                    /* space left and right of the page (smaller windows and phones: see below) */
   --lk-player-h: 600px;                /* height of the Navidrome player panel */
   position: relative;
 }
+@media (max-width: 1400px) { #inner_wrapper { --lk-side: 28px; } }          /* smaller windows: less space at the sides */
 
 /* ---- The page: a little narrower on big screens, a darker and softer picture behind it */
 #inner_wrapper > .container { max-width: 1480px; z-index: auto !important; }      /* no own layer: the music player (custom.js) must lie above the cards but under the search dialog */
@@ -856,7 +857,8 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
 
 /* ---- Phones and narrow windows: a small tile grid on top, then one column of cards */
 @media (max-width: 700px) {
-  #inner_wrapper { --lk-side: 14px; --lk-player-h: 560px; }
+  #inner_wrapper { --lk-player-h: 560px; }
+  html body #inner_wrapper { --lk-side: 14px !important; }           /* (on a phone the side space is always small) */
   #inner_wrapper #information-widgets { margin-top: 12px !important; }
   #inner_wrapper #widgets-wrap { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
   #inner_wrapper .widget-container,
@@ -933,7 +935,7 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
 #inner_wrapper #terminal-card iframe { height: var(--hl-h-terminal, min(70vh, 720px)) !important; min-height: 240px; background: #0a0f19 !important; }          /* the web terminal: a drop-down card on the Links tab */
 /* ---- Wide screens (1080p and bigger): the page uses the whole width, a little smaller, and the groups sit side by side */
 @media (min-width: 1500px) {
-  #inner_wrapper { --lk-side: 24px; --lk-player-h: clamp(420px, 54vh, 680px); }
+  #inner_wrapper { --lk-player-h: clamp(420px, 54vh, 680px); }
   #inner_wrapper > .container { max-width: 2400px; }
   #inner_wrapper #tabs { margin-top: 16px !important; }
   #inner_wrapper #myTab { width: min(100%, 460px); }
@@ -944,15 +946,13 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group { grid-column: 2; min-width: 0 !important; max-width: none !important; width: auto !important; }
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { grid-column: 1; grid-row: 1 / span 3; }
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { grid-column: 1 / -1; grid-row: auto; }
-  /* Stats and Links: the groups flow down two columns (a group is never cut); the panel cards (link editor) run across both */
-  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) { display: block !important; column-count: 2; column-gap: 18px; }
-  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .services-group,
-  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .bookmark-group { break-inside: avoid; width: 100% !important; max-width: none !important; min-width: 0 !important; margin-bottom: 8px; }
-  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > :has(#linkedit-card) { column-span: all; }
+  /* Links: the groups flow down two columns (a group is never cut); the link editor runs across both. (Stats stays one section per row.) */
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) { display: block !important; column-count: 2; column-gap: 18px; }
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) > .services-group,
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) > .bookmark-group { break-inside: avoid; width: 100% !important; max-width: none !important; min-width: 0 !important; margin-bottom: 8px; }
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) > :has(#linkedit-card) { column-span: all; }
   /* Stats: more air, and the At a Glance row runs across the whole width so its four cards have room for their words */
-  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):has(li[id^="stat-"]) { column-gap: 36px; }
-  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .services-group { margin-bottom: 18px; }
-  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)) > .services-group:has(#stat-library) { column-span: all; }
+  #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) > .services-group { margin-bottom: 18px; }
   #inner_wrapper li[id^="stat-"] .service-block { padding: 10px 6px !important; min-width: 0; }
   #inner_wrapper li[id^="stat-"] .service-block-label { overflow-wrap: break-word; line-height: 1.25; }
   #inner_wrapper li[id^="stat-"] .service-block-value { font-size: 1.08rem !important; }
