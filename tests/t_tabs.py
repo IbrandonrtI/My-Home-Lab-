@@ -286,7 +286,7 @@ check("the calendar cards have ids that start with cal-", re.findall(r"(?m)^    
 C9 = rd("custom.css")
 check("the extras script has the calendar fitting code (three steps, with a margin so it does not flicker)", "function calendar()" in rd("custom.js") and "hl-cal-a" in rd("custom.js") and "hl-cal-b" in rd("custom.js") and "392" in rd("custom.js"))
 check("the css has the two calendar steps and the layer rule for the fold panel", all(x in C9 for x in ("hl-cal-a:has(#navidrome-card)", "hl-cal-b:has(#navidrome-card)", "@layer theme", "--hl-cal-cell")))
-check("the Stats row At a Glance runs across the whole width on wide screens", ":has(#stat-library) { column-span: all; }" in C9)
+check("on wide screens only the Links tab flows in two columns (Stats stays one section per row), and the side space is 120px by default", "column-count: 2" in C9 and C9.count('not(:has(li[id^="stat-"]))') >= 2 and "--lk-side: 120px;" in C9 and "max-width: 1400px) { #inner_wrapper { --lk-side: 28px; }" in C9)
 # ---- custom.js (tags every bookmark group with its name) and the bookmark card styles
 J = rd("custom.js")
 check("the shipped custom.js has the managed block", m.JS_BEGIN in J and m.JS_END in J)
