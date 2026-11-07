@@ -39,7 +39,7 @@ PNG = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08
 
 
 def host_page(panel_port):
-    return ("""<!doctype html><html><head><title>host</title><style>#inner_wrapper{--lk-accent:138, 180, 255;--lk-radius:16px}</style></head><body>
+    return ("""<!doctype html><html><head><title>host</title><style>#inner_wrapper{--lk-accent:138, 180, 255;--lk-radius:16px}</style><link rel="stylesheet" href="/api/config/custom.css"></head><body>
 <div id="background" style="background-image:url('/x.jpg')"></div>
 <div id="inner_wrapper"><div id="widgets-wrap"><div class="widget-container"><div>CPU 31</div><div>HomeLab</div></div><div class="widget-container"><div>Main Pool</div></div><div class="widget-container"><div>Connect Backup Drive</div></div></div><ul><li id="customize-card"><iframe id="panel" src="http://localhost:%d/" style="width:1000px;height:760px;border:0"></iframe></li></ul></div>
 <ul><li id="linkedit-card"><iframe id="linkpanel" src="http://localhost:%d/?only=links" style="width:1000px;height:760px;border:0"></iframe></li></ul>
@@ -47,7 +47,7 @@ def host_page(panel_port):
 <script src="/custom.js"></script></body></html>""" % (panel_port, panel_port)).encode()
 
 
-def serve_host(port_holder, panel_port):
+def serve_host(port_holder, panel_port, cssfile):
     page = host_page(panel_port)
     js = open(JS, "rb").read()
 
@@ -56,7 +56,15 @@ def serve_host(port_holder, panel_port):
             pass
 
         def do_GET(self):
-            body, ctype = (js, "application/javascript") if self.path == "/custom.js" else (page, "text/html")
+            if self.path.startswith("/api/config/custom.css"):
+                whole = open(cssfile, "rb").read()                    # (only the look block of it: the page of this test has no use for the rest of the shipped styles)
+                a, b = whole.find(b"/* >>> homelab look >>>"), whole.find(b"/* <<< homelab look <<< */")
+                body, ctype = (whole[a:b + 26] if a >= 0 and b >= 0 else b""), "text/css"
+            elif self.path == "/api/hash":
+                import hashlib
+                body, ctype = ('{"hash":"%s"}' % hashlib.sha256(open(cssfile, "rb").read()).hexdigest()).encode(), "application/json"
+            else:
+                body, ctype = (js, "application/javascript") if self.path == "/custom.js" else (page, "text/html")
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
@@ -73,7 +81,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="hlpui-")
     holder = []
     p = tp.Panel(tmp)
-    host = serve_host(holder, p.port)
+    host = serve_host(holder, p.port, os.path.join(p.hp, "custom.css"))
     p.env["HLP_FRAME"] = "http://localhost:%d" % holder[0]
     p.set_password()
     p.start()
@@ -108,24 +116,31 @@ def main():
             pg.wait_for_timeout(200)
             check("look: a slider changes the dashboard at once", pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-radius').trim()") == "33px")
             check("look: the css file is not touched by a preview", "homelab look" not in p.read("custom.css"))
-            fr.get_by_role("button", name="Throw Away").click()
+            fr.get_by_role("button", name="Discard Changes").click()
             pg.wait_for_timeout(300)
             check("look: throw away brings the saved look back", acc() == "138, 180, 255" and pg.evaluate("document.getElementById('hl-live-look')") is None, acc())
+            pg.evaluate("window.__stay = 1")
             fr.get_by_role("button", name="Ocean").click()
             fr.locator('input[aria-label="How Round the Corners Are"]').fill("8")
             fr.get_by_role("button", name="Save", exact=True).click()
-            pg.wait_for_timeout(800)
+            pg.wait_for_timeout(1200)
             css = p.read("custom.css")
             check("look: Save writes the block to custom.css", "--lk-accent: 94, 200, 255;" in css and "--lk-radius: 8px;" in css, css[-500:])
+            import hashlib
+            want = hashlib.sha256(css.encode()).hexdigest()
+            check("save: the dashboard page is not reloaded, Homepage is told the new version is known, and the new style sheet replaces the preview",
+                  pg.evaluate("window.__stay") == 1 and pg.evaluate("localStorage.getItem('hash')") == want and "hl=" in pg.evaluate("document.querySelector('link[rel=stylesheet][href*=\"custom.css\"]').getAttribute('href')")
+                  and pg.evaluate("document.querySelectorAll('link[rel=stylesheet][href*=\"custom.css\"]').length") == 1 and pg.evaluate("document.getElementById('hl-live-look')") is None, pg.evaluate("[window.__stay, localStorage.getItem('hash'), document.querySelector('link[rel=stylesheet]').getAttribute('href'), !!document.getElementById('hl-live-look')]") + [want])
             ub = fr.get_by_role("button", name="Undo", exact=True)
             check("look: Undo is a plain button that says what it would undo when you point at it", ub.count() == 1 and ub.get_attribute("title") == "Undo: Look changed", ub.get_attribute("title"))
             names = fr.locator(".savebar").locator("button, a").all_inner_texts()
-            check("bar: Undo, Save and Open in Tab, then Log Out, are together at the bottom", [n for n in names if n in ("Undo", "Save", "Open in Tab", "Log Out")] == ["Undo", "Save", "Open in Tab", "Log Out"], names)
+            check("bar: Undo, Save and Open in Tab, then Log Out, are together at the bottom", [n for n in names if n in ("Undo", "Save", "Open in New Tab", "Log Out")] == ["Undo", "Save", "Open in New Tab", "Log Out"], names)
             check("bar: it has the Reset All Settings button on the Look screen", "Reset All Settings" in names, names)
             check("top: the title and tabs are in a section that stays in place", fr.locator(".stickytop nav.tabs").count() == 1 and fr.locator("header.top button").count() == 0
                   and fr.locator(".stickytop").evaluate("e => getComputedStyle(e).position") == "sticky")
 
             # ---- names and logo (the top card of the Look screen)
+            openmenu = lambda: fr.locator("details.logo-menu").evaluate("e => { e.open = true; }")
             wrap = lambda: pg.evaluate("document.getElementById('widgets-wrap').textContent")
             fr.locator('input[aria-label="Server Name"]').fill("Vault")
             fr.locator('input[aria-label="Main Pool Name"]').fill("Data")
@@ -133,30 +148,32 @@ def main():
             pg.wait_for_timeout(300)
             check("names: typed names show on the dashboard at once, also in 'Connect ... Drive'", "Vault" in wrap() and "HomeLab" not in wrap() and "Data" in wrap() and "Connect Spare Drive" in wrap() and "Main Pool" not in wrap(), wrap())
             check("names: an unsaved name is not written to the css", "--hl-name" not in p.read("custom.css"))
-            fr.locator('input[aria-label="Logo picture address"]').fill("https://example.com/l.png")
+            openmenu()
+            fr.locator('input[aria-label="Address of a logo picture on the web"]').fill("https://example.com/l.png")
             fr.get_by_role("button", name="Use This Address").click()
             pg.wait_for_timeout(300)
-            lg = "(() => { const e = document.getElementById('hl-logo'); return e ? [e.tagName, e.firstChild.getAttribute('src'), document.getElementById('widgets-wrap').firstElementChild === e, e.firstChild.style.height] : null; })()"
+            lg = "(() => { const e = document.getElementById('hl-logo'); return e ? [e.tagName, e.firstChild.getAttribute('src'), document.querySelector('#widgets-wrap > .widget-container').firstElementChild === e, e.firstChild.style.height] : null; })()"
             check("logo: a web address shows as the first thing of the top bar, without a link", pg.evaluate(lg) == ["SPAN", "https://example.com/l.png", True, "48px"], pg.evaluate(lg))
-            fr.locator('input[aria-label="Where the logo leads"]').fill("https://example.com/home")
+            fr.locator('input[aria-label="Web address the logo opens"]').fill("https://example.com/home")
             fr.locator('input[aria-label="Logo size"]').fill("70")
             pg.wait_for_timeout(300)
             got = pg.evaluate(lg)
             check("logo: a link makes it a link that opens in a new tab, and the size slider changes the height", got and got[0] == "A" and got[3] == "70px" and pg.evaluate("document.getElementById('hl-logo').getAttribute('target')") == "_blank", got)
-            fr.get_by_role("button", name="Throw Away").click()
+            fr.get_by_role("button", name="Discard Changes").click()
             pg.wait_for_timeout(300)
             check("names: throw away brings the shipped names back and takes the logo off", "HomeLab" in wrap() and "Vault" not in wrap() and "Main Pool" in wrap() and "Connect Backup Drive" in wrap() and pg.evaluate(lg) is None, wrap())
+            openmenu()
             fr.get_by_role("button", name="Use the Server logo").click()
             pg.wait_for_timeout(600)
             got = pg.evaluate(lg)
             check("logo: a ready-made logo is made into a picture and shown", got and got[1].startswith("data:image/png;base64,") and got[1] != "https://example.com/l.png", got)
-            fr.get_by_role("button", name="Logo Off").click()
+            fr.get_by_role("button", name="Logo: On").click()
             pg.wait_for_timeout(300)
-            check("logo: Logo Off takes it off the dashboard (the logo itself is kept in the panel)", pg.evaluate(lg) is None and fr.get_by_role("button", name="Remove Logo").count() == 1)
-            fr.get_by_role("button", name="Logo On").click()
+            check("logo: the Logo button turned off takes it off the dashboard (the logo itself is kept in the panel)", pg.evaluate(lg) is None and fr.get_by_role("button", name="Logo: Off").count() == 1 and fr.get_by_role("button", name="Remove Logo").count() == 0)
+            fr.get_by_role("button", name="Logo: Off").click()
             pg.wait_for_timeout(300)
-            check("logo: Logo On shows it again", pg.evaluate(lg) is not None)
-            fr.locator('input[aria-label="Color of the ready-made logos"]').evaluate("e => { e.value = '#ff0000'; e.dispatchEvent(new Event('input', {bubbles: true})); }")
+            check("logo: the Logo button turned on shows it again", pg.evaluate(lg) is not None)
+            fr.locator('input[aria-label="Color of the built-in logos"]').evaluate("e => { e.value = '#ff0000'; e.dispatchEvent(new Event('input', {bubbles: true})); }")
             pg.wait_for_timeout(600)
             check("logo: another color redraws the ready-made logo, and the logos on offer show it", pg.evaluate(lg)[1].startswith("data:image/png") and "ff0000" in fr.locator(".logo-tile img").first.get_attribute("src").lower().replace("%23", "#"), fr.locator(".logo-tile img").first.get_attribute("src")[:200])
             fr.locator('input[type=file]').first.set_input_files(files=[{"name": "l.png", "mimeType": "image/png", "buffer": PNG}])
@@ -168,8 +185,8 @@ def main():
             pg.wait_for_timeout(800)
             css = p.read("custom.css")
             check("names: Save writes the names and the logo to custom.css", '--hl-name-homelab: "Vault";' in css and '--hl-logo-src: "data:image/png;base64,' in css, css[-400:])
-            fr.get_by_role("button", name="Remove Logo").click()
-            fr.get_by_role("button", name="Use the Original Names").click()
+            fr.get_by_role("button", name="Logo: On").click()
+            fr.get_by_role("button", name="Restore Original Names").click()
             fr.get_by_role("button", name="Save", exact=True).click()
             pg.wait_for_timeout(800)
             check("names: removing them and saving takes them out of custom.css again", "--hl-name" not in p.read("custom.css") and "--hl-logo" not in p.read("custom.css"), p.read("custom.css")[-300:])
@@ -205,6 +222,8 @@ def main():
                   and fr.locator(".prow", has_text="Tailscale").locator(".badge").inner_text() == "Custom")
             fr.locator(".prow", has_text="Tailscale").get_by_role("button", name="Reset").click()
             check("colors: Reset puts the picker back to the color for everything", tsc.input_value().lower() == "#336699", tsc.input_value())
+            check("colors: the Labels card is a dropdown that starts closed", fr.locator("details.card", has=fr.locator("summary b", has_text="Labels")).count() == 1 and fr.locator("details.card", has=fr.locator("summary b", has_text="Labels")).get_attribute("open") is None)
+            fr.locator("details.card > summary", has_text="Labels").click()
             lab = fr.locator('input[aria-label="Text of Network & DNS"]')
             lab.evaluate("e => { e.dataset.same = '1'; }")
             lab.fill("#ffeeaa")
@@ -231,7 +250,7 @@ def main():
             css = p.read("custom.css")
             check("colors: Save writes the colors and the transparent glass", "51, 102, 153" in css and "--lk-glass-a: 0;" in css, css[-700:])
             fr.get_by_role("button", name="Turn Off").first.click()
-            fr.get_by_role("button", name="Throw Away").click()
+            fr.get_by_role("button", name="Discard Changes").click()
             pg.wait_for_timeout(300)
             p.req("POST", "/api/look", {"look": {"accent": "#5ec8ff", "radius": 8}})        # back to the look the next checks expect
 
@@ -268,7 +287,7 @@ def main():
             pg.wait_for_timeout(800)
             check("layout: a group is moved to another tab with a click", "  Files & Photos:\n    tab: Stats" in p.read("settings.yaml"), p.read("settings.yaml")[-900:])
             fr.locator('button[aria-label="Move Calendar up"]').click()
-            fr.get_by_role("button", name="Throw Away").click()
+            fr.get_by_role("button", name="Discard Changes").click()
             check("layout: throw away forgets the change in progress", fr.get_by_role("button", name="Save", exact=True).is_disabled())
 
             # ---- cards

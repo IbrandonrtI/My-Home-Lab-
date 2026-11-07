@@ -157,7 +157,7 @@ try:
         pg2.wait_for_timeout(1200)
         check("inner scrolling box: a tab change still does not reload the player", len(players(pg2)) == 1 and players(pg2)[0].evaluate("window.__id") == id_before)
         check("inner scrolling box: after the tab change it lies over the card", *over(pg2))
-        # the pointer over the player holds the scrolling box still (so the page does not move at the player's top and bottom): the player must not be reloaded
+        # a click in the player, with the pointer still over it, holds the scrolling box still (so the page does not move at the player's top and bottom): the player must not be reloaded
         # by that, and nothing on the page may move (a hidden scrollbar would shift it), so this part runs with scrollbars that take room
         b3 = p.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"], ignore_default_args=["--hide-scrollbars"])
         pg3 = b3.new_page(viewport={"width": 1000, "height": 900})
@@ -172,7 +172,10 @@ try:
         box = pg3.locator("#hl-player-box").bounding_box()
         pg3.mouse.move(box["x"] + 100, box["y"] + 100)
         pg3.wait_for_timeout(1200)
-        check("scroll lock: the scrolling box is held while the pointer is over the player", pg3.evaluate("document.getElementById('scroller').hasAttribute('data-hl-locked')") and pg3.evaluate("getComputedStyle(document.getElementById('scroller')).overflowY") == "hidden")
+        check("scroll lock: just pointing at the player does not hold the page (it scrolls normally until you click in the player)", not pg3.evaluate("document.getElementById('scroller').hasAttribute('data-hl-locked')") and pg3.evaluate("getComputedStyle(document.getElementById('scroller')).overflowY") == "auto")
+        pg3.mouse.click(box["x"] + 100, box["y"] + 100)
+        pg3.wait_for_timeout(800)
+        check("scroll lock: the scrolling box is held after a click in the player, while the pointer stays over it", pg3.evaluate("document.getElementById('scroller').hasAttribute('data-hl-locked')") and pg3.evaluate("getComputedStyle(document.getElementById('scroller')).overflowY") == "hidden")
         check("scroll lock: the player is still the same page (not reloaded), in the same box", len(players(pg3)) == 1 and players(pg3)[0].evaluate("window.__id") == id3 and pg3.evaluate("document.getElementById('hl-player-box').parentNode.id") == "scroller")
         check("scroll lock: nothing on the page moves sideways (the scrollbar's room stays)", bar > 0 and abs(left() - left0) < 0.5, (bar, left0, left()))
         pg3.mouse.move(5, 5)
