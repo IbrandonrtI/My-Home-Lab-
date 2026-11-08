@@ -11,6 +11,12 @@ yn()   {
   case "$(ask "$1 [y/N]: ")" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
 typed() {   # typed WORD "Prompt: ": the person must type WORD. --confirm-erase types it for a script; a dry run changes nothing, so it needs no typing
+  if [ "$PANEL_MODE" = 1 ]; then      # the control panel passes what the person typed; it counts only when it is exactly the word asked for
+    local w
+    for w in "${PANEL_TYPED[@]}"; do [ "$w" = "$1" ] && { note "${2}$1   (typed in the panel)"; return 0; }; done
+    note "${2}(not typed)"
+    return 1
+  fi
   if [ "$CONFIRM_ERASE" = 1 ]; then note "${2}$1   (--confirm-erase)"; return 0; fi
   if [ "$DRY_RUN" = 1 ]; then note "${2}(not needed for a dry run)"; return 0; fi
   [ "$(ask "$2")" = "$1" ]

@@ -111,6 +111,11 @@ DRY_RUN=0            # --dry-run: show what would happen, change nothing
 ASSUME_YES=0         # --yes: answer the yes/no questions with yes
 CONFIRM_ERASE=0      # --confirm-erase: also type the confirmations for erasing or removing a drive (ERASE, REMOVE, CONTINUE, the drive name)
 NOW=0                # --now: do not wait for a running backup or upload
+PANEL_MODE=0          # 1 only inside `drives panel ...`: typed confirmations come from PANEL_TYPED, nothing is ever asked, no question is answered with yes
+PANEL_TYPED=()       # the words the person typed in the panel (checked by typed(), never trusted without a match)
+PANEL_ARG=""         # the extra choice of the panel command: empty|format (wipe), yes|no (copy first), keep|erase ...
+PANEL_KEEP=""        # move: yes = the drive keeps its files and joins the other pool as it is, no = it is erased and formatted
+PANEL_COPY=""        # disconnect and move: yes = copy the drive's files to the other drives of its pool first, no = do not
 PANEL_ID=""          # set only by `drives panel ...`: the drive (a pool label, or sda) the control panel chose, so the flow does not ask
 PANEL_NAME=""        # ... and the new name for rename
 WANT_SPARE=0         # --spare: a ready-made array setup also gets a hot spare drive

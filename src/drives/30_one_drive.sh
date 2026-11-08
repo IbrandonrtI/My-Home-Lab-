@@ -119,7 +119,7 @@ power_action() {   # power_action sleep|wake: pick a spinning hard drive and put
   fi
   if [ -n "${PANEL_ID:-}" ]; then      # the control panel names the drive itself: it must be one of the listed spinning drives
     dev=/dev/$PANEL_ID
-    printf '%s\n' "${devs[@]}" | grep -qx "$dev" || { note "$PANEL_ID is not a spinning hard drive that can be put to sleep. Nothing was changed."; return 1; }
+    grep -qx "$dev" <<<"$(printf '%s\n' "${devs[@]}")" || { note "$PANEL_ID is not a spinning hard drive that can be put to sleep. Nothing was changed."; return 1; }
   else
     for dev in "${devs[@]}"; do items+=("$(disk_base_name "$dev")  ($(disk_role_of "$dev"))  $(power_state "$dev")"); done
     i=$(choose "Which drive do you want to $([ "$verb" = sleep ] && echo "put to sleep" || echo "wake up")? " "${items[@]}") || return 1
@@ -232,14 +232,23 @@ wipe_flow() {   # erase a spare drive (never a pool drive, the boot drive or a d
     note "  sudo drives disconnect   (its files can be copied to the other drives first)"
     return 1
   fi
-  note "Spare drives (a drive in a pool and the boot drive are never listed):"
-  dev=$(pick_disk_list "Which drive do you want to erase? " "${devs[@]}") || return 1
-  refuse_unsafe_disk "$dev"
-  describe_disk "$dev"
-  name=$(disk_base_name "$dev")
-  idx=$(choose "What should I do with the drive? " \
-        "Erase it and leave it empty (no file system)" \
-        "Erase it and format it as a new empty drive (ext4), ready to connect") || return 1
+  if [ -n "${PANEL_ID:-}" ]; then      # the control panel names the spare drive and what to do with it
+    dev=/dev/$PANEL_ID
+    grep -qx "$dev" <<<"$(printf '%s\n' "${devs[@]}")" || { note "$PANEL_ID is not a spare drive that can be erased. Nothing was changed."; return 1; }
+    refuse_unsafe_disk "$dev"
+    describe_disk "$dev"
+    name=$(disk_base_name "$dev")
+    if [ "$PANEL_ARG" = format ]; then idx=1; else idx=0; fi
+  else
+    note "Spare drives (a drive in a pool and the boot drive are never listed):"
+    dev=$(pick_disk_list "Which drive do you want to erase? " "${devs[@]}") || return 1
+    refuse_unsafe_disk "$dev"
+    describe_disk "$dev"
+    name=$(disk_base_name "$dev")
+    idx=$(choose "What should I do with the drive? " \
+          "Erase it and leave it empty (no file system)" \
+          "Erase it and format it as a new empty drive (ext4), ready to connect") || return 1
+  fi
   confirm_erase "$dev" || return 1
   dry_gate "Unmount $dev and erase everything on $name (file systems and partition table)." \
            "$([ "$idx" = 1 ] && echo "Format it as a new empty ext4 drive (label SPARE)." || echo "Leave it empty, without a file system.")" && return 0

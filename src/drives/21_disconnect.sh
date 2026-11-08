@@ -61,7 +61,7 @@ detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on th
   img=$(boot_image_of "$mp")
   mapfile -t others < <(branches_of "$role" | grep -vx "$mp")
   part=$(branch_part "$mp"); dev=""; [ -n "$part" ] && ! is_boot_section "$mp" && dev=$(disk_of_part "$part")
-  local drain=0
+  local drain=0 copyq=""
 
   if is_boot_section "$mp" && mountpoint -q "$mp" && has_data "$mp"; then
     if [ ${#others[@]} -eq 0 ]; then
@@ -82,7 +82,10 @@ detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on th
     typed "REMOVE" "Type REMOVE to continue: " || { say "Cancelled."; return 1; }
   elif ! is_boot_section "$mp" && mountpoint -q "$mp" && has_data "$mp"; then
     say "$label holds files. They will disappear from the $role storage unless they are copied to another $role drive."
-    if yn "Copy them to another $role drive first (recommended)?"; then
+    if [ "$PANEL_MODE" = 1 ] && [ -n "$PANEL_COPY" ]; then copyq=$PANEL_COPY      # the control panel already asked
+    elif yn "Copy them to another $role drive first (recommended)?"; then copyq=yes
+    else copyq=no; fi
+    if [ "$copyq" = yes ]; then
       drain=1
     else
       warn "Continuing without copying. The files stay on the drive but will not show in the pool."
@@ -129,13 +132,16 @@ detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on th
 disconnect_flow() {
   array_guard || return 1
   local mp dev
-  mp=$(pick_branch "Which drive do you want to disconnect? ") || return 1
+  if [ "$PANEL_MODE" = 1 ]; then mp=$(panel_branch "$PANEL_ID") || return 1
+  else mp=$(pick_branch "Which drive do you want to disconnect? ") || return 1; fi
   DETACHED_DEV=""
   detach_branch "$mp" || return 1
   [ "$DRY_RUN" = 1 ] && return 0
   dev=$DETACHED_DEV
   is_boot_section "$mp" && return 0
-  if [ "$TEST_MODE" != 1 ] && [ -n "$dev" ] && command -v udisksctl >/dev/null 2>&1; then
+  if [ "$PANEL_MODE" = 1 ]; then      # a spare drive now: do not power it off, it can be added to a pool or erased from the panel
+    say "The drive is a spare drive now. It is safe to unplug, or you can add it to a pool or erase it in the Drives tab."
+  elif [ "$TEST_MODE" != 1 ] && [ -n "$dev" ] && command -v udisksctl >/dev/null 2>&1; then
     if yn "Power the drive off so it is safe to unplug?"; then
       udisksctl power-off -b "$dev" >/dev/null 2>&1 && say "Powered off. You can unplug it." || say "Could not power it off. It is still safe to unplug now."
     fi
@@ -146,8 +152,9 @@ disconnect_flow() {
 
 move_flow() {
   array_guard || return 1
-  local mp role newrole part dev
-  mp=$(pick_branch "Which drive do you want to move? ") || return 1
+  local mp role newrole part dev keep=no
+  if [ "$PANEL_MODE" = 1 ]; then mp=$(panel_branch "$PANEL_ID") || return 1; keep=$PANEL_KEEP
+  else mp=$(pick_branch "Which drive do you want to move? ") || return 1; fi
   role=$(branch_role "$mp"); newrole=$(other_role "$role")
   if is_boot_section "$mp"; then note "A boot drive section cannot be moved. Remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; fi
   part=$(branch_part "$mp"); [ -n "$part" ] || die "That drive is not connected, so it cannot be moved."
@@ -156,15 +163,28 @@ move_flow() {
   need_tools || return 1
   grep -qx "$dev" <<<"$(protected_disks)" && die "$dev holds the operating system. Refusing."
   pool_can_grow "$newrole" "this drive" || return 1
+  if [ "$keep" = yes ]; then      # the drive keeps its files, so it must have exactly one ext4 partition to be added as it is
+    local -a kparts; mapfile -t kparts < <(parts_of "$dev")
+    if ! { [ ${#kparts[@]} -eq 1 ] && [ "$(fs_type "${kparts[0]}")" = ext4 ]; }; then note "$dev does not have one ext4 partition, so its files cannot be kept. Nothing was changed."; return 1; fi
+  fi
   say "$(branch_name "$mp") will move from $role to $newrole storage."
-  say "Its files are copied to another $role drive first, then the drive is erased and formatted for $newrole."
-  yn "Continue?" || { say "Cancelled."; return 1; }
-  confirm_erase "$dev" || return 1
+  if [ "$keep" = yes ]; then
+    say "The drive keeps its files and is added to the $newrole storage as it is, so the files on it show up in the $newrole storage."
+  else
+    say "The drive is erased and formatted for $newrole, so the files on it are gone from the drive."
+  fi
+  if [ "$PANEL_MODE" != 1 ]; then yn "Continue?" || { say "Cancelled."; return 1; }; fi
+  if [ "$keep" = yes ]; then
+    if [ "$PANEL_MODE" = 1 ]; then typed KEEP "Type KEEP to add the files on the drive to the $newrole storage as they are: " || { say "Cancelled. Nothing was changed."; return 1; }; fi
+  else
+    confirm_erase "$dev" || return 1
+  fi
   DETACHED_DEV=""
-  detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole storage." || return 1
+  if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole storage with its files as they are." || return 1
+  else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole storage." || return 1; fi
   [ "$DRY_RUN" = 1 ] && return 0
   PENDING_NOTE="$(branch_name "$mp") already left the $role storage and was not added to the $newrole storage. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
-  connect_flow "$dev" "$newrole" 1 1 || { note ""; note "$PENDING_NOTE"; PENDING_NOTE=""; return 1; }
+  connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1 || { note ""; note "$PENDING_NOTE"; PENDING_NOTE=""; return 1; }
   PENDING_NOTE=""
 }
 
