@@ -94,7 +94,8 @@
       box.style.left = "0px";                                    // measure from the corner, so the move is right whatever the page's own offsets are
       box.style.top = "0px";
       var o = box.getBoundingClientRect();
-      box.style.cssText = "left:" + (host.left - o.left) + "px;top:" + (host.top - o.top) + "px;width:" + host.width + "px;height:" + host.height + "px;";
+      var z = parseFloat(window.getComputedStyle(document.documentElement).zoom) || 1;     // under the screen fit the page is zoomed: the browser reports sizes as they look on the screen, a style is measured before the zoom
+      box.style.cssText = "left:" + ((host.left - o.left) / z) + "px;top:" + ((host.top - o.top) / z) + "px;width:" + (host.width / z) + "px;height:" + (host.height / z) + "px;";
     } else if (box.className !== "hl-away") {
       box.className = "hl-away";
     }
