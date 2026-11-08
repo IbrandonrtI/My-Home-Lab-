@@ -35,13 +35,18 @@ chosen_name_del() {   # chosen_name_del LABEL
 
 rename_flow() {   # give a pool drive a name of your own (kept by the drive's label, so it stays when the drive is plugged in again)
   local mp label cur new b lower
-  mp=$(pick_branch "Which drive do you want to rename? ") || return 1
+  if [ -n "${PANEL_ID:-}" ]; then mp=$(panel_branch "$PANEL_ID") || return 1      # the control panel names the drive and the new name itself
+  else mp=$(pick_branch "Which drive do you want to rename? ") || return 1; fi
   label=$(basename "$mp"); cur=$(branch_name "$mp")
-  say ""
-  say "This drive is called: $cur"
-  if [ -n "$(chosen_name "$label")" ]; then say "You chose this name. Type  auto  to go back to the automatic name (size, make and type)."
-  else say "The name is made from the size, make and type of the drive."; fi
-  new=$(ask "New name (letters, numbers and spaces, up to 40 characters; Enter cancels): ")
+  if [ -n "${PANEL_ID:-}" ]; then
+    new=$PANEL_NAME
+  else
+    say ""
+    say "This drive is called: $cur"
+    if [ -n "$(chosen_name "$label")" ]; then say "You chose this name. Type  auto  to go back to the automatic name (size, make and type)."
+    else say "The name is made from the size, make and type of the drive."; fi
+    new=$(ask "New name (letters, numbers and spaces, up to 40 characters; Enter cancels): ")
+  fi
   [ -n "$new" ] || { say "Cancelled. Nothing was changed."; return 1; }
   if [ "$new" = auto ]; then
     if [ -z "$(chosen_name "$label")" ]; then say "$cur already has its automatic name. Nothing was changed."; return 0; fi
@@ -111,9 +116,14 @@ power_action() {   # power_action sleep|wake: pick a spinning hard drive and put
     note "No spinning hard drive found. SSDs, the boot drive and drives that do not say what they are have nothing to put to sleep."
     return 1
   fi
-  for dev in "${devs[@]}"; do items+=("$(disk_base_name "$dev")  ($(disk_role_of "$dev"))  $(power_state "$dev")"); done
-  i=$(choose "Which drive do you want to $([ "$verb" = sleep ] && echo "put to sleep" || echo "wake up")? " "${items[@]}") || return 1
-  dev=${devs[$i]}
+  if [ -n "${PANEL_ID:-}" ]; then      # the control panel names the drive itself: it must be one of the listed spinning drives
+    dev=/dev/$PANEL_ID
+    printf '%s\n' "${devs[@]}" | grep -qx "$dev" || { note "$PANEL_ID is not a spinning hard drive that can be put to sleep. Nothing was changed."; return 1; }
+  else
+    for dev in "${devs[@]}"; do items+=("$(disk_base_name "$dev")  ($(disk_role_of "$dev"))  $(power_state "$dev")"); done
+    i=$(choose "Which drive do you want to $([ "$verb" = sleep ] && echo "put to sleep" || echo "wake up")? " "${items[@]}") || return 1
+    dev=${devs[$i]}
+  fi
   refuse_unsafe_disk_power "$dev" || return 1
   name=$(disk_base_name "$dev"); role=$(disk_role_of "$dev"); state=$(power_state "$dev")
   if [ "$verb" = sleep ]; then

@@ -8,7 +8,14 @@ run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser
   return "$rc"
 }
 
+take_lock() {   # one drives command at a time
+  mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
+  { exec 9>"/var/lock/homelab-drives.lock"; } 2>/dev/null || exec 9>"/tmp/homelab-drives.lock"
+  flock -n 9 || die "Another drives command is running."
+}
+
 main() {
+  if [ "${1:-}" = panel ]; then shift; panel_main "$@"; return $?; fi      # the control panel's door: its own strict words, no options (see 42_panel.sh)
   # options can stand before or after the command; test-setup keeps its own arguments
   local -a args=()
   local a WANT_HELP=0
@@ -65,9 +72,7 @@ main() {
     *) if [ $# -gt 1 ]; then note "Unexpected word: ${*:2}"; note "Nothing was done."; note ""; usage_text >&2; exit 1; fi ;;
   esac
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
-  mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
-  { exec 9>"/var/lock/homelab-drives.lock"; } 2>/dev/null || exec 9>"/tmp/homelab-drives.lock"
-  flock -n 9 || die "Another drives command is running."
+  take_lock
   case "${1:-menu}" in
     menu)         menu ;;
     status)       if [ "$JSON" = 1 ]; then with_name_cache json_drives; printf ',"last_backup":%s,"boot_free_bytes":%s}\n' "$(json_str "$(last_backup_line)")" "$(json_num "$(boot_free_bytes)")"; else with_name_cache status_flow; fi ;;
