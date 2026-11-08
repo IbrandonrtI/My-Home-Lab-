@@ -98,13 +98,18 @@ panel_main() {
     done
   fi
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
-  take_lock
+  case "$act" in
+    status|health|check|actions) ;;      # looking only: these may run beside each other and beside a change (the panel does not start them during a change)
+    *) take_lock ;;
+  esac
   PANEL_MODE=1
   ASSUME_YES=0      # nothing is ever answered with yes for the person; a question nobody can answer means no
   local why
   case "$act" in
     rename|sleep|wake|status|health|check|actions) ASSUME_YES=1 ;;      # (these never ask anything that matters)
-    *) why=$(busy_reason)
+    *) why=""
+       # a drive that joins a running pool stops nothing, so a backup or an upload may go on
+       if [ "$act" = add ] && [[ "${3:-}" =~ ^(main|backup)$ ]] && pool_is_live "$3"; then :; else why=$(busy_reason); fi
        if [ -n "$why" ]; then note "Not a good moment: $why. Nothing was changed. Try again when it has finished."; return 1; fi
        NOW=1 ;;
   esac

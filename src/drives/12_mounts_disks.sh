@@ -20,6 +20,14 @@ mount_fstab() {   # fd 9 is the lock: the mergerfs daemon must not inherit it
   mountpoint -q "$1"   # a mount that "succeeds" without mounting counts as a failure
 }
 
+pool_is_live() {   # pool_is_live main|backup -> 0 when that pool is mounted right now as a mergerfs pool that can take a new drive without stopping anything
+  local pool
+  pool=$(role_pool "$1") || return 1
+  command -v setfattr >/dev/null 2>&1 || return 1
+  mountpoint -q "$pool" 2>/dev/null || return 1
+  [ "$(findmnt -no FSTYPE "$pool" 2>/dev/null)" = fuse.mergerfs ] && [ -e "$pool/.mergerfs" ]
+}
+
 pool_umount() {
   local mp=$1
   mountpoint -q "$mp" || return 0

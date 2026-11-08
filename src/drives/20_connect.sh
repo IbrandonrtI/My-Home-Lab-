@@ -104,12 +104,30 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
   mp="$DISKS_DIR/$label"
   name_store_put "$label" "$base"
 
-  stop_containers "$(role_pool "$role")"
+  local live=0
+  pool_is_live "$role" && live=1      # the pool is running: the new drive joins it as it runs, and no container has to stop
+  [ "$live" = 1 ] || stop_containers "$(role_pool "$role")"
   fstab_snapshot
   ensure_mp "$mp"
   fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"
   sd_reload
   if ! mount_fstab "$mp"; then fstab_rollback; die "Could not mount $part at $mp. fstab was restored."; fi
+  if [ "$live" = 1 ]; then
+    if [ "$mode" = erase ] && [ "$role" = main ]; then give_to_owner "$mp"; fi
+    fstab_set_pool "$role"      # (for the next start of the computer)
+    sd_reload
+    if pool_live_apply "$role"; then
+      note "The drive joined the running $role storage. No container was stopped."
+      [ "$role" = main ] && snapraid_active && snapraid_conf_write
+      power_apply "$mp" "$role"
+      say ""
+      say "Done. $(branch_name "$mp") is connected to the $role storage ($(role_pool "$role"))."
+      log "connected $label ($part, $base) to $role (live)"
+      return 0
+    fi
+    warn "The running pool could not take the drive directly, so the pool is mounted again the usual way."
+    stop_containers "$(role_pool "$role")"
+  fi
   if ! absorb_plain_pool "$role" "$mp"; then
     fstab_rollback
     pool_umount "$mp"

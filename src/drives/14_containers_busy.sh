@@ -17,13 +17,25 @@ containers_using() {   # containers_using PATH...  -> names of containers with a
   } | sort -u
 }
 
+docker_each() {   # docker_each stop|start NAME...: the containers go together (8 at a time), not one after the other; prints the names that did not work
+  local act=$1 n tmp; shift
+  tmp=$(mktemp) || return 0
+  for n in "$@"; do
+    ( docker "$act" "$n" >/dev/null 2>&1 || echo "$n" >>"$tmp" ) 9>&- &
+    if [ "$(jobs -rp | wc -l)" -ge 8 ]; then wait -n 2>/dev/null || true; fi
+  done
+  wait
+  cat "$tmp"; rm -f "$tmp"
+}
+
 stop_containers() {   # stop_containers PATH...
-  local list
+  local list bad
   list=$(containers_using "$@" | tr '\n' ' ')
   [ -n "${list// /}" ] || { STOPPED=""; return 0; }
   note "Stopping containers that use this storage: $list"
   # shellcheck disable=SC2086
-  docker stop $list >/dev/null || warn "Some containers did not stop cleanly"
+  bad=$(docker_each stop $list)
+  [ -z "${bad// /}" ] || warn "Some containers did not stop cleanly"
   STOPPED=$list
 }
 
@@ -64,7 +76,7 @@ busy_reason() {   # prints why it is a bad moment to stop the containers, or not
     echo "a backup is running right now"; return 0
   fi
   [ "$TEST_MODE" = 1 ] && return 0
-  local a b secs=5
+  local a b secs=${BUSY_SAMPLE_SECS:-2}      # (a short look is enough: an upload writes a lot every second)
   a=$(sectors_written); sleep "$secs"; b=$(sectors_written)
   # more than about 300 KB per second written to the pool drives: files are coming in
   if [ $(( (b - a) * 512 / secs )) -gt 300000 ]; then echo "files are being written to a storage pool (an upload?)"; fi
@@ -113,9 +125,11 @@ pre_change() {   # pre_change STEP...: the last stop before the first change. 0 
 
 start_containers() {
   [ -n "${STOPPED// /}" ] || return 0
-  local n failed=""
+  local failed=""
   note "Starting containers: $STOPPED"
-  for n in $STOPPED; do docker start "$n" >/dev/null || failed="$failed $n"; done
+  # shellcheck disable=SC2086
+  failed=$(docker_each start $STOPPED | tr '\n' ' ')
+  [ -z "${failed// /}" ] || failed=" ${failed% }"
   STOPPED=""
   if [ -n "${failed// /}" ]; then
     START_FAILED="$START_FAILED$failed"
