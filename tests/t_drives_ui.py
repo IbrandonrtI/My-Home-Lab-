@@ -68,6 +68,10 @@ def main():
                 def menu_of(name, pg=pg):      # the items of a drive's menu (the menu is closed, so its text is read from the page, not from the screen)
                     return pg.eval_on_selector_all(".drow:has-text('%s') .kmenu button" % name, "els => els.map(e => e.textContent)")
 
+                try:
+                    pg.wait_for_selector("#app >> text=Serial X7ABCDEF", timeout=15000)      # the health of each drive comes a moment after the list
+                except Exception:
+                    pass
                 body = pg.inner_text("#app")
                 check("%s: the pools show with their state" % label, "Main Storage" in body and "Backup Storage" in body and "Online" in body and "Offline" in body, body[:300])
                 check("%s: each pool is a card with a usage ring (25%%) and its drives in a tree below it" % label, pg.locator("details.pool svg.ring").count() == 1 and pg.locator("details.pool svg.ring").get_attribute("aria-label") == "25 percent used" and pg.locator("details.pool .tree .drow").count() == 4, pg.locator("details.pool .tree .drow").count())
