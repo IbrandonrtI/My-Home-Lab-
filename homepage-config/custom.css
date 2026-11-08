@@ -384,7 +384,7 @@ div[id$="-card"] > div {
   --lk-radius: 16px;                   /* how round the cards are */
   --lk-text: #eef2f9;
   --lk-muted: #a9b4c7;
-  --lk-side: 120px;                    /* space left and right of the page (smaller windows and phones: see below) */
+  --lk-side: 70px;                     /* space left and right of the page (smaller windows and phones: see below) */
   --lk-player-h: 600px;                /* height of the Navidrome player panel */
   position: relative;
 }
@@ -972,10 +972,9 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
 @media (min-width: 2200px) {
   #inner_wrapper #layout-groups:has(#navidrome-card) { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
 }
-/* ---- A 1080p screen (about 1920 wide at 100% browser zoom, on a screen no taller than 1100): the page is shown at 80%, the same as setting the browser zoom to 80%,
-   so you do not have to change any zoom. It does not apply when the browser zoom is already changed (the page is then wider than 2100 or narrower than 1800).
-   --hl-vh makes the "percent of the screen height" sizes above come out right under this zoom. To turn this off, delete the next block. */
-@media (min-width: 1800px) and (max-width: 2100px) and (max-device-height: 1100px) {
-  html { zoom: 0.8; --hl-vh: 1.25vh; }
-}
+/* ---- Screen fit: custom.js shows the page a little smaller on a 1080p screen (like 90% browser zoom) and a little bigger on a 1440p screen (like 110%), by the real size
+   of the window in screen pixels, whatever the Windows scale and the browser zoom are. It sets data-hl-fit and --hl-vh on the page (--hl-vh makes the "percent of the screen
+   height" sizes above come out right). Under it the page lays out as wide as at that browser zoom, so the top row of tiles gets the size that width would get. */
+html[data-hl-fit="1080"] #information-widgets { zoom: 0.70; }   /* the page then lays out about 1707 wide */
+html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wide */
 /* <<< homelab tabs <<< */

@@ -571,6 +571,24 @@
   window.setInterval(soon, 3000);
   window.setInterval(night, 600000);
 })();
+/* ---- Screen fit: a 1080p screen shows the page at 90% and a 1440p screen at 110% (like the browser zoom), so no zoom has to be set by hand. It goes by the real width of the
+   window in screen pixels (window width x the display scale; the browser zoom cancels out), so it works with any Windows scale. Keep the browser zoom at 100% (Ctrl+0).
+   Inside a frame (the Customize panel) the page's zoom is already inherited. To turn this off, delete this whole block up to the closing marker. */
+(function () {
+  if (window.parent !== window) return;
+  var BANDS = [[1850, 2000, "1080", 0.9], [2450, 2650, "1440", 1.1]];      // [from, to, name, how big the page is shown]
+  var root = document.documentElement, timer = 0;
+  function fit() {
+    var phys = Math.round(window.innerWidth * window.devicePixelRatio), z = 1, name = "";
+    for (var i = 0; i < BANDS.length; i++) if (phys >= BANDS[i][0] && phys <= BANDS[i][1]) { name = BANDS[i][2]; z = BANDS[i][3]; }
+    if (z === 1) { root.style.removeProperty("zoom"); root.style.removeProperty("--hl-vh"); root.removeAttribute("data-hl-fit"); return; }
+    root.style.zoom = String(z);
+    root.style.setProperty("--hl-vh", (1 / z).toFixed(4) + "vh");
+    root.setAttribute("data-hl-fit", name);
+  }
+  fit();
+  window.addEventListener("resize", function () { clearTimeout(timer); timer = setTimeout(fit, 150); });
+})();
 /* <<< homelab extras <<< */
 
 /* >>> homelab panel >>> managed by the installer: an upgrade replaces everything between this line and the closing marker.
