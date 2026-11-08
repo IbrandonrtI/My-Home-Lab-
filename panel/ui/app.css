@@ -270,9 +270,3 @@ details.kebab > summary:hover, details.kebab[open] > summary { border-color: rgb
   .trow::before { left: -10px; width: 8px; }
   details.pool > summary { padding-right: 12px; }
 }
-
-/* A 1080p screen (about 1920 wide at 100% browser zoom): the panel in its own tab is shown at 80%, like the dashboard around it. (Inside the dashboard it
-   already gets the zoom of the page, so its own width is then more than 2100 and this does not apply twice.) */
-@media (min-width: 1800px) and (max-width: 2100px) and (max-device-height: 1100px) {
-  html { zoom: 0.8; --vh: 1.25vh; }
-}

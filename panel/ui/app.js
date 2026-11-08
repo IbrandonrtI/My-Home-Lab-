@@ -2,6 +2,20 @@
 /* The control panel page. Plain JavaScript, no libraries. Everything that comes from the dashboard's files is put on the page as text (never as HTML). */
 
 const framed = window.parent !== window;
+// Screen fit (the same as in the dashboard's custom.js): the panel in its own tab is shown at 90% on a 1080p screen and 110% on a 1440p screen. In the dashboard's frame the zoom is inherited.
+(function () {
+  if (framed) return;
+  const BANDS = [[1850, 2000, 0.9], [2450, 2650, 1.1]], root = document.documentElement;
+  let timer = 0;
+  const fit = () => {
+    const phys = Math.round(window.innerWidth * window.devicePixelRatio), band = BANDS.find(b => phys >= b[0] && phys <= b[1]), z = band ? band[2] : 1;
+    if (z === 1) { root.style.removeProperty("zoom"); root.style.removeProperty("--vh"); return; }
+    root.style.zoom = String(z);
+    root.style.setProperty("--vh", (1 / z).toFixed(4) + "vh");
+  };
+  fit();
+  window.addEventListener("resize", () => { clearTimeout(timer); timer = setTimeout(fit, 150); });
+})();
 let S = null;                 // what the server says (look, background, layout, cards, links)
 let view = "look";
 let lookW = null, bgW = null, layW = null;     // the changes in progress (not saved yet)
