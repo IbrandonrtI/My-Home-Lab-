@@ -64,7 +64,7 @@ async function api(method, path, body, raw) {
   let js = {};
   try { js = await r.json(); } catch (e) { /* no body */ }
   if (r.status === 401 && path !== "/api/login") { S = null; showLogin(); throw new Error(js.error || "Please log in again."); }
-  if (!r.ok) throw new Error(js.error || ("Something went wrong (" + r.status + ")."));
+  if (!r.ok) { const err = new Error(js.error || ("Something went wrong (" + r.status + ").")); err.status = r.status; throw err; }
   return js;
 }
 
@@ -284,7 +284,9 @@ function saveBar(dirty, onSave, onRevert, saveLabel, extra) {      // (kept for 
 let DR = null, DRerr = "", DRbusy = "", DRhealth = null, DRcheck = null, DRwait = "", DRjob = null, DRpoll = 0, DRopen = {};   // DRopen: which Health and Check drop downs are open (the page is redrawn after every result)
 let drivesBox = null;
 const ROLE_TEXT = { main: "Main", backup: "Backup", parity: "Parity", array: "Array", spare: "Spare", system: "System", "plain-data": "Plain Data" };
-const STATE_TEXT = { connected: "Connected", MISSING: "Missing", "NOT MOUNTED": "Not Mounted" };
+const STATE_TEXT = { connected: "Connected", "connected (used last)": "Connected (Used Last)", MISSING: "Missing", "NOT MOUNTED": "Not Mounted",
+  "not connected to a pool": "Not in a Pool", "boot/system drive (never touched)": "Boot Drive" };      // (short words: they must fit in their column)
+const STATE_HINT = { "connected (used last)": "A backup copy on the boot drive. It is only used when the other backup drives are full.", "boot/system drive (never touched)": "The boot drive. The panel never changes it." };
 const JOB_TEXT = { add: "Adding the drive...", wipe: "Erasing the drive...", disconnect: "Taking the drive out of its pool...", move: "Moving the drive...", remount: "Mounting the drives again. This can take a minute...",
   rename: "Saving the name...", sleep: "Telling the drive to sleep...", wake: "Waking the drive up..." };
 function humanBytes(n) {
@@ -305,14 +307,31 @@ function diskOf(dev) {      // /dev/sda1 -> sda, /dev/nvme0n1p2 -> nvme0n1, /dev
   dev = (dev || "").replace(/^\/dev\//, "");
   return /^(nvme|mmcblk|loop)/.test(dev) ? dev.replace(/p\d+$/, "") : dev.replace(/\d+$/, "");
 }
-function loadDrives() {
+let DRretry = 0, DRhealthRetry = 0;
+function loadDrives(tries) {
   if (DRjob && DRjob.running) return Promise.resolve();
+  tries = tries || 0;
+  clearTimeout(DRretry);
   DRwait = "Looking at the drives...";
   drawDrives();
-  return api("GET", "/api/drives").then(d => { DR = d; DRerr = ""; }).catch(e => { DRerr = e.message; }).then(() => { DRwait = ""; drawDrives(); if (DR && !DRhealth) quietHealth(); });
+  const gaveUp = e => { DRerr = e.message; DRwait = ""; drawDrives(); };
+  return api("GET", "/api/drives").then(d => { DR = d; DRerr = ""; DRwait = ""; drawDrives(); if (!DRhealth) quietHealth(); }).catch(e => {
+    if (e.status !== 409) return gaveUp(e);
+    // another drive command is running: when it is a change, follow its progress; else look again in a moment (nothing for the person to do)
+    return api("GET", "/api/drives/job").then(j => {
+      if (j.running) { DRbusy = j.action; DRjob = j; DRwait = ""; followJob(); drawDrives(); }
+      else if (tries < 20) DRretry = setTimeout(() => { if (drivesBox && drivesBox.isConnected) loadDrives(tries + 1); }, 2500);
+      else gaveUp(e);
+    }).catch(() => gaveUp(e));
+  });
 }
-function quietHealth() {      // temperature, health, model and serial are read in the background; a sleeping drive is not woken up for it
-  api("GET", "/api/drives/health").then(r => { DRhealth = r; drawDrives(); }).catch(() => { DRhealth = { drives: [], ok: true }; drawDrives(); });
+function quietHealth(tries) {      // temperature, health, model and serial are read in the background; a sleeping drive is not woken up for it
+  tries = tries || 0;
+  clearTimeout(DRhealthRetry);
+  api("GET", "/api/drives/health").then(r => { DRhealth = r; drawDrives(); }).catch(e => {
+    if (e.status === 409 && tries < 20) { DRhealthRetry = setTimeout(() => { if (drivesBox && drivesBox.isConnected && !DRhealth) quietHealth(tries + 1); }, 3000); return; }
+    DRhealth = { drives: [], ok: true }; drawDrives();
+  });
 }
 function drawDrives() { if (drivesBox && drivesBox.isConnected) put(drivesBox, drivesBody()); }
 
@@ -327,21 +346,23 @@ function followJob() {
   tick();
 }
 async function jobFinished(j) {
-  const was = DRbusy;
+  const was = DRbusy, okText = DRokText;
   DRbusy = "";
   DRjob = null;
-  toast(j.message || (j.rc === 0 ? "Done." : "That did not work."), j.rc !== 0);
-  if (j.rc === 0 && autoReload()) setTimeout(() => send({ type: "reload" }), 900);
+  DRokText = "";
+  toast(j.rc === 0 ? (okText || "Done.") : (j.message || "That did not work."), j.rc !== 0);
   DRhealth = DRcheck = null;
   await loadDrives();
   return was;
 }
-async function startJob(action, body) {
+let DRokText = "";
+async function startJob(action, body, okText) {
   if (DRbusy) return;
   DRbusy = action;
+  DRokText = okText || "";
   DRjob = { running: true, action, lines: [] };
   drawDrives();
-  try { await api("POST", "/api/drives/" + action, body); followJob(); } catch (e) { DRbusy = ""; DRjob = null; fail(e); drawDrives(); }
+  try { await api("POST", "/api/drives/" + action, body); followJob(); } catch (e) { DRbusy = ""; DRjob = null; DRokText = ""; fail(e); drawDrives(); }
 }
 async function driveDo(action, body, okReload) {      // the quick ones: rename, sleep, wake, mount again (the answer comes back in the same call)
   if (DRbusy) return;
@@ -350,7 +371,6 @@ async function driveDo(action, body, okReload) {      // the quick ones: rename,
   try {
     const r = await api("POST", "/api/drives/" + action, body);
     toast(r.message || "Done.");
-    if (okReload && autoReload()) setTimeout(() => send({ type: "reload" }), 900);
   } catch (e) { fail(e); }
   DRbusy = "";
   await loadDrives();
@@ -358,32 +378,33 @@ async function driveDo(action, body, okReload) {      // the quick ones: rename,
 
 // ---- a dialog with questions and typed confirmations
 // cfg: { title, lead: [text], questions: [{ id, label, options: [{ value, label, hint }], value, show(state) }], note(state) -> text|null, warn(state) -> text|null,
-//        refuse(state) -> text|null (nothing can be done: only a Close button), typed(state) -> [{ word, label }], ok(state) -> button text, danger(state) -> bool }
+//        refuse(state) -> text|null (nothing can be done: only a Close button), typed(state) -> [{ word, auto }] (the words the drives tool wants; nobody types them:
+//        a risky one makes the "I understand" box show, which cfg.sure(state) words; an auto one does not), ok(state) -> button text, danger(state) -> bool }
 function driveDialog(cfg) {
   return new Promise(resolve => {
     const state = {};
     (cfg.questions || []).forEach(q => { state[q.id] = q.value; });
     const dynamic = h("div", {});
     const okBtn = h("button", { class: "primary" }, "OK");
-    let typedInputs = [];
+    let sure = false;      // the "I understand" box
     const finish = v => { if (!done) { done = true; resolve(v); } d.close(); };
     let done = false;
     const refresh = () => {
       const qs = (cfg.questions || []).filter(q => !q.show || q.show(state));
       const refuse = cfg.refuse ? cfg.refuse(state) : null;
       const typed = refuse ? [] : (cfg.typed ? cfg.typed(state) : []);
-      const keep = typedInputs.map(t => t.value);
-      typedInputs = typed.map((t, i) => h("input", { type: "text", autocomplete: "off", autocapitalize: "off", spellcheck: "false", "aria-label": t.label, value: keep[i] || "" }));
-      const check = () => { okBtn.disabled = !refuse && typedInputs.some((inp, i) => inp.value !== typed[i].word); };
-      typedInputs.forEach(inp => inp.addEventListener("input", check));
+      const needSure = typed.some(t => !t.auto);      // (the drives tool still wants its exact words; the panel sends them, nobody has to type)
+      const check = () => { okBtn.disabled = !refuse && needSure && !sure; };
       put(dynamic, [
         qs.map(q => h("fieldset", { class: "dq" }, h("legend", {}, q.label),
           q.options.map(o => h("label", { class: "dopt" },
-            h("input", Object.assign({ type: "radio", name: "dq-" + q.id, value: o.value, onchange: () => { state[q.id] = o.value; refresh(); } }, state[q.id] === o.value ? { checked: true } : {})),
+            h("input", Object.assign({ type: "radio", name: "dq-" + q.id, value: o.value, onchange: () => { state[q.id] = o.value; sure = false; refresh(); } }, state[q.id] === o.value ? { checked: true } : {})),
             h("span", {}, h("b", {}, o.label), o.hint ? h("small", {}, o.hint) : null))))),
         cfg.note && cfg.note(state) ? h("p", { class: "muted" }, cfg.note(state)) : null,
         refuse ? h("p", { class: "dwarn", role: "alert" }, refuse) : (cfg.warn && cfg.warn(state) ? h("p", { class: "dwarn", role: "alert" }, cfg.warn(state)) : null),
-        typed.map((t, i) => h("div", { class: "field" }, h("label", {}, t.label), typedInputs[i]))]);
+        needSure ? h("label", { class: "dopt sure" },
+          h("input", { type: "checkbox", checked: sure, onchange: ev => { sure = ev.target.checked; check(); } }),
+          h("span", {}, h("b", {}, cfg.sure ? cfg.sure(state) : "I understand this cannot be undone."))) : null]);
       okBtn.textContent = refuse ? "Close" : cfg.ok(state);
       okBtn.className = !refuse && cfg.danger && cfg.danger(state) ? "danger" : "primary";
       okBtn.onclick = () => refuse ? finish(null) : finish({ answers: Object.assign({}, state), typed: typed.map(t => t.word) });
@@ -421,14 +442,15 @@ async function addDrive(sp, role) {
   const r = await driveDialog({
     title: "Add Drive to " + R + " Storage",
     lead: [sp.name + "  ·  " + dev + "  ·  " + humanBytes(sp.size_bytes)],
-    questions: [{ id: "mode", label: "What should happen to the files on this drive?", value: sp.keep_ok ? "keep" : "erase", options: sp.keep_ok
+    questions: [{ id: "mode", label: sp.keep_ok ? "What should happen to the files on this drive?" : "This drive has to be erased first", value: sp.keep_ok ? "keep" : "erase", options: sp.keep_ok
       ? [{ value: "keep", label: "Keep the files", hint: "The drive is added as it is. Its files show up in the " + R + " storage." },
          { value: "erase", label: "Erase the drive and format it", hint: "Everything on the drive is deleted. It is added as a new, empty drive." }]
-      : [{ value: "erase", label: "Erase the drive and format it", hint: "Its files cannot be kept (it does not have one ext4 partition). Everything on the drive is deleted." }] }],
+      : [{ value: "erase", label: "Erase the drive and format it", hint: "The home lab can only use a drive as it is when it has one Linux (ext4) partition. This one is set up another way (for example Windows exFAT or NTFS, or several partitions), so its files cannot be kept. Everything on it is deleted and it is formatted for the home lab." }] }],
     warn: s => s.mode === "erase" ? "Everything on " + dev + " will be permanently deleted." : "The files on the drive stay as they are and appear in the " + R + " storage. The containers that use it stop for a minute.",
-    typed: s => s.mode === "erase" ? [{ word: dev, label: "Type " + dev + " to continue" }, { word: "ERASE", label: "Type ERASE (capitals) to confirm" }] : [],
+    typed: s => s.mode === "erase" ? [{ word: dev }, { word: "ERASE" }] : [],
+    sure: () => "I understand that everything on this drive will be permanently deleted.",
     ok: s => s.mode === "erase" ? "Erase and Add Drive" : "Add Drive", danger: s => s.mode === "erase" });
-  if (r) startJob("add", { id: sp.id, role, mode: r.answers.mode, typed: r.typed });
+  if (r) startJob("add", { id: sp.id, role, mode: r.answers.mode, typed: r.typed }, sp.name + " was added to the " + R + " Storage.");
 }
 async function eraseSpare(sp) {
   const dev = sp.device;
@@ -439,9 +461,10 @@ async function eraseSpare(sp) {
       { value: "format", label: "A new, empty drive (formatted)", hint: "Ready to be added to a pool." },
       { value: "empty", label: "Empty, without a file system", hint: "It must be formatted before it can be used." }] }],
     warn: () => "Everything on " + dev + " will be permanently deleted.",
-    typed: () => [{ word: dev, label: "Type " + dev + " to continue" }, { word: "ERASE", label: "Type ERASE (capitals) to confirm" }],
+    typed: () => [{ word: dev }, { word: "ERASE" }],
+    sure: () => "I understand that everything on this drive will be permanently deleted.",
     ok: () => "Erase Drive", danger: () => true });
-  if (r) startJob("wipe", { id: sp.id, mode: r.answers.mode, typed: r.typed });
+  if (r) startJob("wipe", { id: sp.id, mode: r.answers.mode, typed: r.typed }, sp.name + " was erased" + (r.answers.mode === "format" ? " and formatted." : "."));
 }
 function poolFacts(a) { return { copyable: a.has_data && a.others > 0, only: a.others === 0 }; }
 async function takeOut(a) {
@@ -454,9 +477,10 @@ async function takeOut(a) {
       { value: "no", label: "Do not copy them", hint: "The files stay on the drive only. They disappear from the " + a.role + " storage." }] }] : [],
     refuse: () => f.only && a.role === "main" ? "This is the only Main drive. Taking it out would take away the storage your services use. Add another Main drive first." : null,
     warn: s => f.only ? "This is the only Backup drive. Backups stop until another backup drive is added." : f.copyable && s.copy === "no" ? "Without copying, the files on this drive will not show in the " + a.role + " storage any more. They stay on the drive." : "The drive is taken out of the " + a.role + " storage. The data on the drive is not touched. The containers that use the storage stop for a minute.",
-    typed: s => f.only ? [{ word: "REMOVE", label: "Type REMOVE to continue" }] : f.copyable && s.copy === "no" ? [{ word: "CONTINUE", label: "Type CONTINUE to confirm" }] : [],
+    typed: s => f.only ? [{ word: "REMOVE" }] : f.copyable && s.copy === "no" ? [{ word: "CONTINUE" }] : [],
+    sure: () => f.only ? "I understand that backups stop until another backup drive is added." : "I understand that the files on this drive will no longer show in the " + a.role + " storage.",
     ok: () => "Take Drive Out", danger: s => f.only || (f.copyable && s.copy === "no") });
-  if (r) startJob("disconnect", { id: a.id, copy: r.answers.copy || "no", typed: r.typed });
+  if (r) startJob("disconnect", { id: a.id, copy: r.answers.copy || "no", typed: r.typed }, a.name + " was taken out of the " + R + " Storage.");
 }
 async function moveDrive(a, dev) {
   const f = poolFacts(a), to = other(a.role), T = cap(to), R = cap(a.role);
@@ -480,14 +504,19 @@ async function moveDrive(a, dev) {
     },
     typed: s => {
       const t = [];
-      if (s.keep === "erase") t.push({ word: dev, label: "Type " + dev + " to continue" }, { word: "ERASE", label: "Type ERASE (capitals) to confirm" });
-      else t.push({ word: "KEEP", label: "Type KEEP to add the files to the " + T + " storage as they are" });
-      if (f.copyable && s.copy === "no") t.push({ word: "CONTINUE", label: "Type CONTINUE to confirm" });
-      if (f.only) t.push({ word: "REMOVE", label: "Type REMOVE to continue" });
+      if (s.keep === "erase") t.push({ word: dev }, { word: "ERASE" });
+      else t.push({ word: "KEEP", auto: true });      // (keeping the files is not risky: no box to tick)
+      if (f.copyable && s.copy === "no") t.push({ word: "CONTINUE" });
+      if (f.only) t.push({ word: "REMOVE" });
       return t;
     },
+    sure: s => {
+      const noCopy = f.copyable && s.copy === "no";
+      if (s.keep === "erase") return noCopy ? "I understand that everything on this drive will be permanently deleted and its files are not copied anywhere." : "I understand that everything on this drive will be permanently deleted.";
+      return noCopy ? "I understand that the " + a.role + " storage will lose the files of this drive." : "I understand that backups stop until another backup drive is added.";
+    },
     ok: s => s.keep === "erase" ? "Erase and Move Drive" : "Move Drive", danger: s => s.keep === "erase" || (f.copyable && s.copy === "no") });
-  if (r) startJob("move", { id: a.id, keep: r.answers.keep, copy: f.copyable ? r.answers.copy : "no", typed: r.typed });
+  if (r) startJob("move", { id: a.id, keep: r.answers.keep, copy: f.copyable ? r.answers.copy : "no", typed: r.typed }, a.name + " was moved to the " + T + " Storage.");
 }
 
 // ---- health and quick check, inside a drop down under each connected drive
@@ -591,7 +620,7 @@ function driveRow(d, act, last) {
       h("span", { class: "sub" }, [d.device && d.device !== "-" ? d.device : "", ident].filter(Boolean).join("  ·  ")),
       typeof d.used_bytes === "number" ? [usageBar(d.used_bytes, d.size_bytes), h("span", { class: "sub" }, humanBytes(d.used_bytes) + " used, " + humanBytes(d.free_bytes) + " free")] : null),
     cell("Size", typeof d.size_bytes === "number" ? humanBytes(d.size_bytes) : "-"),
-    cell("Status", h("span", { class: "pill " + stateClass(d.state) }, stateText(d.state))),
+    cell("Status", h("span", { class: "pill " + stateClass(d.state), title: STATE_HINT[d.state] || null }, stateText(d.state))),
     cell("Power", pw ? h("span", { class: "pill " + (pw.state === "asleep" ? "dim" : "") }, pw.state === "asleep" ? "Asleep" : pw.state === "awake" ? "Awake" : "Unknown") : h("span", { class: "muted" }, "-")),
     cell("Temp", tempCell(hr, pw)),
     cell("Health", healthCell(hr)),

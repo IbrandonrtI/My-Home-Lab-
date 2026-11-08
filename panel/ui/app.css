@@ -212,6 +212,8 @@ fieldset.dq legend { padding: 0 6px; font-weight: 600; }
 label.dopt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; cursor: pointer; }
 label.dopt input { margin-top: 4px; }
 label.dopt small { display: block; color: var(--muted); font-weight: 400; }
+label.dopt.sure { margin-top: 12px; padding: 12px 14px; border: 1px solid rgba(255, 120, 120, 0.45); border-radius: 12px; background: rgba(255, 90, 90, 0.07); align-items: center; }
+label.dopt.sure input { margin-top: 0; width: 20px; height: 20px; flex: none; }
 .dwarn { color: var(--bad); border-left: 3px solid var(--bad); padding: 4px 10px; margin: 10px 0; }
 pre.joblog { max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 13px; background: rgba(0, 0, 0, 0.25); border-radius: 10px; padding: 8px 10px; color: var(--text); }
 
@@ -241,12 +243,13 @@ svg.ring.full .ring-fg { stroke: var(--bad); }
 .ring-t { fill: var(--text); font-size: 15px; font-weight: 650; }
 .tree { margin: 0 16px 14px 28px; border-left: 2px solid var(--line); padding-left: 14px; }
 .tree-empty { margin: 0 16px 14px 38px; }
-.thead, .trow { display: grid; grid-template-columns: minmax(200px, 3fr) 80px 110px 90px 80px 100px 90px 44px; gap: 8px 12px; align-items: center; }
+.thead, .trow { display: grid; grid-template-columns: minmax(200px, 3fr) 80px minmax(150px, 190px) 90px 80px 100px 90px 44px; gap: 8px 12px; align-items: center; }
 .thead { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; padding: 0 0 6px; }
 .trow { position: relative; padding: 10px 0; border-top: 1px solid var(--line); }
 .trow::before { content: ""; position: absolute; left: -14px; top: 50%; width: 12px; border-top: 2px solid var(--line); }
 .trow.last { }
 .trow .c { min-width: 0; }
+.trow .c .pill { white-space: nowrap; }
 .trow .name b { display: block; overflow-wrap: anywhere; }
 .trow .name .usebar { max-width: 260px; }
 .trow .c.act { justify-self: end; }
