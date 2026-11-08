@@ -10,7 +10,7 @@ const LOOKVIEWS = ["look"];                           // (the screens that work 
 const BLURS = ["none", "sm", "md", "lg", "xl", "2xl", "3xl"];
 const ONLY = new URLSearchParams(location.search).get("only");       // "links": only the link editor, shown inside the Links tab of the dashboard
 const VIEWS = ONLY === "links" ? [["links", "Links"]]
-  : [["look", "Look"], ["layout", "Layout"], ["cards", "Cards"]];
+  : [["look", "Look"], ["layout", "Layout"], ["cards", "Cards"], ["drives", "Drives"]];
 if (ONLY === "links") view = "links";
 
 try { const v = sessionStorage.getItem("hlp-view"); if (v && VIEWS.some(x => x[0] === v)) view = v; } catch (e) { /* storage may be blocked */ }
@@ -196,6 +196,7 @@ function iconField(initial, getHref) {
 
 // ---------------------------------------------------------------- the login
 function showLogin(passwordSet = true, msg = "") {
+  DR = DRhealth = DRcheck = null;          // (what was shown of the drives is not kept after a log out)
   const err = h("div", { class: "err", role: "alert" }, msg);
   const pw = h("input", { type: "password", autocomplete: "current-password", "aria-label": "Password", placeholder: "Panel password" });
   const go = async () => {
@@ -217,7 +218,7 @@ function showLogin(passwordSet = true, msg = "") {
 function render() {
   if (!S) return;
   try { sessionStorage.setItem("hlp-view", view); } catch (e) { /* storage may be blocked */ }
-  const fns = { look: viewLook, layout: viewLayout, cards: viewCards, links: viewLinks };
+  const fns = { look: viewLook, layout: viewLayout, cards: viewCards, drives: viewDrives, links: viewLinks };
   if (ONLY === "links") { put(root, viewLinks()); applyAccent(); return; }
   footEl = h("div", { class: "savebar" });
   drawFoot(false, null, null);
@@ -251,14 +252,161 @@ function drawFoot(dirty, onSave, onRevert, extra) {
     h("div", { class: "state" + (dirty ? " dirty" : "") }, onSave ? (dirty ? "You have changes that are not saved yet." : "Everything shown is saved.") : ""),
     onRevert ? h("button", { disabled: !dirty, onclick: onRevert }, "Discard Changes") : null,
     extra || null,
-    h("button", { disabled: !S.undo, onclick: doUndo, title: S.undo ? "Undo: " + S.undo : "Nothing to undo" }, "Undo"),
-    h("button", { class: "primary", disabled: !onSave || !dirty, onclick: onSave || (() => {}) }, "Save"),
+    view === "drives" ? null : h("button", { disabled: !S.undo, onclick: doUndo, title: S.undo ? "Undo: " + S.undo : "Nothing to undo" }, "Undo"),      // (the Drives screen changes no files of the dashboard: nothing to undo or save)
+    view === "drives" ? null : h("button", { class: "primary", disabled: !onSave || !dirty, onclick: onSave || (() => {}) }, "Save"),
     framed ? h("a", { class: "btn", href: location.href, target: "_blank", rel: "noopener" }, "Open in New Tab") : null,
     h("button", { class: "ghost", onclick: async () => { try { await api("POST", "/api/logout", {}); } catch (e) { /* already out */ } S = null; showLogin(); } }, "Log Out"));
 }
 function saveBar(dirty, onSave, onRevert, saveLabel, extra) {      // (kept for the screens: they hand over what the bottom bar shows)
   drawFoot(dirty, onSave, onRevert, extra);
   return null;
+}
+
+
+// ---------------------------------------------------------------- Drives (look at the drives; rename, sleep or wake one; mount again after an unplug)
+// The panel never touches a drive itself: the server asks the drives tool through a narrow sudo rule. Nothing here erases, removes or moves a drive.
+let DR = null, DRerr = "", DRbusy = "", DRhealth = null, DRcheck = null, DRwait = "";
+let drivesBox = null;
+const ROLE_TEXT = { main: "Main", backup: "Backup", parity: "Parity", array: "Array", spare: "Spare", system: "System", "plain-data": "Plain Data" };
+const STATE_TEXT = { connected: "Connected", MISSING: "Missing", "NOT MOUNTED": "Not Mounted" };
+function humanBytes(n) {
+  if (typeof n !== "number" || !(n >= 0)) return "-";
+  const u = ["B", "KB", "MB", "GB", "TB", "PB"];
+  let i = 0;
+  while (n >= 1000 && i < u.length - 1) { n /= 1000; i++; }      // (as drives are sold: a 1 TB drive shows as 1 TB)
+  return (n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)) + " " + u[i];
+}
+function stateText(t) { t = t || ""; return STATE_TEXT[t] || (t ? t[0].toUpperCase() + t.slice(1) : ""); }
+function stateClass(t) { t = t || ""; return t.startsWith("connected") ? "ok" : (t.startsWith("MISSING") || t === "NOT MOUNTED") ? "bad" : ""; }
+function usageBar(used, size) {
+  if (typeof used !== "number" || typeof size !== "number" || !(size > 0)) return null;
+  const pct = Math.max(0, Math.min(100, Math.round(used * 100 / size)));
+  return h("div", { class: "usebar", role: "img", "aria-label": pct + " percent used" }, h("i", { style: { width: pct + "%" }, class: pct >= 95 ? "full" : pct >= 85 ? "high" : "" }));
+}
+function loadDrives() {
+  DRwait = "Looking at the drives...";
+  drawDrives();
+  return api("GET", "/api/drives").then(d => { DR = d; DRerr = ""; }).catch(e => { DRerr = e.message; }).then(() => { DRwait = ""; drawDrives(); });
+}
+function drawDrives() { if (drivesBox && drivesBox.isConnected) put(drivesBox, drivesBody()); }
+async function driveDo(action, body, okReload) {
+  if (DRbusy) return;
+  DRbusy = action;
+  drawDrives();
+  try {
+    const r = await api("POST", "/api/drives/" + action, body);
+    toast(r.message || "Done.");
+    if (okReload && autoReload()) setTimeout(() => send({ type: "reload" }), 900);
+  } catch (e) { fail(e); }
+  DRbusy = "";
+  await loadDrives();
+}
+async function renameDrive(a) {
+  const name = await askText("Rename Drive", "New name for " + a.name + " (letters, numbers, spaces and . ( ) + , -)", a.custom ? a.name : "");
+  if (name === null) return;
+  if (!/^[A-Za-z0-9 .()+,-]{1,40}$/.test(name) || /^[ .-]|[ .-]$/.test(name)) { toast("A name may have up to 40 letters, numbers, spaces and these marks: . ( ) + , -  It cannot start or end with a space, a dot or a dash.", true); return; }
+  driveDo("rename", { id: a.id, name }, true);
+}
+async function autoName(a) {
+  if (await confirmBox("Use the Automatic Name?", "The drive will be called by its size, make and type again instead of \"" + a.name + "\".", "Use Automatic Name")) driveDo("rename", { id: a.id, name: "auto" }, true);
+}
+async function remountDrives() {
+  const ok = await confirmBox("Mount the Drives Again?",
+    "Use this after a drive was unplugged or the power was cut. The containers that use the storage stop, every drive and pool is mounted again from the saved setup, and the containers start again. It can take a minute, and nothing is erased or moved. If a backup or an upload is running right now, it is refused and nothing changes.",
+    "Mount Again");
+  if (ok) driveDo("remount", {}, true);
+}
+function powerFor(drive, power) {         // the spinning drive a row belongs to (a pool drive is a partition such as sdb1; a spare drive is sdb)
+  const dev = (drive.device || "").replace(/^\/dev\//, "");
+  return (power || []).find(p => dev.startsWith(p.id) && /^p?\d*$/.test(dev.slice(p.id.length))) || null;
+}
+function driveRow(d, act) {
+  const ren = (act.rename || []).find(a => d.mount && d.mount.split("/").pop() === a.id);
+  const pw = powerFor(d, act.power);
+  const dis = !!DRbusy;
+  return h("div", { class: "prow drow" },
+    h("div", { class: "txt" },
+      h("b", {}, d.name),
+      h("span", {}, [ROLE_TEXT[d.role] || d.role, d.device && d.device !== "-" ? d.device : "", typeof d.size_bytes === "number" ? humanBytes(d.size_bytes) : ""].filter(Boolean).join("  ·  ")),
+      usageBar(d.used_bytes, d.size_bytes),
+      typeof d.used_bytes === "number" ? h("span", {}, humanBytes(d.used_bytes) + " used, " + humanBytes(d.free_bytes) + " free") : null),
+    h("div", { class: "pills" },
+      h("span", { class: "pill " + stateClass(d.state) }, stateText(d.state)),
+      pw ? h("span", { class: "pill " + (pw.state === "asleep" ? "dim" : "") }, pw.state === "asleep" ? "Asleep" : pw.state === "awake" ? "Awake" : "Sleep State Unknown") : null),
+    h("div", { class: "row tight acts" },
+      ren ? h("button", { class: "small", disabled: dis, onclick: () => renameDrive(ren) }, "Rename") : null,
+      ren && ren.custom ? h("button", { class: "small", disabled: dis, onclick: () => autoName(ren) }, "Automatic Name") : null,
+      pw && pw.state !== "asleep" ? h("button", { class: "small", disabled: dis, onclick: () => driveDo("sleep", { id: pw.id }) }, "Put to Sleep") : null,
+      pw && pw.state === "asleep" ? h("button", { class: "small", disabled: dis, onclick: () => driveDo("wake", { id: pw.id }) }, "Wake Up") : null));
+}
+function drivesBody() {
+  const out = [];
+  if (DRwait || DRbusy) out.push(h("div", { class: "card working", role: "status" }, DRbusy ? ({ remount: "Mounting the drives again. This can take a minute...", rename: "Saving the name...", sleep: "Telling the drive to sleep...", wake: "Waking the drive up..." }[DRbusy] || "Working...") : DRwait));
+  if (DRerr) out.push(h("div", { class: "card", role: "alert" }, h("h2", {}, "The Drives Could Not Be Read"), h("p", { class: "muted" }, DRerr), h("button", { onclick: loadDrives }, "Try Again")));
+  if (!DR) return out;
+  const st = DR.status || {}, act = DR.actions || {};
+  out.push(h("div", { class: "card" },
+    h("div", { class: "row" }, h("h2", { class: "grow" }, "Storage Pools"), h("button", { class: "small", disabled: !!DRbusy || !!DRwait, onclick: loadDrives }, "Refresh")),
+    (st.pools || []).map(p => h("div", { class: "prow" },
+      h("div", { class: "txt" }, h("b", {}, (ROLE_TEXT[p.role] || p.role) + " Storage"), h("span", {}, p.path + (p.mounted ? "  ·  " + (p.filesystem || "") : "")),
+        p.mounted ? [usageBar(p.used_bytes, p.size_bytes), h("span", {}, humanBytes(p.used_bytes) + " used of " + humanBytes(p.size_bytes) + ", " + humanBytes(p.free_bytes) + " free")] : null),
+      h("span", { class: "pill " + (p.mounted ? "ok" : "bad") }, p.mounted ? "Mounted" : "Not Mounted"))),
+    st.last_backup ? h("p", { class: "muted small" }, "Last backup: " + st.last_backup) : null,
+    typeof st.boot_free_bytes === "number" ? h("p", { class: "muted small" }, "Free space on the boot drive: " + humanBytes(st.boot_free_bytes)) : null));
+  out.push(h("div", { class: "card" },
+    h("h2", {}, "Drives"),
+    h("p", { class: "muted" }, "Rename a pool drive, or put a spinning hard drive to sleep or wake it up. Nothing here erases, removes or moves a drive."),
+    (st.drives || []).length ? (st.drives || []).map(d => driveRow(d, act)) : h("p", { class: "muted" }, "No drives were found."),
+    act.can_sleep === false ? h("p", { class: "muted small" }, "Sleep and wake need the tool hdparm, which is not installed on this machine.") : null));
+  out.push(h("div", { class: "card" },
+    h("div", { class: "row" }, h("h2", { class: "grow" }, "Health"), h("button", { disabled: !!DRbusy, onclick: runLook("health") }, DRhealth ? "Check Again" : "Check Health")),
+    h("p", { class: "muted" }, "Reads what each drive says about itself (SMART). A sleeping drive is not woken up for this."),
+    DRhealth ? healthRows(DRhealth) : null));
+  out.push(h("div", { class: "card" },
+    h("div", { class: "row" }, h("h2", { class: "grow" }, "Quick Check"), h("button", { disabled: !!DRbusy, onclick: runLook("check") }, DRcheck ? "Check Again" : "Run Quick Check")),
+    h("p", { class: "muted" }, "Looks for file system errors and drives that are mounted read-only. It reads what was recorded and changes nothing."),
+    DRcheck ? checkRows(DRcheck) : null));
+  out.push(h("div", { class: "card" },
+    h("h2", {}, "After an Unplug or a Power Cut"),
+    h("p", { class: "muted" }, "Mounts every drive and pool again from the saved setup and starts the containers. Plug the drive in first. It stops the containers for a moment, and it is refused while a backup or an upload is running."),
+    h("button", { disabled: !!DRbusy, onclick: remountDrives }, "Mount the Drives Again")));
+  return out;
+}
+function runLook(kind) {
+  return async () => {
+    DRwait = kind === "health" ? "Reading the health of the drives..." : "Checking the drives...";
+    drawDrives();
+    try { const r = await api("GET", "/api/drives/" + kind); if (kind === "health") DRhealth = r; else DRcheck = r; } catch (e) { fail(e); }
+    DRwait = "";
+    drawDrives();
+  };
+}
+function healthRows(r) {
+  const rows = r.drives || [];
+  if (!rows.length) return h("p", { class: "muted" }, "No drives were found.");
+  return [rows.map(d => {
+    const bits = [typeof d.temperature_c === "number" ? d.temperature_c + " °C" : "", typeof d.power_on_hours === "number" ? d.power_on_hours.toLocaleString() + " hours on" : "",
+      typeof d.reallocated_sectors === "number" ? d.reallocated_sectors + " moved sectors" : "", typeof d.pending_sectors === "number" ? d.pending_sectors + " waiting sectors" : ""].filter(Boolean);
+    const bad = d.health === "FAILED" || d.pending_sectors > 0;
+    return h("div", { class: "prow" },
+      h("div", { class: "txt" }, h("b", {}, d.name), h("span", {}, [d.device].concat(bits).join("  ·  ")), d.note ? h("span", { class: bad ? "badtext" : "" }, d.note[0].toUpperCase() + d.note.slice(1)) : null),
+      h("span", { class: "pill " + (d.health === "PASSED" ? "ok" : bad ? "bad" : "dim") }, d.health === "PASSED" ? "Passed" : d.health === "FAILED" ? "Failing" : d.health === "asleep" ? "Asleep" : stateText(d.health)));
+  }), h("p", { class: r.ok ? "muted small" : "badtext" }, r.ok ? "No drive reports a failure." : "At least one drive reports it is failing or has bad sectors. Copy its files to another drive soon.")];
+}
+function checkRows(r) {
+  const rows = r.drives || [];
+  if (!rows.length) return h("p", { class: "muted" }, "No drives are connected to a pool yet, so there is nothing to check.");
+  return [rows.map(d => h("div", { class: "prow" },
+    h("div", { class: "txt" }, h("b", {}, d.name), h("span", {}, d.device && d.device !== "-" ? d.device : ""),
+      (d.findings || []).length ? d.findings.map(f => h("span", { class: f.level === "problem" ? "badtext" : "" }, f.text[0].toUpperCase() + f.text.slice(1))) : h("span", {}, "The file system is clean, no errors are recorded and the drive reports no problem.")),
+    h("span", { class: "pill " + (d.result === "ok" ? "ok" : d.result === "warn" ? "warn" : "bad") }, d.result === "ok" ? "OK" : d.result === "warn" ? "Warning" : "Problem"))),
+  h("p", { class: r.ok ? "muted small" : "badtext" }, r.ok ? "No problems found." : "A problem was found. Read the notes above.")];
+}
+function viewDrives() {
+  drivesBox = h("div", {});
+  put(drivesBox, drivesBody());
+  loadDrives();
+  return drivesBox;
 }
 
 // ---------------------------------------------------------------- Look and Colors (one look, two screens)

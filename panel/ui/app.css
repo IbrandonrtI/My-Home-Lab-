@@ -186,3 +186,20 @@ dialog.wide { width: min(720px, calc(100vw - 24px)); }
 .logo-switch { min-width: 96px; }
 .logo-state { align-items: center; margin-bottom: 12px; }
 #mock { min-height: 250px; }
+
+/* ---- Drives */
+.usebar { height: 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.09); overflow: hidden; margin: 6px 0 2px; max-width: 420px; }
+.usebar i { display: block; height: 100%; border-radius: 6px; background: rgb(var(--accent)); }
+.usebar i.high { background: #ffd78a; }
+.usebar i.full { background: var(--bad); }
+.pill { display: inline-block; font-size: 13px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
+.pill.ok { color: var(--good); border-color: rgba(127, 227, 176, 0.45); }
+.pill.warn { color: #ffd78a; border-color: rgba(255, 215, 138, 0.5); }
+.pill.bad { color: var(--bad); border-color: rgba(255, 141, 141, 0.5); }
+.pill.dim { opacity: 0.8; }
+.pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.drow { align-items: flex-start; }
+.drow .acts { margin-left: auto; }
+.badtext { color: var(--bad) !important; }
+.card.working { border-color: rgba(var(--accent), 0.6); color: rgb(var(--accent)); }
+@media (max-width: 560px) { .drow .acts { margin-left: 0; width: 100%; } .drow .acts button { flex: 1 1 auto; } }
