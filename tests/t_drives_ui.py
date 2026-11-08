@@ -29,6 +29,11 @@ def check(name, cond, extra=""):
     print(("PASS  " if cond else "FAIL  ") + name + ("" if cond else "   " + str(extra)))
 
 
+def act(row, name):      # open the drive's menu (the three dots) and click one item
+    row.locator("details.kebab > summary").first.click()
+    row.get_by_role("menuitem", name=name, exact=True).click()
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="hldrui-")
     log = os.path.join(tmp, "drives.log")
@@ -58,14 +63,26 @@ def main():
                 tabs = pg.eval_on_selector_all("nav.tabs button", "els => els.map(e => e.textContent)")
                 check("%s: the tabs are Look, Layout, Cards, Drives" % label, tabs == ["Look", "Layout", "Cards", "Drives"], tabs)
                 pg.click("nav.tabs button:has-text('Drives')")
-                pg.wait_for_selector("text=Storage Pools")
+                pg.wait_for_selector("text=Main Storage")
+
+                def menu_of(name, pg=pg):      # the items of a drive's menu (the menu is closed, so its text is read from the page, not from the screen)
+                    return pg.eval_on_selector_all(".drow:has-text('%s') .kmenu button" % name, "els => els.map(e => e.textContent)")
+
                 body = pg.inner_text("#app")
-                check("%s: the pools show with their state" % label, "Main Storage" in body and "Backup Storage" in body and "Mounted" in body and "Not Mounted" in body, body[:300])
+                check("%s: the pools show with their state" % label, "Main Storage" in body and "Backup Storage" in body and "Online" in body and "Offline" in body, body[:300])
+                check("%s: each pool is a card with a usage ring (25%%) and its drives in a tree below it" % label, pg.locator("details.pool svg.ring").count() == 1 and pg.locator("details.pool svg.ring").get_attribute("aria-label") == "25 percent used" and pg.locator("details.pool .tree .drow").count() == 4, pg.locator("details.pool .tree .drow").count())
+                check("%s: temperature, health, hours on, model and serial show on the row without clicking anything" % label,
+                      all(x in body for x in ("61 °C", "Failing", "12,345", "TOSHIBA DT01ACA100", "Serial X7ABCDEF")), body[:900])
+                check("%s: the spare drive is in the Unassigned Disks card" % label, pg.locator("details.pool:has-text('Unassigned Disks') .drow:has-text('Cruzer')").count() == 1, "")
+                check("%s: each drive has a three dots menu; a pool drive offers Move and Take Out, the spare offers Add and Erase" % label,
+                      menu_of("1 TB Toshiba") == ["Rename", "Put to Sleep", "Move to Backup", "Take Out"]
+                      and menu_of("Cruzer") == ["Add to Main", "Add to Backup", "Erase"], menu_of("1 TB Toshiba"))
+                check("%s: the menu is closed until the dots are pressed" % label, pg.locator("details.kebab[open]").count() == 0, "")
                 check("%s: the drives show with role, state and space" % label, "1 TB Toshiba HDD" in body and "Missing" in body and "250 GB used, 750 GB free" in body, body[:700])
                 check("%s: the spare drive shows as not connected to a pool" % label, "63 GB Cruzer HDD" in body and "Not connected to a pool" in body, body[:900])
                 check("%s: the last backup and the boot drive space show" % label, "Last backup: Never" in body and "boot drive" in body, body[-400:])
                 btns = pg.eval_on_selector_all("#app > div > .card button, #app button", "els => els.map(e => e.textContent.trim())")
-                want = ("Rename", "Automatic Name", "Put to Sleep", "Move to Backup", "Take Out", "Add to Main", "Add to Backup", "Erase", "Mount the Drives Again")
+                want = ("Rename", "Put to Sleep", "Move to Backup", "Take Out", "Add to Main", "Add to Backup", "Erase", "Mount the Drives Again")
                 check("%s: the drive buttons are there: %s" % (label, ", ".join(want)), all(b in btns for b in want), btns)
                 check("%s: Health and Quick Check are not separate cards any more" % label, "Run Quick Check" not in " ".join(pg.eval_on_selector_all("#app > div > .card > h2", "els => els.map(e => e.textContent)")) and pg.locator("h2:has-text('Health')").count() == 0, "")
                 check("%s: a Health and Check drop down sits under each connected drive (2), closed" % label,
@@ -116,7 +133,7 @@ def main():
 
                 # ---- add the spare drive to Main: keep is the default, no typing; erase asks for two words
                 row = pg.locator(".drow", has_text="Cruzer")
-                row.get_by_role("button", name="Add to Main").click()
+                act(row, "Add to Main")
                 pg.wait_for_selector("dialog")
                 check("%s: Add to Main offers keep and erase, keep first" % label, "Keep the files" in dialog_text() and "Erase the drive and format it" in dialog_text(), dialog_text())
                 check("%s: keep needs no typing" % label, typed_inputs().count() == 0 and ok_button().is_enabled() and ok_button().inner_text() == "Add Drive", dialog_text())
@@ -135,16 +152,16 @@ def main():
                 pg.locator("dialog .actions button").first.click()
                 pg.wait_for_selector("dialog", state="detached")
                 check("%s: Cancel sends nothing" % label, len(calls()) == n, calls()[n:])
-                row.get_by_role("button", name="Add to Backup").click()
+                act(row, "Add to Backup")
                 pg.wait_for_selector("dialog")
                 ok_button().click()
                 check("%s: Add to Backup with keep sends it" % label, wait_calls(["panel", "add", "sdc", "backup", "keep"]), calls()[n:])
                 after_job()
-                check("%s: the page went on after the job" % label, pg.locator("text=Storage Pools").count() == 1, "")
+                check("%s: the page went on after the job" % label, pg.locator("text=Main Storage").count() == 1, "")
 
                 # ---- erase the spare drive
                 row = pg.locator(".drow", has_text="Cruzer")
-                row.get_by_role("button", name="Erase", exact=True).click()
+                act(row, "Erase")
                 pg.wait_for_selector("dialog")
                 check("%s: Erase offers formatted or empty and asks for both words" % label, "A new, empty drive (formatted)" in dialog_text() and typed_inputs().count() == 2 and ok_button().is_disabled(), dialog_text())
                 pg.locator("dialog input[type=radio][value=empty]").check()
@@ -155,7 +172,7 @@ def main():
 
                 # ---- move the first pool drive (it has files, there is another Main drive)
                 row = pg.locator(".drow", has_text="1 TB Toshiba")
-                row.get_by_role("button", name="Move to Backup").click()
+                act(row, "Move to Backup")
                 pg.wait_for_selector("dialog")
                 d = dialog_text()
                 check("%s: Move asks what happens to the files and whether to copy them first" % label, "What should happen to the files on this drive?" in d and "Copy its files to the other main drives first?" in d, d)
@@ -174,7 +191,7 @@ def main():
                 check("%s: Move (erase, no copy) sends all words" % label, wait_calls(["panel", "move", "MAIN1", "erase", "no", "/dev/sdb", "ERASE", "CONTINUE"]), calls()[n:])
                 after_job()
                 row = pg.locator(".drow", has_text="1 TB Toshiba")
-                row.get_by_role("button", name="Move to Backup").click()
+                act(row, "Move to Backup")
                 pg.wait_for_selector("dialog")
                 typed_inputs().nth(0).fill("KEEP")
                 ok_button().click()
@@ -183,7 +200,7 @@ def main():
 
                 # ---- take a drive out: one with files asks about copying, one without does not
                 row = pg.locator(".drow", has_text="1 TB Toshiba")
-                row.get_by_role("button", name="Take Out").click()
+                act(row, "Take Out")
                 pg.wait_for_selector("dialog")
                 d = dialog_text()
                 check("%s: Take Out (with files) offers to copy them first, recommended" % label, "Copy them to another main drive first (recommended)" in d and typed_inputs().count() == 0 and ok_button().is_enabled(), d)
@@ -194,7 +211,7 @@ def main():
                 check("%s: Take Out (no copy) sends CONTINUE" % label, wait_calls(["panel", "disconnect", "MAIN1", "no", "CONTINUE"]), calls()[n:])
                 after_job()
                 row = pg.locator(".drow", has_text="2 TB Seagate HDD 2")
-                row.get_by_role("button", name="Take Out").click()
+                act(row, "Take Out")
                 pg.wait_for_selector("dialog")
                 check("%s: Take Out (no files) has no question and no typing" % label, "Copy them" not in dialog_text() and typed_inputs().count() == 0 and ok_button().is_enabled(), dialog_text())
                 ok_button().click()
@@ -213,13 +230,13 @@ def main():
             pg.click("text=Log In")
             pg.wait_for_selector("nav.tabs")
             pg.click("nav.tabs button:has-text('Drives')")
-            pg.wait_for_selector("text=Storage Pools")
+            pg.wait_for_selector("text=Main Storage")
             m = len(calls())
-            pg.locator(".drow", has_text="1 TB Toshiba").get_by_role("button", name="Take Out").click()
+            act(pg.locator(".drow", has_text="1 TB Toshiba"), "Take Out")
             pg.wait_for_selector("dialog")
             check("single: the only Main drive cannot be taken out (only a Close button)", "only Main drive" in pg.inner_text("dialog") and pg.locator("dialog .actions button").last.inner_text() == "Close", pg.inner_text("dialog"))
             pg.locator("dialog .actions button").last.click()
-            pg.locator(".drow", has_text="1 TB Toshiba").get_by_role("button", name="Move to Backup").click()
+            act(pg.locator(".drow", has_text="1 TB Toshiba"), "Move to Backup")
             pg.wait_for_selector("dialog")
             check("single: the only Main drive cannot be moved either", "only Main drive" in pg.inner_text("dialog") and pg.locator("dialog .actions button").last.inner_text() == "Close", pg.inner_text("dialog"))
             pg.locator("dialog .actions button").last.click()
@@ -240,13 +257,13 @@ def main():
             check("remount: Mount Again sends remount", ["panel", "remount"] in calls()[m:], calls()[m:])
             # rename (a quick action)
             pg.wait_for_selector(".card.working", state="detached")
-            pg.locator(".drow", has_text="1 TB Toshiba").get_by_role("button", name="Rename").click()
+            act(pg.locator(".drow", has_text="1 TB Toshiba"), "Rename")
             pg.wait_for_selector("dialog input")
             pg.fill("dialog input", "bad/name")
             pg.click("dialog button:has-text('OK')")
             pg.wait_for_selector("#toast.show.bad")
             check("rename: a bad name is refused on the page, nothing is sent", not any(c[1] == "rename" for c in calls()), calls()[m:])
-            pg.locator(".drow", has_text="1 TB Toshiba").get_by_role("button", name="Rename").click()
+            act(pg.locator(".drow", has_text="1 TB Toshiba"), "Rename")
             pg.wait_for_selector("dialog input")
             pg.fill("dialog input", "Photos Drive")
             pg.click("dialog button:has-text('OK')")

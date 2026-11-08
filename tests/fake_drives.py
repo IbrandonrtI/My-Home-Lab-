@@ -36,7 +36,7 @@ elif act == "actions":
                       "spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "keep_ok": True, "partitions": 1}],
                       "power": [{"id": "sdb", "name": "1 TB Toshiba HDD", "role": "main", "state": "awake"}], "can_sleep": True}))
 elif act == "health":
-    print(json.dumps({"drives": [{"name": "1 TB Toshiba HDD", "device": "/dev/sdb", "health": "FAILED", "temperature_c": 61, "power_on_hours": 12345, "reallocated_sectors": 3, "pending_sectors": 2, "note": "the drive says it is failing: back up its files now"}], "ok": False}))
+    print(json.dumps({"drives": [{"name": "1 TB Toshiba HDD", "device": "/dev/sdb", "model": "TOSHIBA DT01ACA100", "serial": "X7ABCDEF", "health": "FAILED", "temperature_c": 61, "power_on_hours": 12345, "reallocated_sectors": 3, "pending_sectors": 2, "note": "the drive says it is failing: back up its files now"}], "ok": False}))
     sys.exit(1)
 elif act == "check":
     print(json.dumps({"drives": [{"name": "1 TB Toshiba HDD", "device": "/dev/sdb1", "result": "ok", "findings": []},

@@ -141,10 +141,10 @@ def main():
                   and pg.evaluate("document.querySelectorAll('link[rel=stylesheet][href*=\"custom.css\"]').length") == 1 and pg.evaluate("document.getElementById('hl-live-look')") is None, pg.evaluate("[window.__stay, localStorage.getItem('hash'), document.querySelector('link[rel=stylesheet]').getAttribute('href'), !!document.getElementById('hl-live-look')]") + [want])
             ub = fr.get_by_role("button", name="Undo", exact=True)
             check("look: Undo is a plain button that says what it would undo when you point at it", ub.count() == 1 and ub.get_attribute("title") == "Undo: Look changed", ub.get_attribute("title"))
-            names = fr.locator(".savebar").locator("button, a").all_inner_texts()
-            check("bar: Undo, Save and Open in Tab, then Log Out, are together at the bottom", [n for n in names if n in ("Undo", "Save", "Open in New Tab", "Log Out")] == ["Undo", "Save", "Open in New Tab", "Log Out"], names)
-            check("bar: it has the Reset All Settings button on the Look screen", "Reset All Settings" in names, names)
-            check("top: the title and tabs are in a section that stays in place", fr.locator(".stickytop nav.tabs").count() == 1 and fr.locator("header.top button").count() == 0
+            names = fr.locator("header.top .hactions").locator("button, a").all_inner_texts()
+            check("top: Undo, Save and Open in Tab, then Log Out, are together in the top line", [n for n in names if n in ("Undo", "Save", "Open in New Tab", "Log Out")] == ["Undo", "Save", "Open in New Tab", "Log Out"], names)
+            check("top: it has the Reset All Settings button on the Look screen", "Reset All Settings" in names, names)
+            check("top: the title and tabs are in a section that stays in place", fr.locator(".stickytop header.top nav.tabs").count() == 1 and fr.locator("header.top h1").count() == 1 and fr.locator(".sub").count() == 0
                   and fr.locator(".stickytop").evaluate("e => getComputedStyle(e).position") == "sticky")
 
             # ---- names and logo (the top card of the Look screen)
