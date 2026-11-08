@@ -2512,11 +2512,12 @@ disk_role_of() {   # disk_role_of /dev/sdX -> main, backup, plain-data or spare 
   if grep -qx "$1" <<<"$(legacy_disks)"; then echo plain-data; else echo spare; fi
 }
 
-spinning_disks() {   # hard drives with moving parts (the boot drive, SSDs and drives that do not say what they are are left out)
+spinning_disks() {   # hard drives with moving parts (the boot drive, SSDs, flash sticks and drives that do not say what they are are left out)
   local d prot model
   prot=$(protected_disks)
   for d in $(all_disks | sort -u); do
     grep -qx "$d" <<<"$prot" && continue
+    [ "$(lsblk -dno RM "$d" 2>/dev/null | tr -d ' ' | head -1)" = 1 ] && continue      # a removable stick: it has no motor, yet it often claims to be a spinning drive and to be asleep
     model=$(lsblk -dno MODEL "$d" 2>/dev/null | sed 's/ *$//')
     [ "$(drive_kind "$d" "$model")" = HDD ] && echo "$d"
   done
