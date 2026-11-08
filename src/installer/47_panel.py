@@ -8,9 +8,10 @@ PANEL_SHARE = "/usr/local/share/homelab-panel"
 PANEL_UNIT = "/etc/systemd/system/homelab-panel.service"
 PANEL_UI_FILES = ["index.html", "app.js", "app.css", "icon.svg"]
 PANEL_SUDOERS = "/etc/sudoers.d/homelab-panel"
-# the only commands the panel's user may run as root without a password (the Drives tab); `drives panel` checks every word again
+# the only commands the panel's user may run as root without a password (the Drives tab); `drives panel` checks every word again, and the
+# ones that erase or move drives (add, wipe, disconnect, move) also ask for the typed confirmations inside the drives tool and refuse while a backup runs
 PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount"]
-PANEL_SUDO_WITH_WORDS = ["rename", "sleep", "wake"]
+PANEL_SUDO_WITH_WORDS = ["rename", "sleep", "wake", "add", "wipe", "disconnect", "move"]
 
 
 def panel_applies():
