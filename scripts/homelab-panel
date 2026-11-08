@@ -9,8 +9,10 @@
 What the panel is:
   - a small web page that only listens on THIS machine (127.0.0.1); Tailscale Serve gives it an HTTPS address that only your own
     devices (your tailnet) can reach. It is never opened to your home network, and has its own password (not the other logins).
-  - it runs as the same user as the dashboard files, so it needs no sudo: it edits ~/homepage-config (settings.yaml, services.yaml,
+  - it runs as the same user as the dashboard files, so it needs no sudo for them: it edits ~/homepage-config (settings.yaml, services.yaml,
     bookmarks.yaml and the look block of custom.css) and nothing else. The work is done by plain text edits, the same files you could edit by hand.
+  - the Drives tab asks the drives tool (sudo drives panel ...) through a narrow sudo rule: look at the drives, rename one, sleep or wake one,
+    remount after an unplug. It is never allowed to erase, remove or move a drive.
   - the Terminal card of the Links tab is a web terminal (ttyd, its own service as the same user) that listens on a private socket only this
     panel can reach. The panel checks the login before it passes anything through, so the terminal is as private as the panel: only your tailnet.
   - every change first saves a copy of the files it changes (.panel-history in the Homepage folder), so "Undo" brings the last state back.
@@ -29,6 +31,7 @@ import os
 import re
 import secrets
 import select
+import shlex
 import shutil
 import socket
 import subprocess
@@ -60,6 +63,7 @@ HOMEPAGE_URL = (os.environ.get("HLP_HOMEPAGE_URL") or "").rstrip("/")      # whe
 TERM_SOCK = os.environ.get("HLP_TERM_SOCK") or "/run/homelab-terminal/ttyd.sock"      # where ttyd (the web terminal) listens: a socket, not a port
 COOKIE = "hlpanel" if os.environ.get("HLP_COOKIE_PLAIN") else "__Host-hlpanel"
 NO_DOCKER = bool(os.environ.get("HLP_NO_DOCKER"))
+DRIVES_CMD = shlex.split(os.environ.get("HLP_DRIVES") or "sudo -n /usr/local/sbin/drives")      # the one door to the drives (see "the Drives tab")
 
 SETTINGS = os.path.join(HP, "settings.yaml")
 SERVICES = os.path.join(HP, "services.yaml")
@@ -1639,6 +1643,102 @@ def full_state():
             "links": marks_state(), "paint": paint_state(), "undo": (h[1]["label"] if h else ""), "automatic": sorted(AUTOMATIC), "protected": sorted(PROTECTED)}
 
 
+# ================================================================ the Drives tab
+# The panel never touches a drive itself. It asks the drives tool, through the narrow sudo rule the installer writes
+# (/etc/sudoers.d/homelab-panel): `sudo -n drives panel status|health|check|actions|remount|rename ID NAME|sleep ID|wake ID` and nothing else.
+# Every word is checked here and again by the drives tool.
+DRIVES_LOCK = threading.Lock()                 # one drive command at a time (a remount can take a minute); it is not the big LOCK, so the look still works meanwhile
+DRIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
+DRIVE_NAME = re.compile(r"[A-Za-z0-9 .()+,-]{1,40}\Z")
+DRIVE_TIMEOUT = {"status": 90, "actions": 90, "health": 180, "check": 180, "remount": 600}
+
+
+def drives_problem(rc, text):
+    """A sentence for a drives command that did not work (sudo said no, the tool is missing, or the tool refused)."""
+    low = text.lower()
+    if rc == 127 or "command not found" in low or "no such file" in low:
+        return "The drives tool is not installed on this machine, so the Drives tab has nothing to work with."
+    if "password is required" in low or "not allowed" in low or "may not run sudo" in low or "no tty present" in low:
+        return "The Drives tab is not allowed to use the drives tool yet. On the server, run:  sudo homelab-setup upgrade"
+    if rc == 124:
+        return "The drives tool took too long. Nothing more was started; try again in a minute."
+    lines = [x.strip() for x in text.splitlines() if x.strip() and not x.startswith("WARNING")]
+    return " ".join(lines[-3:])[:400] or "The drives tool did not work (code %d)." % rc
+
+
+def drives_run(words, timeout):
+    """Run `drives panel WORDS...`; returns (returncode, stdout, stderr). Only one at a time."""
+    if not DRIVES_LOCK.acquire(blocking=False):
+        raise Fail("Another drive command is running. Try again in a moment.", 409)
+    try:
+        try:
+            p = subprocess.run(DRIVES_CMD + ["panel"] + words, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
+            return p.returncode, p.stdout or "", p.stderr or ""
+        except FileNotFoundError:
+            return 127, "", "command not found"
+        except subprocess.TimeoutExpired:
+            return 124, "", "timed out"
+    finally:
+        DRIVES_LOCK.release()
+
+
+def drives_json(action):
+    """The JSON a look-only command prints (health and check also exit 1 when they find a problem, and still print it)."""
+    rc, out, err = drives_run([action], DRIVE_TIMEOUT[action])
+    try:
+        data = json.loads(out)
+    except ValueError:
+        raise Fail(drives_problem(rc, err or out), 502 if rc != 124 else 504) from None
+    if not isinstance(data, dict):
+        raise Fail("The drives tool answered in a way the panel does not understand.", 502)
+    return data
+
+
+def api_drives_state():
+    """Pools, drives and the last backup, plus what can be renamed or put to sleep."""
+    st = drives_json("status")
+    ac = drives_json("actions")
+    return {"status": st, "actions": ac}
+
+
+def drive_message(out, err):
+    """What the drives tool said, for a toast: its own sentences, without the progress lines."""
+    lines = []
+    for x in (out + "\n" + err).splitlines():
+        x = x.strip()
+        if not x or x.startswith(("Starting containers", "Stopping", "WARNING: Not a good moment")):
+            continue
+        lines.append(x)
+    return " ".join(lines)[-600:]
+
+
+def api_drives_do(action, body):
+    """rename / sleep / wake / remount. The answer says what the drives tool said."""
+    words = [action]
+    if action in ("rename", "sleep", "wake"):
+        ident = body.get("id")
+        if not isinstance(ident, str) or not DRIVE_ID.match(ident):
+            raise Fail("Choose a drive first.")
+        words.append(ident)
+    if action == "rename":
+        name = body.get("name")
+        if not isinstance(name, str):
+            raise Fail("Type a name first.")
+        name = " ".join(name.split())
+        if name != "auto" and not DRIVE_NAME.match(name):
+            raise Fail("A name may have up to 40 letters, numbers, spaces and these marks: . ( ) + , -")
+        if name != "auto" and (name[0] in " .-" or name[-1] in " .-"):
+            raise Fail("A name cannot start or end with a space, a dot or a dash.")
+        words.append(name)
+    rc, out, err = drives_run(words, DRIVE_TIMEOUT.get(action, 90))
+    msg = drive_message(out, err)
+    if rc != 0:
+        low = (err + out).lower()
+        sudo_no = "password is required" in low or "not allowed" in low or "may not run sudo" in low or "no tty present" in low
+        raise Fail(drives_problem(rc, err + out) if rc in (124, 127) or sudo_no or not msg else msg, 409 if rc == 1 and not sudo_no else 502)
+    return {"message": msg or "Done."}
+
+
 # ================================================================ the web server
 TERM_MAX = 6_000_000             # the biggest page the terminal may send (its own page is under 1 MB)
 TERM_IDLE = 600                  # a terminal connection with no traffic at all for this many seconds is closed (ttyd pings every few seconds)
@@ -1744,6 +1844,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, icon_index())
+            if path in ("/api/drives", "/api/drives/health", "/api/drives/check"):
+                if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
+                    raise Fail("Please log in again.", 401)
+                return self.send(200, api_drives_state() if path == "/api/drives" else drives_json(path.rsplit("/", 1)[1]))
             if path.startswith("/api/"):
                 raise Fail("Unknown address.", 404)
             if path == "/terminal":
@@ -1869,6 +1973,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.read_body(1 << 20) or b"{}")
             if not isinstance(body, dict):
                 raise Fail("The request is not understood.")
+            if path in ("/api/drives/rename", "/api/drives/sleep", "/api/drives/wake", "/api/drives/remount"):
+                return self.send(200, dict(api_drives_do(path.rsplit("/", 1)[1], body), ok=True))      # not under LOCK: a remount takes a while
             routes = {"/api/look": api_look_save, "/api/look/css": api_look_css, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
                       "/api/layout": api_layout_save, "/api/card": api_card, "/api/link": api_link, "/api/group": api_group,
                       "/api/undo": lambda b: {"undone": undo()}}

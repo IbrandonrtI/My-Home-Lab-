@@ -111,6 +111,8 @@ DRY_RUN=0            # --dry-run: show what would happen, change nothing
 ASSUME_YES=0         # --yes: answer the yes/no questions with yes
 CONFIRM_ERASE=0      # --confirm-erase: also type the confirmations for erasing or removing a drive (ERASE, REMOVE, CONTINUE, the drive name)
 NOW=0                # --now: do not wait for a running backup or upload
+PANEL_ID=""          # set only by `drives panel ...`: the drive (a pool label, or sda) the control panel chose, so the flow does not ask
+PANEL_NAME=""        # ... and the new name for rename
 WANT_SPARE=0         # --spare: a ready-made array setup also gets a hot spare drive
 WANT_CACHE=0         # --cache: a ready-made ZFS setup also gets an SSD read cache
 WANT_ENCRYPT=0       # --encrypt: a ready-made array setup is encrypted (key file on the boot drive)
@@ -2455,13 +2457,18 @@ chosen_name_del() {   # chosen_name_del LABEL
 
 rename_flow() {   # give a pool drive a name of your own (kept by the drive's label, so it stays when the drive is plugged in again)
   local mp label cur new b lower
-  mp=$(pick_branch "Which drive do you want to rename? ") || return 1
+  if [ -n "${PANEL_ID:-}" ]; then mp=$(panel_branch "$PANEL_ID") || return 1      # the control panel names the drive and the new name itself
+  else mp=$(pick_branch "Which drive do you want to rename? ") || return 1; fi
   label=$(basename "$mp"); cur=$(branch_name "$mp")
-  say ""
-  say "This drive is called: $cur"
-  if [ -n "$(chosen_name "$label")" ]; then say "You chose this name. Type  auto  to go back to the automatic name (size, make and type)."
-  else say "The name is made from the size, make and type of the drive."; fi
-  new=$(ask "New name (letters, numbers and spaces, up to 40 characters; Enter cancels): ")
+  if [ -n "${PANEL_ID:-}" ]; then
+    new=$PANEL_NAME
+  else
+    say ""
+    say "This drive is called: $cur"
+    if [ -n "$(chosen_name "$label")" ]; then say "You chose this name. Type  auto  to go back to the automatic name (size, make and type)."
+    else say "The name is made from the size, make and type of the drive."; fi
+    new=$(ask "New name (letters, numbers and spaces, up to 40 characters; Enter cancels): ")
+  fi
   [ -n "$new" ] || { say "Cancelled. Nothing was changed."; return 1; }
   if [ "$new" = auto ]; then
     if [ -z "$(chosen_name "$label")" ]; then say "$cur already has its automatic name. Nothing was changed."; return 0; fi
@@ -2531,9 +2538,14 @@ power_action() {   # power_action sleep|wake: pick a spinning hard drive and put
     note "No spinning hard drive found. SSDs, the boot drive and drives that do not say what they are have nothing to put to sleep."
     return 1
   fi
-  for dev in "${devs[@]}"; do items+=("$(disk_base_name "$dev")  ($(disk_role_of "$dev"))  $(power_state "$dev")"); done
-  i=$(choose "Which drive do you want to $([ "$verb" = sleep ] && echo "put to sleep" || echo "wake up")? " "${items[@]}") || return 1
-  dev=${devs[$i]}
+  if [ -n "${PANEL_ID:-}" ]; then      # the control panel names the drive itself: it must be one of the listed spinning drives
+    dev=/dev/$PANEL_ID
+    printf '%s\n' "${devs[@]}" | grep -qx "$dev" || { note "$PANEL_ID is not a spinning hard drive that can be put to sleep. Nothing was changed."; return 1; }
+  else
+    for dev in "${devs[@]}"; do items+=("$(disk_base_name "$dev")  ($(disk_role_of "$dev"))  $(power_state "$dev")"); done
+    i=$(choose "Which drive do you want to $([ "$verb" = sleep ] && echo "put to sleep" || echo "wake up")? " "${items[@]}") || return 1
+    dev=${devs[$i]}
+  fi
   refuse_unsafe_disk_power "$dev" || return 1
   name=$(disk_base_name "$dev"); role=$(disk_role_of "$dev"); state=$(power_state "$dev")
   if [ "$verb" = sleep ]; then
@@ -4546,6 +4558,82 @@ EOF
   esac
 }
 
+# ---------- the control panel's door: `sudo drives panel ACTION` ----------
+# The control panel (the Drives tab of the dashboard) runs as the lab's own user and is allowed to run exactly these commands as root, without
+# a password (the installer writes /etc/sudoers.d/homelab-panel). Nothing else. Every word is checked here again, because the rule only
+# matches the start of the line. The commands never ask a question and never change anything but what their name says.
+#   panel status | health | check | actions     look only (JSON)
+#   panel rename ID NAME                          give a pool drive a name of your own (NAME auto: the automatic name again)
+#   panel sleep ID | panel wake ID                put a spinning hard drive to sleep / wake it (ID is like sda)
+#   panel remount                                 mount the drives again after an unplug (refused while a backup or upload runs)
+
+panel_branch() {   # panel_branch LABEL -> the mount point of the pool drive with that label (nothing and 1 when there is none)
+  local mp
+  for mp in $(all_branches); do
+    [ "$(basename "$mp")" = "$1" ] && { echo "$mp"; return 0; }
+  done
+  note "There is no pool drive called '$1'. Nothing was changed."
+  return 1
+}
+
+panel_actions_json() {   # what the Drives tab may offer: the drives that can be renamed and the spinning drives that can sleep
+  local mp label dev first=1 chosen
+  printf '{"rename":['
+  for mp in $(all_branches); do
+    label=$(basename "$mp"); chosen=$(chosen_name "$label")
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '{"id":%s,"name":%s,"role":%s,"custom":%s,"connected":%s}' "$(json_str "$label")" "$(json_str "$(branch_name "$mp")")" \
+      "$(json_str "$(branch_role "$mp")")" "$([ -n "$chosen" ] && echo true || echo false)" "$(mountpoint -q "$mp" && echo true || echo false)"
+  done
+  printf '],"power":['
+  first=1
+  if command -v hdparm >/dev/null 2>&1; then
+    for dev in $(spinning_disks); do
+      [ "$first" = 1 ] || printf ','
+      first=0
+      printf '{"id":%s,"name":%s,"role":%s,"state":%s}' "$(json_str "$(basename "$dev")")" "$(json_str "$(disk_base_name "$dev")")" \
+        "$(json_str "$(disk_role_of "$dev")")" "$(json_str "$(power_state "$dev")")"
+    done
+  fi
+  printf '],"can_sleep":%s}\n' "$(command -v hdparm >/dev/null 2>&1 && echo true || echo false)"
+}
+
+panel_main() {
+  local act=${1:-} n=$#
+  case "$act" in
+    status|health|check|actions|remount) [ "$n" -eq 1 ] || { note "panel $act takes no more words. Nothing was changed."; return 1; } ;;
+    rename)       [ "$n" -eq 3 ] || { note "panel rename takes a drive and a name. Nothing was changed."; return 1; } ;;
+    sleep|wake)   [ "$n" -eq 2 ] || { note "panel $act takes one drive. Nothing was changed."; return 1; } ;;
+    *) note "Unknown panel command. Nothing was changed."; return 1 ;;
+  esac
+  if [ "$n" -ge 2 ] && ! [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then note "That drive id is not allowed. Nothing was changed."; return 1; fi
+  if [ "$act" = rename ]; then
+    if [ "$3" != auto ]; then
+      if [ "${#3}" -gt 40 ] || [ "$(LC_ALL=C clean_name "$3")" != "$3" ] || [ -z "$3" ]; then
+        note "A name may have up to 40 letters, numbers, spaces and . ( ) + , - (no space, dot or dash at the start or the end). Nothing was changed."; return 1
+      fi
+    fi
+  fi
+  [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
+  take_lock
+  ASSUME_YES=1
+  local why
+  case "$act" in
+    status)  JSON=1; with_name_cache json_drives; printf ',"last_backup":%s,"boot_free_bytes":%s}\n' "$(json_str "$(last_backup_line)")" "$(json_num "$(boot_free_bytes)")" ;;
+    health)  JSON=1; health_flow ;;
+    check)   JSON=1; check_flow ;;
+    actions) with_name_cache panel_actions_json ;;
+    rename)  PANEL_ID=$2; PANEL_NAME=$3; run_changing rename_flow ;;
+    sleep)   PANEL_ID=$2; sleep_flow ;;
+    wake)    PANEL_ID=$2; wake_flow ;;
+    remount)
+      why=$(busy_reason)
+      if [ -n "$why" ]; then note "Not a good moment: $why. Nothing was changed. Try again when it has finished."; return 1; fi
+      NOW=1
+      run_changing remount_flow ;;
+  esac
+}
 run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser; the exit code is the flow's (1 also when containers did not start)
   local rc=0
   "$@" || rc=$?
@@ -4556,7 +4644,14 @@ run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser
   return "$rc"
 }
 
+take_lock() {   # one drives command at a time
+  mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
+  { exec 9>"/var/lock/homelab-drives.lock"; } 2>/dev/null || exec 9>"/tmp/homelab-drives.lock"
+  flock -n 9 || die "Another drives command is running."
+}
+
 main() {
+  if [ "${1:-}" = panel ]; then shift; panel_main "$@"; return $?; fi      # the control panel's door: its own strict words, no options (see 42_panel.sh)
   # options can stand before or after the command; test-setup keeps its own arguments
   local -a args=()
   local a WANT_HELP=0
@@ -4613,9 +4708,7 @@ main() {
     *) if [ $# -gt 1 ]; then note "Unexpected word: ${*:2}"; note "Nothing was done."; note ""; usage_text >&2; exit 1; fi ;;
   esac
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
-  mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
-  { exec 9>"/var/lock/homelab-drives.lock"; } 2>/dev/null || exec 9>"/tmp/homelab-drives.lock"
-  flock -n 9 || die "Another drives command is running."
+  take_lock
   case "${1:-menu}" in
     menu)         menu ;;
     status)       if [ "$JSON" = 1 ]; then with_name_cache json_drives; printf ',"last_backup":%s,"boot_free_bytes":%s}\n' "$(json_str "$(last_backup_line)")" "$(json_num "$(boot_free_bytes)")"; else with_name_cache status_flow; fi ;;
