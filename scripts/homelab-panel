@@ -12,7 +12,8 @@ What the panel is:
   - it runs as the same user as the dashboard files, so it needs no sudo for them: it edits ~/homepage-config (settings.yaml, services.yaml,
     bookmarks.yaml and the look block of custom.css) and nothing else. The work is done by plain text edits, the same files you could edit by hand.
   - the Drives tab asks the drives tool (sudo drives panel ...) through a narrow sudo rule: look at the drives, rename one, sleep or wake one,
-    remount after an unplug. It is never allowed to erase, remove or move a drive.
+    remount after an unplug, add a spare drive to a pool, take one out, move one between pools, erase a spare drive. The drives tool itself asks
+    for the typed confirmations (the drive name and ERASE, CONTINUE, REMOVE, KEEP) and refuses when a backup or an upload is running.
   - the Terminal card of the Links tab is a web terminal (ttyd, its own service as the same user) that listens on a private socket only this
     panel can reach. The panel checks the login before it passes anything through, so the terminal is as private as the panel: only your tailnet.
   - every change first saves a copy of the files it changes (.panel-history in the Homepage folder), so "Undo" brings the last state back.
@@ -1651,6 +1652,10 @@ DRIVES_LOCK = threading.Lock()                 # one drive command at a time (a 
 DRIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 DRIVE_NAME = re.compile(r"[A-Za-z0-9 .()+,-]{1,40}\Z")
 DRIVE_TIMEOUT = {"status": 90, "actions": 90, "health": 180, "check": 180, "remount": 600}
+DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|/dev/[a-z0-9]{1,16})\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
+JOB_MAX_SECONDS = 8 * 3600
+JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0}      # the drive change that runs (or ran last) in the background
+JOB_LOCK = threading.Lock()
 
 
 def drives_problem(rc, text):
@@ -1737,6 +1742,85 @@ def api_drives_do(action, body):
         sudo_no = "password is required" in low or "not allowed" in low or "may not run sudo" in low or "no tty present" in low
         raise Fail(drives_problem(rc, err + out) if rc in (124, 127) or sudo_no or not msg else msg, 409 if rc == 1 and not sudo_no else 502)
     return {"message": msg or "Done."}
+
+
+
+def job_words(action, body):
+    """The exact words of a drive change (add, wipe, disconnect, move), checked before anything is asked of the drives tool."""
+    ident = body.get("id")
+    if not isinstance(ident, str) or not DRIVE_ID.match(ident):
+        raise Fail("Choose a drive first.")
+    typed = body.get("typed", [])
+    if not isinstance(typed, list) or len(typed) > 4 or not all(isinstance(w, str) and DRIVE_WORD.match(w) for w in typed):
+        raise Fail("A confirmation word is not allowed.")
+
+    def pick(key, allowed):
+        v = body.get(key)
+        if v not in allowed:
+            raise Fail("Choose %s first." % key)
+        return v
+    if action == "add":
+        words = ["add", ident, pick("role", ("main", "backup")), pick("mode", ("keep", "erase"))]
+    elif action == "wipe":
+        words = ["wipe", ident, pick("mode", ("empty", "format"))]
+    elif action == "disconnect":
+        words = ["disconnect", ident, pick("copy", ("yes", "no"))]
+    elif action == "move":
+        words = ["move", ident, pick("keep", ("keep", "erase")), pick("copy", ("yes", "no"))]
+    else:
+        raise Fail("Unknown address.", 404)
+    return words + typed
+
+
+def job_thread(words):
+    """Run one drive change and keep its progress lines for the page. Holds DRIVES_LOCK until it is over."""
+    rc, tail = 1, []
+    try:
+        try:
+            p = subprocess.Popen(DRIVES_CMD + ["panel"] + words, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1)
+        except FileNotFoundError:
+            with JOB_LOCK:
+                JOB["lines"] = ["command not found"]
+            rc = 127
+        else:
+            timer = threading.Timer(JOB_MAX_SECONDS, p.kill)
+            timer.start()
+            try:
+                for line in p.stdout:
+                    line = line.rstrip()
+                    if line:
+                        with JOB_LOCK:
+                            JOB["lines"] = (JOB["lines"] + [line])[-300:]
+                rc = p.wait()
+            finally:
+                timer.cancel()
+        with JOB_LOCK:
+            tail = list(JOB["lines"])
+    finally:
+        text = "\n".join(tail)
+        low = text.lower()
+        sudo_no = "password is required" in low or "may not run sudo" in low or "no tty present" in low
+        with JOB_LOCK:
+            JOB["rc"] = rc
+            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else drive_message(text, "")
+            JOB["running"] = False
+        DRIVES_LOCK.release()
+
+
+def api_drives_job_start(action, body):
+    words = job_words(action, body)
+    if not DRIVES_LOCK.acquire(blocking=False):
+        raise Fail("Another drive command is running. Try again in a moment.", 409)
+    with JOB_LOCK:
+        JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()))
+        jid = JOB["id"]
+    threading.Thread(target=job_thread, args=(words,), daemon=True).start()
+    return {"ok": True, "job": jid}
+
+
+def api_drives_job():
+    with JOB_LOCK:
+        return {"id": JOB["id"], "running": JOB["running"], "action": JOB["action"], "lines": JOB["lines"][-12:], "rc": JOB["rc"], "message": JOB["message"], "started": JOB["started"]}
 
 
 # ================================================================ the web server
@@ -1844,6 +1928,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, icon_index())
+            if path == "/api/drives/job":
+                if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
+                    raise Fail("Please log in again.", 401)
+                return self.send(200, api_drives_job())
             if path in ("/api/drives", "/api/drives/health", "/api/drives/check"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
@@ -1973,6 +2061,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.read_body(1 << 20) or b"{}")
             if not isinstance(body, dict):
                 raise Fail("The request is not understood.")
+            if path in ("/api/drives/add", "/api/drives/wipe", "/api/drives/disconnect", "/api/drives/move"):
+                return self.send(200, api_drives_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/drives/job
             if path in ("/api/drives/rename", "/api/drives/sleep", "/api/drives/wake", "/api/drives/remount"):
                 return self.send(200, dict(api_drives_do(path.rsplit("/", 1)[1], body), ok=True))      # not under LOCK: a remount takes a while
             routes = {"/api/look": api_look_save, "/api/look/css": api_look_css, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
