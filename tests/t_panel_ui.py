@@ -107,7 +107,7 @@ def main():
 
             # ---- one Look screen: the order of its parts, and no separate Colors and Background screens
             tabs_now = fr.locator("nav.tabs button").all_inner_texts()
-            check("screens: Look, Layout and Cards only (Colors and Background are part of Look)", tabs_now == ["Look", "Layout", "Cards"], tabs_now)
+            check("screens: Look, Layout, Cards and Drives only (Colors and Background are part of Look)", tabs_now == ["Look", "Layout", "Cards", "Drives"], tabs_now)
             heads = fr.locator(".card h2, details.card > summary b").all_inner_texts()
             want = ["Preview, Shapes and Space", "Names and Logo", "Background Picture", "How the Background Looks Behind the Cards", "Colors and Built-In Looks", "Colors of Cards, Tiles and Bookmarks", "Service Cards"]
             pos = [heads.index(x) if x in heads else -1 for x in want]
@@ -370,7 +370,7 @@ def main():
             ph.locator("input[type=password]").fill(tp.PW)
             ph.get_by_role("button", name="Log In").click()
             ph.locator("nav.tabs").wait_for(timeout=5000)
-            for v in ("Look", "Layout", "Cards"):
+            for v in ("Look", "Layout", "Cards", "Drives"):
                 ph.locator("nav.tabs").get_by_text(v, exact=True).click()
                 ph.wait_for_timeout(250)
                 w = ph.evaluate("[document.documentElement.scrollWidth, window.innerWidth]")
