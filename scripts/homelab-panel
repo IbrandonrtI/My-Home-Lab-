@@ -1648,7 +1648,8 @@ def full_state():
 # The panel never touches a drive itself. It asks the drives tool, through the narrow sudo rule the installer writes
 # (/etc/sudoers.d/homelab-panel): `sudo -n drives panel status|health|check|actions|remount|rename ID NAME|sleep ID|wake ID` and nothing else.
 # Every word is checked here and again by the drives tool.
-DRIVES_LOCK = threading.Lock()                 # one drive command at a time (a remount can take a minute); it is not the big LOCK, so the look still works meanwhile
+DRIVES_GATE = threading.Condition()           # looking at the drives (any number at once) or changing them (one, alone); it is not the big LOCK, so the look still works meanwhile
+DRIVES_STATE = {"readers": 0, "changing": False}
 DRIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 DRIVE_NAME = re.compile(r"[A-Za-z0-9 .()+,-]{1,40}\Z")
 DRIVE_TIMEOUT = {"status": 90, "actions": 90, "health": 180, "check": 180, "remount": 600}
@@ -1671,10 +1672,46 @@ def drives_problem(rc, text):
     return " ".join(lines[-3:])[:400] or "The drives tool did not work (code %d)." % rc
 
 
-def drives_run(words, timeout):
-    """Run `drives panel WORDS...`; returns (returncode, stdout, stderr). Only one at a time."""
-    if not DRIVES_LOCK.acquire(blocking=False):
-        raise Fail("Another drive command is running. Try again in a moment.", 409)
+DRIVES_BUSY_MSG = "A drive change is running right now. This page shows its progress."
+
+
+def drives_look_begin():
+    with DRIVES_GATE:
+        if DRIVES_STATE["changing"]:
+            raise Fail(DRIVES_BUSY_MSG, 409)
+        DRIVES_STATE["readers"] += 1
+
+
+def drives_look_end():
+    with DRIVES_GATE:
+        DRIVES_STATE["readers"] -= 1
+        DRIVES_GATE.notify_all()
+
+
+def drives_change_begin(wait=30):
+    """A change runs alone: it says so first (so no new look starts), then waits a moment for the looks that are already running."""
+    with DRIVES_GATE:
+        if DRIVES_STATE["changing"]:
+            raise Fail("Another drive command is running. Try again in a moment.", 409)
+        DRIVES_STATE["changing"] = True
+        if not DRIVES_GATE.wait_for(lambda: DRIVES_STATE["readers"] == 0, timeout=wait):
+            DRIVES_STATE["changing"] = False
+            DRIVES_GATE.notify_all()
+            raise Fail("The drives are still being read. Try again in a moment.", 409)
+
+
+def drives_change_end():
+    with DRIVES_GATE:
+        DRIVES_STATE["changing"] = False
+        DRIVES_GATE.notify_all()
+
+
+def drives_run(words, timeout, look=False):
+    """Run `drives panel WORDS...`; returns (returncode, stdout, stderr). Looks run together; a change runs alone."""
+    if look:
+        drives_look_begin()
+    else:
+        drives_change_begin()
     try:
         try:
             p = subprocess.run(DRIVES_CMD + ["panel"] + words, capture_output=True, text=True, timeout=timeout, stdin=subprocess.DEVNULL)
@@ -1684,12 +1721,15 @@ def drives_run(words, timeout):
         except subprocess.TimeoutExpired:
             return 124, "", "timed out"
     finally:
-        DRIVES_LOCK.release()
+        if look:
+            drives_look_end()
+        else:
+            drives_change_end()
 
 
 def drives_json(action):
     """The JSON a look-only command prints (health and check also exit 1 when they find a problem, and still print it)."""
-    rc, out, err = drives_run([action], DRIVE_TIMEOUT[action])
+    rc, out, err = drives_run([action], DRIVE_TIMEOUT[action], look=True)
     try:
         data = json.loads(out)
     except ValueError:
@@ -1773,7 +1813,7 @@ def job_words(action, body):
 
 
 def job_thread(words):
-    """Run one drive change and keep its progress lines for the page. Holds DRIVES_LOCK until it is over."""
+    """Run one drive change and keep its progress lines for the page. Holds the drive gate (a change runs alone) until it is over."""
     rc, tail = 1, []
     try:
         try:
@@ -1804,13 +1844,12 @@ def job_thread(words):
             JOB["rc"] = rc
             JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else drive_message(text, "")
             JOB["running"] = False
-        DRIVES_LOCK.release()
+            drives_change_end()      # (inside the same lock: whoever sees "not running" can look at the drives at once)
 
 
 def api_drives_job_start(action, body):
     words = job_words(action, body)
-    if not DRIVES_LOCK.acquire(blocking=False):
-        raise Fail("Another drive command is running. Try again in a moment.", 409)
+    drives_change_begin()
     with JOB_LOCK:
         JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()))
         jid = JOB["id"]
