@@ -205,8 +205,15 @@ health_rows() {   # one row per physical drive: name US device US health US temp
   done
 }
 
+disk_ident() {   # disk_ident sdb -> "MODEL US SERIAL" as the drive reports them (read from the system, the drive is not woken up)
+  local d=${1#/dev/} m s
+  m=$(lsblk -dno MODEL "/dev/$d" 2>/dev/null | sed 's/^ *//; s/ *$//' | head -1)
+  s=$(lsblk -dno SERIAL "/dev/$d" 2>/dev/null | sed 's/^ *//; s/ *$//' | head -1)
+  printf '%s\n' "$m$US$s"
+}
+
 health_flow() {
-  local name dev h t hrs re pe note bad=0 first=1 n=0
+  local name dev h t hrs re pe note bad=0 first=1 n=0 ident model serial
   if [ "$JSON" = 1 ]; then printf '{"drives":['; fi
   [ "$JSON" = 1 ] || { say ""; printf '%-26s %-10s %-9s %-6s %-8s %-9s %-8s %s\n' DRIVE DEVICE HEALTH TEMP HOURS REALLOC PENDING NOTE; }
   while IFS=$US read -r name dev h t hrs re pe note; do
@@ -215,8 +222,9 @@ health_flow() {
     if [ "$JSON" = 1 ]; then
       [ "$first" = 1 ] || printf ','
       first=0
-      printf '{"name":%s,"device":%s,"health":%s,"temperature_c":%s,"power_on_hours":%s,"reallocated_sectors":%s,"pending_sectors":%s,"note":%s}' \
-        "$(json_str "$name")" "$(json_str "$dev")" "$(json_str "$h")" "$(json_num "$t")" "$(json_num "$hrs")" "$(json_num "$re")" "$(json_num "$pe")" "$(json_str "$note")"
+      ident=$(disk_ident "$dev"); model=${ident%%"$US"*}; serial=${ident#*"$US"}
+      printf '{"name":%s,"device":%s,"model":%s,"serial":%s,"health":%s,"temperature_c":%s,"power_on_hours":%s,"reallocated_sectors":%s,"pending_sectors":%s,"note":%s}' \
+        "$(json_str "$name")" "$(json_str "$dev")" "$(json_str "$model")" "$(json_str "$serial")" "$(json_str "$h")" "$(json_num "$t")" "$(json_num "$hrs")" "$(json_num "$re")" "$(json_num "$pe")" "$(json_str "$note")"
     else
       printf '%-26s %-10s %-9s %-6s %-8s %-9s %-8s %s\n' "$name" "$dev" "$h" "${t:+${t} C}" "${hrs:--}" "${re:--}" "${pe:--}" "$note"
     fi
