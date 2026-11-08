@@ -231,7 +231,7 @@
       if (v >= f.min && v <= f.max) return v;
       var fr = document.querySelector(f.sel);
       if (fr && fr.offsetHeight > 100) return Math.min(f.max, Math.max(f.min, Math.round(fr.offsetHeight)));
-      return Math.min(f.max, Math.max(f.min, Math.round(Math.min(window.innerHeight * f.vh, f.top))));
+      return Math.min(f.max, Math.max(f.min, Math.round(Math.min(window.innerHeight / (parseFloat(getComputedStyle(document.documentElement).zoom) || 1) * f.vh, f.top))));
     }
     function show() { var v = current(); rng.value = String(v); val.textContent = v + " px"; }
     function changed() { frameHeights(); show(); window.dispatchEvent(new Event("resize")); }
