@@ -64,7 +64,7 @@ check "nothing was written by the refusals" "$([ -e "$DRIVE_NAMES_FILE" ] && ech
 # --- look only
 out=$(P status); has "status prints the pools and drives and the extras" "$out" '"last_backup":"never","boot_free_bytes":12345}'
 out=$(P actions)
-has "actions lists the pool drives that can be renamed" "$out" '{"id":"MAIN1","name":"1 TB Toshiba HDD","role":"main","custom":false,"connected":true}'
+has "actions lists the pool drives that can be renamed" "$out" '{"id":"MAIN1","name":"1 TB Toshiba HDD","role":"main","custom":false,"connected":true,'
 has "an unplugged pool drive is marked not connected" "$out" '"id":"BACKUP1","name":"2 TB Seagate HDD","role":"backup","custom":false,"connected":false'
 has "actions lists the spinning drives with their state" "$out" '{"id":"sdb","name":"disk-sdb","role":"main","state":"awake"}'
 has "the boot drive is not offered" "$(P actions | grep -c sda)" "0"
