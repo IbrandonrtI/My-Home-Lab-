@@ -447,7 +447,30 @@ class Folders(Step):
 
     def run(self):
         for p, u, g in folder_plan():
-            mkdirs(P(p), u, g)
+            try:
+                mkdirs(P(p), u, g)
+            except OSError as e:
+                raise Abort(folder_problem(p, e)) from e
+
+
+def locked_mountpoint(path):
+    """True when `path` is the folder of a drive that is not mounted right now AND is locked (the drives tool sets the 'immutable' flag on such a folder
+    on purpose, so nothing is written onto the boot drive while the drive is away)."""
+    if os.path.ismount(P(path)) or not os.path.isdir(P(path)):
+        return False
+    rc, text = run(["lsattr", "-d", P(path)])
+    return rc == 0 and bool(re.match(r"^[-a-zA-Z]*i[-a-zA-Z]*\s", text.strip()))
+
+
+def folder_problem(path, err):
+    """The plain-words message for a folder that could not be made: a locked, unmounted drive folder is the usual reason."""
+    for root in ("/mnt/storage", "/mnt/backup"):
+        if (path == root or path.startswith(root + "/")) and locked_mountpoint(root):
+            return ("%s is not mounted right now, so the folders cannot be made in it (its folder is locked on purpose while the drive is away, so nothing is written onto the boot drive by mistake). "
+                    "Mount the drives, then run this step again:\n$ sudo drives remount\n$ sudo homelab-setup refresh\n"
+                    "If the drive is really gone, open the drives menu to see what is connected:  sudo drives" % root)
+    return ("the folder %s could not be made (%s). If it is on a drive, check that the drive is mounted and uses a file system that keeps owners (ext4). "
+            "Look at the drives with:  sudo drives" % (path, err.strerror or err))
 
 
 def restored_nc_password():

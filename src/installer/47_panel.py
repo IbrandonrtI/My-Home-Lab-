@@ -44,6 +44,7 @@ def panel_unit_text():
         "Environment=HLP_FRAME=%s" % ",".join(frame),
         "Environment=HLP_HOMEPAGE_URL=https://%s:%d" % (Ctx.fqdn, SERVE[0][0]),
         "ExecStart=/usr/bin/python3 /usr/local/sbin/homelab-panel serve",
+        "KillMode=process",   # a restart of the panel stops only the panel itself, never a program it started (such as the daemon of a mounted pool)
         "Restart=on-failure",
         "RestartSec=3",
         "",
