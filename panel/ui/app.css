@@ -203,3 +203,14 @@ dialog.wide { width: min(720px, calc(100vw - 24px)); }
 .badtext { color: var(--bad) !important; }
 .card.working { border-color: rgba(var(--accent), 0.6); color: rgb(var(--accent)); }
 @media (max-width: 560px) { .drow .acts { margin-left: 0; width: 100%; } .drow .acts button { flex: 1 1 auto; } }
+.dcheck { margin-top: 8px; }
+.dcheck summary { cursor: pointer; color: rgb(var(--accent)); font-size: 14px; padding: 4px 0; }
+.dcheck .result { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.dcheck .row.tight { gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+fieldset.dq { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 10px 0; }
+fieldset.dq legend { padding: 0 6px; font-weight: 600; }
+label.dopt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; cursor: pointer; }
+label.dopt input { margin-top: 4px; }
+label.dopt small { display: block; color: var(--muted); font-weight: 400; }
+.dwarn { color: var(--bad); border-left: 3px solid var(--bad); padding: 4px 10px; margin: 10px 0; }
+pre.joblog { max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 13px; background: rgba(0, 0, 0, 0.25); border-radius: 10px; padding: 8px 10px; color: var(--text); }
