@@ -101,5 +101,16 @@ rm -f "$TMP/busy"
 has "remount runs when nothing is busy" "$(P remount)" "Recovered."
 check "remount ran once, without a question" "$(cat "$TMP/remount.log" | wc -l | tr -d ' ')" "1"
 
+# --- a flash stick (removable, but it says it spins) is never offered for sleep or wake; a USB hard drive that is not removable still is
+( unset -f spinning_disks disk_base_name disk_role_of protected_disks
+  # shellcheck disable=SC1091
+  source "$HERE/../scripts/drives"
+  all_disks() { printf '%s\n' /dev/sda /dev/sdb /dev/sdc; }
+  protected_disks() { echo /dev/sda; }
+  drive_kind() { echo HDD; }
+  lsblk() { case "$*" in *"-dno RM /dev/sdc"*) echo " 1" ;; *"-dno RM"*) echo " 0" ;; *"-dno MODEL"*) echo "SOMETHING" ;; esac; }
+  spinning_disks ) >"$TMP/spin.txt" 2>&1
+check "a removable flash stick is not a spinning drive (sdb stays, sdc and the boot drive do not)" "$(tr '\n' ' ' <"$TMP/spin.txt")" "/dev/sdb "
+
 echo "$([ "$bad" -eq 0 ] && echo OK || echo FAIL)"
 exit "$bad"
