@@ -136,7 +136,7 @@ def main():
         st, j, _, _ = p.req("GET", "/api/drives/job")
         check("drives: a running job shows its progress lines", st == 200 and j["running"] is True and any("Copying files" in x for x in j["lines"]), (st, j))
         st, js, _, _ = p.req("GET", "/api/drives")
-        check("drives: the list waits while a job runs (try again)", st == 409, (st, js))
+        check("drives: the list waits while a job runs (the page follows the progress instead)", st == 409 and "drive change is running" in js["error"], (st, js))
         st, js, _, _ = p.req("POST", "/api/drives/wipe", {"id": "sdc", "mode": "empty", "typed": []})
         check("drives: a second change cannot start while one runs", st == 409 and "Another drive command is running" in js["error"], (st, js))
         st, js, _, _ = p.req("GET", "/api/state")
@@ -177,6 +177,26 @@ def main():
         check("drives: when the drives tool is not installed the answer says so", st == 502 and "not installed" in js["error"], (st, js))
         p.stop()
 
+        # ---- looking at the drives never collides with other looks; a change waits for the looks that run, and the looks wait for no one
+        p.env["HLP_DRIVES"] = FAKE
+        p.env["FAKE_DRIVES_MODE"] = "slowhealth"
+        p.start(); p.login()
+        outh = {}
+        th = threading.Thread(target=lambda: outh.update(zip(("st", "js"), p.req("GET", "/api/drives/health")[:2])))
+        th.start()
+        time.sleep(0.5)
+        t0 = time.time()
+        st, js, _, _ = p.req("GET", "/api/drives")
+        check("drives: the list can be read while the health is being read (no 'another command' error)", st == 200 and "status" in js, (st, js))
+        st, js, _, _ = p.req("GET", "/api/drives/check")
+        check("drives: two looks at once are fine", st == 200 and "drives" in js, (st, js))
+        st, js, _, _ = p.req("POST", "/api/drives/add", {"id": "sdc", "role": "main", "mode": "erase", "typed": ["/dev/sdc", "ERASE"]})
+        check("drives: a change waits for the look that runs, then starts", st == 200 and js.get("ok") is True, (st, js, time.time() - t0))
+        wait_job()
+        th.join(10)
+        check("drives: the slow look finished well", outh.get("st") == 200 and "drives" in (outh.get("js") or {}), outh)
+        p.stop()
+
         # ---- a long remount does not block the rest of the panel
         p.env["HLP_DRIVES"] = FAKE
         p.env["FAKE_DRIVES_MODE"] = "slow"
@@ -188,7 +208,7 @@ def main():
         st, js, _, _ = p.req("GET", "/api/state")
         check("drives: the rest of the panel works while a remount runs", st == 200 and "look" in js, st)
         st, js, _, _ = p.req("GET", "/api/drives")
-        check("drives: a second drive command at the same time waits its turn (try again)", st == 409 and "Another drive command is running" in js["error"], (st, js))
+        check("drives: a look at the drives during a change is turned away, with words that say why (the page shows the progress)", st == 409 and "drive change is running" in js["error"], (st, js))
         t.join(10)
         check("drives: the slow remount finished well", out.get("st") == 200, out)
     finally:

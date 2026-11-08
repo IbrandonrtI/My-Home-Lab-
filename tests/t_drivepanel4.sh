@@ -79,6 +79,26 @@ check "a drive with one ext4 partition is offered as keepable" "$(actions | jq_ 
 has "add keep: the drive joins Backup with its files" "$(P add "$(loop_of 2 | sed 's|/dev/||')" backup keep)" "connected to the backup storage"
 check "its file is in the Backup storage" "$(cat /mnt/test-backup/old.txt 2>/dev/null)" "old file of drive 2"
 
+# ---------------- add to a RUNNING pool: the drive joins it as it runs (no container stops, so a backup or an upload may go on); a pool that is not running is mounted the usual way
+if command -v setfattr >/dev/null && command -v getfattr >/dev/null; then
+  reset_env; $D test-setup 3 300M >/dev/null 2>&1
+  L1=$(loop_of 1); L2=$(loop_of 2); L3=$(loop_of 3)
+  P add "${L1#/dev/}" main erase "$L1" ERASE >/dev/null
+  echo "a backup is running right now" >"$S/busy"; export DRIVES_BUSY_FILE="$S/busy"
+  LIVE=$(P add "${L2#/dev/}" main erase "$L2" ERASE)
+  has "a second Main drive joins the running pool" "$LIVE" "joined the running main storage. No container was stopped."
+  hasnt "a backup that runs does not hold back a drive that joins a running pool" "$LIVE" "Not a good moment"
+  has "the same while a backup runs is refused for a pool that is not running" "$(P add "${L3#/dev/}" backup erase "$L3" ERASE)" "Not a good moment"
+  unset DRIVES_BUSY_FILE
+  check "the running pool has both drives (no remount)" "$(getfattr -n user.mergerfs.branches --only-values /mnt/test-main/.mergerfs 2>/dev/null | tr ':' '\n' | grep -c '^/')" "2"
+  check "the saved setup (fstab) has both drives too" "$(grep fuse.mergerfs "$S/fstab" | grep -o '/mnt/test-disks/[A-Za-z0-9]*' | sort -u | wc -l)" "2"
+  echo live >/mnt/test-main/live.txt
+  check "the pool works: a file can be written" "$(cat /mnt/test-main/live.txt 2>/dev/null)" "live"
+  check "the pool is still mounted as one pool" "$(findmnt -no FSTYPE /mnt/test-main)" "fuse.mergerfs"
+else
+  echo "skipped: the live add needs setfattr and getfattr (package attr)"
+fi
+
 # ---------------- disconnect
 setup3
 for i in 1 2 3 4 5; do echo "f$i" >"/mnt/test-main/f$i.txt"; done; echo "b1" >/mnt/test-backup/b1.txt
