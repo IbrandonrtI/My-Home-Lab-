@@ -157,6 +157,26 @@ try:
         pg2.wait_for_timeout(1200)
         check("inner scrolling box: a tab change still does not reload the player", len(players(pg2)) == 1 and players(pg2)[0].evaluate("window.__id") == id_before)
         check("inner scrolling box: after the tab change it lies over the card", *over(pg2))
+        # under the screen fit the whole page is zoomed (90% on a 1080p screen, 110% on a 1440p screen): the player must still lie exactly over the card
+        for label, width, want in (("1080p screen (page at 90%)", 1536, 0.9), ("1440p screen (page at 110%)", 2048, 1.1)):
+            ctxz = browser.new_context(viewport={"width": width, "height": 900}, device_scale_factor=1.25)
+            for where in ("", "inner"):
+                pz = ctxz.new_page()
+                pz.goto(URL + where)
+                pz.wait_for_timeout(1500)
+                zoom = pz.evaluate("parseFloat(getComputedStyle(document.documentElement).zoom)")
+                check("%s%s: the page is zoomed to %s" % (label, ", scrolling box" if where else "", want), zoom == want, zoom)
+                check("%s%s: the player lies over the card" % (label, ", scrolling box" if where else ""), *over(pz))
+                if where:
+                    for top in (150, 0, 300):
+                        pz.evaluate("document.getElementById('scroller').scrollTop = %d" % top)
+                        pz.wait_for_timeout(100)
+                    check("%s, scrolling box: still over the card after scrolling" % label, *over(pz))
+                else:
+                    pz.evaluate("window.scrollTo(0, 120)")
+                    pz.wait_for_timeout(700)
+                    check("%s: still over the card after scrolling" % label, *over(pz))
+            ctxz.close()
         # a click in the player, with the pointer still over it, holds the scrolling box still (so the page does not move at the player's top and bottom): the player must not be reloaded
         # by that, and nothing on the page may move (a hidden scrollbar would shift it), so this part runs with scrollbars that take room
         b3 = p.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"], ignore_default_args=["--hide-scrollbars"])
