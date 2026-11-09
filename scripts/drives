@@ -128,6 +128,7 @@ PANEL_RESERVE_DIR="" # the folder of a batch with several drives: reserved drive
 PANEL_JOBS=3         # how many drives of one batch are worked on at the same time
 CRIT_DEPTH=0         # >0 while this process holds the pool lock (the short steps that change a pool run one at a time)
 ABORTED=0            # 1 when the person pressed Stop and this drive was stopped because of it
+HOLDER_STOPPED=""
 PUTBACK=0            # 1 when a half-moved drive was put back into the pool it came from
 NOROOM=0            # 1 when a drive was left where it is because the drives that stay have no room for its files
 PANEL_UNDO=0         # 1 while drives are put back after Stop (typed words are not asked for)
@@ -808,6 +809,72 @@ next_label() {
   echo "$p$n"
 }
 
+disk_holder_pids() {   # disk_holder_pids /dev/sdX -> the processes that still have the drive (or a partition of it) mounted in their own view of the system, or open
+  local dev=$1 mm f pid
+  for mm in $(lsblk -lno MAJ:MIN "$dev" 2>/dev/null | tr -d ' '); do
+    for f in /proc/[0-9]*/mountinfo; do
+      awk -v m="$mm" '$3 == m {found = 1; exit} END {exit !found}' "$f" 2>/dev/null || continue
+      pid=${f#/proc/}; echo "${pid%/mountinfo}"
+    done
+  done
+  # shellcheck disable=SC2046
+  fuser $(lsblk -lnpo NAME "$dev" 2>/dev/null) 2>/dev/null | tr -s ' ' '\n'
+}
+
+disk_holders() {   # disk_holders /dev/sdX -> one readable line for everything that still holds the drive
+  local dev=$1 d n pid
+  d=${dev#/dev/}
+  for pid in $(disk_holder_pids "$dev" | sort -un); do
+    [ -d "/proc/$pid" ] && echo "process $pid ($(cat "/proc/$pid/comm" 2>/dev/null))"
+  done
+  for n in "/sys/block/$d"/holders/* "/sys/block/$d/$d"*/holders/*; do [ -e "$n" ] && echo "kernel: held by $(basename "$n")"; done
+  grep -q "^$dev" /proc/swaps 2>/dev/null && echo "used as swap space"
+  return 0
+}
+
+unmount_in_views() {   # unmount_in_views /dev/sdX: a program (often a container) that has its own copy of the old mount is told to let go of it, without stopping the program
+  local dev=$1 mm pid ns seen=" " tgt
+  for mm in $(lsblk -lno MAJ:MIN "$dev" 2>/dev/null | tr -d ' '); do
+    for pid in $(disk_holder_pids "$dev" | sort -un); do
+      ns=$(readlink "/proc/$pid/ns/mnt" 2>/dev/null) || continue
+      case "$seen" in *" $ns|$mm "*) continue ;; esac
+      seen="$seen$ns|$mm "
+      while read -r tgt; do
+        [ -n "$tgt" ] && nsenter -t "$pid" -m -- umount -l "$tgt" >/dev/null 2>&1
+      done < <(awk -v m="$mm" '$3 == m {print $5}' "/proc/$pid/mountinfo" 2>/dev/null)
+    done
+  done
+  return 0
+}
+
+release_disk() {   # release_disk /dev/sdX: first every program with its own copy of the old mount lets go of it; a container that still holds the drive after that is stopped for a moment (HOLDER_STOPPED; format_disk starts it again)
+  local dev=$1 pid ns cpid cname cns held=""
+  command -v nsenter >/dev/null 2>&1 && unmount_in_views "$dev"
+  [ -z "$(disk_holder_pids "$dev")" ] && return 0
+  docker_ok || return 0
+  for pid in $(disk_holder_pids "$dev" | sort -un); do
+    ns=$(readlink "/proc/$pid/ns/mnt" 2>/dev/null) || continue
+    while read -r cpid cname; do
+      [ "${cpid:-0}" -gt 0 ] 2>/dev/null || continue
+      cns=$(readlink "/proc/$cpid/ns/mnt" 2>/dev/null)
+      [ -n "$cns" ] && [ "$cns" = "$ns" ] && held="$held ${cname#/}"
+    done < <(docker ps -q | xargs -r docker inspect --format '{{.State.Pid}} {{.Name}}' 2>/dev/null)
+  done
+  held=$(echo "$held" | tr ' ' '\n' | sort -u | tr '\n' ' ')
+  [ -n "${held// /}" ] || return 0
+  note "These containers still hold the old drive: $held. Stopping them for a moment."
+  # shellcheck disable=SC2086
+  docker_each stop $held >/dev/null
+  HOLDER_STOPPED="$HOLDER_STOPPED $held"
+}
+
+release_started() {   # start the containers that release_disk stopped
+  [ -n "${HOLDER_STOPPED// /}" ] || return 0
+  # shellcheck disable=SC2086
+  docker_each start $HOLDER_STOPPED >/dev/null
+  HOLDER_STOPPED=""
+}
+
 retry_busy() {   # retry_busy COMMAND...: a drive that was just unplugged from a pool or just changed is sometimes still looked at by the system for a moment ("busy"): try again a few times
   local i
   for i in 1 2 3 4 5 6; do
@@ -829,7 +896,11 @@ format_disk() {   # format_disk /dev/sdX LABEL -> prints partition path
   fi
   for p in $(parts_of "$dev"); do wipefs -a "$p" >/dev/null 2>&1 || true; done
   udevadm settle 2>/dev/null || true
-  retry_busy wipefs -a "$dev" >/dev/null 2>&1 || die "wipefs failed on $dev (the drive is busy: $(wipefs -a "$dev" 2>&1 | tail -1))"
+  if ! wipefs -a "$dev" >/dev/null 2>&1; then
+    release_disk "$dev"
+    umount_disk_parts "$dev"
+    retry_busy wipefs -a "$dev" >/dev/null 2>&1 || { release_started; die "wipefs failed on $dev (the drive is busy: $(wipefs -a "$dev" 2>&1 | tail -1 | sed 's/^wipefs: error: //'); held by: $(disk_holders "$dev" | tr '\n' ';' | sed 's/;$//'; true))"; }
+  fi
   retry_busy parted -s "$dev" mklabel gpt mkpart storage ext4 1MiB 100% >/dev/null 2>&1 || die "parted failed on $dev"
   partprobe "$dev" >/dev/null 2>&1 || true
   udevadm settle 2>/dev/null || true
@@ -837,6 +908,7 @@ format_disk() {   # format_disk /dev/sdX LABEL -> prints partition path
   wipefs -a "$p" >/dev/null 2>&1 || true
   retry_busy mkfs.ext4 -F -q -L "$label" -m 0 "$p" >&2 || die "mkfs failed on $p"
   udevadm settle 2>/dev/null || true
+  release_started
   log "formatted $dev -> $p label $label"
   echo "$p"
 }
@@ -1017,6 +1089,7 @@ restore_services() {   # a step failed after the containers were stopped: when t
 }
 
 on_exit() {
+  release_started
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
