@@ -29,8 +29,20 @@ docker_each() {   # docker_each stop|start NAME...: the containers go together (
 }
 
 stop_containers() {   # stop_containers PATH...
-  local list bad
+  local list bad held n new=""
   list=$(containers_using "$@" | tr '\n' ' ')
+  if [ "$PANEL_HOLD" = 1 ] && [ -n "$PANEL_RESERVE_DIR" ]; then      # several drives at once: the batch stops each container once and starts it once, when every drive is done
+    held=$(cat "$PANEL_RESERVE_DIR/held" 2>/dev/null | tr '\n' ' ')
+    for n in $list; do case " $held " in *" $n "*) ;; *) new="$new $n" ;; esac; done
+    STOPPED=""
+    [ -n "${new// /}" ] || return 0
+    note "Stopping containers that use this storage (they stay stopped until every drive is done):$new"
+    # shellcheck disable=SC2086
+    bad=$(docker_each stop $new)
+    [ -z "${bad// /}" ] || warn "Some containers did not stop cleanly"
+    for n in $new; do echo "$n" >>"$PANEL_RESERVE_DIR/held"; done
+    return 0
+  fi
   [ -n "${list// /}" ] || { STOPPED=""; return 0; }
   note "Stopping containers that use this storage: $list"
   # shellcheck disable=SC2086
@@ -159,6 +171,20 @@ main_pool_ok() {   # true when the main storage is mounted the way fstab says (o
   mountpoint -q "$MAIN_POOL"
 }
 
+batch_start_held() {   # the end of a batch of several drives: the containers it stopped start again (when the pools are mounted the way fstab says)
+  local f="$PANEL_RESERVE_DIR/held" list
+  [ -s "$f" ] || return 0
+  list=$(tr '\n' ' ' <"$f"); rm -f "$f"
+  PANEL_HOLD=0
+  if main_pool_ok; then
+    STOPPED=$list
+    start_containers
+  else
+    STOPPED=$list
+    note "The pools are not mounted the way they should be, so the containers stay stopped."
+  fi
+}
+
 restore_services() {   # a step failed after the containers were stopped: when the old setup is back, mount it and start them again
   [ -n "${STOPPED// /}" ] && [ "$ROLLED_BACK" = 1 ] || return 0
   local role mp
@@ -179,6 +205,9 @@ on_exit() {
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
     note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
+  fi
+  if [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -s "$PANEL_RESERVE_DIR/held" ]; then
+    note ""; note "The containers ($(tr '\n' ' ' <"$PANEL_RESERVE_DIR/held")) are still STOPPED because something went wrong."; note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
   if [ -n "${PANEL_RESERVE_DIR:-}" ]; then rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; fi      # (a drive change of the panel that ended some other way)

@@ -136,6 +136,8 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
   local par=$PANEL_JOBS      # (when every drive of a pool leaves there is nothing to copy to: the files stay on the drives, and the flow asks for the words)
   [ "$n" -gt 1 ] || par=1
   PANEL_LEAVING=()
+  [ "$n" -gt 1 ] && { PANEL_HOLD=1; PANEL_BARRIER=1; }
+  local -a started=()
   for id in "${PANEL_IDS[@]}"; do
     if [ "$act" = add ]; then nameof[$id]=$(disk_base_name "/dev/$id")
     else mp=$(panel_branch "$id"); nameof[$id]=$(branch_name "$mp"); PANEL_LEAVING+=("$mp"); fi
@@ -147,12 +149,16 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
       panel_one "$act" "$id" "$mode" || { if [ "$ABORTED" = 1 ]; then rc=4; else rc=1; fi; }
       continue
     fi
+    while [ "$(batch_copying "${started[@]}")" -ge "$par" ]; do sleep 0.5; done      # (a drive that is only waiting for the others does not count: the next one can start copying)
     if abort_requested; then printf 'notstarted\n' >"$PANEL_RESERVE_DIR/$id.state"; progress_for "$id" 0 "Not started"; continue; fi
-    while [ "$(jobs -rp | wc -l)" -ge "$par" ]; do wait -n 2>/dev/null || true; done
+    started+=("$id")
     ( trap 'panel_job_end "$id" $?' EXIT; panel_one "$act" "$id" "$mode" ) &
   done
+  : >"$PANEL_RESERVE_DIR/launched-all"
   wait
+  PANEL_BARRIER=0
   if [ "$n" -gt 1 ] && [ "$act" != add ] && abort_requested; then panel_undo_done "$act"; fi      # Stop was pressed: the drives that were already done go back where they were
+  batch_start_held; PANEL_HOLD=0
   [ "$n" = 1 ] && { rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; PANEL_RESERVE_DIR=""; PANEL_LEAVING=(); return "$rc"; }
   panel_batch_report "$act" nameof
   rc=$?

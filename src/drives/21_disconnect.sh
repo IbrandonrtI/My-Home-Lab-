@@ -64,6 +64,9 @@ drain_branch_run() {   # copy everything from branch $1 to the emptiest other br
   fi
   space_release "$mp"
   if abort_requested; then ABORTED=1; note "Stopped. Nothing was changed."; return 1; fi
+  target_unlock      # (the other drives may copy to this drive while this one waits for them)
+  batch_barrier || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
+  target_lock "$target" || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
   crit_enter abortable || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }      # from here the containers are stopped and the pool changes: one drive at a time
   progress 62 "Stopping the containers"
   stop_containers "$pool"
@@ -139,6 +142,7 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
   if [ "$drain" = 1 ]; then drain_branch "$mp" || { note "Not removing $label."; return 1; }; fi
 
   if [ "$CRIT_DEPTH" = 0 ] && abort_requested; then ABORTED=1; note "Stopped. Nothing was changed."; return 1; fi
+  batch_barrier || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
   crit_enter abortable || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
   progress 75 "Stopping the containers"
   if [ -z "${STOPPED// /}" ]; then stop_containers "$pool"; fi

@@ -77,6 +77,33 @@ abort_requested() {   # 0 when the person pressed Stop (not while a drive is bei
   [ -e "$ABORT_FILE" ]
 }
 
+batch_all_ready() {   # 0 when every drive of the batch has finished its slow work or has ended
+  local id
+  for id in "${PANEL_IDS[@]}"; do
+    [ -e "$PANEL_RESERVE_DIR/ready-$id" ] || [ -e "$PANEL_RESERVE_DIR/$id.state" ] || return 1
+  done
+  return 0
+}
+batch_barrier() {   # a drive whose slow work (copying, formatting) is done waits here until every drive of the batch is done with it: then the pool changes follow one after the other, with the containers stopped only once. 1 when Stop was pressed while waiting
+  [ "$PANEL_BARRIER" = 1 ] && [ -n "$PANEL_RESERVE_DIR" ] || return 0
+  local f="$PANEL_RESERVE_DIR/ready-$PROG_ITEM"
+  [ -e "$f" ] && return 0
+  : >"$f"
+  progress 60 "Waiting for the other drives"
+  until [ -e "$PANEL_RESERVE_DIR/launched-all" ] && batch_all_ready; do
+    abort_requested && return 1
+    sleep 0.5
+  done
+  return 0
+}
+batch_copying() {   # how many drives of the batch are in their slow part right now
+  local id n=0
+  for id in "$@"; do
+    [ -e "$PANEL_RESERVE_DIR/ready-$id" ] || [ -e "$PANEL_RESERVE_DIR/$id.state" ] || n=$((n + 1))
+  done
+  echo "$n"
+}
+
 crit_enter() {   # crit_enter [abortable]: only one drive at a time may change a pool (stop containers, edit fstab, mount, start containers). Waits for its turn; 1 only when "abortable" and Stop was pressed while waiting
   if [ "$CRIT_DEPTH" -gt 0 ]; then CRIT_DEPTH=$((CRIT_DEPTH + 1)); return 0; fi
   mkdir -p "$(dirname "$POOL_LOCK")" 2>/dev/null || true

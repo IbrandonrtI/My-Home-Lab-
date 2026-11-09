@@ -110,6 +110,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
     fi
   fi
 
+  pool_is_live "$role" || batch_barrier || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }      # (a drive joins a running pool without stopping anything: it does not wait for the others)
   crit_enter || true      # from here the pool changes: one drive at a time
   uuid=$(blkid -s UUID -o value "$part") || true
   [ -n "$uuid" ] || die "Could not read the UUID of $part"
