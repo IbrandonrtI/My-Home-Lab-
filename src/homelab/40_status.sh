@@ -137,30 +137,30 @@ pool_lines() {
   if pool_mounted "$MAIN_POOL"; then
     read -r used size < <(df -h --output=used,size "$MAIN_POOL" 2>/dev/null | awk 'NR==2 {print $1, $2}')
     if only_boot_section MAIN; then
-      warn "Main pool" "mounted, ${used:-?} used of ${size:-?}, but only on a section of the boot drive (no separate drive: sudo drives)"
+      warn "Main Pool" "mounted, ${used:-?} used of ${size:-?}, but only on a section of the boot drive (no separate drive: sudo drives)"
       suggest 3 "sudo drives" "the main pool is only a section of the boot drive: connect a real drive"
     else
-      ok "Main pool" "mounted, ${used:-?} used of ${size:-?}"
+      ok "Main Pool" "mounted, ${used:-?} used of ${size:-?}"
     fi
   elif [ -e "$STATE_DIR/no-data-drive" ]; then
     # written by homelab-setup while no data drive has been set up (or when you skipped that step): not a failure
-    warn "Main pool" "no data drive set up yet (when you have one: sudo drives)"
+    warn "Main Pool" "no data drive set up yet (when you have one: sudo drives)"
     suggest 5 "sudo drives" "connect a data drive (a menu; it asks before erasing anything)"
   else
-    bad "Main pool" "NOT MOUNTED -> plug the drive in, then run: sudo drives remount (drive dead? sudo drives replace)"
+    bad "Main Pool" "NOT MOUNTED -> plug the drive in, then run: sudo drives remount (drive dead? sudo drives replace)"
     suggest 1 "sudo drives remount" "the data drive is not mounted: remount it and restart the containers"
   fi
 
   # backup pool
   if pool_mounted "$BACKUP_POOL"; then
     if only_boot_section BACKUP; then
-      warn "Backup pool" "mounted, but only on a section of the boot drive (lost if that drive dies; fix: sudo drives connect)"
+      warn "Backup Pool" "mounted, but only on a section of the boot drive (lost if that drive dies; fix: sudo drives connect)"
       suggest 4 "sudo drives" "connect a real backup drive: the backup is on the boot drive now"
     else
-      ok "Backup pool" "mounted"
+      ok "Backup Pool" "mounted"
     fi
   else
-    warn "Backup pool" "not connected, so the backup goes to the boot drive (connect a drive: sudo drives connect)"
+    warn "Backup Pool" "not connected, so the backup goes to the boot drive (connect a drive: sudo drives connect)"
     suggest 5 "sudo drives" "connect a backup drive (or use part of the boot drive: sudo drives bootsection)"
   fi
 }
