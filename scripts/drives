@@ -51,11 +51,13 @@ if [ "$TEST_MODE" = 1 ]; then
   CRYPTTAB="${CRYPTTAB:-$STATE_DIR/crypttab}"
   MAPPER_DIR="${MAPPER_DIR:-$STATE_DIR/mapper}"
   ZFS_KEY_UNIT="${ZFS_KEY_UNIT:-$STATE_DIR/homelab-zfs-key.service}"
+  MIGRATE_DIR="${MIGRATE_DIR:-/mnt/test-newmain}"
 else
   STATE_DIR="${DRIVES_STATE_DIR:-/var/lib/homelab-drives}"
   FSTAB="${FSTAB:-/etc/fstab}"
   DISKS_DIR="${DISKS_DIR:-/mnt/disks}"
   MAIN_POOL="${MAIN_POOL:-/mnt/storage}"
+  MIGRATE_DIR="${MIGRATE_DIR:-/mnt/storage-new}"                    # where a new ZFS / RAID setup is built and filled while the old Main storage is still in use
   BACKUP_POOL="${BACKUP_POOL:-/mnt/backup}"
   MAIN_PREFIX="${MAIN_PREFIX:-MAIN}"
   BACKUP_PREFIX="${BACKUP_PREFIX:-BACKUP}"
@@ -1107,6 +1109,7 @@ main_hold_file() { printf '%s' "$STATE_DIR/main-empty-stopped"; }
 
 main_hold_apply() {   # takes the containers that use the Main storage out of STOPPED when Main has no drive
   [ -z "$(branches_of main)" ] || return 0
+  array_active && return 0      # (a ZFS / RAID setup is the Main storage too)
   local keep n rest="" mine=""
   keep=$(containers_using "$MAIN_POOL" | tr '\n' ' ')
   for n in $STOPPED; do case " $keep " in *" $n "*) mine="$mine $n" ;; *) rest="$rest $n" ;; esac; done
@@ -1120,7 +1123,7 @@ main_hold_apply() {   # takes the containers that use the Main storage out of ST
 main_hold_resume() {   # a Main drive is back and mounted: the containers that were kept stopped join the ones to start
   local f; f=$(main_hold_file)
   [ -s "$f" ] || return 0
-  [ -n "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
+  { [ -n "$(branches_of main)" ] || array_active; } && mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
   # shellcheck disable=SC2046
   STOPPED=$({ printf '%s\n' $STOPPED; cat "$f"; } | sort -u | grep . | tr '\n' ' ')
   rm -f "$f"
@@ -3620,6 +3623,95 @@ snapraid_flow() {   # snapraid status|diff|sync|scrub: SnapRAID by hand, with th
   snapraid -c "$SNAPRAID_CONF" "$what"
 }
 
+
+# ---------- moving the Main storage into a new ZFS / RAID setup ----------
+# The new setup is built on spare drives and filled from the old Main storage while that is still in use (the containers are stopped).
+# Only when the copy is checked does the new setup take the Main path; then the old Main drives are released (their files are not touched).
+ARRAY_MOUNT=""      # where zfs_build / md_build mount the new setup (empty = the Main path)
+
+main_is_pool() { [ -n "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$(findmnt -no FSTYPE "$MAIN_POOL" 2>/dev/null)" = fuse.mergerfs ]; }
+pool_used_bytes() { df -B1 --output=used "$MAIN_POOL" 2>/dev/null | awk 'NR == 2 {print $1 + 0}'; }
+migrate_need_bytes() { local u=${1:-0}; echo $((u + u / 50 + 67108864)); }      # the files, 2% extra for the way the new file system stores them, and 64 MB
+
+fstab_move_mp() {   # fstab_move_mp OLD NEW: the line that mounts at OLD mounts at NEW
+  local tmp; tmp=$(mktemp)
+  awk -v o="$1" -v n="$2" '!/^[[:space:]]*#/ && $2 == o { sub(o, n) } { print }' "$FSTAB" >"$tmp" && cat "$tmp" >"$FSTAB"
+  rm -f "$tmp"
+  log "fstab move mount point: $1 -> $2"
+}
+
+migrate_copy() {   # copy everything from the Main storage into the new setup, then compare
+  local rc=0 changed
+  local -a skip=(--exclude=/.mergerfs --exclude=/lost+found)
+  say "Copying the files of the Main storage into the new setup. This can take a long time on big drives..."
+  rsync -aHAX --numeric-ids "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- >&2 || rc=$?
+  case $rc in 0|24) ;; *) warn "The copy stopped with an error (code $rc)."; return 1 ;; esac
+  say "Checking the copy..."
+  changed=$(rsync -aHAXni --numeric-ids --delete "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- 2>/dev/null | grep -cE '^(>f|\*deleting|cL|hf)') || true
+  if [ "${changed:-0}" -gt 0 ]; then warn "$changed file(s) are not the same in the copy."; return 1; fi
+  say "The copy is complete and matches."
+}
+
+migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setup apart again (the old Main storage was not changed)
+  local id=$1 d; shift
+  pool_umount "$MIGRATE_DIR" || true
+  if [ "$(preset_kind "$id")" = zfs ]; then
+    zpool destroy -f "$ZFS_POOL_NAME" 9>&- >/dev/null 2>&1 || true
+    rm -f "$ZFS_SCRUB_CRON" "$KEY_DIR/$ZFS_POOL_NAME.key"
+  else
+    fstab_remove_mp "$MIGRATE_DIR"
+    md_undo "$@"
+    md_conf_forget
+    sd_reload
+  fi
+  for d in "$@"; do wipefs -a "$d" >/dev/null 2>&1 || true; done
+  rmdir "$MIGRATE_DIR" 2>/dev/null || true
+}
+
+migrate_retire_main() {   # the old Main drives leave the Main storage; their files stay on them and they are spare drives now
+  local mp
+  for mp in "$@"; do
+    mountpoint -q "$mp" && { umount "$mp" 2>/dev/null || umount -l "$mp"; }
+    fstab_remove_mp "$mp"
+  done
+  sd_reload
+  for mp in "$@"; do
+    is_boot_section "$mp" || name_store_del "$(basename "$mp")"
+    chattr -i "$mp" 2>/dev/null || true
+    rmdir "$mp" 2>/dev/null || true
+  done
+}
+
+migrate_switch() {   # migrate_switch ID: the new setup (mounted at MIGRATE_DIR, filled) takes the Main path; the old drives are released
+  local id=$1 kind
+  local -a old_mps=()
+  kind=$(preset_kind "$id")
+  mapfile -t old_mps < <(branches_of main)
+  sync_fs "$MIGRATE_DIR" "${old_mps[@]}"
+  if ! pool_umount "$MAIN_POOL" || mountpoint -q "$MAIN_POOL"; then warn "Could not unmount $MAIN_POOL (something is using it)."; return 1; fi
+  fstab_snapshot
+  fstab_remove_mp "$MAIN_POOL"
+  local ok=1
+  if [ "$kind" = zfs ]; then
+    zfs set mountpoint="$MAIN_POOL" "$ZFS_POOL_NAME" 9>&- >&2 || ok=0
+    mountpoint -q "$MAIN_POOL" || ok=0
+  else
+    pool_umount "$MIGRATE_DIR" || ok=0
+    fstab_move_mp "$MIGRATE_DIR" "$MAIN_POOL"
+    sd_reload
+    [ "$ok" = 1 ] && { mount_fstab "$MAIN_POOL" || ok=0; }
+  fi
+  if [ "$ok" != 1 ]; then
+    if [ "$kind" = zfs ]; then zfs set mountpoint="$MIGRATE_DIR" "$ZFS_POOL_NAME" >/dev/null 2>&1 || true; fi
+    fstab_rollback
+    apply_pool main || warn "The old Main storage could not be mounted again. Run  sudo drives remount"
+    return 1
+  fi
+  migrate_retire_main "${old_mps[@]}"
+  rmdir "$MIGRATE_DIR" 2>/dev/null || true
+  log "Main moved into a $id setup; released: ${old_mps[*]}"
+  return 0
+}
 # ---------- ZFS and mdadm arrays (the zfs-* and md-* setups) ----------
 # An array is built from whole drives and mounted at the Main pool path. The setup record keeps the drives by a stable name
 # (/dev/disk/by-id/... when the system has one), so the array is found again after a reboot even when sdb became sdc.
@@ -3717,22 +3809,22 @@ UNIT
 }
 
 zfs_build() {   # zfs_build ID ENCRYPT(0|1) NAME...: one ZFS pool on whole drives, mounted at the Main pool path
-  local id=$1 enc=$2 key=""; shift 2
+  local id=$1 enc=$2 key="" mnt="${ARRAY_MOUNT:-$MAIN_POOL}"; shift 2
   local -a vdev=() eopts=()
   case "$id" in zfs-mirror) vdev=(mirror) ;; zfs-raidz1) vdev=(raidz1) ;; zfs-raidz2) vdev=(raidz2) ;; zfs-raidz3) vdev=(raidz3) ;; esac
   if [ "$enc" = 1 ]; then
     key=$(key_make "$ZFS_POOL_NAME" 32) || return 1
     eopts=(-O encryption=aes-256-gcm -O keyformat=raw -O "keylocation=file://$key")
   fi
-  mkdir -p "$MAIN_POOL"
+  mkdir -p "$mnt"
   if ! zpool create -f -o ashift=12 -O compression=lz4 -O atime=off -O xattr=sa -O acltype=posixacl ${eopts[@]+"${eopts[@]}"} \
-       -O mountpoint="$MAIN_POOL" "$ZFS_POOL_NAME" ${vdev[@]+"${vdev[@]}"} "$@" 9>&- >&2; then
+       -O mountpoint="$mnt" "$ZFS_POOL_NAME" ${vdev[@]+"${vdev[@]}"} "$@" 9>&- >&2; then
     [ -z "$key" ] || rm -f "$key"
     return 1
   fi
   [ "$enc" = 1 ] && zfs_key_unit_write
   zfs_scrub_cron_write
-  mountpoint -q "$MAIN_POOL" || { warn "The ZFS pool was made but is not mounted at $MAIN_POOL."; return 1; }
+  mountpoint -q "$mnt" || { warn "The ZFS pool was made but is not mounted at $mnt."; return 1; }
 }
 
 md_conf_forget() {   # take this array's lines out of mdadm.conf
@@ -3754,9 +3846,9 @@ md_undo() {   # md_undo NAME...: stop the array and clear the drives (a build th
   rm -f "$KEY_DIR/$MD_NAME.key"
 }
 md_build() {   # md_build ID ENCRYPT(0|1) NAME...: one RAID array on whole drives, formatted and mounted at the Main pool path
-  local id=$1 enc=$2 level uuid i key="" target="$MD_DEVICE" luks="" opts="$BRANCH_OPTS"; shift 2
+  local id=$1 enc=$2 level uuid i key="" target="$MD_DEVICE" luks="" opts="$BRANCH_OPTS" mnt="${ARRAY_MOUNT:-$MAIN_POOL}"; shift 2
   level=${id#md-raid}
-  mkdir -p "$(dirname "$MD_DEVICE")" "$MAIN_POOL"
+  mkdir -p "$(dirname "$MD_DEVICE")" "$mnt"
   mdadm --create "$MD_DEVICE" --run --level="$level" --raid-devices="$#" --metadata=1.2 --name="$MD_NAME" "$@" 9>&- </dev/null >&2 || return 1
   udevadm settle 2>/dev/null || true
   for i in 1 2 3 4 5 6 7 8 9 10; do [ -b "$(readlink -f "$MD_DEVICE")" ] && break; sleep 1; done
@@ -3778,9 +3870,9 @@ md_build() {   # md_build ID ENCRYPT(0|1) NAME...: one RAID array on whole drive
     printf '%s UUID=%s %s luks,nofail\n' "$MD_CRYPT" "$luks" "$key" >>"$CRYPTTAB"
   fi
   fstab_snapshot
-  fstab_add "UUID=$uuid  $MAIN_POOL  ext4  $opts  0  2"
+  fstab_add "UUID=$uuid  $mnt  ext4  $opts  0  2"
   sd_reload
-  if ! mount_fstab "$MAIN_POOL"; then fstab_rollback; md_undo "$@"; warn "Could not mount the new array at $MAIN_POOL. fstab was restored."; return 1; fi
+  if ! mount_fstab "$mnt"; then fstab_rollback; md_undo "$@"; warn "Could not mount the new array at $mnt. fstab was restored."; return 1; fi
   md_conf_write
   # the array must be known when the computer starts (the name stays /dev/md/$MD_NAME)
   if command -v update-initramfs >/dev/null 2>&1; then update-initramfs -u >/dev/null 2>&1 || warn "update-initramfs failed. Run it later:  sudo update-initramfs -u"; fi
@@ -3904,7 +3996,7 @@ preset_list_flow() {   # preset: what can be built, and what the empty drives th
     say ""
   done
   say "Build one with:  sudo drives preset NAME      (for example  sudo drives preset snapraid1  or  sudo drives preset raidz1;  add --dry-run to see the plan first)"
-  say "A ZFS or RAID setup becomes the Main storage. It needs the Main storage to have no drives yet (take them out first with  sudo drives release)."
+  say "A ZFS or RAID setup becomes the Main storage. If Main has drives already, the files of Main are copied into the new setup first, and the old Main drives are released afterwards (their files are not erased)."
   if [ -n "$(preset_current)" ]; then say "Built here: $(preset_title "$(preset_current)")"; fi
 }
 
@@ -3977,7 +4069,7 @@ rest_drives() {   # the empty drives that are left when these are taken: rest_dr
 }
 
 preset_flow() {   # preset_flow ID
-  local id d i n=0 usable total=0 mp label par s hint smallest biggest enc=0 spare_dev="" cache_dev="" key_path="" bk_dev="" used_b kept_n=0 force
+  local id d i n=0 usable total=0 mp label par s hint smallest biggest enc=0 spare_dev="" cache_dev="" key_path="" bk_dev="" used_b kept_n=0 force migrate=0 main_used=0 main_need=0
   local -a devs=() sizes=() order=() main_devs=() par_devs=() ids=() rest=() erase_list=()
   id=$(preset_alias "${1:-}")
   if ! preset_known "$id"; then
@@ -3987,8 +4079,8 @@ preset_flow() {   # preset_flow ID
   fi
   if [ -n "$WIZARD_KEEP" ]; then
     case "$id" in
-      pool|mirror) ;;
-      *) note "$(preset_title "$id") erases every drive, so it cannot keep the files you chose to keep. Choose the plain pool or the mirror, or erase that drive first."; return 1 ;;
+      pool|mirror|snapraid1|snapraid2) ;;
+      *) note "$(preset_title "$id") erases every drive, so it cannot keep the files you chose to keep. Choose the plain pool, the mirror or SnapRAID, or erase that drive first."; return 1 ;;
     esac
   fi
   if preset_is_array "$id"; then need_cmds wipefs blkid mkfs.ext4 || return 1; else need_tools || return 1; fi
@@ -3999,18 +4091,29 @@ preset_flow() {   # preset_flow ID
     note "To start over, take it apart first:  sudo drives release   (this DELETES the array and its files)."
     return 1
   fi
-  if [ -n "$(branches_of main)" ] || { [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; } || [ -n "$(parity_mounts)" ]; then
+  if preset_is_array "$id" && [ -n "$(branches_of main)" ] && [ -z "$(parity_mounts)" ]; then
+    migrate=1      # the Main storage has drives: the new setup is built on spare drives, the files are copied over, then the old drives are released
+    if ! main_is_pool; then
+      note "The Main storage is not mounted right now, so its files cannot be copied into a new setup. Mount it first:  sudo drives remount"
+      return 1
+    fi
+    need_cmds rsync || return 1
+    if mountpoint -q "$MIGRATE_DIR" || [ -n "$(find "$MIGRATE_DIR" -mindepth 1 -print -quit 2>/dev/null)" ]; then
+      note "The folder $MIGRATE_DIR (where the new setup is built) is not empty. Look at it, move it away, then try again."
+      return 1
+    fi
+  elif [ -n "$(branches_of main)" ] || { [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; } || [ -n "$(parity_mounts)" ]; then
     note "A ready-made setup builds a NEW setup, but some drives are already in a storage."
     note "Look at them with  sudo drives list.  To add one more drive to what you have, use  sudo drives connect."
     note "To start over with every drive, take them out of the pools first:  sudo drives release   (the files stay on the drives)."
     return 1
   fi
   if preset_is_array "$id"; then
-    if mountpoint -q "$MAIN_POOL"; then
+    if [ "$migrate" != 1 ] && mountpoint -q "$MAIN_POOL"; then
       note "$MAIN_POOL is already used by something else (check: findmnt $MAIN_POOL). A RAID setup needs it to be an ordinary empty folder."
       return 1
     fi
-    if [ -n "$(find "$MAIN_POOL" ! -type d -print -quit 2>/dev/null)" ]; then
+    if [ "$migrate" != 1 ] && [ -n "$(find "$MAIN_POOL" ! -type d -print -quit 2>/dev/null)" ]; then
       note "The folder $MAIN_POOL (on the boot drive) has files in it. The new storage would hide them."
       note "Move them somewhere else first, then try again."
       return 1
@@ -4046,10 +4149,41 @@ preset_flow() {   # preset_flow ID
       fi ;;
     snapraid1|snapraid2)
       par=$(preset_parity_count "$id")
-      par_devs=("${order[@]:0:par}"); main_devs=("${order[@]:par}") ;;
+      if [ -n "$WIZARD_KEEP" ]; then      # the drives whose files stay are data drives; the protection drives are the biggest of the others (they are erased)
+        local -a cand=()
+        for d in "${order[@]}"; do in_list "$d" "$WIZARD_KEEP" || cand+=("$d"); done
+        if [ ${#cand[@]} -lt "$par" ]; then
+          note "$(preset_title "$id") needs $par drive(s) for the protection data, and those are erased. Every drive you chose keeps its files, so there is none left for that."
+          note "Nothing was changed. Choose one drive to erase for the protection (or take one off the keep list)."
+          return 1
+        fi
+        par_devs=("${cand[@]:0:par}")
+        for d in "${devs[@]}"; do in_list "$d" "$(printf '%s\n' "${par_devs[@]}")" || main_devs+=("$d"); done
+        biggest=0
+        for d in "${main_devs[@]}"; do s=$(disk_size_bytes "$d"); [ "$s" -gt "$biggest" ] && biggest=$s; done
+        for d in "${par_devs[@]}"; do
+          if [ "$(disk_size_bytes "$d")" -lt "$biggest" ]; then
+            note "The protection drive $d ($(pretty_size "$(disk_size_bytes "$d")")) is smaller than the biggest data drive ($(pretty_size "$biggest")). SnapRAID needs it to be at least as big."
+            note "Nothing was changed. Erase a bigger drive for the protection, or leave the biggest drive out."
+            return 1
+          fi
+        done
+      else
+        par_devs=("${order[@]:0:par}"); main_devs=("${order[@]:par}")
+      fi ;;
   esac
   usable=$(preset_capacity "$id" "${sizes[@]}")
+  if [ -n "$WIZARD_KEEP" ]; then case "$id" in snapraid1|snapraid2)      # (the protection drives are not the biggest ones here: the space is what the data drives hold)
+    usable=0; for d in "${main_devs[@]}"; do usable=$((usable + $(disk_size_bytes "$d"))); done ;; esac; fi
   for s in "${sizes[@]}"; do total=$((total + s)); done
+  if [ "$migrate" = 1 ]; then      # will everything of the Main storage fit into the new setup? (checked before anything is changed)
+    main_used=$(pool_used_bytes); main_need=$(migrate_need_bytes "$main_used")
+    if [ "$usable" -lt "$main_need" ]; then
+      note "The new setup is too small. $(preset_title "$id") on these drives holds about $(pretty_size "$usable"), but the Main storage has $(pretty_size "$main_used") of files (about $(pretty_size "$main_need") are needed for the copy)."
+      note "Nothing was changed. Choose more or bigger drives, or a setup that gives more room."
+      return 1
+    fi
+  fi
 
   # the extras: a hot spare, an SSD read cache, encryption (only for the ZFS and RAID setups)
   if preset_is_array "$id"; then
@@ -4118,6 +4252,13 @@ preset_flow() {   # preset_flow ID
   [ -z "$cache_dev" ] || printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$cache_dev")" "$cache_dev" "$(pretty_size "$(disk_size_bytes "$cache_dev")")" "SSD read cache"
   say ""
   say "You can use $(pretty_size "$usable") of the $(pretty_size "$total") on the ${#devs[@]} drives of the setup."
+  if [ "$migrate" = 1 ]; then
+    say "Size check: your Main storage has $(pretty_size "$main_used") of files and the new setup holds $(pretty_size "$usable"). Everything fits."
+    say "Your Main storage is not erased: its files are copied into the new setup first. Only when the copy is checked does the new setup take over."
+    say "Then the old Main drives are released: their files stay on them, and they show up as spare drives."
+    say "The containers that use the Main storage are stopped while the files are copied (this can take hours for a lot of data)."
+    for mp in $(branches_of main); do say "  - old Main drive: $(branch_name "$mp")  (released afterwards, not erased)"; done
+  fi
   if [ "$enc" = 1 ]; then
     say "!! ENCRYPTED. The key file is $key_path (on the boot drive; the server unlocks itself at boot). !!"
     say "!! Copy that key file to a safe place (a USB stick) after the build: if the boot drive dies and you have no copy, the files are lost for good. !!"
@@ -4151,17 +4292,27 @@ preset_flow() {   # preset_flow ID
   [ ${#erase_list[@]} -eq 0 ] || typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
   if preset_is_array "$id"; then
     pre_change "Erase the ${#erase_list[@]} drives and build the $(preset_title "$id") array on them." \
-               "Stop the containers that use the Main storage for a minute." \
+               "$([ "$migrate" = 1 ] && echo "Stop the containers that use the Main storage while its files are copied into the new array, check the copy, then let the array take over $MAIN_POOL and release the old Main drives (their files stay)." || echo "Stop the containers that use the Main storage for a minute.")" \
                "$([ "$(preset_kind "$id")" = zfs ] && echo "Create the ZFS pool '$ZFS_POOL_NAME'$([ "$enc" = 1 ] && echo ", encrypted with a new key file,") and mount it at $MAIN_POOL." || echo "Create the RAID array$([ "$enc" = 1 ] && echo ", encrypt it with a new key file,"), format it and mount it at $MAIN_POOL (and write it into fstab and mdadm.conf).")" \
                "$([ -n "$spare_dev$cache_dev" ] && echo "Add the $([ -n "$spare_dev" ] && echo "hot spare")$([ -n "$spare_dev" ] && [ -n "$cache_dev" ] && echo " and the ")$([ -n "$cache_dev" ] && echo "read cache").")" \
                "Start the containers again." && return 0
     PRESET_TOUCHED=1
     for d in "${devs[@]}"; do refuse_unsafe_disk "$d"; ids+=("$(disk_stable_name "$d")"); done
     stop_containers "$MAIN_POOL"
+    [ "$migrate" != 1 ] || ARRAY_MOUNT=$MIGRATE_DIR      # (built beside the old Main storage; it takes the Main path after the copy)
     if [ "$(preset_kind "$id")" = zfs ]; then
-      zfs_build "$id" "$enc" "${ids[@]}" || { start_containers; warn "The ZFS pool could not be created. Look at the messages above. See: sudo drives status"; return 1; }
+      zfs_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The ZFS pool could not be created. Look at the messages above. See: sudo drives status"; return 1; }
     else
-      md_build "$id" "$enc" "${ids[@]}" || { start_containers; warn "The RAID array could not be built. Look at the messages above. See: sudo drives status"; return 1; }
+      md_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The RAID array could not be built. Look at the messages above. See: sudo drives status"; return 1; }
+    fi
+    ARRAY_MOUNT=""
+    if [ "$migrate" = 1 ]; then
+      if ! migrate_copy || ! migrate_switch "$id"; then
+        migrate_discard "$id" "${ids[@]}"
+        start_containers
+        warn "The move to the new setup did not finish. Your Main storage is as it was and its files are untouched; the new setup was taken apart again and its drives are empty."
+        return 1
+      fi
     fi
     preset_record "$id" "${ids[*]}$([ "$enc" = 1 ] && echo " encrypted")"
     if [ -n "$spare_dev" ]; then
@@ -4179,6 +4330,7 @@ preset_flow() {   # preset_flow ID
     log "preset $id built on ${#devs[@]} drives: ${ids[*]}"
     say ""
     say "Done. $(preset_title "$id") is ready at $MAIN_POOL: about $(pretty_size "$usable") usable."
+    [ "$migrate" != 1 ] || say "The files of the old Main storage were copied over. Its drives are spare drives now (their files are still on them until you use or erase them)."
     [ "$enc" != 1 ] || say "IMPORTANT: copy the key file $key_path to a safe place now (for example a USB stick). Without it the files cannot be read again."
     case "$id" in
       md-*) say "Watch the background build:  cat /proc/mdstat      Health any time:  sudo drives status" ;;
@@ -4548,6 +4700,13 @@ json_drives() {   # {"pools":[...],"drives":[...]} (usage, list and status all u
       "$(json_str "$name")" "$(json_str "$role")" "$(json_str "$dev")" "$(json_num "$size")" "$(json_num "$used")" "$(json_num "$free")" \
       "$(json_str "$state")" "$(json_str "$mount")"
   done < <(drive_rows)
+  printf ']'
+  # Main has no drive (and is not a ZFS / RAID setup): the services that keep their files there wait; the panel shows a warning
+  local empty=false held n hf=1
+  if [ -z "$(branches_of main)" ] && ! array_active; then empty=true; fi
+  printf ',"main_empty":%s,"main_held":[' "$empty"
+  held=$(sort -u "$(main_hold_file)" 2>/dev/null)
+  for n in $held; do [ "$hf" = 1 ] || printf ','; hf=0; printf '%s' "$(json_str "$n")"; done
   printf ']'
 }
 
@@ -5563,15 +5722,20 @@ setup_choose() {   # setup_choose ID SIZE... (the biggest first) -> "K CAPACITY"
 setup_blocker() {   # setup_blocker ID -> why this setup cannot be built right now (nothing when it can)
   local id=$1
   if array_active; then echo "The Main storage already is a $(preset_title "$(preset_current)") setup. It has to be taken apart first (sudo drives release)."; return 0; fi
-  if [ -n "$(branches_of main)" ] || [ -n "$(parity_mounts)" ]; then echo "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+  if [ -n "$(parity_mounts)" ]; then echo "The Main storage uses SnapRAID protection drives. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+  if [ -n "$(branches_of main)" ]; then
+    if ! preset_is_array "$id"; then echo "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+    main_is_pool || { echo "The Main storage is not mounted right now, so its files cannot be copied into a new setup. Mount it first (sudo drives remount)."; return 0; }
+  fi
   if [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; then echo "The Backup storage still has drives in it. The mirror builds a new Backup storage, so take its drives out first."; return 0; fi
-  if preset_is_array "$id" && mountpoint -q "$MAIN_POOL"; then echo "$MAIN_POOL is already in use by something else."; return 0; fi
+  if preset_is_array "$id" && [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL"; then echo "$MAIN_POOL is already in use by something else."; return 0; fi
   if [ -n "$(preset_tool_hint "$id")" ]; then echo "The program for this setup is not installed yet. Run  sudo homelab-setup upgrade  on the server to install it."; return 0; fi
   return 0
 }
 
 panel_setups_json() {
-  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep
+  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep main_used=0 main_need=0 migrate
+  [ -n "$(branches_of main)" ] && main_is_pool && { main_used=$(pool_used_bytes); main_used=${main_used:-0}; main_need=$(migrate_need_bytes "$main_used"); }
   local -a devs=() sizes=() rows=() chosen=()
   local line
   while read -r s d; do devs+=("$d"); sizes+=("$s"); total=$((total + s)); done < <(for d in $(candidate_disks); do s=$(disk_size_bytes "$d"); [[ "$s" =~ ^[0-9]+$ ]] && echo "$s $d"; done | sort -rn -k1,1)
@@ -5583,25 +5747,29 @@ panel_setups_json() {
     [ "$i" = 0 ] || printf ','
     printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s,"keep_ok":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${sizes[$i]}")" "$blank" "$keep"
   done
-  printf '],"total_bytes":%s,"options":[' "$(json_num "$total")"
+  printf '],"total_bytes":%s,"main_used_bytes":%s,"main_has_drives":%s,"options":[' "$(json_num "$total")" "$(json_num "$main_used")" "$([ -n "$(branches_of main)" ] && echo true || echo false)"
   for id in $PRESET_IDS; do
     local fits=false k=0 cap=0 used=0 why="" tol=0 score
+    migrate=false; preset_is_array "$id" && [ -n "$(branches_of main)" ] && [ -z "$(parity_mounts)" ] && migrate=true
     score=$(( -10 * $(preset_min "$id") ))
     if [ "$n" -ge "$(preset_min "$id")" ] && line=$(setup_choose "$id" "${sizes[@]}"); then
       fits=true; k=${line% *}; cap=${line#* }
       tol=$(setup_tolerates "$id" "$k"); score=$(setup_score "$id" "$tol" "$cap" "$total")
       used=0; for ((i = 0; i < k; i++)); do used=$((used + sizes[i])); done
       why=$(setup_blocker "$id")
+      if [ "$migrate" = true ] && [ -z "$why" ] && [ "$cap" -lt "$main_need" ]; then
+        why="Too small to hold what is in Main: this setup holds about $(pretty_size "$cap") and Main has $(pretty_size "$main_used") of files. Add more or bigger drives."
+      fi
     else
       why="Needs $(preset_drives_text "$id") empty drives; $n found."
     fi
     ids_json=""
     if [ "$fits" = true ]; then for ((i = 0; i < k; i++)); do ids_json="${ids_json:+$ids_json,}$(json_str "$(basename "${devs[$i]}")")"; done; fi
     hint=false; [ -n "$(preset_tool_hint "$id")" ] && hint=true
-    rows+=("$score|$(printf '{"id":%s,"title":%s,"blurb":%s,"kind":%s,"fits":%s,"min":%s,"drives":[%s],"usable_bytes":%s,"used_bytes":%s,"tolerates":%s,"nightly":%s,"score":%s,"can_build":%s,"why":%s,"needs_tool":%s,"can_keep":%s}' \
+    rows+=("$score|$(printf '{"id":%s,"title":%s,"blurb":%s,"kind":%s,"fits":%s,"min":%s,"drives":[%s],"usable_bytes":%s,"used_bytes":%s,"tolerates":%s,"nightly":%s,"score":%s,"can_build":%s,"why":%s,"needs_tool":%s,"can_keep":%s,"migrate":%s}' \
       "$(json_str "$id")" "$(json_str "$(preset_title "$id")")" "$(json_str "$(preset_blurb "$id")")" "$(json_str "$(preset_kind "$id")")" "$fits" "$(json_num "$(preset_min "$id")")" "$ids_json" \
       "$(json_num "$cap")" "$(json_num "$used")" "$(json_num "$tol")" "$(setup_soft "$id" && echo true || echo false)" "$score" \
-      "$([ "$fits" = true ] && [ -z "$why" ] && echo true || echo false)" "$(json_str "$why")" "$hint" "$(case "$id" in pool|mirror) echo true ;; *) echo false ;; esac)")")
+      "$([ "$fits" = true ] && [ -z "$why" ] && echo true || echo false)" "$(json_str "$why")" "$hint" "$(case "$id" in pool|mirror|snapraid1|snapraid2) echo true ;; *) echo false ;; esac)" "$migrate")")
   done
   local sorted rec="" r
   sorted=$(printf '%s\n' "${rows[@]}" | sort -t'|' -k1,1nr -s)
