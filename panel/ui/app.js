@@ -492,18 +492,32 @@ async function buildSetup(o) {
   const drives = o.drives.map(id => c.spare.find(sp => sp.id === id)).filter(Boolean);
   const left = c.spare.filter(sp => !o.drives.includes(sp.id));
   const withFiles = drives.filter(sp => !sp.blank);
+  const par = o.id === "snapraid1" ? 1 : o.id === "snapraid2" ? 2 : 0;      // protection drives: they are erased, so a drive that keeps its files cannot be one
+  const keepable = o.can_keep ? withFiles.filter(sp => sp.keep_ok) : [];
+  const defKeep = new Set();
+  if (o.id === "mirror") { const k = keepable.slice().sort((a, b) => b.size_bytes - a.size_bytes)[0]; if (k) defKeep.add(k.id); }      // (one drive can keep its files; the other holds the copy)
+  else if (par) drives.slice().sort((a, b) => b.size_bytes - a.size_bytes).slice(par).forEach(sp => { if (keepable.includes(sp)) defKeep.add(sp.id); });
+  const modeOf = (st, sp) => (keepable.includes(sp) ? st["m-" + sp.id] : "erase");
+  const kept = st => drives.filter(sp => modeOf(st, sp) === "keep");
+  const erased = st => drives.filter(sp => modeOf(st, sp) !== "keep");
+  const withFilesErased = st => erased(st).filter(sp => !sp.blank);
   const r = await driveDialog({
     title: "Build: " + o.title,
     lead: [o.blurb, "Drives used (" + drives.length + " of " + c.spare.length + "): " + drives.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", "),
       "You get about " + humanBytes(o.usable_bytes) + " of the " + humanBytes(o.used_bytes) + " on these drives. " + (o.tolerates > 0 ? cap(protectText(o)) + " without losing files." : "No drive may fail: one dead drive loses the files."),
-      left.length ? "Not used: " + left.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", ") + ". They stay as spare drives." : "Every spare drive is used."],
-    questions: [],
+      keepable.length ? (o.id === "mirror" ? "One drive can keep its files (it becomes the Main drive); the other drive holds the copy and is erased." : "Drives that hold files can keep them as data drives. The biggest drive" + (par > 1 ? "s" : "") + " that " + (par > 1 ? "are" : "is") + " not kept hold" + (par > 1 ? "" : "s") + " the protection data and " + (par > 1 ? "are" : "is") + " erased.") : null,
+      o.migrate ? "Your Main storage has " + humanBytes(c.main_used_bytes || 0) + " of files and this setup holds " + humanBytes(o.usable_bytes) + ", so everything fits. The files are copied into the new setup first and checked; only then does it become your Main storage. The old Main drives are released afterwards: their files are not erased, and they show up as spare drives. The services that use Main are stopped while the files are copied, which can take hours for a lot of data." : null,
+      left.length ? "Not used: " + left.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", ") + ". They stay as spare drives." : "Every spare drive is used."].filter(Boolean),
+    questions: keepable.map(sp => ({ id: "m-" + sp.id, label: sp.name + "  ·  " + sp.device + "  ·  holds files", value: defKeep.has(sp.id) ? "keep" : "erase", options: [KEEP_OPT("Main"), ERASE_OPT] })),
+    invalid: st => o.id === "mirror" && kept(st).length > 1 ? "A mirror can keep the files of one drive only: the other drive becomes the copy." : par && drives.length - kept(st).length < par ? "SnapRAID needs " + par + " drive" + (par > 1 ? "s" : "") + " for the protection data, and " + (par > 1 ? "they are" : "it is") + " erased. Let at least " + par + " of the drives be erased." : null,
     refuse: () => o.can_build ? null : o.why,
-    warn: () => "Everything on " + drives.map(sp => sp.device).join(", ") + " will be permanently deleted" + (withFiles.length ? " (" + withFiles.map(sp => sp.name).join(", ") + " already hold files)" : "") + "." + (o.kind !== "pool" && o.id !== "mirror" && !/^snapraid/.test(o.id) ? " The new storage becomes your Main storage." : ""),
+    warn: st => (erased(st).length ? "Everything on " + erased(st).map(sp => sp.device).join(", ") + " will be permanently deleted" + (withFilesErased(st).length ? " (" + withFilesErased(st).map(sp => sp.name).join(", ") + " already hold files)" : "") + "." : "") + (kept(st).length ? " The files on " + kept(st).map(sp => sp.device).join(", ") + " stay as they are." : "") + (o.kind !== "pool" && o.id !== "mirror" && !/^snapraid/.test(o.id) ? " The new storage becomes your Main storage." : "") + (o.migrate ? " The files of your current Main storage are copied into it, and the old Main drives are released (nothing on them is erased)." : ""),
     typed: () => [{ word: o.id }, { word: "ERASE" }],
-    sure: () => "I understand that everything on these drives will be permanently deleted.",
-    ok: () => "Erase and Build Setup", danger: () => true });
-  if (r) startJob("setup", { setup: o.id, ids: o.drives, typed: r.typed }, o.title + " is ready.");
+    sure: () => "I understand that everything on the drives marked for erasing will be permanently deleted.",
+    ok: st => erased(st).length === drives.length ? "Erase and Build Setup" : "Build Setup", danger: () => true });
+  if (!r) return;
+  const ids = keepable.length ? o.drives.map(id => id + ":" + (modeOf(r.answers, drives.find(sp => sp.id === id) || {}) || "erase")) : o.drives;
+  startJob("setup", { setup: o.id, ids, typed: r.typed }, o.title + " is ready.");
 }
 function cfgBox() {
   if (!DRcfg) return null;
@@ -515,7 +529,7 @@ function cfgBox() {
   if (!(c.spare || []).length || !rec) return h("div", { class: "cfg" }, h("p", { class: "muted" }, "No spare drives to build a setup on. Plug drives in (or take them out of Main and Backup), then press Configure Drives again."));
   const others = c.options.filter(o => o.id !== rec.id);
   return h("div", { class: "cfg" },
-    h("p", { class: "muted small" }, "Scanned " + nDrives(c.spare.length).toLowerCase() + " that are not in a pool: " + sizes + ". Setups are ranked by a balance of protection and usable space. Every setup erases the drives it uses, except a plain pool: it can keep the files that are on them."),
+    h("p", { class: "muted small" }, "Scanned " + nDrives(c.spare.length).toLowerCase() + " that are not in a pool: " + sizes + ". Setups are ranked by a balance of protection and usable space. Every setup erases the drives it uses, except a plain pool, a mirror and SnapRAID: they can keep the files that are on a drive. A RAID or ZFS setup can also be built while Main has drives: your files are copied into it first, and the old Main drives are released afterwards (their files are not erased)."),
     h("div", { class: "cfgrec" }, h("b", {}, "Recommended: " + rec.title), h("span", { class: "muted small" }, humanBytes(rec.usable_bytes) + " usable, " + protectText(rec) + ", uses " + rec.drives.length + " drives"),
       !rec.can_build ? h("span", { class: "dwarn small" }, rec.why) : null),
     h("div", { class: "row tight" },
@@ -999,6 +1013,12 @@ function drivesBody() {
     h("button", { class: "small" + (DRselMode ? " on" : ""), "aria-pressed": DRselMode ? "true" : "false", disabled: !!DRbusy, onclick: () => { DRselMode = !DRselMode; if (!DRselMode) DRsel = new Set(); drawDrives(); }, title: "Press drives to pick several, then use the buttons that show up" }, DRselMode ? "Done Selecting" : "Select"),
     h("button", { class: "small", disabled: off, onclick: () => { DRhealth = null; loadDrives(); } }, "Refresh"),
     h("button", { class: "small", disabled: !!DRbusy, onclick: remountDrives, title: "Mounts every drive and pool again from the saved setup (after an unplug or a power cut)" }, "Mount the Drives Again")));
+  if (st.main_empty && !DRbusy) {      // no drive in Main: the services that keep files there wait; say which, and how to fix it
+    const held = st.main_held || [];
+    out.push(h("div", { class: "card warncard", role: "alert" }, h("h2", {}, "Main Has No Drive"),
+      h("p", {}, "Nothing is connected to the Main storage, so the services that keep their files there (Immich and Nextcloud, for example) have no safe place to save them. " + (held.length ? "These services are kept stopped until a drive is added: " + held.join(", ") + "." : "Any service that needs Main waits until a drive is added.")),
+      h("p", { class: "muted small" }, "Updates still install. Only the parts that need Main wait. To fix it, drag a drive into Main, or press Configure Drives and build a setup. The stopped services start again by themselves.")));
+  }
   out.push(selBar());
   const inPool = t => t.kind === "pool" || t.kind === "boot" || (t.kind === "other" && (t.d.role === "main" || t.d.role === "backup"));
   const top = tiles.filter(t => !inPool(t));

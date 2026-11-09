@@ -300,3 +300,4 @@ details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-siz
 .dfield input { width: 7.5em; min-height: 44px; font: inherit; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: inherit; }
 .card.failcard { border-color: rgba(255, 107, 107, 0.7); }
 .card.failcard .joblog { max-height: 50vh; overflow: auto; }
+.card.warncard { border-color: rgba(255, 193, 7, 0.75); }
