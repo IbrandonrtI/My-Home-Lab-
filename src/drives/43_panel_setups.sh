@@ -42,15 +42,20 @@ setup_choose() {   # setup_choose ID SIZE... (the biggest first) -> "K CAPACITY"
 setup_blocker() {   # setup_blocker ID -> why this setup cannot be built right now (nothing when it can)
   local id=$1
   if array_active; then echo "The Main storage already is a $(preset_title "$(preset_current)") setup. It has to be taken apart first (sudo drives release)."; return 0; fi
-  if [ -n "$(branches_of main)" ] || [ -n "$(parity_mounts)" ]; then echo "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+  if [ -n "$(parity_mounts)" ]; then echo "The Main storage uses SnapRAID protection drives. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+  if [ -n "$(branches_of main)" ]; then
+    if ! preset_is_array "$id"; then echo "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+    main_is_pool || { echo "The Main storage is not mounted right now, so its files cannot be copied into a new setup. Mount it first (sudo drives remount)."; return 0; }
+  fi
   if [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; then echo "The Backup storage still has drives in it. The mirror builds a new Backup storage, so take its drives out first."; return 0; fi
-  if preset_is_array "$id" && mountpoint -q "$MAIN_POOL"; then echo "$MAIN_POOL is already in use by something else."; return 0; fi
+  if preset_is_array "$id" && [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL"; then echo "$MAIN_POOL is already in use by something else."; return 0; fi
   if [ -n "$(preset_tool_hint "$id")" ]; then echo "The program for this setup is not installed yet. Run  sudo homelab-setup upgrade  on the server to install it."; return 0; fi
   return 0
 }
 
 panel_setups_json() {
-  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep
+  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep main_used=0 main_need=0 migrate
+  [ -n "$(branches_of main)" ] && main_is_pool && { main_used=$(pool_used_bytes); main_used=${main_used:-0}; main_need=$(migrate_need_bytes "$main_used"); }
   local -a devs=() sizes=() rows=() chosen=()
   local line
   while read -r s d; do devs+=("$d"); sizes+=("$s"); total=$((total + s)); done < <(for d in $(candidate_disks); do s=$(disk_size_bytes "$d"); [[ "$s" =~ ^[0-9]+$ ]] && echo "$s $d"; done | sort -rn -k1,1)
@@ -62,25 +67,29 @@ panel_setups_json() {
     [ "$i" = 0 ] || printf ','
     printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s,"keep_ok":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${sizes[$i]}")" "$blank" "$keep"
   done
-  printf '],"total_bytes":%s,"options":[' "$(json_num "$total")"
+  printf '],"total_bytes":%s,"main_used_bytes":%s,"main_has_drives":%s,"options":[' "$(json_num "$total")" "$(json_num "$main_used")" "$([ -n "$(branches_of main)" ] && echo true || echo false)"
   for id in $PRESET_IDS; do
     local fits=false k=0 cap=0 used=0 why="" tol=0 score
+    migrate=false; preset_is_array "$id" && [ -n "$(branches_of main)" ] && [ -z "$(parity_mounts)" ] && migrate=true
     score=$(( -10 * $(preset_min "$id") ))
     if [ "$n" -ge "$(preset_min "$id")" ] && line=$(setup_choose "$id" "${sizes[@]}"); then
       fits=true; k=${line% *}; cap=${line#* }
       tol=$(setup_tolerates "$id" "$k"); score=$(setup_score "$id" "$tol" "$cap" "$total")
       used=0; for ((i = 0; i < k; i++)); do used=$((used + sizes[i])); done
       why=$(setup_blocker "$id")
+      if [ "$migrate" = true ] && [ -z "$why" ] && [ "$cap" -lt "$main_need" ]; then
+        why="Too small to hold what is in Main: this setup holds about $(pretty_size "$cap") and Main has $(pretty_size "$main_used") of files. Add more or bigger drives."
+      fi
     else
       why="Needs $(preset_drives_text "$id") empty drives; $n found."
     fi
     ids_json=""
     if [ "$fits" = true ]; then for ((i = 0; i < k; i++)); do ids_json="${ids_json:+$ids_json,}$(json_str "$(basename "${devs[$i]}")")"; done; fi
     hint=false; [ -n "$(preset_tool_hint "$id")" ] && hint=true
-    rows+=("$score|$(printf '{"id":%s,"title":%s,"blurb":%s,"kind":%s,"fits":%s,"min":%s,"drives":[%s],"usable_bytes":%s,"used_bytes":%s,"tolerates":%s,"nightly":%s,"score":%s,"can_build":%s,"why":%s,"needs_tool":%s,"can_keep":%s}' \
+    rows+=("$score|$(printf '{"id":%s,"title":%s,"blurb":%s,"kind":%s,"fits":%s,"min":%s,"drives":[%s],"usable_bytes":%s,"used_bytes":%s,"tolerates":%s,"nightly":%s,"score":%s,"can_build":%s,"why":%s,"needs_tool":%s,"can_keep":%s,"migrate":%s}' \
       "$(json_str "$id")" "$(json_str "$(preset_title "$id")")" "$(json_str "$(preset_blurb "$id")")" "$(json_str "$(preset_kind "$id")")" "$fits" "$(json_num "$(preset_min "$id")")" "$ids_json" \
       "$(json_num "$cap")" "$(json_num "$used")" "$(json_num "$tol")" "$(setup_soft "$id" && echo true || echo false)" "$score" \
-      "$([ "$fits" = true ] && [ -z "$why" ] && echo true || echo false)" "$(json_str "$why")" "$hint" "$(case "$id" in pool|mirror) echo true ;; *) echo false ;; esac)")")
+      "$([ "$fits" = true ] && [ -z "$why" ] && echo true || echo false)" "$(json_str "$why")" "$hint" "$(case "$id" in pool|mirror|snapraid1|snapraid2) echo true ;; *) echo false ;; esac)" "$migrate")")
   done
   local sorted rec="" r
   sorted=$(printf '%s\n' "${rows[@]}" | sort -t'|' -k1,1nr -s)

@@ -157,6 +157,7 @@ main_hold_file() { printf '%s' "$STATE_DIR/main-empty-stopped"; }
 
 main_hold_apply() {   # takes the containers that use the Main storage out of STOPPED when Main has no drive
   [ -z "$(branches_of main)" ] || return 0
+  array_active && return 0      # (a ZFS / RAID setup is the Main storage too)
   local keep n rest="" mine=""
   keep=$(containers_using "$MAIN_POOL" | tr '\n' ' ')
   for n in $STOPPED; do case " $keep " in *" $n "*) mine="$mine $n" ;; *) rest="$rest $n" ;; esac; done
@@ -170,7 +171,7 @@ main_hold_apply() {   # takes the containers that use the Main storage out of ST
 main_hold_resume() {   # a Main drive is back and mounted: the containers that were kept stopped join the ones to start
   local f; f=$(main_hold_file)
   [ -s "$f" ] || return 0
-  [ -n "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
+  { [ -n "$(branches_of main)" ] || array_active; } && mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
   # shellcheck disable=SC2046
   STOPPED=$({ printf '%s\n' $STOPPED; cat "$f"; } | sort -u | grep . | tr '\n' ' ')
   rm -f "$f"

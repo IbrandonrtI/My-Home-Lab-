@@ -51,11 +51,13 @@ if [ "$TEST_MODE" = 1 ]; then
   CRYPTTAB="${CRYPTTAB:-$STATE_DIR/crypttab}"
   MAPPER_DIR="${MAPPER_DIR:-$STATE_DIR/mapper}"
   ZFS_KEY_UNIT="${ZFS_KEY_UNIT:-$STATE_DIR/homelab-zfs-key.service}"
+  MIGRATE_DIR="${MIGRATE_DIR:-/mnt/test-newmain}"
 else
   STATE_DIR="${DRIVES_STATE_DIR:-/var/lib/homelab-drives}"
   FSTAB="${FSTAB:-/etc/fstab}"
   DISKS_DIR="${DISKS_DIR:-/mnt/disks}"
   MAIN_POOL="${MAIN_POOL:-/mnt/storage}"
+  MIGRATE_DIR="${MIGRATE_DIR:-/mnt/storage-new}"                    # where a new ZFS / RAID setup is built and filled while the old Main storage is still in use
   BACKUP_POOL="${BACKUP_POOL:-/mnt/backup}"
   MAIN_PREFIX="${MAIN_PREFIX:-MAIN}"
   BACKUP_PREFIX="${BACKUP_PREFIX:-BACKUP}"

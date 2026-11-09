@@ -103,6 +103,13 @@ json_drives() {   # {"pools":[...],"drives":[...]} (usage, list and status all u
       "$(json_str "$state")" "$(json_str "$mount")"
   done < <(drive_rows)
   printf ']'
+  # Main has no drive (and is not a ZFS / RAID setup): the services that keep their files there wait; the panel shows a warning
+  local empty=false held n hf=1
+  if [ -z "$(branches_of main)" ] && ! array_active; then empty=true; fi
+  printf ',"main_empty":%s,"main_held":[' "$empty"
+  held=$(sort -u "$(main_hold_file)" 2>/dev/null)
+  for n in $held; do [ "$hf" = 1 ] || printf ','; hf=0; printf '%s' "$(json_str "$n")"; done
+  printf ']'
 }
 
 list_flow() {
