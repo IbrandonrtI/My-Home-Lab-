@@ -1653,9 +1653,9 @@ DRIVES_STATE = {"readers": 0, "changing": False}
 DRIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 DRIVE_NAME = re.compile(r"[A-Za-z0-9 .()+,-]{1,40}\Z")
 DRIVE_TIMEOUT = {"status": 90, "actions": 90, "health": 180, "check": 180, "remount": 600}
-DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|/dev/[a-z0-9]{1,16})\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
+DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16})\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
 JOB_MAX_SECONDS = 8 * 3600
-JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0}      # the drive change that runs (or ran last) in the background
+JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "items": [], "progress": {}, "current": ""}      # the drive change that runs (or ran last) in the background
 JOB_LOCK = threading.Lock()
 
 
@@ -1785,13 +1785,33 @@ def api_drives_do(action, body):
 
 
 
+DRIVE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}(:(keep|erase))?\Z")
+
+
+def job_ids(body):
+    """The drives a change is about: `ids` (up to eight, each 'ID' or 'ID:keep' / 'ID:erase') or the single `id`."""
+    ids = body.get("ids")
+    if ids is None:
+        ids = [body.get("id")]
+    if not isinstance(ids, list) or not 1 <= len(ids) <= 8:
+        raise Fail("Choose between one and eight drives.")
+    out = []
+    for t in ids:
+        if not isinstance(t, str) or not DRIVE_TOKEN.match(t):
+            raise Fail("Choose a drive first.")
+        if t.split(":")[0] in [x.split(":")[0] for x in out]:
+            raise Fail("A drive cannot be chosen twice.")
+        out.append(t)
+    each = [":" in t for t in out]
+    if any(each) and not all(each):
+        raise Fail("Every drive needs its own choice.")
+    return out
+
+
 def job_words(action, body):
     """The exact words of a drive change (add, wipe, disconnect, move), checked before anything is asked of the drives tool."""
-    ident = body.get("id")
-    if not isinstance(ident, str) or not DRIVE_ID.match(ident):
-        raise Fail("Choose a drive first.")
     typed = body.get("typed", [])
-    if not isinstance(typed, list) or len(typed) > 4 or not all(isinstance(w, str) and DRIVE_WORD.match(w) for w in typed):
+    if not isinstance(typed, list) or len(typed) > 20 or not all(isinstance(w, str) and DRIVE_WORD.match(w) for w in typed):
         raise Fail("A confirmation word is not allowed.")
 
     def pick(key, allowed):
@@ -1799,17 +1819,40 @@ def job_words(action, body):
         if v not in allowed:
             raise Fail("Choose %s first." % key)
         return v
-    if action == "add":
-        words = ["add", ident, pick("role", ("main", "backup")), pick("mode", ("keep", "erase"))]
-    elif action == "wipe":
+    if action == "wipe":
+        ident = body.get("id")
+        if not isinstance(ident, str) or not DRIVE_ID.match(ident):
+            raise Fail("Choose a drive first.")
         words = ["wipe", ident, pick("mode", ("empty", "format"))]
+        return words + typed
+    ids = job_ids(body)
+    lst = ",".join(ids)
+    each = ":" in ids[0]
+    if action == "add":
+        words = ["add", lst, pick("role", ("main", "backup")), "each" if each else pick("mode", ("keep", "erase"))]
     elif action == "disconnect":
-        words = ["disconnect", ident, pick("copy", ("yes", "no"))]
+        words = ["disconnect", lst, pick("copy", ("yes", "no"))]
     elif action == "move":
-        words = ["move", ident, pick("keep", ("keep", "erase")), pick("copy", ("yes", "no"))]
+        words = ["move", lst, "each" if each else pick("keep", ("keep", "erase")), pick("copy", ("yes", "no"))]
     else:
         raise Fail("Unknown address.", 404)
     return words + typed
+
+
+def job_progress(line):
+    """A progress line of the drives tool: `PROGRESS ID PERCENT text`. Keeps the bar of that drive (it never goes back); the drives before it are done. True when the line was one."""
+    m = re.match(r"PROGRESS (\S+) (\d{1,3}) ?(.*)\Z", line)
+    if not m:
+        return False
+    item, pct, text = m.group(1), min(100, int(m.group(2))), m.group(3)[:80]
+    prog = JOB["progress"]
+    if item in JOB["items"] and JOB["current"] != item:
+        for earlier in JOB["items"][:JOB["items"].index(item)]:
+            prog[earlier] = {"pct": 100, "text": "Done"}
+        JOB["current"] = item
+    old = prog.get(item, {"pct": 0})
+    prog[item] = {"pct": max(old["pct"], pct), "text": text}
+    return True
 
 
 def job_thread(words):
@@ -1830,7 +1873,8 @@ def job_thread(words):
                     line = line.rstrip()
                     if line:
                         with JOB_LOCK:
-                            JOB["lines"] = (JOB["lines"] + [line])[-300:]
+                            if not job_progress(line):
+                                JOB["lines"] = (JOB["lines"] + [line])[-300:]
                 rc = p.wait()
             finally:
                 timer.cancel()
@@ -1842,6 +1886,9 @@ def job_thread(words):
         sudo_no = "password is required" in low or "may not run sudo" in low or "no tty present" in low
         with JOB_LOCK:
             JOB["rc"] = rc
+            if rc == 0:
+                for it in JOB["items"]:
+                    JOB["progress"][it] = {"pct": 100, "text": "Done"}
             JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else drive_message(text, "")
             JOB["running"] = False
             drives_change_end()      # (inside the same lock: whoever sees "not running" can look at the drives at once)
@@ -1849,9 +1896,10 @@ def job_thread(words):
 
 def api_drives_job_start(action, body):
     words = job_words(action, body)
+    items = [t.split(":")[0] for t in job_ids(body)] if action != "wipe" else [body.get("id")]
     drives_change_begin()
     with JOB_LOCK:
-        JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()))
+        JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), items=items, progress={}, current="")
         jid = JOB["id"]
     threading.Thread(target=job_thread, args=(words,), daemon=True).start()
     return {"ok": True, "job": jid}
@@ -1859,7 +1907,7 @@ def api_drives_job_start(action, body):
 
 def api_drives_job():
     with JOB_LOCK:
-        return {"id": JOB["id"], "running": JOB["running"], "action": JOB["action"], "lines": JOB["lines"][-12:], "rc": JOB["rc"], "message": JOB["message"], "started": JOB["started"]}
+        return {"id": JOB["id"], "running": JOB["running"], "action": JOB["action"], "lines": JOB["lines"][-12:], "rc": JOB["rc"], "message": JOB["message"], "started": JOB["started"], "items": JOB["items"], "progress": JOB["progress"], "current": JOB["current"]}
 
 
 # ================================================================ the web server
