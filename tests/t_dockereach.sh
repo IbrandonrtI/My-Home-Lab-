@@ -15,6 +15,7 @@ source "$HERE/../scripts/drives"
 LOG="$TMP/calls"
 docker() { sleep 0.5; echo "docker $*" >>"$LOG"; [ "${2:-}" = bad ] && return 1; return 0; }
 containers_using() { printf '%s\n' a b c d e f g h i j; }
+branches_of() { echo /mnt/test-disks/MAIN1; }      # (a Main drive exists, so the containers may start)
 note() { :; }; warn() { echo "WARN $*" >>"$TMP/warn"; }
 
 : >"$LOG"; start=$(date +%s.%N)

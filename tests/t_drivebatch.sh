@@ -52,7 +52,7 @@ check "the files of both went to the drive that stays" "$(cat /mnt/test-disks/$C
 check "the pool still shows every file" "$(cat /mnt/test-main/fa.txt /mnt/test-main/fb.txt /mnt/test-main/fc.txt 2>/dev/null | tr '\n' ',')" "from A,from B,from C,"
 check "only one Main drive is left" "$(pool_drives main)" "1"
 hasnt "no drive was copied onto a drive that was leaving" "$OUT" "No other main drive has enough free space"
-has "all the Main drives cannot leave together" "$(P disconnect "$C,$(label_of backup 0)" yes)" "Keep at least one Main drive"
+has "all the Main drives cannot MOVE together" "$(P move "$C,$(label_of backup 0)" keep yes KEEP)" "Keep at least one Main drive"
 
 # ---------------- not enough room on the drives that stay: that drive is left where it is, nothing is lost
 setup 3
@@ -185,6 +185,35 @@ A=$(label_of main 0); B2=$(label_of main 1)
 OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A,$B2" yes)
 check "containers: taking two drives out stops each container once" "$(grep -c '^stop' "$S/docker.log")" "2"
 check "containers: and starts each once" "$(grep -c '^start' "$S/docker.log")" "2"
+
+# ---------------- every Main drive can leave: the Main storage is empty, and the services that use it stay stopped until a drive is back
+setup 2 1
+fake_docker
+A=$(label_of main 0); B2=$(label_of main 1)
+echo "stay on A" >"/mnt/test-disks/$A/sa.txt"
+OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A,$B2" yes)
+has "empty Main: without the word REMOVE nothing happens" "$OUT" "Cancelled"
+check "empty Main: both drives are still in" "$(pool_drives main)" "2"
+OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A,$B2" yes REMOVE)
+has "empty Main: the drives leave" "$OUT" "is disconnected from the main storage"
+check "empty Main: no drive is left in the Main storage" "$(pool_drives main)" "0"
+check "empty Main: the containers were stopped" "$(grep -c '^stop' "$S/docker.log")" "2"
+check "empty Main: and are NOT started again" "$(grep -c '^start' "$S/docker.log")" "0"
+has "empty Main: the report says they stay stopped" "$OUT" "stay stopped until a Main drive is added"
+SP=$(actions | jq_ "d['spare'][0]['id']")
+OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P add "$SP" main keep)
+has "empty Main: a drive can be added again" "$OUT" "connected to the main storage"
+check "empty Main: now the containers start" "$(grep -c '^start' "$S/docker.log")" "2"
+SP2=$(actions | jq_ "d['spare'][0]['id']")
+HOMELAB_EXTRA_PATH="$S/bin3" P add "$SP2" main keep >/dev/null
+check "empty Main: the files stayed on the drives that left and show again when they are added back" "$(cat /mnt/test-main/sa.txt 2>/dev/null)" "stay on A"
+check "empty Main: and the reminder is gone" "$(ls "$S"/main-empty-stopped 2>/dev/null | wc -l)" "0"
+# the only Backup drive and a single Main drive too
+setup 1 1
+fake_docker
+A=$(label_of main 0)
+has "empty Main: a single last Main drive asks for REMOVE" "$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A" yes)" "Cancelled"
+has "empty Main: and goes with REMOVE" "$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A" yes REMOVE)" "is disconnected from the main storage"
 
 echo
 if [ "$bad" = 0 ]; then echo OK; else echo "FAIL ($bad)"; exit 1; fi

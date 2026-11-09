@@ -143,7 +143,7 @@ FULL=$A; EMPTY=$B; [ "$(actions | jq_ "[r['has_data'] for r in d['rename'] if r[
 has "disconnect with copy: the drive with files goes after its files are copied" "$(P disconnect "$FULL" yes)" "is disconnected from the main storage"
 check "all 5 files are still in Main" "$(ls /mnt/test-main/f*.txt | wc -l)" "5"
 check "the drive is a spare drive now" "$(actions | jq_ "len(d['spare'])")" "1"
-has "disconnect the last Main drive is refused" "$(P disconnect "$EMPTY" yes)" "is the only main drive"
+has "disconnect the last Main drive warns and waits for REMOVE" "$(P disconnect "$EMPTY" yes)" "is the only main drive"
 check "Main still has its drive" "$(ls /mnt/test-main/f*.txt | wc -l)" "5"
 # add it back (keep: its files are still on it), then take it out without copying
 SP=$(actions | jq_ "d['spare'][0]['id']")
