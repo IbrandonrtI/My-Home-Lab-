@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A fake `drives` for the panel tests: it only records the words it was given (FAKE_DRIVES_LOG) and answers like the real one.
 FAKE_DRIVES_MODE: ok (default) | nosudo (sudo wants a password) | busy (remount is refused) | slow (remount takes 2 seconds) | bad (not JSON)
-| slowhealth (health takes 2 seconds) | single (each pool has just one drive) | jobslow (add / wipe / disconnect / move print progress lines for a few seconds) | jobfail (they end with a refusal, exit 1) | jobbusy (they are refused with Not a good moment unless the word NOW is among the words) | twospares (a second spare drive is plugged in)."""
+| slowhealth (health takes 2 seconds) | single (each pool has just one drive) | jobslow (add / wipe / disconnect / move print progress lines for a few seconds) | jobfail (they end with a refusal, exit 1) | jobbusy (they are refused with Not a good moment unless the word NOW is among the words) | twospares (a second spare drive is plugged in) | tight (the other Main drive is nearly full) | bootsec (a boot drive section is in Backup)."""
 import json
 import os
 import sys
@@ -33,6 +33,10 @@ if act == "status":
                       "last_backup": "Never", "boot_free_bytes": 40000000000})
     if "twospares" in mode:
         STATUS["drives"].append(SPARE2_DRIVE)
+    if "tight" in mode:
+        STATUS["drives"][2].update(used_bytes=1999000000000, free_bytes=1000000000)
+    if "bootsec" in mode:
+        STATUS["drives"].append({"name": "546 GB boot drive section", "role": "backup", "device": "boot drive", "size_bytes": 536000000000, "used_bytes": 12000000000, "free_bytes": 524000000000, "state": "connected (used last)", "mount": "/mnt/disks/BACKUPBOOT"})
     print(json.dumps(STATUS))
 elif act == "actions":
     ACTIONS = ({"rename": [{"id": "MAIN1", "name": "1 TB Toshiba HDD", "role": "main", "custom": False, "connected": True, "others": 0 if mode == "single" else 1, "has_data": True, "boot_section": False, "used_bytes": 250000000000},
@@ -42,6 +46,8 @@ elif act == "actions":
                       "power": [{"id": "sdb", "name": "1 TB Toshiba HDD", "role": "main", "state": "awake"}], "can_sleep": True})
     if "twospares" in mode:
         ACTIONS["spare"].append(SPARE2_ACTION)
+    if "bootsec" in mode:
+        ACTIONS["rename"].append({"id": "BACKUPBOOT", "name": "546 GB boot drive section", "role": "backup", "custom": False, "connected": True, "others": 1, "has_data": True, "boot_section": True, "used_bytes": 12000000000})
     print(json.dumps(ACTIONS))
 elif act == "health":
     if mode == "slowhealth":
@@ -65,15 +71,32 @@ elif act in ("add", "wipe", "disconnect", "move"):
         sys.stderr.write("Not a good moment: files are being written to a storage pool (an upload?). Nothing was changed. Try again when it has finished.\n")
         sys.exit(1)
     if "jobslow" in mode:
+        flag = os.environ["FAKE_DRIVES_LOG"]
+        open(flag + ".running", "w").close()
+        if os.path.exists(flag + ".abort"):
+            os.remove(flag + ".abort")
         for it in ids:
             for i in range(1, 5):
                 print("PROGRESS %s %d Copying files %d%%" % (it, i * 22, i * 25), flush=True)
                 print("Copying files, step %d of 4..." % i, flush=True)
                 time.sleep(0.7)
+                if os.path.exists(flag + ".abort"):
+                    os.remove(flag + ".abort")
+                    os.remove(flag + ".running")
+                    print("PROGRESS %s 0 Stopped" % it, flush=True)
+                    print("Stopped as you asked. Stopped with nothing lost: %s." % it, flush=True)
+                    sys.exit(4)
+        os.remove(flag + ".running")
     if mode == "jobfail":
         sys.stderr.write("Cancelled. Nothing was changed.\n")
         sys.exit(1)
     print("Done. 63 GB Cruzer HDD was %s." % {"add": "added", "wipe": "erased", "disconnect": "taken out of its pool", "move": "moved"}[act])
+elif act == "abort":
+    if not os.path.exists(os.environ["FAKE_DRIVES_LOG"] + ".running"):
+        sys.stderr.write("No drive change is running right now. Nothing was changed.\n")
+        sys.exit(1)
+    open(os.environ["FAKE_DRIVES_LOG"] + ".abort", "w").close()
+    print("Stop requested. The drives are stopped at the next safe moment.")
 elif act == "rename":
     print("Done. 1 TB Toshiba HDD is now called %s." % args[3])
 elif act in ("sleep", "wake"):

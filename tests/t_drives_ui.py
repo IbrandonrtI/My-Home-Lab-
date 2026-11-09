@@ -389,6 +389,67 @@ def main():
             check("busy pool: it then ends well", pg.inner_text("#toast") == "63 GB Cruzer HDD was added to the Backup Storage.", pg.inner_text("#toast"))
             ctx.close()
 
+            # ---- the Abort button
+            p.stop()
+            p.env["FAKE_DRIVES_MODE"] = "jobslow"
+            p.start(); p.login()
+            ctx, pg, errors = open_drives(br)
+            m = len(calls())
+            card_button(pg, "MAIN1", "Move to Backup")
+            pg.wait_for_selector("dialog")
+            ok_button(pg).click()
+            pg.wait_for_selector(".card.working button:has-text('Abort')", timeout=8000)
+            check("abort: a running move shows an Abort button", pg.get_by_role("button", name="Abort", exact=True).count() == 1, pg.inner_text(".card.working"))
+            if SHOTS:
+                pg.screenshot(path=os.path.join(SHOTS, "drives-abort.png"))
+            pg.get_by_role("button", name="Abort", exact=True).click()
+            pg.wait_for_selector("dialog:has-text('Abort This Change?')")
+            check("abort: it asks first and says what happens to the drives", "put back" in dialog_text(pg) and "stays where it is" in dialog_text(pg), dialog_text(pg))
+            pg.locator("dialog .actions button").first.click()
+            pg.wait_for_selector("dialog", state="detached")
+            check("abort: Cancel does not stop anything", ["panel", "abort"] not in calls()[m:], calls()[m:])
+            pg.get_by_role("button", name="Abort", exact=True).click()
+            pg.wait_for_selector("dialog:has-text('Abort This Change?')")
+            pg.locator("dialog .actions button").last.click()
+            check("abort: Abort sends Stop to the tool", wait_calls(pg, ["panel", "abort"]), calls()[m:])
+            pg.wait_for_selector(".card.working:has-text('Stopping')", timeout=8000)
+            check("abort: the card says it is stopping and the button waits", pg.get_by_role("button", name="Stopping...").is_disabled(), pg.inner_text(".card.working"))
+            pg.wait_for_selector(".card.working", state="detached", timeout=20000)
+            t = pg.inner_text("#toast")
+            check("abort: when it has stopped, the answer says what was stopped (and is not an error)", "Stopped as you asked" in t and "bad" not in (pg.get_attribute("#toast", "class") or ""), t)
+            check("abort: the tiles are back to normal", pg.locator(".tile.working, .tprog").count() == 0 and tile(pg, "MAIN1").get_attribute("draggable") == "true", "")
+            ctx.close()
+
+            # ---- the files of the drives that leave do not fit on the drives that stay
+            p.stop()
+            p.env["FAKE_DRIVES_MODE"] = "tight"
+            p.start()
+            ctx, pg, errors = open_drives(br)
+            m = len(calls())
+            card_button(pg, "MAIN1", "Take Out")
+            pg.wait_for_selector("dialog")
+            d = dialog_text(pg)
+            check("room: a take out that does not fit warns with the numbers", "not enough free room" in d and "250 GB to copy" in d and "1.0 GB free" in d and "A drive whose files do not fit is not taken out" in d, d)
+            check("room: it can still be sent (the tool leaves the drive alone if it cannot copy)", ok_button(pg).is_enabled(), "")
+            pg.locator("dialog input[type=radio][value=no]").check()
+            check("room: choosing not to copy replaces the room warning with the usual one", "not enough free room" not in dialog_text(pg), dialog_text(pg))
+            cancel_dialog(pg)
+            ctx.close()
+
+            # ---- a boot drive section: its status word fits in the card
+            p.stop()
+            p.env["FAKE_DRIVES_MODE"] = "bootsec"
+            p.start()
+            ctx, pg, errors = open_drives(br)
+            tile(pg, "BACKUPBOOT").click()
+            pg.wait_for_selector("dialog.dcard")
+            pill = pg.locator("dialog.dcard .st:has-text('Status') .pill")
+            box = pg.locator("dialog.dcard .st:has-text('Status')").bounding_box()
+            pb = pill.bounding_box()
+            check("boot section: the status word is just Connected", pill.inner_text() == "Connected", pill.inner_text())
+            check("boot section: the status word stays inside its box", pb["x"] + pb["width"] <= box["x"] + box["width"] + 0.5, [pb, box])
+            ctx.close()
+
             # ---- a pool with only one drive: the only Main drive cannot be moved or taken out
             p.stop()
             p.env["FAKE_DRIVES_MODE"] = "single"
