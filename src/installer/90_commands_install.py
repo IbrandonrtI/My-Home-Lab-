@@ -600,6 +600,50 @@ def wait_for_apps():
             warn(str(e) + " Going on anyway.")
 
 
+def update_panel_when_blocked(res):
+    """A machine whose Main storage has no drive cannot finish the steps after 'Folders for the services exist', but the control panel and the
+    helper scripts do not need the storage. So a panel that was installed before is still brought up to date here (it is the way to add a drive)."""
+    s = BY_ID.get("panel-files")
+    if s is None or Opt.dry or not s.applies() or res["panel-files"].state != "blocked" or not main_storage_missing():
+        return False
+    if not os.path.exists(P(PANEL_UNIT)) or safe_probe(s) == "done":
+        return False
+    try:
+        s.run()
+    except Abort as e:
+        warn("The control panel could not be updated: %s" % e)
+        return False
+    good("The control panel was updated (it does not need the Main storage).")
+    return True
+
+
+def storage_notice(res):
+    """Plain words about what is paused while the Main storage has no drive, and what to do."""
+    if Opt.dry or not main_storage_missing():
+        return
+    waits = [s for s in STEPS if res[s.id].state in ("blocked", "todo", "failed") and s.id != "folders" and waits_for_folders(s)]
+    rule("The Main storage has no drive")
+    say("Nothing is wrong with the update itself: the new scripts and the control panel are installed. But /mnt/storage has no drive mounted, so the services "
+        "that keep their files there stay stopped (nothing is written onto the boot drive by mistake).")
+    out("")
+    if waits:
+        groups = []
+        for g in GROUPS:
+            n = sum(1 for s in waits if s.group == g)
+            if n:
+                groups.append("%s (%d)" % (g, n))
+        say("%d steps wait for it: %s." % (len(waits), ", ".join(groups)))
+        late = [s for s in waits if s.id in ("terminal", "stack-navidrome", "navidrome-stack", "stack-immich", "stack-nextcloud", "stack-filebrowser")]
+        if late:
+            say("That includes: %s." % ", ".join(s.title.split(" (")[0] for s in late))
+        out("")
+    say("What to do:\n1. Open the control panel, then Customize, then Drives, and drag a drive into Main Storage (Keep the files if it already holds them).\n"
+        "   Or run:  sudo drives\n"
+        "2. The services that were stopped start again by themselves.\n"
+        "3. Run:  sudo homelab-setup refresh")
+    out("")
+
+
 def cmd_refresh():
     """`refresh`: check every step again and do what is now possible."""
     load_all()
@@ -620,6 +664,9 @@ def cmd_refresh():
         res = evaluate()
         if not gained:
             break
+    if update_panel_when_blocked(res):
+        res = evaluate()
     write_progress(res)
     show_checklist(res)
+    storage_notice(res)
     next_step_section(res)

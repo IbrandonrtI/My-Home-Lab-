@@ -165,6 +165,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
     done, total = counts(res)
     rule("%s %s %s %s %d of %d steps done" % (title, S_DOT, Ctx.hostname, S_DOT, done, total))
     waiting = False
+    nodrive = not Opt.dry and main_storage_missing()
     for g in GROUPS:
         items = [s for s in STEPS if s.group == g and res[s.id].state != "na"]
         if not items:
@@ -186,7 +187,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
                 continue
             if r.state == "blocked":
                 waiting = True
-                out("   %s%s %s%s" % (D, S_WAIT, s.title, N))
+                out("   %s%s %s%s%s" % (D, S_WAIT, s.title, "   (waits for a Main drive)" if nodrive and waits_for_folders(s) else "", N))
                 continue
             col, sym = (R, S_BAD) if r.state == "failed" else (Y, S_TODO)
             tag = ""

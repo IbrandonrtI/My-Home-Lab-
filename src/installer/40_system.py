@@ -462,13 +462,27 @@ def locked_mountpoint(path):
     return rc == 0 and bool(re.match(r"^[-a-zA-Z]*i[-a-zA-Z]*\s", text.strip()))
 
 
+def main_storage_missing():
+    """True when /mnt/storage is the locked folder of a drive that is not mounted: Main has no drive right now (or its drive is away)."""
+    return locked_mountpoint("/mnt/storage")
+
+
+def waits_for_folders(step, _seen=None):
+    """True when the step (directly or through the steps it needs) waits for the 'Folders for the services exist' step."""
+    for n in step.needs:
+        if n == "folders" or waits_for_folders(BY_ID[n]):
+            return True
+    return False
+
+
 def folder_problem(path, err):
     """The plain-words message for a folder that could not be made: a locked, unmounted drive folder is the usual reason."""
     for root in ("/mnt/storage", "/mnt/backup"):
         if (path == root or path.startswith(root + "/")) and locked_mountpoint(root):
-            return ("%s is not mounted right now, so the folders cannot be made in it (its folder is locked on purpose while the drive is away, so nothing is written onto the boot drive by mistake). "
-                    "Mount the drives, then run this step again:\n$ sudo drives remount\n$ sudo homelab-setup refresh\n"
-                    "If the drive is really gone, open the drives menu to see what is connected:  sudo drives" % root)
+            return ("%s is not mounted right now, so the folders cannot be made in it (its folder is locked on purpose while the drive is away, so nothing is written onto the boot drive by mistake).\n"
+                    "- If a drive is connected but not mounted:  sudo drives remount\n"
+                    "- If this storage has no drive at all: open the control panel (Customize, then Drives) and drag a drive into it, or run  sudo drives\n"
+                    "Then run this step again:  sudo homelab-setup refresh" % root)
     return ("the folder %s could not be made (%s). If it is on a drive, check that the drive is mounted and uses a file system that keeps owners (ext4). "
             "Look at the drives with:  sudo drives" % (path, err.strerror or err))
 
