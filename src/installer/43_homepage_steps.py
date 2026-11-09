@@ -78,6 +78,7 @@ class HomepageTabs(Step):
                 svc = services_calendar_block(svc, shipped_svc)
             if not State.ran("homepage-customize") or CUSTOM_BEGIN in svc:         # the control panel's card: offered once, then kept up to date
                 svc = services_customize_block(svc, shipped_svc)
+        svc = cards_worded(svc)
         sett = layout_renamed(sett)
         sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
         if re.search(r"(?m)^layout:", sett):
@@ -88,10 +89,19 @@ class HomepageTabs(Step):
             sett, seen = layout_stats_before_links(sett, seen)
             sett, seen = layout_linkedit_first(sett, seen)
             sett, seen = layout_terminal_to_customize(sett, seen)
+            sett, seen = layout_home_order(sett, seen)
         sett, seen = settings_quicklaunch(sett, seen)
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))
         return sett, new_css, seen, new_js, svc
+
+    def widgets_new(self):
+        """widgets.yaml with the clock showing the month as a word (Nov 9, 2026 instead of 11/9/26). Offered once: a clock set back to the short
+        form later is left alone."""
+        old = read_file(hp_path("widgets.yaml")) if os.path.exists(hp_path("widgets.yaml")) else ""
+        if State.ran("homepage-clock") or not old:
+            return old
+        return re.sub(r"(?m)^(\s+dateStyle:\s*)short\s*$", r"\1medium", old)
 
     def remember(self, seen):
         if seen != State.data.get("layout_seen", []):
@@ -101,11 +111,11 @@ class HomepageTabs(Step):
     def probe(self):
         sett, css, seen, js, svc = self.wanted()
         if (sett != read_file(hp_path("settings.yaml")) or css != read_file(hp_path("custom.css")) or js != read_file(hp_path("custom.js"))
-                or svc != read_file(hp_path("services.yaml"))):
+                or svc != read_file(hp_path("services.yaml")) or self.widgets_new() != (read_file(hp_path("widgets.yaml")) if os.path.exists(hp_path("widgets.yaml")) else "")):
             return "todo"
         if not Opt.dry:
             self.remember(seen)                  # already in place (a new machine): a later removal of a group or of the tabs is respected
-            for k in ("homepage-tabs", "homepage-stats", "homepage-calendar", "homepage-customize"):
+            for k in ("homepage-tabs", "homepage-stats", "homepage-calendar", "homepage-customize", "homepage-clock"):
                 if not State.ran(k):
                     State.mark(k)
         return "done"
@@ -113,11 +123,12 @@ class HomepageTabs(Step):
     def run(self):
         old_sett, old_css, old_js, old_svc = (read_file(hp_path(n)) for n in ("settings.yaml", "custom.css", "custom.js", "services.yaml"))
         sett, css, seen, js, svc = self.wanted()
+        wid, old_wid = self.widgets_new(), (read_file(hp_path("widgets.yaml")) if os.path.exists(hp_path("widgets.yaml")) else "")
         own = (Ctx.uid, Ctx.gid)
         if Opt.dry:
             out("      would add the tabs (Home, Stats, Links), the group icons, the bookmark cards, the STATS cards and their styles to the Homepage files")
             return
-        for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js), ("services.yaml", old_svc, svc)):
+        for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js), ("services.yaml", old_svc, svc), ("widgets.yaml", old_wid, wid)):
             if new == old:
                 continue
             if old and not os.path.exists(hp_path(name) + ".before-tabs"):          # the first copy is the one worth keeping
@@ -128,6 +139,7 @@ class HomepageTabs(Step):
         State.mark("homepage-stats")
         State.mark("homepage-calendar")
         State.mark("homepage-customize")
+        State.mark("homepage-clock")
         stats_file = hp_path("images/stats.json")
         if not FAKE and not os.path.exists(stats_file) and os.path.exists(P("/usr/local/sbin/homelab-stats")):
             # Homepage only serves a file that was there when it started, so the first stats.json is made now, before the restart below

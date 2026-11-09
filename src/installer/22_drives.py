@@ -271,7 +271,7 @@ def filebrowser_volumes(text):
 
 
 HOMEPAGE_PARENT_LINE = "/mnt:/mnt:ro,rslave"
-HOMEPAGE_PARENT_NOTE = "   # the Main and Backup pool pills; rslave: a pool mounted later still shows"
+HOMEPAGE_PARENT_NOTE = "   # the Main and Backup Pool pills; rslave: a pool mounted later still shows"
 
 
 def homepage_volumes(text):

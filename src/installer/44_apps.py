@@ -79,7 +79,7 @@ class NavidromeCard(Step):
             if not os.path.exists(hp_path("services.yaml") + ".before-navidrome"):
                 write_file(hp_path("services.yaml") + ".before-navidrome", old, 0o644, (Ctx.uid, Ctx.gid))
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
-            out("      The Navidrome card is first in its group, called Navidrome (\"Spotify Music Player\"), and has Navidrome's own player inside "
+            out("      The Navidrome card is first in its group, called Navidrome (\"Music Streaming Server\"), and has Navidrome's own player inside "
                 "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
 
 

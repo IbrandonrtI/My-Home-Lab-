@@ -472,6 +472,32 @@ def layout_terminal_to_customize(settings, seen):
     return _entries_text((head, entries, tail, rest)), seen
 
 
+HOME_ORDER = "~home-order"                               # the Home groups were put in the order they are shown in (done once)
+HOME_FIRST = ["Network & DNS", "Monitoring & Management", "Files & Photos", "Media & Entertainment"]
+
+
+def layout_home_order(settings, seen):
+    """The Home groups are listed as they are shown: Network & DNS and Monitoring & Management (is the server okay?), then Files & Photos, then
+    Media & Entertainment, then any other group in the order it had. The slots of the Home groups in the list stay where they are. Once; an
+    order you chose later is left alone. Returns (settings, seen)."""
+    if HOME_ORDER in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {HOME_ORDER})
+    parts = layout_entries(settings)
+    if not parts:
+        return settings, seen
+    head, entries, tail, rest = parts
+    slots = [i for i, e in enumerate(entries) if _entry_tab(e) == "Home"]
+    home = [entries[i] for i in slots]
+    first = [next(e for e in home if _entry_name(e) == n) for n in HOME_FIRST if any(_entry_name(e) == n for e in home)]
+    ordered = first + [e for e in home if e not in first]
+    if ordered == home:
+        return settings, seen
+    for i, e in zip(slots, ordered):
+        entries[i] = e
+    return _entries_text((head, entries, tail, rest)), seen
+
+
 def layout_columns_changed(settings, seen, group, old, new, marker):
     """`columns: old` of one group of the layout becomes `columns: new`, once (the marker is put in the groups-seen list, so a later change
     by the owner is left alone). Returns (settings, seen)."""

@@ -481,7 +481,7 @@ def folder_problem(path, err):
         if (path == root or path.startswith(root + "/")) and locked_mountpoint(root):
             return ("%s is not mounted right now, so the folders cannot be made in it (its folder is locked on purpose while the drive is away, so nothing is written onto the boot drive by mistake).\n"
                     "- If a drive is connected but not mounted:  sudo drives remount\n"
-                    "- If this storage has no drive at all: open the control panel (Customize, then Drives) and drag a drive into it, or run  sudo drives\n"
+                    "- If this pool has no drive at all: open the control panel (Customize, then Drives) and drag a drive into it, or run  sudo drives\n"
                     "Then run this step again:  sudo homelab-setup refresh" % root)
     return ("the folder %s could not be made (%s). If it is on a drive, check that the drive is mounted and uses a file system that keeps owners (ext4). "
             "Look at the drives with:  sudo drives" % (path, err.strerror or err))

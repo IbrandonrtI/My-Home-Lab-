@@ -64,12 +64,23 @@ def card_retitled(text, card_id, old_title, new_title, old_desc, new_desc):
     return "\n".join(lines)
 
 
-NAVIDROME_TITLE, NAVIDROME_DESC = "Navidrome", "Spotify Music Player"
+NAVIDROME_TITLE, NAVIDROME_DESC = "Navidrome", "Music Streaming Server"
 
 
 def navidrome_card_named(text):
-    """The Navidrome card with the name Navidrome (not navidrome) and the description Spotify Music Player."""
-    return card_retitled(text, "navidrome-card", "navidrome", NAVIDROME_TITLE, "Music streaming server", NAVIDROME_DESC)
+    """The Navidrome card with the name Navidrome (not navidrome) and the description Music Streaming Server (the older wordings are replaced)."""
+    text = card_retitled(text, "navidrome-card", "navidrome", NAVIDROME_TITLE, "Music streaming server", NAVIDROME_DESC)
+    return card_retitled(text, "navidrome-card", NAVIDROME_TITLE, NAVIDROME_TITLE, "Spotify Music Player", NAVIDROME_DESC)
+
+
+CARD_WORDING = [("filebrowser-card", "FileBrowser", "View and edit the backups", "Browse and Edit Files")]      # (card id, its name, the old description, the new one)
+
+
+def cards_worded(text):
+    """services.yaml with the descriptions of the cards that were reworded in a later version (only where they still are the old words)."""
+    for cid, title, old, new in CARD_WORDING:
+        text = card_retitled(text, cid, title, title, old, new)
+    return text
 
 
 PLAYER_ID = "navidrome-player"      # the separate player card of zip 33; the player now lives inside the Navidrome card and this card is taken out

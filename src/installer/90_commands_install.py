@@ -57,7 +57,7 @@ def ask_weather(a):
 
 LVM_EXPLAIN = ("Ubuntu Server's installer makes the system volume small (about 100 GB) and leaves the rest of the drive unused. "
                "Using that space makes the system volume bigger. Nothing is erased and nothing moves: your files stay as they "
-               "are, and it is done while the machine runs. It is needed if you want to use part of this drive as a storage "
+               "are, and it is done while the machine runs. It is needed if you want to use part of this drive as a pool "
                "pool later (sudo drives bootsection). A volume grows easily but only shrinks with effort.")
 
 
@@ -601,7 +601,7 @@ def wait_for_apps():
 
 
 def update_panel_when_blocked(res):
-    """A machine whose Main storage has no drive cannot finish the steps after 'Folders for the services exist', but the control panel and the
+    """A machine whose Main pool has no drive cannot finish the steps after 'Folders for the services exist', but the control panel and the
     helper scripts do not need the storage. So a panel that was installed before is still brought up to date here (it is the way to add a drive)."""
     s = BY_ID.get("panel-files")
     if s is None or Opt.dry or not s.applies() or res["panel-files"].state != "blocked" or not main_storage_missing():
@@ -613,16 +613,16 @@ def update_panel_when_blocked(res):
     except Abort as e:
         warn("The control panel could not be updated: %s" % e)
         return False
-    good("The control panel was updated (it does not need the Main storage).")
+    good("The control panel was updated (it does not need the Main pool).")
     return True
 
 
 def storage_notice(res):
-    """Plain words about what is paused while the Main storage has no drive, and what to do."""
+    """Plain words about what is paused while the Main pool has no drive, and what to do."""
     if Opt.dry or not main_storage_missing():
         return
     waits = [s for s in STEPS if res[s.id].state in ("blocked", "todo", "failed") and s.id != "folders" and waits_for_folders(s)]
-    rule("The Main storage has no drive")
+    rule("The Main pool has no drive")
     say("Nothing is wrong with the update itself: the new scripts and the control panel are installed. But /mnt/storage has no drive mounted, so the services "
         "that keep their files there stay stopped (nothing is written onto the boot drive by mistake).")
     out("")
@@ -637,7 +637,7 @@ def storage_notice(res):
         if late:
             say("That includes: %s." % ", ".join(s.title.split(" (")[0] for s in late))
         out("")
-    say("What to do:\n1. Open the control panel, then Customize, then Drives, and drag a drive into Main Storage (Keep the files if it already holds them).\n"
+    say("What to do:\n1. Open the control panel, then Customize, then Drives, and drag a drive into Main pool (Keep the files if it already holds them).\n"
         "   Or run:  sudo drives\n"
         "2. The services that were stopped start again by themselves.\n"
         "3. Run:  sudo homelab-setup refresh")

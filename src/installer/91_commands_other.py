@@ -620,7 +620,7 @@ def restart_homepage_if_blind():
 
 
 def cmd_homepage():
-    """Make Homepage see the Main and Backup pool (the two drive pills). sudo drives calls this by itself."""
+    """Make Homepage see the Main and Backup Pool (the two drive pills). sudo drives calls this by itself."""
     load_all()
     if "homepage" not in containers_all():
         say("Homepage is not installed on this machine.")
@@ -632,7 +632,7 @@ def cmd_homepage():
     if result == "dry":
         return
     if result == "changed":
-        good("Homepage can see the Main and Backup pool")
+        good("Homepage can see the Main and Backup Pool")
     else:
         say("Homepage already sees the pools.")
 
@@ -767,7 +767,7 @@ Commands:
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
-  homepage                 let Homepage see the Main and Backup pool, and move custom.css to the current layout
+  homepage                 let Homepage see the Main and Backup Pool, and move custom.css to the current layout
   adguard                  add AdGuard Home, if you skipped it during the install
   cards                    give every new service (a container with a web page) its Homepage card; also: cards list | move | ignore
   lastfm                   save your free Last.fm key so Navidrome can suggest similar songs; also: lastfm remove
