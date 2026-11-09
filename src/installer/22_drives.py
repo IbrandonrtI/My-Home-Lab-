@@ -141,7 +141,7 @@ def drive_brand(model):
 
 
 def drive_kind(mountpoint, model=""):
-    """'SSD' or 'HDD' for the drive behind a mount point; empty when it cannot be told.
+    """'SSD', 'HDD' or 'Flash' (a USB stick) for the drive behind a mount point; empty when it cannot be told.
     The model text wins (a USB box often says 'spinning disk' for an SSD), then NVMe, then the drive's own flag."""
     if re.search(r"\bSSD\b|NVME", model.upper().replace("_", " ")):
         return "SSD"
@@ -154,6 +154,10 @@ def drive_kind(mountpoint, model=""):
         return ""
     if len(parts) > 1 and parts[1].lower() == "nvme":
         return "SSD"
+    if len(parts) > 1 and parts[1].lower() == "usb":      # a USB stick: it can be pulled out (or its model says so) and often claims to spin like a hard drive
+        rc2, rm = run(["lsblk", "-dno", "RM", disk], timeout=15)
+        if re.search(r"CRUZER|DATATRAVELER|FLASH|JUMPDRIVE|ULTRA FIT|STORE N GO|TRANSMEMORY|MICRO SD|CARD READER", model.upper().replace("_", " ")) or (rc2 == 0 and rm.strip().split("\n")[0].strip() == "1"):
+            return "Flash"
     return {"1": "HDD", "0": "SSD"}.get(parts[0], "")
 
 

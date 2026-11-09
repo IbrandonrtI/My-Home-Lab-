@@ -83,7 +83,7 @@ class AptUpgrade(Step):
 
 
 REQUIRED_PKGS = ["curl", "ca-certificates", "gnupg", "rsync", "cron", "python3-yaml", "smartmontools", "hdparm"]
-OPTIONAL_PKGS = ["mergerfs", "parted"]
+OPTIONAL_PKGS = ["mergerfs", "parted", "mdadm", "snapraid", "zfsutils-linux"]      # (mdadm, snapraid and zfsutils-linux are for the ready-made RAID, SnapRAID and ZFS setups of the Drives tab)
 
 
 @step
@@ -91,7 +91,7 @@ class Packages(Step):
     id, group, title = "packages", "System", "Helper programs installed (rsync, cron, smartmontools, mergerfs, ...)"
 
     def probe(self):
-        missing = [p for p in REQUIRED_PKGS if not pkg_installed(p)]
+        missing = [p for p in REQUIRED_PKGS + OPTIONAL_PKGS if not pkg_installed(p)]
         return "done" if not missing else "todo"
 
     def run(self):
