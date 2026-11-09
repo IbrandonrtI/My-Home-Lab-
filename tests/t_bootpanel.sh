@@ -78,5 +78,19 @@ has "take out: it says the space went back to the boot drive" "$OUT" "Its space 
 check "take out: Backup has one drive again" "$(pool_drives backup)" "1"
 check "take out: the section file is gone" "$([ -e "$(img backup)" ] && echo left || echo gone)" "gone"
 
+# ---------------- a section that is alone in its pool and holds files: it can still be taken out, its files are deleted after ERASE
+reset_env; $D test-setup 1 300M >/dev/null 2>&1
+L1=$(loop_of 1)
+P add "${L1#/dev/}" main erase "$L1" ERASE >/dev/null
+P bootadd backup 40 CONTINUE >/dev/null
+check "alone: Backup has only the section" "$(pool_drives backup)" "1"
+echo "only copy" >/mnt/test-disks/TBACKUPBOOT/only.txt
+has "alone: without ERASE nothing happens and the files are safe" "$(P disconnect TBACKUPBOOT yes REMOVE)" "Cancelled"
+check "alone: the section is still there with its file" "$(cat /mnt/test-disks/TBACKUPBOOT/only.txt 2>/dev/null)" "only copy"
+OUT=$(P disconnect TBACKUPBOOT yes ERASE REMOVE)
+has "alone: with ERASE and REMOVE the section is removed" "$OUT" "Its space went back to the boot drive"
+check "alone: the section file is gone" "$([ -e "$(img backup)" ] && echo left || echo gone)" "gone"
+check "alone: Backup has no drive" "$(pool_drives backup)" "0"
+
 echo
 if [ "$bad" = 0 ]; then echo OK; else echo "FAIL ($bad)"; exit 1; fi

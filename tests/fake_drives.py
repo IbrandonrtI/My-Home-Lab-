@@ -49,7 +49,7 @@ elif act == "actions":
     if "twospares" in mode:
         ACTIONS["spare"].append(SPARE2_ACTION)
     if "bootsec" in mode:
-        ACTIONS["rename"].append({"id": "BACKUPBOOT", "name": "546 GB boot drive section", "role": "backup", "custom": False, "connected": True, "others": 1, "has_data": True, "boot_section": True, "used_bytes": 12000000000})
+        ACTIONS["rename"].append({"id": "BACKUPBOOT", "name": "546 GB boot drive section", "role": "backup", "custom": False, "connected": True, "others": 0 if "alone" in mode else 1, "has_data": True, "boot_section": True, "used_bytes": 12000000000})
     print(json.dumps(ACTIONS))
 elif act == "health":
     if mode == "slowhealth":
@@ -98,7 +98,7 @@ elif act == "setups":
         return {"id": i, "title": title, "blurb": "About " + title + ".", "kind": kind, "fits": fits, "min": mn, "drives": drives, "usable_bytes": usable, "used_bytes": usable * 2,
                 "tolerates": tol, "nightly": nightly, "score": 600, "can_build": fits and not why, "why": why if fits else "Needs %d empty drives; 3 found." % mn, "needs_tool": False}
     block = "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first." if "blocked" in mode else ""
-    print(json.dumps({"spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "blank": False},
+    print(json.dumps({"spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "blank": False, "keep_ok": True},
                                 {"id": "sde", "device": "/dev/sde", "name": "32 GB Kingston HDD", "size_bytes": 32000000000, "blank": True},
                                 {"id": "sdf", "device": "/dev/sdf", "name": "32 GB Kingston HDD 2", "size_bytes": 32000000000, "blank": True}],
                       "total_bytes": 127100000000, "current": "",
