@@ -2579,6 +2579,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
     done, total = counts(res)
     rule("%s %s %s %s %d of %d steps done" % (title, S_DOT, Ctx.hostname, S_DOT, done, total))
     waiting = False
+    nodrive = not Opt.dry and main_storage_missing()
     for g in GROUPS:
         items = [s for s in STEPS if s.group == g and res[s.id].state != "na"]
         if not items:
@@ -2600,7 +2601,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
                 continue
             if r.state == "blocked":
                 waiting = True
-                out("   %s%s %s%s" % (D, S_WAIT, s.title, N))
+                out("   %s%s %s%s%s" % (D, S_WAIT, s.title, "   (waits for a Main drive)" if nodrive and waits_for_folders(s) else "", N))
                 continue
             col, sym = (R, S_BAD) if r.state == "failed" else (Y, S_TODO)
             tag = ""
@@ -3158,13 +3159,27 @@ def locked_mountpoint(path):
     return rc == 0 and bool(re.match(r"^[-a-zA-Z]*i[-a-zA-Z]*\s", text.strip()))
 
 
+def main_storage_missing():
+    """True when /mnt/storage is the locked folder of a drive that is not mounted: Main has no drive right now (or its drive is away)."""
+    return locked_mountpoint("/mnt/storage")
+
+
+def waits_for_folders(step, _seen=None):
+    """True when the step (directly or through the steps it needs) waits for the 'Folders for the services exist' step."""
+    for n in step.needs:
+        if n == "folders" or waits_for_folders(BY_ID[n]):
+            return True
+    return False
+
+
 def folder_problem(path, err):
     """The plain-words message for a folder that could not be made: a locked, unmounted drive folder is the usual reason."""
     for root in ("/mnt/storage", "/mnt/backup"):
         if (path == root or path.startswith(root + "/")) and locked_mountpoint(root):
-            return ("%s is not mounted right now, so the folders cannot be made in it (its folder is locked on purpose while the drive is away, so nothing is written onto the boot drive by mistake). "
-                    "Mount the drives, then run this step again:\n$ sudo drives remount\n$ sudo homelab-setup refresh\n"
-                    "If the drive is really gone, open the drives menu to see what is connected:  sudo drives" % root)
+            return ("%s is not mounted right now, so the folders cannot be made in it (its folder is locked on purpose while the drive is away, so nothing is written onto the boot drive by mistake).\n"
+                    "- If a drive is connected but not mounted:  sudo drives remount\n"
+                    "- If this storage has no drive at all: open the control panel (Customize, then Drives) and drag a drive into it, or run  sudo drives\n"
+                    "Then run this step again:  sudo homelab-setup refresh" % root)
     return ("the folder %s could not be made (%s). If it is on a drive, check that the drive is mounted and uses a file system that keeps owners (ext4). "
             "Look at the drives with:  sudo drives" % (path, err.strerror or err))
 
@@ -6252,6 +6267,50 @@ def wait_for_apps():
             warn(str(e) + " Going on anyway.")
 
 
+def update_panel_when_blocked(res):
+    """A machine whose Main storage has no drive cannot finish the steps after 'Folders for the services exist', but the control panel and the
+    helper scripts do not need the storage. So a panel that was installed before is still brought up to date here (it is the way to add a drive)."""
+    s = BY_ID.get("panel-files")
+    if s is None or Opt.dry or not s.applies() or res["panel-files"].state != "blocked" or not main_storage_missing():
+        return False
+    if not os.path.exists(P(PANEL_UNIT)) or safe_probe(s) == "done":
+        return False
+    try:
+        s.run()
+    except Abort as e:
+        warn("The control panel could not be updated: %s" % e)
+        return False
+    good("The control panel was updated (it does not need the Main storage).")
+    return True
+
+
+def storage_notice(res):
+    """Plain words about what is paused while the Main storage has no drive, and what to do."""
+    if Opt.dry or not main_storage_missing():
+        return
+    waits = [s for s in STEPS if res[s.id].state in ("blocked", "todo", "failed") and s.id != "folders" and waits_for_folders(s)]
+    rule("The Main storage has no drive")
+    say("Nothing is wrong with the update itself: the new scripts and the control panel are installed. But /mnt/storage has no drive mounted, so the services "
+        "that keep their files there stay stopped (nothing is written onto the boot drive by mistake).")
+    out("")
+    if waits:
+        groups = []
+        for g in GROUPS:
+            n = sum(1 for s in waits if s.group == g)
+            if n:
+                groups.append("%s (%d)" % (g, n))
+        say("%d steps wait for it: %s." % (len(waits), ", ".join(groups)))
+        late = [s for s in waits if s.id in ("terminal", "stack-navidrome", "navidrome-stack", "stack-immich", "stack-nextcloud", "stack-filebrowser")]
+        if late:
+            say("That includes: %s." % ", ".join(s.title.split(" (")[0] for s in late))
+        out("")
+    say("What to do:\n1. Open the control panel, then Customize, then Drives, and drag a drive into Main Storage (Keep the files if it already holds them).\n"
+        "   Or run:  sudo drives\n"
+        "2. The services that were stopped start again by themselves.\n"
+        "3. Run:  sudo homelab-setup refresh")
+    out("")
+
+
 def cmd_refresh():
     """`refresh`: check every step again and do what is now possible."""
     load_all()
@@ -6272,8 +6331,11 @@ def cmd_refresh():
         res = evaluate()
         if not gained:
             break
+    if update_panel_when_blocked(res):
+        res = evaluate()
     write_progress(res)
     show_checklist(res)
+    storage_notice(res)
     next_step_section(res)
 # ================================================================ more commands: adguard, cards, upgrade, filebrowser, homepage, fill, secrets, progress
 def cmd_adguard():
