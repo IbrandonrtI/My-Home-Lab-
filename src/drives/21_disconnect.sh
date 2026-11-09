@@ -104,11 +104,13 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
 
   if is_boot_section "$mp" && [ "$KEEP_IMG" != 1 ] && mountpoint -q "$mp" && has_data "$mp"; then
     if [ ${#others[@]} -eq 0 ]; then
-      note "$label holds files and there is no other $role drive to copy them to. Nothing was changed."
-      return 1
+      warn "$label holds files and there is no other $role drive to copy them to."
+      warn "Taking the section out deletes it, and every file in it is permanently lost."
+      typed "ERASE" "Type ERASE to delete the section and its files: " || { say "Cancelled. Nothing was changed."; return 1; }
+    else
+      say "$label holds files. Removing the section deletes it, so they are copied to another $role drive first."
+      drain=1
     fi
-    say "$label holds files. Removing the section deletes it, so they are copied to another $role drive first."
-    drain=1
   fi
 
   if [ ${#others[@]} -eq 0 ]; then
