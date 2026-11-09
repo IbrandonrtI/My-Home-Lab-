@@ -160,8 +160,9 @@ HOLD_HINT=""
 log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE" 2>/dev/null || true; }
 say()  { printf '%s\n' "$*"; }
 note() { printf '%s\n' "$*" >&2; }
-warn() { printf 'WARNING: %s\n' "$*" >&2; log "WARN $*"; }
-die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; restore_services; exit 1; }
+why() { [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -d "$PANEL_RESERVE_DIR" ] && printf '%s\n' "$2" >"$PANEL_RESERVE_DIR/${PROG_ITEM:-none}.$1" 2>/dev/null; return 0; }      # why KIND TEXT: in a batch, what this drive's process complained about last (the batch tells it in its report)
+warn() { printf 'WARNING: %s\n' "$*" >&2; log "WARN $*"; why warn "$*"; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; why err "$*"; restore_services; exit 1; }
 
 ask()  { local v=""; printf '%s' "$1" >&2; IFS= read -r v || true; printf '%s' "$v"; }
 yn()   {
@@ -264,6 +265,17 @@ take_label() {   # take_label main|backup -> the next free drive name; in a batc
   crit_leave
   echo "$l"
 }
+
+target_lock() {   # target_lock TARGET-MOUNT: only one drive of a batch copies to the same drive at a time (two drives can hold different versions of the same file, and a copy must not be overwritten while it is being checked). Waits for its turn; 1 only when Stop was pressed while waiting
+  local f
+  f="$STATE_DIR/target-$(basename "$1").lock"
+  { exec 6>"$f"; } 2>/dev/null || return 0
+  until flock -w 1 6; do
+    if abort_requested; then { exec 6>&-; } 2>/dev/null; return 1; fi
+  done
+  return 0
+}
+target_unlock() { { exec 6>&-; } 2>/dev/null; return 0; }
 
 space_pick() {   # space_pick SOURCE-MOUNT BYTES TARGET...: the emptiest of the target drives that still has BYTES (and the spare margin) free after what other copies of this batch have reserved; reserves it
   local src=$1 need=$2 o free res best="" bestfree=0; shift 2
@@ -463,9 +475,9 @@ mount_fstab() {   # fd 9 is the lock (and fd 8 the pool lock of a batch): the me
   # From the control panel the daemon of a pool would live inside the panel's service, and a restart of the panel (an upgrade does that) would end it and
   # unmount the pool. In its own scope it belongs to the system instead.
   if [ "$PANEL_MODE" = 1 ] && [ -d "${SYSTEMD_DIR:-/run/systemd/system}" ] && command -v systemd-run >/dev/null 2>&1; then
-    systemd-run --scope --quiet --collect --slice=system.slice mount -T "$FSTAB" "$1" 8>&- 9>&- || return 1
+    systemd-run --scope --quiet --collect --slice=system.slice mount -T "$FSTAB" "$1" 6>&- 8>&- 9>&- || return 1
   else
-    mount -T "$FSTAB" "$1" 8>&- 9>&- || return 1
+    mount -T "$FSTAB" "$1" 6>&- 8>&- 9>&- || return 1
   fi
   mountpoint -q "$1"   # a mount that "succeeds" without mounting counts as a failure
 }
@@ -796,6 +808,15 @@ next_label() {
   echo "$p$n"
 }
 
+retry_busy() {   # retry_busy COMMAND...: a drive that was just unplugged from a pool or just changed is sometimes still looked at by the system for a moment ("busy"): try again a few times
+  local i
+  for i in 1 2 3 4 5 6; do
+    "$@" && return 0
+    sleep 2; udevadm settle 2>/dev/null || true
+  done
+  "$@"
+}
+
 format_disk() {   # format_disk /dev/sdX LABEL -> prints partition path
   local dev=$1 label=$2 p vg
   refuse_unsafe_disk "$dev"
@@ -807,13 +828,14 @@ format_disk() {   # format_disk /dev/sdX LABEL -> prints partition path
     done
   fi
   for p in $(parts_of "$dev"); do wipefs -a "$p" >/dev/null 2>&1 || true; done
-  wipefs -a "$dev" >/dev/null 2>&1 || die "wipefs failed on $dev"
-  parted -s "$dev" mklabel gpt mkpart storage ext4 1MiB 100% >/dev/null 2>&1 || die "parted failed on $dev"
+  udevadm settle 2>/dev/null || true
+  retry_busy wipefs -a "$dev" >/dev/null 2>&1 || die "wipefs failed on $dev (the drive is busy: $(wipefs -a "$dev" 2>&1 | tail -1))"
+  retry_busy parted -s "$dev" mklabel gpt mkpart storage ext4 1MiB 100% >/dev/null 2>&1 || die "parted failed on $dev"
   partprobe "$dev" >/dev/null 2>&1 || true
   udevadm settle 2>/dev/null || true
   p=$(first_part "$dev") || die "The new partition did not appear on $dev"
   wipefs -a "$p" >/dev/null 2>&1 || true
-  mkfs.ext4 -F -q -L "$label" -m 0 "$p" >&2 || die "mkfs failed on $p"
+  retry_busy mkfs.ext4 -F -q -L "$label" -m 0 "$p" >&2 || die "mkfs failed on $p"
   udevadm settle 2>/dev/null || true
   log "formatted $dev -> $p label $label"
   echo "$p"
@@ -842,7 +864,7 @@ docker_each() {   # docker_each stop|start NAME...: the containers go together (
   local act=$1 n tmp; shift
   tmp=$(mktemp) || return 0
   for n in "$@"; do
-    ( docker "$act" "$n" >/dev/null 2>&1 || echo "$n" >>"$tmp" ) 8>&- 9>&- &
+    ( docker "$act" "$n" >/dev/null 2>&1 || echo "$n" >>"$tmp" ) 6>&- 8>&- 9>&- &
     if [ "$(jobs -rp | wc -l)" -ge 8 ]; then wait -n 2>/dev/null || true; fi
   done
   wait
@@ -1276,7 +1298,14 @@ not_leaving() {   # a filter: the mount points on stdin that do not leave their 
   return 0
 }
 
-drain_branch() {   # copy everything from branch $1 to the emptiest other branch of the same role
+drain_branch() {   # (the real work is below; the lock on the drive that is copied to is let go however it ends)
+  drain_branch_run "$@"
+  local rc=$?
+  target_unlock
+  return "$rc"
+}
+
+drain_branch_run() {   # copy everything from branch $1 to the emptiest other branch of the same role
   local mp=$1 role used target pool
   local -a cands=()
   role=$(branch_role "$mp"); pool=$(role_pool "$role")
@@ -1287,6 +1316,7 @@ drain_branch() {   # copy everything from branch $1 to the emptiest other branch
     NOROOM=1
     return 1
   fi
+  if ! target_lock "$target"; then ABORTED=1; space_release "$mp"; note "Stopped before copying. Nothing was changed."; return 1; fi
   if abort_requested; then ABORTED=1; space_release "$mp"; note "Stopped before copying. Nothing was changed."; return 1; fi
   say "Copying $(human "$used") from $(branch_name "$mp") to $(branch_name "$target") (pass 1, services keep running)..."
   progress 5 "Copying files to $(branch_name "$target")"
@@ -5081,6 +5111,13 @@ panel_batch_report() {   # panel_batch_report ACT NAMEOF: read what each drive's
   if [ ${#failed[@]} -gt 0 ]; then
     [ ${#stopped[@]} -gt 0 ] && say "The other drives were stopped with nothing lost: $(joinl "${stopped[@]}")."
     [ ${#back[@]} -gt 0 ] && say "Put back where they were: $(joinl "${back[@]}")."
+    local why_f why_all=""
+    for id in "${PANEL_IDS[@]}"; do      # what each failed drive complained about
+      [ "$(cat "$PANEL_RESERVE_DIR/$id.state" 2>/dev/null)" = failed ] || [ ! -f "$PANEL_RESERVE_DIR/$id.state" ] || continue
+      why_f=$(cat "$PANEL_RESERVE_DIR/$id.err" 2>/dev/null || tail -1 "$PANEL_RESERVE_DIR/$id.warn" 2>/dev/null)
+      [ -n "$why_f" ] && why_all="${why_all:+$why_all; }${nm[$id]:-$id}: $why_f"
+    done
+    [ -n "$why_all" ] && say "What went wrong: $why_all"
     say "Stopped because of a problem with $(joinl "${failed[@]}"): ${#okl[@]} of ${#PANEL_IDS[@]} drives were done."
     return 1
   fi
