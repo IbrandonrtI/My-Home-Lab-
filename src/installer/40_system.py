@@ -76,8 +76,8 @@ class AptUpgrade(Step):
         return State.data["ran"].get("apt-upgrade", "")
 
     def run(self):
-        act(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=900)
-        act(["apt-get", "upgrade", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"], env=apt_env(), check=True, timeout=3600)
+        act(["apt-get", "-oDPkg::Lock::Timeout=600", "update", "-q"], env=apt_env(), check=True, timeout=900)
+        act(["apt-get", "-oDPkg::Lock::Timeout=600", "upgrade", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"], env=apt_env(), check=True, timeout=3600)
         if not Opt.dry:
             State.mark("apt-upgrade")
 
@@ -100,7 +100,7 @@ class Packages(Step):
             apt_install(need)
         for p in OPTIONAL_PKGS:
             if not pkg_installed(p):
-                rc, txt = act(["apt-get", "install", "-y", "-q", p], env=apt_env())
+                rc, txt = act(["apt-get", "-oDPkg::Lock::Timeout=600", "install", "-y", "-q", p], env=apt_env())
                 if rc != 0 and not Opt.dry:
                     warn("Optional package %s could not be installed (%s). The drives tool needs it later." % (p, txt.strip()[-120:]))
 
@@ -124,7 +124,7 @@ class DockerInstalled(Step):
         if pkg_installed("docker.io") or pkg_installed("docker-compose") or pkg_installed("podman-docker"):
             if containers_all():
                 raise Abort("Another Docker package is installed and has containers. The installer does not remove it. Remove it manually first.")
-            act(["apt-get", "remove", "-y", "-q", "docker.io", "docker-compose", "podman-docker", "containerd", "runc"],
+            act(["apt-get", "-oDPkg::Lock::Timeout=600", "remove", "-y", "-q", "docker.io", "docker-compose", "podman-docker", "containerd", "runc"],
                 env=apt_env())
         if Opt.dry:
             out("      would add Docker's apt repository for %s %s and install docker-ce" % (distro, suite))
@@ -141,7 +141,7 @@ class DockerInstalled(Step):
         write_file(P("/etc/apt/sources.list.d/docker.sources"),
                    "Types: deb\nURIs: https://download.docker.com/linux/%s\nSuites: %s\nComponents: stable\n"
                    "Architectures: %s\nSigned-By: /etc/apt/keyrings/docker.asc\n" % (distro, suite, arch), 0o644)
-        run(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=600)
+        run(["apt-get", "-oDPkg::Lock::Timeout=600", "update", "-q"], env=apt_env(), check=True, timeout=600)
         apt_install(["docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin"])
         act(["systemctl", "enable", "--now", "docker"])
 
@@ -182,7 +182,7 @@ class TailscaleInstalled(Step):
                 f.write(fetch_bytes(base + ".noarmor.gpg"))
             with open(P("/etc/apt/sources.list.d/tailscale.list"), "wb") as f:
                 f.write(fetch_bytes(base + ".tailscale-keyring.list"))
-            run(["apt-get", "update", "-q"], env=apt_env(), check=True, timeout=600)
+            run(["apt-get", "-oDPkg::Lock::Timeout=600", "update", "-q"], env=apt_env(), check=True, timeout=600)
             apt_install(["tailscale"])
         except Abort:
             raise

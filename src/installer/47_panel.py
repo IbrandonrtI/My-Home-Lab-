@@ -266,7 +266,7 @@ class TerminalFiles(Step):
 
     def run(self):
         if not pkg_installed("ttyd"):
-            rc, txt = act(["apt-get", "install", "-y", "-q", "ttyd"], env=apt_env(), timeout=900)
+            rc, txt = act(["apt-get", "-oDPkg::Lock::Timeout=600", "install", "-y", "-q", "ttyd"], env=apt_env(), timeout=900)
             if rc != 0 and not Opt.dry:
                 raise Abort("The terminal program (ttyd) could not be installed: %s\n      Try it by hand: sudo apt-get install ttyd" % txt.strip()[-200:])
         changed = read_file(P(TERMINAL_UNIT)) != terminal_unit_text()

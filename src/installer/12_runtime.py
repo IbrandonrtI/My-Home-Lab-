@@ -60,7 +60,7 @@ def apt_distro():
 
 def apt_install(pkgs):
     """Install packages with apt without asking questions (does nothing in a dry run)."""
-    act(["apt-get", "install", "-y", "-q"] + list(pkgs), env=apt_env(), check=True, timeout=1800)
+    act(["apt-get", "-oDPkg::Lock::Timeout=600", "install", "-y", "-q"] + list(pkgs), env=apt_env(), check=True, timeout=1800)
 
 
 # ---------------------------------------------------------------- files
