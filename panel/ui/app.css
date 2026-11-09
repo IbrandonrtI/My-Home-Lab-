@@ -203,10 +203,6 @@ dialog.wide { width: min(720px, calc(100vw - 24px)); }
 .pills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .badtext { color: var(--bad) !important; }
 .card.working { border-color: rgba(var(--accent), 0.6); color: rgb(var(--accent)); }
-.dcheck { margin-top: 8px; }
-.dcheck summary { cursor: pointer; color: rgb(var(--accent)); font-size: 14px; padding: 4px 0; }
-.dcheck .result { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
-.dcheck .row.tight { gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 fieldset.dq { border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin: 10px 0; }
 fieldset.dq legend { padding: 0 6px; font-weight: 600; }
 label.dopt { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; cursor: pointer; }
@@ -217,18 +213,12 @@ label.dopt.sure input { margin-top: 0; width: 20px; height: 20px; flex: none; }
 .dwarn { color: var(--bad); border-left: 3px solid var(--bad); padding: 4px 10px; margin: 10px 0; }
 pre.joblog { max-height: 180px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 13px; background: rgba(0, 0, 0, 0.25); border-radius: 10px; padding: 8px 10px; color: var(--text); }
 
-/* Drives: pool cards with a tree of drives (like the TrueNAS storage pages) */
+/* Drives: the top bar */
 .dbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .dbar .info { flex: 1 1 240px; display: flex; gap: 6px 18px; flex-wrap: wrap; color: var(--muted); font-size: 13px; }
 .warntext { color: #ffd78a; }
 .badtext { color: var(--bad); }
 .sub { color: var(--muted); font-size: 13px; display: block; }
-details.pool { padding: 0; overflow: visible; }
-details.pool > summary { display: block; list-style: none; cursor: pointer; padding: 14px 16px; border-radius: 16px; position: relative; padding-left: 38px; }
-details.pool > summary::-webkit-details-marker { display: none; }
-details.pool > summary::before { content: "\25B8"; position: absolute; left: 16px; top: 50%; transform: translateY(-50%); color: var(--muted); transition: transform 0.15s; }
-details.pool[open] > summary::before { transform: translateY(-50%) rotate(90deg); }
-details.pool > summary:hover { background: rgba(255, 255, 255, 0.03); }
 .ph { display: flex; align-items: center; gap: 14px 22px; flex-wrap: wrap; }
 .ph .pt { flex: 1 1 220px; min-width: 0; }
 .ph .pt h2 { margin: 0; }
@@ -241,35 +231,57 @@ svg.ring { flex: none; }
 svg.ring.high .ring-fg { stroke: #ffd78a; }
 svg.ring.full .ring-fg { stroke: var(--bad); }
 .ring-t { fill: var(--text); font-size: 15px; font-weight: 650; }
-.tree { margin: 0 16px 14px 28px; border-left: 2px solid var(--line); padding-left: 14px; }
-.tree-empty { margin: 0 16px 14px 38px; }
-.thead, .trow { display: grid; grid-template-columns: minmax(200px, 3fr) 80px minmax(150px, 190px) 90px 80px 100px 90px 44px; gap: 8px 12px; align-items: center; }
-.thead { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; padding: 0 0 6px; }
-.trow { position: relative; padding: 10px 0; border-top: 1px solid var(--line); }
-.trow::before { content: ""; position: absolute; left: -14px; top: 50%; width: 12px; border-top: 2px solid var(--line); }
-.trow.last { }
-.trow .c { min-width: 0; }
-.trow .c .pill { white-space: nowrap; }
-.trow .name b { display: block; overflow-wrap: anywhere; }
-.trow .name .usebar { max-width: 260px; }
-.trow .c.act { justify-self: end; }
-.trow .c.more { grid-column: 1 / -1; }
-.trow .c.more .dcheck { margin-top: 0; }
-details.kebab { position: relative; }
-details.kebab > summary { list-style: none; cursor: pointer; min-width: 36px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; border-radius: 10px; border: 1px solid var(--line); background: var(--panel2); font-size: 20px; line-height: 1; }
-details.kebab > summary::-webkit-details-marker { display: none; }
-details.kebab > summary:hover, details.kebab[open] > summary { border-color: rgba(var(--accent), 0.6); }
-.kmenu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; min-width: 190px; display: grid; gap: 2px; padding: 6px; background: #0f1726; border: 1px solid rgba(var(--accent), 0.45); border-radius: 12px; box-shadow: 0 10px 28px rgba(0, 0, 0, 0.5); }
-.kmenu button { justify-content: flex-start; background: transparent; border-color: transparent; min-height: 38px; font-size: 14px; border-radius: 8px; }
-.kmenu button:hover:not(:disabled) { background: rgba(255, 255, 255, 0.07); border-color: transparent; }
+/* the Drives screen: a box for the loose drives and a box per pool; a drive is a tile */
+.pools { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+@media (max-width: 900px) { .pools { grid-template-columns: 1fr; } }
+.dzone { border: 2px dashed transparent; transition: border-color 0.12s, background 0.12s; margin-bottom: 14px; padding: 14px 16px; }
+.pools .dzone { margin-bottom: 0; }
+.dzone .ph { margin-bottom: 12px; }
+.dzone .tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; min-height: 120px; align-content: start; }
+.dropnote { grid-column: 1 / -1; align-self: center; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 12px; padding: 26px 12px; margin: 0; }
+[data-drag="spare"] .dzone[data-accepts~="spare"], [data-drag="main"] .dzone[data-accepts~="main"], [data-drag="backup"] .dzone[data-accepts~="backup"] { border-color: rgba(var(--accent), 0.55); }
+.dzone.over { border-color: rgb(var(--accent)) !important; background: rgba(var(--accent), 0.1); }
+.tile { position: relative; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 10px 12px; min-width: 0; background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; cursor: grab; user-select: none; -webkit-user-select: none; text-align: center; }
+.tile:hover { border-color: rgba(var(--accent), 0.6); }
+.tile:focus-visible { outline: 2px solid rgb(var(--accent)); outline-offset: 2px; }
+.tile.locked { cursor: pointer; }
+.tile.dim { opacity: 0.55; cursor: default; }
+.tile.dragging { opacity: 0.4; }
+.tile.sel { border-color: rgb(var(--accent)); background: rgba(var(--accent), 0.16); box-shadow: 0 0 0 2px rgba(var(--accent), 0.55); }
+.tile.asleep .hdd { opacity: 0.6; }
+.tile .tname { width: 100%; font-weight: 650; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .ticon { position: relative; width: 64px; height: 48px; margin: 2px 0; }
+.tile .ticon .dot { position: absolute; top: -5px; right: -7px; width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--panel2); }
+.tile .dot.ok { background: var(--good); box-shadow: 0 0 6px rgba(127, 227, 176, 0.7); }
+.tile .dot.bad { background: var(--bad); box-shadow: 0 0 6px rgba(255, 141, 141, 0.7); }
+.tile .warnmark { position: absolute; bottom: -4px; left: -8px; width: 18px; height: 18px; border-radius: 50%; background: #ffd78a; color: #1a1300; font-weight: 800; font-size: 13px; line-height: 18px; }
+.tile .lock { position: absolute; bottom: -6px; left: -8px; font-size: 14px; }
+.tile .tused { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.tile .usebar { width: 100%; margin: 2px 0 0; max-width: none; }
+.tile .usebar.ghost { background: transparent; }
+svg.hdd { display: block; }
+.hdd-body { fill: rgba(255, 255, 255, 0.07); stroke: rgba(var(--accent), 0.85); stroke-width: 2.5; }
+.hdd-disc { fill: none; stroke: rgba(255, 255, 255, 0.4); stroke-width: 2; }
+.hdd-hub { fill: rgba(255, 255, 255, 0.55); }
+.hdd-arm { stroke: rgba(var(--accent), 0.9); stroke-width: 2.5; stroke-linecap: round; }
+.hdd-led { fill: rgba(var(--accent), 0.9); }
+.tile.working { border-color: rgba(var(--accent), 0.7); }
+.tprog { width: 100%; display: grid; gap: 3px; }
+.tprog .bar { height: 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.tprog .bar i { display: block; height: 100%; border-radius: 6px; background: rgb(var(--accent)); transition: width 0.6s; }
+.tprog small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.selbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 12px; border-radius: 14px; border: 1px solid rgba(var(--accent), 0.6); background: rgba(var(--accent), 0.12); position: sticky; top: 0; z-index: 5; }
+.selbar b { margin-right: 6px; }
+.dbar button.on { border-color: rgb(var(--accent)); background: rgba(var(--accent), 0.2); }
+dialog.dcard { width: min(640px, calc(100vw - 24px)); }
+.dcard .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin: 10px 0; }
+.dcard .st { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; min-width: 0; overflow-wrap: anywhere; }
+.dcard .st small { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+.dcard .row.tight { gap: 8px; flex-wrap: wrap; margin: 8px 0; }
+.dcard .result { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
+.dcard .cardactions { padding-top: 10px; border-top: 1px solid var(--line); }
+details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-size: 14px; margin-top: 8px; }
 @media (max-width: 760px) {
-  .thead { display: none; }
-  .trow { grid-template-columns: 1fr 1fr; padding: 12px 0; }
-  .trow .c.name { grid-column: 1 / -1; }
-  .trow .c.act { position: absolute; right: 0; top: 10px; }
-  .trow .c.name { padding-right: 46px; }
-  .trow .c[data-label]::before { content: attr(data-label); display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
-  .tree { margin-left: 8px; margin-right: 8px; padding-left: 10px; }
-  .trow::before { left: -10px; width: 8px; }
-  details.pool > summary { padding-right: 12px; }
+  .dzone { padding: 12px; }
+  .dzone .tiles { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 }
