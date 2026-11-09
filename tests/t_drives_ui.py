@@ -462,6 +462,7 @@ def main():
             size.fill("5")
             check("boot tile: a size below the limit is refused", "whole number from 10 to 30" in dialog_text(pg) and ok_button(pg).is_disabled(), dialog_text(pg))
             size.fill("20")
+            check("boot tile: the button has fixed plain words (no size in it, so it never shows an old number)", ok_button(pg).inner_text() == "Add to Main Storage", ok_button(pg).inner_text())
             check("boot tile: the I-understand box is needed", sure_box(pg).count() == 1 and ok_button(pg).is_disabled(), "")
             sure_box(pg).check()
             check("boot tile: a good size and the box enable the button", ok_button(pg).is_enabled(), "")
