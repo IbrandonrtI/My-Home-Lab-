@@ -174,6 +174,7 @@ restore_services() {   # a step failed after the containers were stopped: when t
 }
 
 on_exit() {
+  release_started
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."

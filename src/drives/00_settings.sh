@@ -128,6 +128,7 @@ PANEL_RESERVE_DIR="" # the folder of a batch with several drives: reserved drive
 PANEL_JOBS=3         # how many drives of one batch are worked on at the same time
 CRIT_DEPTH=0         # >0 while this process holds the pool lock (the short steps that change a pool run one at a time)
 ABORTED=0            # 1 when the person pressed Stop and this drive was stopped because of it
+HOLDER_STOPPED=""
 PUTBACK=0            # 1 when a half-moved drive was put back into the pool it came from
 NOROOM=0            # 1 when a drive was left where it is because the drives that stay have no room for its files
 PANEL_UNDO=0         # 1 while drives are put back after Stop (typed words are not asked for)
