@@ -113,11 +113,11 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
 
   if [ ${#others[@]} -eq 0 ]; then
     if [ "$role" = main ]; then
-      note "$label is the only main drive. Removing it would take away the storage your services use."
-      note "Add another main drive first (sudo drives > Add or remove drives > Connect a new drive), then try again."
-      return 1
+      warn "$label is the only main drive. Taking it out leaves the Main storage empty."
+      warn "The services that use it (Immich, Nextcloud, FileBrowser...) stay stopped until a main drive is added again. Nothing on the drive is deleted."
+    else
+      warn "$label is the only backup drive. Backups will stop until another backup drive is connected."
     fi
-    warn "$label is the only backup drive. Backups will stop until another backup drive is connected."
     typed "REMOVE" "Type REMOVE to continue: " || { say "Cancelled."; return 1; }
   elif { ! is_boot_section "$mp" || [ "$KEEP_IMG" = 1 ]; } && mountpoint -q "$mp" && has_data "$mp"; then
     say "$label holds files. They will disappear from the $role storage unless they are copied to another $role drive."

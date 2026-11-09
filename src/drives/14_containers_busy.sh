@@ -151,7 +151,35 @@ pre_change() {   # pre_change STEP...: the last stop before the first change. 0 
   dry_gate "$@"
 }
 
+# The Main storage can be left empty on purpose (every Main drive taken out). The services that use it must NOT start then: they would
+# write into the bare folder on the boot drive. They are written down here and start again when a Main drive is back.
+main_hold_file() { printf '%s' "$STATE_DIR/main-empty-stopped"; }
+
+main_hold_apply() {   # takes the containers that use the Main storage out of STOPPED when Main has no drive
+  [ -z "$(branches_of main)" ] || return 0
+  local keep n rest="" mine=""
+  keep=$(containers_using "$MAIN_POOL" | tr '\n' ' ')
+  for n in $STOPPED; do case " $keep " in *" $n "*) mine="$mine $n" ;; *) rest="$rest $n" ;; esac; done
+  [ -n "${mine// /}" ] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  for n in $mine; do echo "$n" >>"$(main_hold_file)"; done
+  note "The Main storage is empty, so these containers stay stopped until a Main drive is added:$mine"
+  STOPPED=${rest# }
+}
+
+main_hold_resume() {   # a Main drive is back and mounted: the containers that were kept stopped join the ones to start
+  local f; f=$(main_hold_file)
+  [ -s "$f" ] || return 0
+  [ -n "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
+  # shellcheck disable=SC2046
+  STOPPED=$({ printf '%s\n' $STOPPED; cat "$f"; } | sort -u | grep . | tr '\n' ' ')
+  rm -f "$f"
+}
+
 start_containers() {
+  main_hold_resume
+  [ -n "${STOPPED// /}" ] || return 0
+  main_hold_apply
   [ -n "${STOPPED// /}" ] || return 0
   local failed=""
   note "Starting containers: $STOPPED"
@@ -173,7 +201,7 @@ main_pool_ok() {   # true when the main storage is mounted the way fstab says (o
 
 batch_start_held() {   # the end of a batch of several drives: the containers it stopped start again (when the pools are mounted the way fstab says)
   local f="$PANEL_RESERVE_DIR/held" list
-  [ -s "$f" ] || return 0
+  [ -s "$f" ] || { start_containers; return 0; }      # (nothing was stopped by this batch; containers kept stopped for an empty Main may start now)
   list=$(tr '\n' ' ' <"$f"); rm -f "$f"
   PANEL_HOLD=0
   if main_pool_ok; then

@@ -125,7 +125,7 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
     done
   else
     for id in "${PANEL_IDS[@]}"; do panel_branch "$id" >/dev/null || return 1; done
-    if [ "$n" -gt 1 ]; then      # several drives at once must leave at least one Main drive (a single drive gets its own, longer explanation from the flow)
+    if [ "$n" -gt 1 ] && [ "$act" = move ]; then      # several drives moving at once must leave at least one Main drive (a single drive gets its own, longer explanation from the flow)
       local keepleft
       keepleft=$(branches_of main | wc -l)
       for id in "${PANEL_IDS[@]}"; do [ "$(branch_role "$(panel_branch "$id" 2>/dev/null)")" = main ] && keepleft=$((keepleft - 1)); done
