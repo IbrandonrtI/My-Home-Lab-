@@ -42,5 +42,29 @@ stop_containers /mnt/x
 check "a container that does not stop gives a warning" "$(grep -c 'did not stop cleanly' "$TMP/warn")" "1"
 check "and the stopped ones are still remembered" "$STOPPED" "ok1 bad ok2 "
 
+# --- a drive that joined a pool a short while ago is not counted when looking for an upload; progress lines are for the panel only
+mark_added NEWONE
+young_drive NEWONE && r=young || r=old
+check "a drive added just now counts as young" "$r" "young"
+young_drive NOTMARKED && r=young || r=old
+check "a drive that was never marked is not young" "$r" "old"
+echo $(( $(date +%s) - 4000 )) >"$STATE_DIR/added/OLDONE"
+young_drive OLDONE && r=young || r=old
+check "a drive added over half an hour ago is not young any more" "$r" "old"
+PANEL_MODE=0; PROG_ITEM=sdx
+check "progress prints nothing outside the panel" "$(progress 50 "Half")" ""
+PANEL_MODE=1
+check "in the panel progress names the drive, the percent and the step" "$(progress 50 "Half way")" "PROGRESS sdx 50 Half way"
+PROG_LO=0; PROG_HI=55
+check "a step may use only part of the bar" "$(progress 100 "Left the pool")" "PROGRESS sdx 55 Left the pool"
+PROG_LO=0; PROG_HI=100
+rsync() { printf '  1,000  10%%  1MB/s  0:00:09\r  5,000  50%%  1MB/s  0:00:05\r 10,000 100%%  1MB/s  0:00:00 (xfr#1)\n'; return "${FAKE_RSYNC_RC:-0}"; }
+out=$(rsync_run 5 60 "Copying files" -a /x /y)
+check "rsync percent moves the bar between FROM and TO" "$(printf '%s\n' "$out" | tr '\n' ',')" "PROGRESS sdx 10 Copying files 10%,PROGRESS sdx 32 Copying files 50%,PROGRESS sdx 60 Copying files 100%,"
+FAKE_RSYNC_RC=23; rsync_run 5 60 "Copying files" -a /x /y >/dev/null; rc=$?
+check "a failing rsync still fails" "$rc" "23"
+FAKE_RSYNC_RC=0; PANEL_MODE=0; rsync_run 5 60 "Copying files" -a /x /y >/dev/null; rc=$?
+check "outside the panel rsync is plain" "$rc" "0"
+
 [ "$bad" = 0 ] && echo OK || echo FAIL
 [ "$bad" = 0 ]

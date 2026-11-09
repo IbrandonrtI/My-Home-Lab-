@@ -101,7 +101,7 @@ def main():
         n3 = len(calls())
         bad_jobs = [("add", {"id": "sdc", "role": "middle", "mode": "erase", "typed": []}, "a bad role"), ("add", {"id": "sdc", "role": "main", "mode": "both", "typed": []}, "a bad mode"),
                     ("add", {"id": "sdc", "role": "main", "mode": "erase", "typed": ["yes"]}, "a typed word that is not allowed"), ("add", {"id": "sdc", "role": "main", "mode": "erase", "typed": ["/dev/sdc;reboot"]}, "a typed word with a shell character"),
-                    ("add", {"id": "sdc", "role": "main", "mode": "erase", "typed": ["ERASE"] * 5}, "too many typed words"), ("add", {"id": "sdc", "role": "main", "mode": "erase", "typed": "ERASE"}, "typed that is not a list"),
+                    ("add", {"id": "sdc", "role": "main", "mode": "erase", "typed": ["ERASE"] * 21}, "too many typed words"), ("add", {"id": "sdc", "role": "main", "mode": "erase", "typed": "ERASE"}, "typed that is not a list"),
                     ("add", {"id": "../x", "role": "main", "mode": "erase", "typed": []}, "a path as the drive"), ("add", {"role": "main", "mode": "erase", "typed": []}, "no drive"),
                     ("wipe", {"id": "sdc", "mode": "shred", "typed": []}, "a bad wipe mode"), ("disconnect", {"id": "MAIN1", "copy": "maybe", "typed": []}, "a bad copy choice"),
                     ("move", {"id": "MAIN1", "keep": "both", "copy": "yes", "typed": []}, "a bad keep choice"), ("move", {"id": "MAIN1", "keep": "keep", "typed": []}, "a missing copy choice")]
@@ -122,6 +122,23 @@ def main():
         check("drives: move passes exactly the words", calls()[-1] == ["panel", "move", "MAIN1", "keep", "yes", "KEEP"], calls()[-1:])
         st, js, _, _ = p.req("POST", "/api/drives/move", {"id": "MAIN1", "keep": "erase", "copy": "no", "typed": ["/dev/sdb", "ERASE", "CONTINUE"]}); wait_job()
         check("drives: move (erase, no copy) passes all its typed words", calls()[-1] == ["panel", "move", "MAIN1", "erase", "no", "/dev/sdb", "ERASE", "CONTINUE"], calls()[-1:])
+        # ---- several drives at once, a choice for each drive, and the word NOW
+        bad_many = [({"ids": ["sdc", "sdc"], "role": "main", "mode": "erase", "typed": []}, "a drive named twice"), ({"ids": [], "role": "main", "mode": "erase", "typed": []}, "no drive"),
+                    ({"ids": ["a%d" % i for i in range(9)], "role": "main", "mode": "erase", "typed": []}, "nine drives"), ({"ids": ["sdc", "sdd:keep"], "role": "main", "typed": []}, "a choice for only one of two drives"),
+                    ({"ids": ["sdc;reboot", "sdd"], "role": "main", "mode": "erase", "typed": []}, "a shell character in an id"), ({"ids": "sdc,sdd", "role": "main", "mode": "erase", "typed": []}, "ids that are not a list"),
+                    ({"ids": ["sdc:both"], "role": "main", "typed": []}, "a bad per-drive choice")]
+        n4 = len(calls())
+        for body, what in bad_many:
+            st, js, _, _ = p.req("POST", "/api/drives/add", body)
+            check("drives: add refuses %s before asking the tool" % what, st in (400, 404) and "error" in js and len(calls()) == n4, (st, js))
+        p.req("POST", "/api/drives/add", {"ids": ["sdc", "sdd"], "role": "main", "mode": "erase", "typed": ["/dev/sdc", "/dev/sdd", "ERASE"]}); wait_job()
+        check("drives: two drives with one choice go as one list", calls()[-1] == ["panel", "add", "sdc,sdd", "main", "erase", "/dev/sdc", "/dev/sdd", "ERASE"], calls()[-1:])
+        p.req("POST", "/api/drives/add", {"ids": ["sdc:keep", "sdd:erase"], "role": "backup", "typed": ["/dev/sdd", "ERASE"]}); wait_job()
+        check("drives: a choice for each drive goes as 'each'", calls()[-1] == ["panel", "add", "sdc:keep,sdd:erase", "backup", "each", "/dev/sdd", "ERASE"], calls()[-1:])
+        p.req("POST", "/api/drives/move", {"ids": ["MAIN1", "MAIN2"], "keep": "keep", "copy": "yes", "typed": ["KEEP", "NOW"]}); wait_job()
+        check("drives: move of two drives, with the word NOW, passes exactly the words", calls()[-1] == ["panel", "move", "MAIN1,MAIN2", "keep", "yes", "KEEP", "NOW"], calls()[-1:])
+        p.req("POST", "/api/drives/disconnect", {"ids": ["MAIN1", "MAIN2"], "copy": "yes", "typed": []}); wait_job()
+        check("drives: disconnect of two drives goes as one list", calls()[-1] == ["panel", "disconnect", "MAIN1,MAIN2", "yes"], calls()[-1:])
         p.stop()
         p.env["FAKE_DRIVES_MODE"] = "jobfail"
         p.start(); p.login()
@@ -129,12 +146,22 @@ def main():
         j = wait_job()
         check("drives: a refused change ends with rc 1 and the tool's sentence", j["rc"] == 1 and "Cancelled. Nothing was changed." in j["message"], j)
         p.stop()
+        p.env["FAKE_DRIVES_MODE"] = "jobbusy"
+        p.start(); p.login()
+        p.req("POST", "/api/drives/move", {"ids": ["MAIN1"], "keep": "keep", "copy": "yes", "typed": ["KEEP"]})
+        j = wait_job()
+        check("drives: a change refused as busy ends with the tool's sentence (the page offers Go Ahead Anyway)", j["rc"] == 1 and "Not a good moment" in j["message"], j)
+        p.req("POST", "/api/drives/move", {"ids": ["MAIN1"], "keep": "keep", "copy": "yes", "typed": ["KEEP", "NOW"]})
+        j = wait_job()
+        check("drives: with the word NOW it goes on", j["rc"] == 0, j)
+        p.stop()
         p.env["FAKE_DRIVES_MODE"] = "jobslow"
         p.start(); p.login()
         st, js, _, _ = p.req("POST", "/api/drives/move", {"id": "MAIN1", "keep": "keep", "copy": "yes", "typed": ["KEEP"]})
         time.sleep(1.0)
         st, j, _, _ = p.req("GET", "/api/drives/job")
         check("drives: a running job shows its progress lines", st == 200 and j["running"] is True and any("Copying files" in x for x in j["lines"]), (st, j))
+        check("drives: a running job shows the bar of its drive (and the progress lines stay out of the text)", j["items"] == ["MAIN1"] and j["progress"].get("MAIN1", {}).get("pct", 0) >= 22 and "Copying files" in j["progress"]["MAIN1"]["text"] and not any(x.startswith("PROGRESS") for x in j["lines"]), (st, j))
         st, js, _, _ = p.req("GET", "/api/drives")
         check("drives: the list waits while a job runs (the page follows the progress instead)", st == 409 and "drive change is running" in js["error"], (st, js))
         st, js, _, _ = p.req("POST", "/api/drives/wipe", {"id": "sdc", "mode": "empty", "typed": []})

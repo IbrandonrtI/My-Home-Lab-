@@ -99,6 +99,38 @@ else
   echo "skipped: the live add needs setfattr and getfattr (package attr)"
 fi
 
+# ---------------- several drives at once (add, move, take out): one answer for all, or one answer for each; the busy check is made once; progress lines name each drive
+reset_env; $D test-setup 4 300M >/dev/null 2>&1
+L1=$(loop_of 1); L2=$(loop_of 2); L3=$(loop_of 3); L4=$(loop_of 4); i2=${L2#/dev/}; i3=${L3#/dev/}; i4=${L4#/dev/}
+P add "${L1#/dev/}" main erase "$L1" ERASE >/dev/null
+has "several: a drive named twice is refused" "$(P add "$i2,$i2" main erase "$L2" ERASE)" "cannot be chosen twice"
+has "several: more than eight drives are refused" "$(P add a1,a2,a3,a4,a5,a6,a7,a8,a9 main erase ERASE)" "between one and eight"
+has "several: 'each' needs a choice for every drive" "$(P add "$i2,$i3" main each "$L2" "$L3" ERASE)" "One of the choices is not allowed"
+has "several: a choice for a drive needs the word 'each'" "$(P add "$i2:erase,$i3:erase" main erase "$L2" "$L3" ERASE)" "One of the choices is not allowed"
+has "several: a drive that is not a spare stops the whole batch before anything changes" "$(P add "$i2,sda" main erase "$L2" ERASE)" "is not a spare drive"
+check "several: nothing was added by the refusals" "$(fstab_lines)" "1"
+OUT=$(P add "$i2:erase,$i3:erase" main each "$L2" "$L3" ERASE)
+check "several: two drives joined the Main storage one after the other" "$(printf '%s\n' "$OUT" | grep -c 'is connected to the main storage')" "2"
+has "several: the progress names the first drive" "$OUT" "PROGRESS $i2 100 Done"
+has "several: and the second" "$OUT" "PROGRESS $i3 100 Done"
+check "several: Main has three drives now" "$(fstab_lines)" "3"
+echo one >/mnt/test-main/one.txt; echo two >/mnt/test-main/two.txt
+A=$(label_of main 1); B=$(label_of main 2)
+P add "$i4" backup erase "$L4" ERASE >/dev/null
+echo "a backup is running right now" >"$S/busy"; export DRIVES_BUSY_FILE="$S/busy"
+has "several: moving is refused while a backup runs" "$(P move "$A,$B" keep yes KEEP)" "Not a good moment"
+OUT=$(P move "$A,$B" keep yes KEEP NOW)
+unset DRIVES_BUSY_FILE
+check "several: the word NOW goes on anyway and both drives moved" "$(printf '%s\n' "$OUT" | grep -c 'is connected to the backup storage')" "2"
+has "several: a move shows its own progress for the first drive" "$OUT" "PROGRESS $A 100 Done"
+pool_drives() { grep -v '^#' "$S/fstab" | grep " /mnt/test-$1 fuse.mergerfs" | grep -o '/mnt/test-disks/[A-Za-z0-9]*' | sort -u | wc -l; }
+check "several: Backup has three drives, Main has one" "$(pool_drives backup)-$(pool_drives main)" "3-1"
+check "several: the files that were in Main are still in Main" "$(cat /mnt/test-main/one.txt /mnt/test-main/two.txt 2>/dev/null | tr '\n' ' ')" "one two "
+has "several: all the Main drives cannot be moved in one batch" "$(P move "$(label_of main 0),$(label_of backup 0)" keep yes KEEP)" "Keep at least one Main drive"
+C=$(label_of backup 0); D2=$(label_of backup 1)
+has "several: two drives are taken out together" "$(P disconnect "$C,$D2" yes)" "is disconnected from the backup storage"
+check "several: both are spare drives now" "$(actions | jq_ "len(d['spare'])")" "2"
+
 # ---------------- disconnect
 setup3
 for i in 1 2 3 4 5; do echo "f$i" >"/mnt/test-main/f$i.txt"; done; echo "b1" >/mnt/test-backup/b1.txt
