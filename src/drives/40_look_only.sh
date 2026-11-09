@@ -110,6 +110,11 @@ json_drives() {   # {"pools":[...],"drives":[...]} (usage, list and status all u
   held=$(sort -u "$(main_hold_file)" 2>/dev/null)
   for n in $held; do [ "$hf" = 1 ] || printf ','; hf=0; printf '%s' "$(json_str "$n")"; done
   printf ']'
+  # a RAID or ZFS setup: its name and health (the panel shows it as one tile inside Main, with its drives)
+  if array_active; then
+    local ah; ah=$(array_health_text); ah=${ah%%   (*}
+    printf ',"array":{"title":%s,"health":%s}' "$(json_str "$(preset_title "$(preset_current)")")" "$(json_str "$ah")"
+  else printf ',"array":null'; fi
 }
 
 list_flow() {
@@ -150,7 +155,7 @@ usage_flow() {
     while IFS=$US read -r role pool mounted fst size used free; do
       [ "$mounted" = 1 ] || continue
       say ""
-      say "Biggest folders in the $role storage ($pool). This can take a while on a big drive."
+      say "Biggest folders in the $role pool ($pool). This can take a while on a big drive."
       while IFS=$US read -r fb fp; do printf '  %-9s %s\n' "$(hs "$fb")" "$fp"; done < <(folder_rows "$pool")
     done < <(pool_rows)
   else
@@ -321,7 +326,7 @@ check_flow() {
     fi
   done
   if [ "$JSON" = 1 ]; then printf '],"ok":%s}\n' "$([ "$nprob" = 0 ] && echo true || echo false)"; [ "$nprob" = 0 ]; return; fi
-  if [ "$n" = 0 ] && array_active; then say "The Main storage is a $(preset_title "$(preset_current)") array. Array health: $(array_health_text)"; say "(The health of every plugged-in drive:  sudo drives health)"; say ""; return 0; fi
+  if [ "$n" = 0 ] && array_active; then say "The Main pool is a $(preset_title "$(preset_current)") array. Array health: $(array_health_text)"; say "(The health of every plugged-in drive:  sudo drives health)"; say ""; return 0; fi
   if [ "$n" = 0 ]; then say "No drives are connected to a pool yet, so there is nothing to check."; say "(The health of every plugged-in drive, pooled or not:  sudo drives health)"; say ""; return 0; fi
   say ""
   say "Checked $n drive(s): $nok ok, $nwarn with a warning, $nprob with a problem. Nothing was changed."
@@ -338,13 +343,13 @@ check_full_flow() {   # a full read-only scan of one drive: it is taken offline 
   part=$(branch_part "$mp")
   if [ -z "$part" ] || ! mountpoint -q "$mp"; then note "$name is not connected, so it cannot be scanned."; return 1; fi
   say "$name will be scanned from start to finish. The scan is read-only: nothing on the drive is changed."
-  say "For the scan the drive is taken offline, so the containers that use the $role storage stop until it is done."
+  say "For the scan the drive is taken offline, so the containers that use the $role pool stop until it is done."
   say "A big drive can take an hour or more."
   yn "Continue?" || { say "Cancelled. Nothing was changed."; return 1; }
-  pre_change "Stop the containers that use the $role storage." \
-             "Unmount the $role storage and $name." \
+  pre_change "Stop the containers that use the $role pool." \
+             "Unmount the $role pool and $name." \
              "Scan $part (read-only)." \
-             "Mount $name and the $role storage again, then start the containers." && return 0
+             "Mount $name and the $role pool again, then start the containers." && return 0
   stop_containers "$pool"
   ROLLED_BACK=1    # nothing in fstab changes, so if a step fails the old mounts can simply be restored
   pool_umount "$pool" || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
@@ -356,7 +361,7 @@ check_full_flow() {   # a full read-only scan of one drive: it is taken offline 
   say "Scanning $part (read-only)..."
   e2fsck -fn "$part" || rc=$?
   mount_fstab "$mp" || die "Could not mount $name again. Run  sudo drives remount"
-  mount_fstab "$pool" || die "Could not mount the $role storage again. Run  sudo drives remount"
+  mount_fstab "$pool" || die "Could not mount the $role pool again. Run  sudo drives remount"
   start_containers
   say ""
   if [ "$rc" = 0 ]; then

@@ -42,7 +42,7 @@ balance_main() {
     mps+=("$mp")
   done
   say ""
-  say "Used space in the $role storage now (the boot drive section is left out: it is only used when the others are full):"
+  say "Used space in the $role pool now (the boot drive section is left out: it is only used when the others are full):"
   balance_table "${mps[@]}"
   lo=100; hi=0
   for mp in "${mps[@]}"; do
@@ -95,8 +95,8 @@ balance_main() {
   say "Your services keep running while the files are copied; they stop for a short time at the end to catch the last changes."
   say "A big move can take hours. New files still go where the fill order says (see: sudo drives fillorder)."
   yn "Move the files now?" || { say "Cancelled. Nothing was changed."; return 1; }
-  pre_change "Copy the chosen files ($(human "$total")) between the drives of the $role storage, while the services run." \
-             "Stop the containers that use the $role storage for a short time and copy the last changes." \
+  pre_change "Copy the chosen files ($(human "$total")) between the drives of the $role pool, while the services run." \
+             "Stop the containers that use the $role pool for a short time and copy the last changes." \
              "Check every copied file, then remove the old copies, and start the containers again." && return 0
   for i in "${!steps[@]}"; do
     [ "${cnt[$i]}" -gt 0 ] || continue
@@ -137,7 +137,7 @@ balance_main() {
   start_containers
   log "balanced $role: moved $total bytes ($files files)"
   say ""
-  say "Done. Used space in the $role storage now:"
+  say "Done. Used space in the $role pool now:"
   balance_table "${mps[@]}"
   return 0
 }
@@ -200,12 +200,12 @@ resize_flow() {
   if [ "$shrink" = 1 ]; then
     say ""
     say "Making the section smaller rewrites its file system. It is safe when nothing goes wrong, but if the power fails halfway the section can be damaged."
-    say "The files in it are in the backup only if the main storage is backed up (a section of the backup storage has no second copy)."
+    say "The files in it are in the backup only if the main pool is backed up (a section of the backup pool has no second copy)."
     typed "CONTINUE" "Type CONTINUE to go on, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
   fi
   yn "Change the section from $(pretty_size "$cur") to $(pretty_size "$new_gb") now? The $role containers stop for a minute or more." || { say "Cancelled. Nothing was changed."; return 1; }
-  pre_change "Stop the containers that use the $role storage." \
-             "Unmount the $role storage and $(branch_name "$mp"), check its file system." \
+  pre_change "Stop the containers that use the $role pool." \
+             "Unmount the $role pool and $(branch_name "$mp"), check its file system." \
              "$([ "$shrink" = 1 ] && echo "Shrink the file system, then the file, to $(pretty_size "$new_gb")." || echo "Make the file $(pretty_size "$new_gb") big and grow the file system into it.")" \
              "Mount everything again, compare the files, and start the containers." && return 0
   before_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l); before_used=$used
@@ -231,7 +231,7 @@ resize_flow() {
   fi
   e2fsck -fn "$img" >/dev/null 2>&1 || warn "The check after the change reports problems. Run: sudo drives check --full"
   if ! mount_fstab "$mp"; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not mount the section again. Run  sudo drives remount"; fi
-  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role storage again. Run  sudo drives remount"; fi
+  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role pool again. Run  sudo drives remount"; fi
   after_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l)
   start_containers
   name_store_put "$(basename "$mp")" "$(pretty_size "$(stat -c %s "$img")") boot drive section"

@@ -45,7 +45,7 @@ apply_pool() {   # rebuild the pool line for a role and (re)mount the pool
   sd_reload
   pool_umount "$mp"
   if [ -n "$(branches_of "$role")" ]; then mount_fstab "$mp" || return 1; fi
-  [ "$role" = main ] && snapraid_active && snapraid_conf_write   # the drives of the Main storage changed: SnapRAID has to know
+  [ "$role" = main ] && snapraid_active && snapraid_conf_write   # the drives of the Main pool changed: SnapRAID has to know
   return 0
 }
 

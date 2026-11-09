@@ -151,20 +151,20 @@ pre_change() {   # pre_change STEP...: the last stop before the first change. 0 
   dry_gate "$@"
 }
 
-# The Main storage can be left empty on purpose (every Main drive taken out). The services that use it must NOT start then: they would
+# The Main pool can be left empty on purpose (every Main drive taken out). The services that use it must NOT start then: they would
 # write into the bare folder on the boot drive. They are written down here and start again when a Main drive is back.
 main_hold_file() { printf '%s' "$STATE_DIR/main-empty-stopped"; }
 
-main_hold_apply() {   # takes the containers that use the Main storage out of STOPPED when Main has no drive
+main_hold_apply() {   # takes the containers that use the Main pool out of STOPPED when Main has no drive
   [ -z "$(branches_of main)" ] || return 0
-  array_active && return 0      # (a ZFS / RAID setup is the Main storage too)
+  array_active && return 0      # (a ZFS / RAID setup is the Main pool too)
   local keep n rest="" mine=""
   keep=$(containers_using "$MAIN_POOL" | tr '\n' ' ')
   for n in $STOPPED; do case " $keep " in *" $n "*) mine="$mine $n" ;; *) rest="$rest $n" ;; esac; done
   [ -n "${mine// /}" ] || return 0
   mkdir -p "$STATE_DIR" 2>/dev/null
   for n in $mine; do echo "$n" >>"$(main_hold_file)"; done
-  note "The Main storage is empty, so these containers stay stopped until a Main drive is added:$mine"
+  note "The Main pool is empty, so these containers stay stopped until a Main drive is added:$mine"
   STOPPED=${rest# }
 }
 
@@ -195,7 +195,7 @@ start_containers() {
   fi
 }
 
-main_pool_ok() {   # true when the main storage is mounted the way fstab says (or it is not set up at all)
+main_pool_ok() {   # true when the main pool is mounted the way fstab says (or it is not set up at all)
   [ -n "$(branches_of main)" ] || pool_in_fstab "$MAIN_POOL" || return 0
   mountpoint -q "$MAIN_POOL"
 }

@@ -36,7 +36,7 @@ remount_flow() {
     HOLD_HINT="They stay stopped on purpose: with a main drive missing they would write to an incomplete storage. Plug the drive in and run  sudo drives remount  again. If it is dead:  sudo drives replace"
     return 1
   fi
-  # main storage: the pool, or the plain drive before it is converted
+  # main pool: the pool, or the plain drive before it is converted
   if pool_in_fstab "$MAIN_POOL"; then
     mount_fstab "$MAIN_POOL" || { echo "The main pool did not mount. Check the cable."; return 1; }
   fi
@@ -132,8 +132,8 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
   fi
   typed "RESTORE" "Type RESTORE (capitals) to copy these $n files: " || { say "Cancelled. Nothing was copied."; return 1; }
   if [ -z "${STOPPED// /}" ]; then   # the check above changes nothing: the containers are stopped only now, for the copy
-    pre_change "Stop the containers that use the main storage." \
-               "Copy the $n missing files ($(human "$bytes")) from the backup into the main storage. Files already there are never overwritten." \
+    pre_change "Stop the containers that use the main pool." \
+               "Copy the $n missing files ($(human "$bytes")) from the backup into the main pool. Files already there are never overwritten." \
                "Check that every file is there, then start the containers again." && return 0
     stop_containers "$MAIN_POOL"
     HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo drives remount  to start them without restoring."
@@ -174,7 +174,7 @@ restore_flow() {   # restore only the missing files from the backup into the mai
   need_tools || return 1
   mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive and run sudo drives remount first."; return 1; }
   local src
-  src=$(find_backup_source) || { note "No backup copy of the main storage was found, so there is nothing to restore from."; return 1; }
+  src=$(find_backup_source) || { note "No backup copy of the main pool was found, so there is nothing to restore from."; return 1; }
   show_backup_source "$src" || { say "Cancelled."; return 1; }
   restore_files "$src" || return 1
   [ "$DRY_RUN" = 1 ] && return 0
@@ -205,10 +205,10 @@ replace_flow() {
   local shown; shown=$(branch_name "$mp")
 
   say ""
-  say "$shown will be replaced by a new drive. The new drive takes its place in the $role storage and is named by what it is."
+  say "$shown will be replaced by a new drive. The new drive takes its place in the $role pool and is named by what it is."
   if [ "$role" = main ]; then
     say "The files that were on the dead drive are copied back from the backup. Only missing files are copied."
-    src=$(find_backup_source) || { note "No backup copy of the main storage was found. Nothing was changed."; return 1; }
+    src=$(find_backup_source) || { note "No backup copy of the main pool was found. Nothing was changed."; return 1; }
     show_backup_source "$src" || { say "Cancelled. Nothing was changed."; return 1; }
     say "Measuring the backup copy (this can take a minute)..."
     need=$(du -sb "$src/main" 2>/dev/null | awk '{print $1}'); need=${need:-0}
@@ -231,9 +231,9 @@ replace_flow() {
     typed "CONTINUE" "Type CONTINUE to use it anyway, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
   fi
   confirm_erase "$dev" || return 1
-  pre_change "Stop the containers that use the $role storage." \
+  pre_change "Stop the containers that use the $role pool." \
              "Erase $dev and format it as the new drive for $shown." \
-             "Add it to the $role storage and mount the pool again." \
+             "Add it to the $role pool and mount the pool again." \
              "$([ "$role" = main ] && echo "Copy the missing files back from the backup, then start the containers." || echo "Start the containers. The next backup run fills the new drive.")" && return 0
 
   stop_containers "$pool"

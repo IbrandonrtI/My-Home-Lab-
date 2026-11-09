@@ -131,7 +131,7 @@ bootsection_attach() {   # bootsection_attach ROLE REUSE: the section file of th
   name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
   timeshift_protect
   say ""
-  say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
+  say "Done. $(branch_name "$mp") is part of the $role pool ($(role_pool "$role")). It is the last place that storage uses."
   log "connected $label ($img) to $role"
   crit_release
   return 0
@@ -154,11 +154,11 @@ bootsection_flow() {
     fi
     return 1
   fi
-  idx=$(choose "Add a boot drive section to which storage? " "Main storage (photos and files used by your services)" "Backup storage (daily copy of main)") || return 1
+  idx=$(choose "Add a boot drive section to which storage? " "Main pool (photos and files used by your services)" "Backup pool (daily copy of main)") || return 1
   if [ "$idx" = 0 ]; then role=main; else role=backup; fi
   other=$(other_role "$role")
   if [ -n "$(boot_section_of "$role")" ]; then
-    say "The $role storage already has a boot drive section: $(branch_name "$(boot_section_of "$role")")."
+    say "The $role pool already has a boot drive section: $(branch_name "$(boot_section_of "$role")")."
     say "To change its size, remove it (sudo drives > Add or remove drives > Disconnect) and add it again."
     return 1
   fi
@@ -168,7 +168,7 @@ bootsection_flow() {
 
   if [ -f "$img" ]; then
     old=$(stat -c %s "$img")
-    say "A boot drive section of $(pretty_size "$old") that was used for the $role storage before is still saved."
+    say "A boot drive section of $(pretty_size "$old") that was used for the $role pool before is still saved."
     idx=$(choose "What should I do? " "Use it again, with its files" "Delete it and make a new one") || return 1
     [ "$idx" = 0 ] && reuse=1
   fi
@@ -178,7 +178,7 @@ bootsection_flow() {
     say "!! USING PART OF THE BOOT DRIVE !!"
     say "  - The boot drive also holds the operating system and your apps. If it fails, you lose everything in this section too."
     say "  - The space is taken from the boot drive right away and stays reserved, even while the section is empty."
-    say "  - The section is the LAST place the $role storage uses. It gets files only when the other $role drives are full."
+    say "  - The section is the LAST place the $role pool uses. It gets files only when the other $role drives are full."
     if [ "$role" = backup ]; then
       say "  - A backup on the boot drive helps if a main drive dies, but NOT if the boot drive dies: the backup goes with it."
     fi
@@ -213,8 +213,8 @@ bootsection_flow() {
     say "The section will have $(pretty_size "$bytes") ($(role_pool "$role"), last in line)."
     yn "Make it now?" || { say "Cancelled. Nothing was changed."; return 1; }
     pre_change "Reserve $(pretty_size "$bytes") on the boot drive and format it as a new drive section." \
-               "Stop the containers that use the $role storage for a minute." \
-               "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+               "Stop the containers that use the $role pool for a minute." \
+               "Add the section to the $role pool as its last drive, then start the containers again." && return 0
     [ "$old" -gt 0 ] && rm -f "$img"
     if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(pretty_size "$bytes") on the boot drive."; fi
     if ! mkfs.ext4 -F -q -L "$label" -m 0 "$img" >&2; then rm -f "$img"; die "Could not format the section."; fi
@@ -223,8 +223,8 @@ bootsection_flow() {
 
   if [ "$reuse" = 1 ]; then
     pre_change "Use the saved boot drive section again, with its files." \
-               "Stop the containers that use the $role storage for a minute." \
-               "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+               "Stop the containers that use the $role pool for a minute." \
+               "Add the section to the $role pool as its last drive, then start the containers again." && return 0
   fi
   bootsection_attach "$role" "$reuse"
 }
@@ -254,9 +254,9 @@ panel_bootadd_flow() {   # the control panel: part of the boot drive becomes a d
   command -v fallocate >/dev/null 2>&1 || { note "The tool 'fallocate' is missing (package util-linux)."; return 1; }
   lim=$(bootsection_limits); read -r min max unit small <<<"$lim"
   if [ "$small" = 1 ]; then note "The boot drive is too small to lend a part of it for a storage pool. Nothing was changed."; return 1; fi
-  if [ -n "$(boot_section_of "$role")" ]; then note "The $role storage already has a boot drive section. Take it out first to make a different size. Nothing was changed."; return 1; fi
+  if [ -n "$(boot_section_of "$role")" ]; then note "The $role pool already has a boot drive section. Take it out first to make a different size. Nothing was changed."; return 1; fi
   label="$(role_prefix "$role")BOOT"; mp="$DISKS_DIR/$label"; img="$BOOT_SECTION_DIR/$role.img"
-  if [ -f "$img" ]; then note "A boot drive section that was used for the $role storage before is still saved. Use it or delete it with  sudo drives  on the server. Nothing was changed."; return 1; fi
+  if [ -f "$img" ]; then note "A boot drive section that was used for the $role pool before is still saved. Use it or delete it with  sudo drives  on the server. Nothing was changed."; return 1; fi
   pool_can_grow "$role" "a section" || return 1
   [[ "$units" =~ ^[0-9]{1,6}$ ]] || { note "Please choose a size in $BOOT_UNIT_NAME. Nothing was changed."; return 1; }
   bytes=$(( units * unit ))
@@ -265,8 +265,8 @@ panel_bootadd_flow() {   # the control panel: part of the boot drive becomes a d
   typed "CONTINUE" "Type CONTINUE to go on: " || { say "Cancelled. Nothing was changed."; return 1; }
   mkdir -p "$BOOT_SECTION_DIR"; chmod 700 "$BOOT_SECTION_DIR" 2>/dev/null || true
   pre_change "Reserve $(pretty_size "$bytes") on the boot drive and format it as a new drive section." \
-             "Stop the containers that use the $role storage for a minute." \
-             "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+             "Stop the containers that use the $role pool for a minute." \
+             "Add the section to the $role pool as its last drive, then start the containers again." && return 0
   progress_for "$PROG_ITEM" 10 "Reserving the space"
   if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(pretty_size "$bytes") on the boot drive."; fi
   if ! mkfs.ext4 -F -q -L "$label" -m 0 "$img" >&2; then rm -f "$img"; die "Could not format the section."; fi
@@ -280,10 +280,10 @@ bootmove_flow() {   # the control panel: a boot drive section goes to the other 
   [ "$PANEL_MODE" = 1 ] || { note "A boot drive section is moved in the Drives tab of the dashboard. Here: remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; }
   [ -f "$img" ] || die "The file behind $oldname is not there. Nothing was changed."
   size=$(stat -c %s "$img")
-  if [ -n "$(boot_section_of "$newrole")" ]; then note "The $newrole storage already has a boot drive section. Nothing was changed."; return 1; fi
+  if [ -n "$(boot_section_of "$newrole")" ]; then note "The $newrole pool already has a boot drive section. Nothing was changed."; return 1; fi
   pool_can_grow "$newrole" "a section" || return 1
   newlabel="$(role_prefix "$newrole")BOOT"; newimg="$BOOT_SECTION_DIR/$newrole.img"
-  [ ! -e "$newimg" ] || { note "A saved boot drive section for the $newrole storage is in the way ($newimg). Nothing was changed."; return 1; }
+  [ ! -e "$newimg" ] || { note "A saved boot drive section for the $newrole pool is in the way ($newimg). Nothing was changed."; return 1; }
   if [ "$keep" = yes ]; then
     typed KEEP "Type KEEP to move the section with its files: " || { say "Cancelled. Nothing was changed."; return 1; }
     KEEP_IMG=1
@@ -291,12 +291,12 @@ bootmove_flow() {   # the control panel: a boot drive section goes to the other 
     typed ERASE "Type ERASE to move the section as a new, empty one: " || { say "Cancelled. Nothing was changed."; return 1; }
     KEEP_IMG=0
   fi
-  say "$oldname moves from the $role storage to the $newrole storage."
+  say "$oldname moves from the $role pool to the $newrole pool."
   PROG_LO=0; PROG_HI=55
-  detach_branch "$mp" "Then put the section into the $newrole storage." || { PROG_HI=100; KEEP_IMG=0; return 1; }
+  detach_branch "$mp" "Then put the section into the $newrole pool." || { PROG_HI=100; KEEP_IMG=0; return 1; }
   [ "$DRY_RUN" = 1 ] && { PROG_HI=100; KEEP_IMG=0; return 0; }
   KEEP_IMG=0
-  PENDING_NOTE="$oldname already left the $role storage and was not added to the $newrole storage."
+  PENDING_NOTE="$oldname already left the $role pool and was not added to the $newrole pool."
   PROG_LO=55; PROG_HI=100
   if [ "$keep" = yes ]; then
     mv "$img" "$newimg" || die "Could not move the section file. It is at $img."

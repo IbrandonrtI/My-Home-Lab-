@@ -27,7 +27,7 @@ status_flow() {
     fi
   done
   if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$TEST_MODE" != 1 ] && ! array_active; then
-    say "Note: main storage is still one plain drive. Run  sudo drives  and choose Settings and upgrades > Convert to turn it into a pool."
+    say "Note: main pool is still one plain drive. Run  sudo drives  and choose Settings and upgrades > Convert to turn it into a pool."
   fi
   for role in main backup; do
     [ -n "$(branches_of "$role")" ] || continue

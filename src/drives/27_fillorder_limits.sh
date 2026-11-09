@@ -33,7 +33,7 @@ pool_reconfigure() {   # pool_reconfigure main|backup: the saved policy, order o
     say "It is in use right now; nothing had to stop."
     return 0
   fi
-  if mountpoint -q "$pool" && yn "The $role storage cannot take the change while it runs. Apply it now? Its containers stop for a minute while the pool mounts again."; then
+  if mountpoint -q "$pool" && yn "The $role pool cannot take the change while it runs. Apply it now? Its containers stop for a minute while the pool mounts again."; then
     if ! ( busy_gate ); then settings_rollback; return 1; fi   # a subshell: when you answer no it stops here and the change is undone
     stop_containers "$pool"
     if apply_pool "$role"; then
@@ -96,18 +96,18 @@ fillorder_flow() {   # how a pool picks a drive for a new file, and which drive 
     0|1)
       local want=ff; [ "$act" = 1 ] && want=mfs
       if [ "$now" = "$want" ] && pool_has_limits "$pool"; then
-        settings_discard; say "The $role storage already works like that. Nothing was changed."; return 0
+        settings_discard; say "The $role pool already works like that. Nothing was changed."; return 0
       fi
-      dry_gate "Save the setting '$(policy_text "$want")' for the $role storage." \
+      dry_gate "Save the setting '$(policy_text "$want")' for the $role pool." \
                "Use it in the running pool if possible (nothing stops). Otherwise you are asked before the pool is mounted again." && { settings_discard; return 0; }
       if [ "$want" = ff ]; then setting_del policy "$role"; else setting_put policy "$role" mfs; fi
       pool_reconfigure "$role" || { settings_rollback; return 1; }
       settings_discard
-      say ""; say "Done. The $role storage now puts a new file on $(policy_text "$want" | sed 's/^[^(]*(a new file goes to //; s/)$//')."
+      say ""; say "Done. The $role pool now puts a new file on $(policy_text "$want" | sed 's/^[^(]*(a new file goes to //; s/)$//')."
       log "pool $role policy $want"
       ;;
     2)
-      if [ ${#real[@]} -lt 2 ]; then settings_discard; note "The $role storage has only one drive, so there is no order to change. Nothing was changed."; return 1; fi
+      if [ ${#real[@]} -lt 2 ]; then settings_discard; note "The $role pool has only one drive, so there is no order to change. Nothing was changed."; return 1; fi
       for mp in "${real[@]}"; do
         mps+=("$mp")
         items+=("$(branch_name "$mp")   [position $(( ${#mps[@]} ))]")
@@ -123,7 +123,7 @@ fillorder_flow() {   # how a pool picks a drive for a new file, and which drive 
       setting_put order "$role" "$cur"
       pool_reconfigure "$role" || { settings_rollback; return 1; }
       settings_discard
-      say ""; say "Done. Order of the drives in the $role storage: $(order_text "$role")"
+      say ""; say "Done. Order of the drives in the $role pool: $(order_text "$role")"
       log "pool $role order $cur"
       ;;
   esac
@@ -170,7 +170,7 @@ limit_flow() {   # how much free space a pool drive keeps before the pool uses t
   if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo drives remount). Nothing was changed."; return 1; fi
   size=$(total_bytes "$mp")
   say ""
-  say "$(branch_name "$mp") is $(human "$size"). It keeps this much free before the $role storage uses the next drive: $(limit_text "$mp")"
+  say "$(branch_name "$mp") is $(human "$size"). It keeps this much free before the $role pool uses the next drive: $(limit_text "$mp")"
   say "(A drive that is nearly full works badly; a limit from 1% to 50% of the drive is accepted. Type  auto  for the automatic ${POOL_FREE_PERCENT}%.)"
   new=$(ask "New free-space limit (for example 50GB or 8%; Enter cancels): ")
   [ -n "$new" ] || { say "Cancelled. Nothing was changed."; return 1; }
@@ -182,7 +182,7 @@ limit_flow() {   # how much free space a pool drive keeps before the pool uses t
   else
     parsed=$(parse_limit "$new" "$size") || { settings_discard; note "Nothing was changed."; return 1; }
     if [ "$(setting_get limit "$label")" = "$parsed" ]; then settings_discard; say "That is already the limit. Nothing was changed."; return 0; fi
-    dry_gate "Keep $new free on $(branch_name "$mp") before the $role storage uses the next drive." "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
+    dry_gate "Keep $new free on $(branch_name "$mp") before the $role pool uses the next drive." "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
     setting_put limit "$label" "$parsed"
   fi
   pool_reconfigure "$role" || { settings_rollback; return 1; }

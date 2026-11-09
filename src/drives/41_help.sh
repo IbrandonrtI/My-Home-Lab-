@@ -10,7 +10,7 @@ Look at the drives (these change nothing):
   check         quick check of every pool drive for file system errors
 
 Change the drives:
-  connect       connect a new drive to the Main or the Backup storage
+  connect       connect a new drive to the Main or the Backup pool
   disconnect    take a drive out of its pool (its files can be copied to the other drives first)
   move          move a drive between Main and Backup (its files are copied away first)
   bootsection   use part of the boot drive as a pool drive, with a size limit
@@ -132,7 +132,7 @@ EOF
     ;;
     adopt) cat <<'EOF'
 sudo drives adopt [--dry-run] [--yes] [--now]
-  Turns the old single data drive (mounted directly at the main storage path) into the first drive of a pool. Its files
+  Turns the old single data drive (mounted directly at the main pool path) into the first drive of a pool. Its files
   are not moved or copied. The containers stop for a minute.
 EOF
     ;;
@@ -157,7 +157,7 @@ EOF
     ;;
     restore) cat <<'EOF'
 sudo drives restore [--dry-run] [--yes] [--confirm-erase] [--now]
-  Copies back only the files that are in the backup but missing from the main storage. Files that are already there are
+  Copies back only the files that are in the backup but missing from the main pool. Files that are already there are
   never overwritten. Shows the list first and asks you to type RESTORE.
 EOF
     ;;
@@ -245,12 +245,12 @@ sudo drives preset [NAME] [--dry-run] [--yes] [--confirm-erase] [--spare] [--cac
   With a name: builds it. You pick the drives, see the plan and what you can use, and type the setup name and ERASE
   before anything is erased. Only EMPTY or new drives are used (a drive with files: use  sudo drives wizard  to keep or erase its files,
   or erase it first with  sudo drives wipe).
-  The Main storage must not have drives yet (to add to it use connect).
+  The Main pool must not have drives yet (to add to it use connect).
     pool        all the drives in one pool (no protection)
     mirror      exactly 2 drives: the smaller one is Main, the bigger one is Backup; the backup copies Main to it every day
     snapraid1   3 or more drives: the biggest holds protection data (updated every night at 04:00, not at once)
     snapraid2   4 or more drives: the two biggest hold protection data
-  Real RAID arrays (they become the Main storage at /mnt/storage; the drives must all be empty):
+  Real RAID arrays (they become the Main pool at /mnt/storage; the drives must all be empty):
     zfs-stripe  2 or more drives, ZFS, all the space, NO protection        zfs-mirror  2 or more drives, same data on each
     zfs-raidz1  3 or more drives, ZFS, 1 drive can die                     zfs-raidz2  4 or more, 2 can die    zfs-raidz3  5 or more, 3 can die
     md-raid0    2 or more drives, Linux RAID, NO protection                md-raid1    2 or more, same data on each

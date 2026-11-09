@@ -129,7 +129,7 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
       local keepleft
       keepleft=$(branches_of main | wc -l)
       for id in "${PANEL_IDS[@]}"; do [ "$(branch_role "$(panel_branch "$id" 2>/dev/null)")" = main ] && keepleft=$((keepleft - 1)); done
-      if [ "$keepleft" -lt 1 ]; then panel_refuse "That would take every drive out of the Main storage. Keep at least one Main drive."; return 1; fi
+      if [ "$keepleft" -lt 1 ]; then panel_refuse "That would take every drive out of the Main pool. Keep at least one Main drive."; return 1; fi
     fi
   fi
   PANEL_RESERVE_DIR=$(mktemp -d) || { panel_refuse "No room for working files."; return 1; }

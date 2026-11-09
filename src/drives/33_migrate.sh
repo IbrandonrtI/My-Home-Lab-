@@ -1,6 +1,6 @@
 
-# ---------- moving the Main storage into a new ZFS / RAID setup ----------
-# The new setup is built on spare drives and filled from the old Main storage while that is still in use (the containers are stopped).
+# ---------- moving the Main pool into a new ZFS / RAID setup ----------
+# The new setup is built on spare drives and filled from the old Main pool while that is still in use (the containers are stopped).
 # Only when the copy is checked does the new setup take the Main path; then the old Main drives are released (their files are not touched).
 ARRAY_MOUNT=""      # where zfs_build / md_build mount the new setup (empty = the Main path)
 
@@ -15,10 +15,10 @@ fstab_move_mp() {   # fstab_move_mp OLD NEW: the line that mounts at OLD mounts 
   log "fstab move mount point: $1 -> $2"
 }
 
-migrate_copy() {   # copy everything from the Main storage into the new setup, then compare
+migrate_copy() {   # copy everything from the Main pool into the new setup, then compare
   local rc=0 changed
   local -a skip=(--exclude=/.mergerfs --exclude=/lost+found)
-  say "Copying the files of the Main storage into the new setup. This can take a long time on big drives..."
+  say "Copying the files of the Main pool into the new setup. This can take a long time on big drives..."
   rsync -aHAX --numeric-ids "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- >&2 || rc=$?
   case $rc in 0|24) ;; *) warn "The copy stopped with an error (code $rc)."; return 1 ;; esac
   say "Checking the copy..."
@@ -27,7 +27,7 @@ migrate_copy() {   # copy everything from the Main storage into the new setup, t
   say "The copy is complete and matches."
 }
 
-migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setup apart again (the old Main storage was not changed)
+migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setup apart again (the old Main pool was not changed)
   local id=$1 d; shift
   pool_umount "$MIGRATE_DIR" || true
   if [ "$(preset_kind "$id")" = zfs ]; then
@@ -43,7 +43,7 @@ migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setu
   rmdir "$MIGRATE_DIR" 2>/dev/null || true
 }
 
-migrate_retire_main() {   # the old Main drives leave the Main storage; their files stay on them and they are spare drives now
+migrate_retire_main() {   # the old Main drives leave the Main pool; their files stay on them and they are spare drives now
   local mp
   for mp in "$@"; do
     mountpoint -q "$mp" && { umount "$mp" 2>/dev/null || umount -l "$mp"; }
@@ -79,7 +79,7 @@ migrate_switch() {   # migrate_switch ID: the new setup (mounted at MIGRATE_DIR,
   if [ "$ok" != 1 ]; then
     if [ "$kind" = zfs ]; then zfs set mountpoint="$MIGRATE_DIR" "$ZFS_POOL_NAME" >/dev/null 2>&1 || true; fi
     fstab_rollback
-    apply_pool main || warn "The old Main storage could not be mounted again. Run  sudo drives remount"
+    apply_pool main || warn "The old Main pool could not be mounted again. Run  sudo drives remount"
     return 1
   fi
   migrate_retire_main "${old_mps[@]}"

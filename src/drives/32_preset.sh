@@ -101,7 +101,7 @@ snapraid_conf_write() {   # the SnapRAID settings: the protection drives, a list
   local mp i=0 n=0
   mkdir -p "$(dirname "$SNAPRAID_CONF")" "$SNAPRAID_CONTENT_DIR" 2>/dev/null || true
   {
-    echo "# Written by 'sudo drives preset'. It is written again whenever the drives of the Main storage change."
+    echo "# Written by 'sudo drives preset'. It is written again whenever the drives of the Main pool change."
     for mp in $(parity_mounts); do
       i=$((i + 1))
       if [ "$i" -eq 1 ]; then echo "parity $mp/snapraid.parity"; else echo "$i-parity $mp/snapraid.$i-parity"; fi

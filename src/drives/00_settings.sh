@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # drives - menu for the home lab storage pools.
 #
-# Main storage   = mergerfs pool at /mnt/storage (services already use this path)
-# Backup storage = mergerfs pool at /mnt/backup
+# Main pool   = mergerfs pool at /mnt/storage (services already use this path)
+# Backup pool = mergerfs pool at /mnt/backup
 # Every drive is mounted by UUID under /mnt/disks/ with a label (MAIN1, BACKUP1, ...).
 # A pool can also get one "boot drive section": a file of a fixed size on the boot drive, mounted as MAINBOOT / BACKUPBOOT.
 # It is always the LAST branch of its pool, so it is used only when the real drives are full.
@@ -57,7 +57,7 @@ else
   FSTAB="${FSTAB:-/etc/fstab}"
   DISKS_DIR="${DISKS_DIR:-/mnt/disks}"
   MAIN_POOL="${MAIN_POOL:-/mnt/storage}"
-  MIGRATE_DIR="${MIGRATE_DIR:-/mnt/storage-new}"                    # where a new ZFS / RAID setup is built and filled while the old Main storage is still in use
+  MIGRATE_DIR="${MIGRATE_DIR:-/mnt/storage-new}"                    # where a new ZFS / RAID setup is built and filled while the old Main pool is still in use
   BACKUP_POOL="${BACKUP_POOL:-/mnt/backup}"
   MAIN_PREFIX="${MAIN_PREFIX:-MAIN}"
   BACKUP_PREFIX="${BACKUP_PREFIX:-BACKUP}"

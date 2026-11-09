@@ -27,7 +27,7 @@ adopt_flow() {
   fstab_snapshot
   sync_fs "$pool"
   umount "$pool" 2>/dev/null || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
-  if [ "$cur" != "$label" ]; then e2label "$part" "$label" || { fstab_rollback; mount_fstab "$pool"; start_containers; die "Could not set the label."; }; fi
+  if [ "$cur" != "$label" ]; then e2label "$part" "$label" || { fstab_rollback; mount_fstab "$pool"; start_containers; die "Could not set the label."; }; carry_name "$cur" "$label"; fi
   ensure_mp "$mp"
   fstab_remove_mp "$pool"
   fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"

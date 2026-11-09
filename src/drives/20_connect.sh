@@ -63,7 +63,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   refuse_unsafe_disk "$dev"
   describe_disk "$dev"
   if [ -z "$role" ]; then
-    idx=$(choose "Use this drive for: " "Main storage (photos and files used by your services)" "Backup storage (daily copy of main)") || return 1
+    idx=$(choose "Use this drive for: " "Main pool (photos and files used by your services)" "Backup pool (daily copy of main)") || return 1
     if [ "$idx" = 0 ]; then role=main; else role=backup; fi
   fi
   pool_can_grow "$role" "this drive" || return 1
@@ -91,22 +91,24 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   if [ "$mode" = erase ]; then
     [ "$confirmed" = 1 ] || confirm_erase "$dev" || return 1
     $gate "Erase $dev and format it as a new drive ($base)." \
-               "Stop the containers that use the $role storage for a minute." \
-               "Add the drive to the $role storage and mount the pool again." \
+               "Stop the containers that use the $role pool for a minute." \
+               "Add the drive to the $role pool and mount the pool again." \
                "Start the containers again." && return 0
     if abort_requested; then ABORTED=1; note "Stopped before $dev was erased. Nothing was changed."; return 1; fi
     progress 10 "Erasing and formatting (cannot be stopped)"
     part=$(format_disk "$dev" "$label") || return 1
   else
     $gate "Keep the files on $dev and add the drive as it is ($base)." \
-               "Stop the containers that use the $role storage for a minute." \
-               "Add the drive to the $role storage and mount the pool again." \
+               "Stop the containers that use the $role pool for a minute." \
+               "Add the drive to the $role pool and mount the pool again." \
                "Start the containers again." && return 0
     if abort_requested; then ABORTED=1; note "Stopped before $dev was added. Nothing was changed."; return 1; fi
     progress 10 "Getting the drive ready"
     umount_disk_parts "$dev"
-    if [ "$(fs_label "$part")" != "$label" ]; then
+    local oldlabel; oldlabel=$(fs_label "$part")
+    if [ "$oldlabel" != "$label" ]; then
       e2label "$part" "$label" || die "Could not set the label on $part"
+      carry_name "$oldlabel" "$label"      # a name you chose follows the drive to its new place
     fi
   fi
 
@@ -133,12 +135,12 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
     fstab_set_pool "$role"      # (for the next start of the computer)
     sd_reload
     if pool_live_apply "$role"; then
-      note "The drive joined the running $role storage. No container was stopped."
+      note "The drive joined the running $role pool. No container was stopped."
       [ "$role" = main ] && snapraid_active && snapraid_conf_write
       power_apply "$mp" "$role"
       say ""
       progress 100 "Done"
-      say "Done. $(branch_name "$mp") is connected to the $role storage ($(role_pool "$role"))."
+      say "Done. $(branch_name "$mp") is connected to the $role pool ($(role_pool "$role"))."
       log "connected $label ($part, $base) to $role (live)"
       return 0
     fi
@@ -164,7 +166,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   power_apply "$mp" "$role"
   progress 100 "Done"
   say ""
-  say "Done. $(branch_name "$mp") is connected to the $role storage ($(role_pool "$role"))."
+  say "Done. $(branch_name "$mp") is connected to the $role pool ($(role_pool "$role"))."
   log "connected $label ($part, $base) to $role"
   return 0
 }

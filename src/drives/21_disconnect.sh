@@ -115,14 +115,14 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
 
   if [ ${#others[@]} -eq 0 ]; then
     if [ "$role" = main ]; then
-      warn "$label is the only main drive. Taking it out leaves the Main storage empty."
+      warn "$label is the only main drive. Taking it out leaves the Main pool empty."
       warn "The services that use it (Immich, Nextcloud, FileBrowser...) stay stopped until a main drive is added again. Nothing on the drive is deleted."
     else
       warn "$label is the only backup drive. Backups will stop until another backup drive is connected."
     fi
     typed "REMOVE" "Type REMOVE to continue: " || { say "Cancelled."; return 1; }
   elif { ! is_boot_section "$mp" || [ "$KEEP_IMG" = 1 ]; } && mountpoint -q "$mp" && has_data "$mp"; then
-    say "$label holds files. They will disappear from the $role storage unless they are copied to another $role drive."
+    say "$label holds files. They will disappear from the $role pool unless they are copied to another $role drive."
     if [ "$PANEL_MODE" = 1 ] && [ -n "$PANEL_COPY" ]; then copyq=$PANEL_COPY      # the control panel already asked
     elif yn "Copy them to another $role drive first (recommended)?"; then copyq=yes
     else copyq=no; fi
@@ -136,9 +136,9 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
 
   local -a plan=()
   [ "$drain" = 1 ] && plan+=("Copy the files of $label to another $role drive and check every file.")
-  plan+=("Stop the containers that use the $role storage for a minute.")
-  if is_boot_section "$mp"; then plan+=("Take $label out of the $role storage and delete the section file (its space goes back to the boot drive).")
-  else plan+=("Take $label out of the $role storage (the data on the drive is not touched)."); fi
+  plan+=("Stop the containers that use the $role pool for a minute.")
+  if is_boot_section "$mp"; then plan+=("Take $label out of the $role pool and delete the section file (its space goes back to the boot drive).")
+  else plan+=("Take $label out of the $role pool (the data on the drive is not touched)."); fi
   plan+=("Start the containers again." "$@")
   pre_change "${plan[@]}" && return 0
   if [ "$drain" = 1 ]; then drain_branch "$mp" || { note "Not removing $label."; return 1; }; fi
@@ -168,9 +168,9 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
     name_store_del "$(basename "$mp")"
     chattr -i "$mp" 2>/dev/null || true
     rmdir "$mp" 2>/dev/null || true
-    if [ "$KEEP_IMG" = 1 ]; then say "$label is out of the $role storage."; else say "$label is removed. Its space went back to the boot drive."; fi
+    if [ "$KEEP_IMG" = 1 ]; then say "$label is out of the $role pool."; else say "$label is removed. Its space went back to the boot drive."; fi
   else
-    say "$label is disconnected from the $role storage. The data on the drive was not touched."
+    say "$label is disconnected from the $role pool. The data on the drive was not touched."
   fi
   DETACHED_DEV=$dev
   return 0
@@ -214,32 +214,32 @@ move_flow() {
     local -a kparts; mapfile -t kparts < <(parts_of "$dev")
     if ! { [ ${#kparts[@]} -eq 1 ] && [ "$(fs_type "${kparts[0]}")" = ext4 ]; }; then note "$dev does not have one ext4 partition, so its files cannot be kept. Nothing was changed."; return 1; fi
   fi
-  say "$(branch_name "$mp") will move from $role to $newrole storage."
+  say "$(branch_name "$mp") will move from $role to $newrole pool."
   if [ "$keep" = yes ]; then
-    say "The drive keeps its files and is added to the $newrole storage as it is, so the files on it show up in the $newrole storage."
+    say "The drive keeps its files and is added to the $newrole pool as it is, so the files on it show up in the $newrole pool."
   else
     say "The drive is erased and formatted for $newrole, so the files on it are gone from the drive."
   fi
   if [ "$PANEL_MODE" != 1 ]; then yn "Continue?" || { say "Cancelled."; return 1; }; fi
   if [ "$keep" = yes ]; then
-    if [ "$PANEL_MODE" = 1 ]; then typed KEEP "Type KEEP to add the files on the drive to the $newrole storage as they are: " || { say "Cancelled. Nothing was changed."; return 1; }; fi
+    if [ "$PANEL_MODE" = 1 ]; then typed KEEP "Type KEEP to add the files on the drive to the $newrole pool as they are: " || { say "Cancelled. Nothing was changed."; return 1; }; fi
   else
     confirm_erase "$dev" || return 1
   fi
   DETACHED_DEV=""
   PROG_LO=0; PROG_HI=55      # leaving the pool is the first part of the bar, joining the other pool the rest
-  if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole storage with its files as they are." || { PROG_HI=100; return 1; }
-  else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole storage." || { PROG_HI=100; return 1; }; fi
+  if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole pool with its files as they are." || { PROG_HI=100; return 1; }
+  else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole pool." || { PROG_HI=100; return 1; }; fi
   [ "$DRY_RUN" = 1 ] && { PROG_HI=100; return 0; }
-  PENDING_NOTE="$(branch_name "$mp") already left the $role storage and was not added to the $newrole storage. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
+  PENDING_NOTE="$(branch_name "$mp") already left the $role pool and was not added to the $newrole pool. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
   PROG_LO=55; PROG_HI=100
   if ! connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1; then
     if [ "$ABORTED" = 1 ]; then      # Stop was pressed before the drive was erased: it goes back where it came from, with all its files
       PROG_LO=0; PROG_HI=100
       progress 90 "Putting the drive back"
-      say "Stopped. Putting $oldname back into the $role storage with its files..."
+      say "Stopped. Putting $oldname back into the $role pool with its files..."
       ABORT_IGNORE=1
-      if connect_flow "$dev" "$role" 2 1; then PUTBACK=1; say "$oldname is back in the $role storage."
+      if connect_flow "$dev" "$role" 2 1; then PUTBACK=1; say "$oldname is back in the $role pool."
       else note ""; note "$PENDING_NOTE"; fi
       ABORT_IGNORE=0; PENDING_NOTE=""
       return 1

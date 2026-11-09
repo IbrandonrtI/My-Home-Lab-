@@ -4,7 +4,7 @@
 sync_filebrowser() {
   [ "$TEST_MODE" = 1 ] && return 0
   [ "$DRY_RUN" = 1 ] && return 0
-  # the Homepage drive pills ("Main pool" / "Connect Backup Drive" ...) follow the pools
+  # the Homepage drive pills ("Main Pool" / "Connect Backup Drive" ...) follow the pools
   command -v homelab-sample >/dev/null 2>&1 && { homelab-sample widgets 9>&- >/dev/null 2>&1 || true; }
   command -v homelab-setup >/dev/null 2>&1 || return 0
   # Homepage can only measure a pool that is mounted inside its own container: after a pool was mounted or changed it must see it
@@ -52,7 +52,7 @@ drives_menu() {
     case "$c" in
       1) intro_ask "Connect a new drive" \
            "Next I list the drives that are plugged in and not used yet. You pick one," \
-           "then you say if it is for the Main storage or the Backup storage." \
+           "then you say if it is for the Main pool or the Backup pool." \
            "If the drive has files on it you can keep them. Nothing is erased without you typing ERASE." &&
          { connect_flow && sync_filebrowser; } ;;
       2) intro_ask "Disconnect a drive" \
@@ -65,7 +65,7 @@ drives_menu() {
            "then the drive is erased and formatted for the other storage." &&
          { move_flow && sync_filebrowser; } ;;
       4) intro "Use part of the boot drive for a pool" \
-           "Next you choose the Main or the Backup storage, read the warning and choose the size." \
+           "Next you choose the Main or the Backup pool, read the warning and choose the size." \
            "You are asked again before anything is made. Cancel any time by pressing Enter." &&
          { bootsection_flow && sync_filebrowser; } ;;
       5) intro "Take all drives out of the pools" \
@@ -104,7 +104,7 @@ problem_menu() {
          { replace_flow && sync_filebrowser; } ;;
       3) intro "Copy back only the files that are missing from the backup" \
            "Next I look for the backup copy and show what it holds." \
-           "Only files that are missing in the main storage are copied back. Nothing is overwritten." &&
+           "Only files that are missing in the main pool are copied back. Nothing is overwritten." &&
          { restore_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
@@ -135,7 +135,7 @@ settings_menu() {
            "${POOL_FREE_PERCENT}% of it is free, then the next one, or it can spread by free space. No files are moved." &&
          fillorder_flow ;;
       3) intro "Convert the current single data drive into the main pool" \
-           "Only for older setups where one drive is mounted directly as the main storage." \
+           "Only for older setups where one drive is mounted directly as the main pool." \
            "Next you see what changes and are asked before anything is done." &&
          { adopt_flow && sync_filebrowser; } ;;
       4) intro "Even out the used space (balance)" \

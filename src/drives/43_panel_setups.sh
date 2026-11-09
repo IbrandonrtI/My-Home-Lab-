@@ -41,13 +41,13 @@ setup_choose() {   # setup_choose ID SIZE... (the biggest first) -> "K CAPACITY"
 
 setup_blocker() {   # setup_blocker ID -> why this setup cannot be built right now (nothing when it can)
   local id=$1
-  if array_active; then echo "The Main storage already is a $(preset_title "$(preset_current)") setup. It has to be taken apart first (sudo drives release)."; return 0; fi
-  if [ -n "$(parity_mounts)" ]; then echo "The Main storage uses SnapRAID protection drives. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+  if array_active; then echo "The Main pool already is a $(preset_title "$(preset_current)") setup. It has to be taken apart first (sudo drives release)."; return 0; fi
+  if [ -n "$(parity_mounts)" ]; then echo "The Main pool uses SnapRAID protection drives. A new setup builds a new Main pool, so take the drives out of Main first."; return 0; fi
   if [ -n "$(branches_of main)" ]; then
-    if ! preset_is_array "$id"; then echo "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
-    main_is_pool || { echo "The Main storage is not mounted right now, so its files cannot be copied into a new setup. Mount it first (sudo drives remount)."; return 0; }
+    if ! preset_is_array "$id"; then echo "The Main pool still has drives in it. A new setup builds a new Main pool, so take the drives out of Main first."; return 0; fi
+    main_is_pool || { echo "The Main pool is not mounted right now, so its files cannot be copied into a new setup. Mount it first (sudo drives remount)."; return 0; }
   fi
-  if [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; then echo "The Backup storage still has drives in it. The mirror builds a new Backup storage, so take its drives out first."; return 0; fi
+  if [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; then echo "The Backup pool still has drives in it. The mirror builds a new Backup pool, so take its drives out first."; return 0; fi
   if preset_is_array "$id" && [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL"; then echo "$MAIN_POOL is already in use by something else."; return 0; fi
   if [ -n "$(preset_tool_hint "$id")" ]; then echo "The program for this setup is not installed yet. Run  sudo homelab-setup upgrade  on the server to install it."; return 0; fi
   return 0

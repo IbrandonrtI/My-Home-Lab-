@@ -33,6 +33,16 @@ chosen_name_del() {   # chosen_name_del LABEL
   rm -f "$tmp"
 }
 
+carry_name() {   # carry_name OLDLABEL NEWLABEL: a drive that gets a new label keeps the name you chose for it (names are kept by label)
+  local nm
+  [ -n "$1" ] && [ "$1" != "$2" ] || return 0
+  nm=$(chosen_name "$1")
+  [ -n "$nm" ] || return 0
+  [ -z "$(chosen_name "$2")" ] || return 0
+  chosen_name_put "$2" "$nm"
+  chosen_name_del "$1"
+}
+
 rename_flow() {   # give a pool drive a name of your own (kept by the drive's label, so it stays when the drive is plugged in again)
   local mp label cur new b lower
   if [ -n "${PANEL_ID:-}" ]; then mp=$(panel_branch "$PANEL_ID") || return 1      # the control panel names the drive and the new name itself
@@ -129,7 +139,7 @@ power_action() {   # power_action sleep|wake: pick a spinning hard drive and put
   name=$(disk_base_name "$dev"); role=$(disk_role_of "$dev"); state=$(power_state "$dev")
   if [ "$verb" = sleep ]; then
     if [ "$state" = asleep ]; then say "$name is already asleep. Nothing was changed."; return 0; fi
-    case "$role" in main|backup) say "Note: $name is in the $role storage. Anything that reads it wakes it up again at once$([ "$role" = main ] && echo " (main drives are set to never sleep)")." ;; esac
+    case "$role" in main|backup) say "Note: $name is in the $role pool. Anything that reads it wakes it up again at once$([ "$role" = main ] && echo " (main drives are set to never sleep)")." ;; esac
     dry_gate "Tell $dev ($name) to go to sleep (spin down)." && return 0
     hdparm -y "$dev" >/dev/null 2>&1 || true
     log "sleep $dev ($name)"
