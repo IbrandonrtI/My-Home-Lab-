@@ -1557,7 +1557,7 @@ def filebrowser_volumes(text):
 
 
 HOMEPAGE_PARENT_LINE = "/mnt:/mnt:ro,rslave"
-HOMEPAGE_PARENT_NOTE = "   # the Main and Backup pool pills; rslave: a pool mounted later still shows"
+HOMEPAGE_PARENT_NOTE = "   # the Main and Backup Pool pills; rslave: a pool mounted later still shows"
 
 
 def homepage_volumes(text):
@@ -2091,6 +2091,32 @@ def layout_terminal_to_customize(settings, seen):
     return _entries_text((head, entries, tail, rest)), seen
 
 
+HOME_ORDER = "~home-order"                               # the Home groups were put in the order they are shown in (done once)
+HOME_FIRST = ["Network & DNS", "Monitoring & Management", "Files & Photos", "Media & Entertainment"]
+
+
+def layout_home_order(settings, seen):
+    """The Home groups are listed as they are shown: Network & DNS and Monitoring & Management (is the server okay?), then Files & Photos, then
+    Media & Entertainment, then any other group in the order it had. The slots of the Home groups in the list stay where they are. Once; an
+    order you chose later is left alone. Returns (settings, seen)."""
+    if HOME_ORDER in seen:
+        return settings, seen
+    seen = sorted(set(seen) | {HOME_ORDER})
+    parts = layout_entries(settings)
+    if not parts:
+        return settings, seen
+    head, entries, tail, rest = parts
+    slots = [i for i, e in enumerate(entries) if _entry_tab(e) == "Home"]
+    home = [entries[i] for i in slots]
+    first = [next(e for e in home if _entry_name(e) == n) for n in HOME_FIRST if any(_entry_name(e) == n for e in home)]
+    ordered = first + [e for e in home if e not in first]
+    if ordered == home:
+        return settings, seen
+    for i, e in zip(slots, ordered):
+        entries[i] = e
+    return _entries_text((head, entries, tail, rest)), seen
+
+
 def layout_columns_changed(settings, seen, group, old, new, marker):
     """`columns: old` of one group of the layout becomes `columns: new`, once (the marker is put in the groups-seen list, so a later change
     by the owner is left alone). Returns (settings, seen)."""
@@ -2184,12 +2210,23 @@ def card_retitled(text, card_id, old_title, new_title, old_desc, new_desc):
     return "\n".join(lines)
 
 
-NAVIDROME_TITLE, NAVIDROME_DESC = "Navidrome", "Spotify Music Player"
+NAVIDROME_TITLE, NAVIDROME_DESC = "Navidrome", "Music Streaming Server"
 
 
 def navidrome_card_named(text):
-    """The Navidrome card with the name Navidrome (not navidrome) and the description Spotify Music Player."""
-    return card_retitled(text, "navidrome-card", "navidrome", NAVIDROME_TITLE, "Music streaming server", NAVIDROME_DESC)
+    """The Navidrome card with the name Navidrome (not navidrome) and the description Music Streaming Server (the older wordings are replaced)."""
+    text = card_retitled(text, "navidrome-card", "navidrome", NAVIDROME_TITLE, "Music streaming server", NAVIDROME_DESC)
+    return card_retitled(text, "navidrome-card", NAVIDROME_TITLE, NAVIDROME_TITLE, "Spotify Music Player", NAVIDROME_DESC)
+
+
+CARD_WORDING = [("filebrowser-card", "FileBrowser", "View and edit the backups", "Browse and Edit Files")]      # (card id, its name, the old description, the new one)
+
+
+def cards_worded(text):
+    """services.yaml with the descriptions of the cards that were reworded in a later version (only where they still are the old words)."""
+    for cid, title, old, new in CARD_WORDING:
+        text = card_retitled(text, cid, title, title, old, new)
+    return text
 
 
 PLAYER_ID = "navidrome-player"      # the separate player card of zip 33; the player now lives inside the Navidrome card and this card is taken out
@@ -3178,7 +3215,7 @@ def folder_problem(path, err):
         if (path == root or path.startswith(root + "/")) and locked_mountpoint(root):
             return ("%s is not mounted right now, so the folders cannot be made in it (its folder is locked on purpose while the drive is away, so nothing is written onto the boot drive by mistake).\n"
                     "- If a drive is connected but not mounted:  sudo drives remount\n"
-                    "- If this storage has no drive at all: open the control panel (Customize, then Drives) and drag a drive into it, or run  sudo drives\n"
+                    "- If this pool has no drive at all: open the control panel (Customize, then Drives) and drag a drive into it, or run  sudo drives\n"
                     "Then run this step again:  sudo homelab-setup refresh" % root)
     return ("the folder %s could not be made (%s). If it is on a drive, check that the drive is mounted and uses a file system that keeps owners (ext4). "
             "Look at the drives with:  sudo drives" % (path, err.strerror or err))
@@ -3801,6 +3838,7 @@ class HomepageTabs(Step):
                 svc = services_calendar_block(svc, shipped_svc)
             if not State.ran("homepage-customize") or CUSTOM_BEGIN in svc:         # the control panel's card: offered once, then kept up to date
                 svc = services_customize_block(svc, shipped_svc)
+        svc = cards_worded(svc)
         sett = layout_renamed(sett)
         sett, seen = layout_complete(sett, group_names(svc), group_names(read_file(hp_path("bookmarks.yaml"))), State.data.get("layout_seen", []))
         if re.search(r"(?m)^layout:", sett):
@@ -3811,10 +3849,19 @@ class HomepageTabs(Step):
             sett, seen = layout_stats_before_links(sett, seen)
             sett, seen = layout_linkedit_first(sett, seen)
             sett, seen = layout_terminal_to_customize(sett, seen)
+            sett, seen = layout_home_order(sett, seen)
         sett, seen = settings_quicklaunch(sett, seen)
         new_css = css_tabs_block(css, read_file(repo_file("homepage-config", "custom.css")))
         new_js = js_groups_block(read_file(hp_path("custom.js")), read_file(repo_file("homepage-config", "custom.js")))
         return sett, new_css, seen, new_js, svc
+
+    def widgets_new(self):
+        """widgets.yaml with the clock showing the month as a word (Nov 9, 2026 instead of 11/9/26). Offered once: a clock set back to the short
+        form later is left alone."""
+        old = read_file(hp_path("widgets.yaml")) if os.path.exists(hp_path("widgets.yaml")) else ""
+        if State.ran("homepage-clock") or not old:
+            return old
+        return re.sub(r"(?m)^(\s+dateStyle:\s*)short\s*$", r"\1medium", old)
 
     def remember(self, seen):
         if seen != State.data.get("layout_seen", []):
@@ -3824,11 +3871,11 @@ class HomepageTabs(Step):
     def probe(self):
         sett, css, seen, js, svc = self.wanted()
         if (sett != read_file(hp_path("settings.yaml")) or css != read_file(hp_path("custom.css")) or js != read_file(hp_path("custom.js"))
-                or svc != read_file(hp_path("services.yaml"))):
+                or svc != read_file(hp_path("services.yaml")) or self.widgets_new() != (read_file(hp_path("widgets.yaml")) if os.path.exists(hp_path("widgets.yaml")) else "")):
             return "todo"
         if not Opt.dry:
             self.remember(seen)                  # already in place (a new machine): a later removal of a group or of the tabs is respected
-            for k in ("homepage-tabs", "homepage-stats", "homepage-calendar", "homepage-customize"):
+            for k in ("homepage-tabs", "homepage-stats", "homepage-calendar", "homepage-customize", "homepage-clock"):
                 if not State.ran(k):
                     State.mark(k)
         return "done"
@@ -3836,11 +3883,12 @@ class HomepageTabs(Step):
     def run(self):
         old_sett, old_css, old_js, old_svc = (read_file(hp_path(n)) for n in ("settings.yaml", "custom.css", "custom.js", "services.yaml"))
         sett, css, seen, js, svc = self.wanted()
+        wid, old_wid = self.widgets_new(), (read_file(hp_path("widgets.yaml")) if os.path.exists(hp_path("widgets.yaml")) else "")
         own = (Ctx.uid, Ctx.gid)
         if Opt.dry:
             out("      would add the tabs (Home, Stats, Links), the group icons, the bookmark cards, the STATS cards and their styles to the Homepage files")
             return
-        for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js), ("services.yaml", old_svc, svc)):
+        for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js), ("services.yaml", old_svc, svc), ("widgets.yaml", old_wid, wid)):
             if new == old:
                 continue
             if old and not os.path.exists(hp_path(name) + ".before-tabs"):          # the first copy is the one worth keeping
@@ -3851,6 +3899,7 @@ class HomepageTabs(Step):
         State.mark("homepage-stats")
         State.mark("homepage-calendar")
         State.mark("homepage-customize")
+        State.mark("homepage-clock")
         stats_file = hp_path("images/stats.json")
         if not FAKE and not os.path.exists(stats_file) and os.path.exists(P("/usr/local/sbin/homelab-stats")):
             # Homepage only serves a file that was there when it started, so the first stats.json is made now, before the restart below
@@ -4021,7 +4070,7 @@ class NavidromeCard(Step):
             if not os.path.exists(hp_path("services.yaml") + ".before-navidrome"):
                 write_file(hp_path("services.yaml") + ".before-navidrome", old, 0o644, (Ctx.uid, Ctx.gid))
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
-            out("      The Navidrome card is first in its group, called Navidrome (\"Spotify Music Player\"), and has Navidrome's own player inside "
+            out("      The Navidrome card is first in its group, called Navidrome (\"Music Streaming Server\"), and has Navidrome's own player inside "
                 "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
 
 
@@ -5724,7 +5773,7 @@ def ask_weather(a):
 
 LVM_EXPLAIN = ("Ubuntu Server's installer makes the system volume small (about 100 GB) and leaves the rest of the drive unused. "
                "Using that space makes the system volume bigger. Nothing is erased and nothing moves: your files stay as they "
-               "are, and it is done while the machine runs. It is needed if you want to use part of this drive as a storage "
+               "are, and it is done while the machine runs. It is needed if you want to use part of this drive as a pool "
                "pool later (sudo drives bootsection). A volume grows easily but only shrinks with effort.")
 
 
@@ -6268,7 +6317,7 @@ def wait_for_apps():
 
 
 def update_panel_when_blocked(res):
-    """A machine whose Main storage has no drive cannot finish the steps after 'Folders for the services exist', but the control panel and the
+    """A machine whose Main pool has no drive cannot finish the steps after 'Folders for the services exist', but the control panel and the
     helper scripts do not need the storage. So a panel that was installed before is still brought up to date here (it is the way to add a drive)."""
     s = BY_ID.get("panel-files")
     if s is None or Opt.dry or not s.applies() or res["panel-files"].state != "blocked" or not main_storage_missing():
@@ -6280,16 +6329,16 @@ def update_panel_when_blocked(res):
     except Abort as e:
         warn("The control panel could not be updated: %s" % e)
         return False
-    good("The control panel was updated (it does not need the Main storage).")
+    good("The control panel was updated (it does not need the Main pool).")
     return True
 
 
 def storage_notice(res):
-    """Plain words about what is paused while the Main storage has no drive, and what to do."""
+    """Plain words about what is paused while the Main pool has no drive, and what to do."""
     if Opt.dry or not main_storage_missing():
         return
     waits = [s for s in STEPS if res[s.id].state in ("blocked", "todo", "failed") and s.id != "folders" and waits_for_folders(s)]
-    rule("The Main storage has no drive")
+    rule("The Main pool has no drive")
     say("Nothing is wrong with the update itself: the new scripts and the control panel are installed. But /mnt/storage has no drive mounted, so the services "
         "that keep their files there stay stopped (nothing is written onto the boot drive by mistake).")
     out("")
@@ -6304,7 +6353,7 @@ def storage_notice(res):
         if late:
             say("That includes: %s." % ", ".join(s.title.split(" (")[0] for s in late))
         out("")
-    say("What to do:\n1. Open the control panel, then Customize, then Drives, and drag a drive into Main Storage (Keep the files if it already holds them).\n"
+    say("What to do:\n1. Open the control panel, then Customize, then Drives, and drag a drive into Main pool (Keep the files if it already holds them).\n"
         "   Or run:  sudo drives\n"
         "2. The services that were stopped start again by themselves.\n"
         "3. Run:  sudo homelab-setup refresh")
@@ -6959,7 +7008,7 @@ def restart_homepage_if_blind():
 
 
 def cmd_homepage():
-    """Make Homepage see the Main and Backup pool (the two drive pills). sudo drives calls this by itself."""
+    """Make Homepage see the Main and Backup Pool (the two drive pills). sudo drives calls this by itself."""
     load_all()
     if "homepage" not in containers_all():
         say("Homepage is not installed on this machine.")
@@ -6971,7 +7020,7 @@ def cmd_homepage():
     if result == "dry":
         return
     if result == "changed":
-        good("Homepage can see the Main and Backup pool")
+        good("Homepage can see the Main and Backup Pool")
     else:
         say("Homepage already sees the pools.")
 
@@ -7106,7 +7155,7 @@ Commands:
   verify                   check that every container and service is up (also shown when all steps are done)
   fill                     walk through the logins and keys that need you
   filebrowser              update FileBrowser's drive folders after a drive was connected or removed
-  homepage                 let Homepage see the Main and Backup pool, and move custom.css to the current layout
+  homepage                 let Homepage see the Main and Backup Pool, and move custom.css to the current layout
   adguard                  add AdGuard Home, if you skipped it during the install
   cards                    give every new service (a container with a web page) its Homepage card; also: cards list | move | ignore
   lastfm                   save your free Last.fm key so Navidrome can suggest similar songs; also: lastfm remove
