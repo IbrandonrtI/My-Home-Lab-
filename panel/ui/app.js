@@ -284,7 +284,7 @@ function saveBar(dirty, onSave, onRevert, saveLabel, extra) {      // (kept for 
 let DR = null, DRerr = "", DRbusy = "", DRhealth = null, DRcheck = null, DRwait = "", DRjob = null, DRpoll = 0;
 let drivesBox = null;
 const ROLE_TEXT = { main: "Main", backup: "Backup", parity: "Parity", array: "Array", spare: "Spare", system: "System", "plain-data": "Plain Data" };
-const STATE_TEXT = { connected: "Connected", "connected (used last)": "Connected (Used Last)", MISSING: "Missing", "NOT MOUNTED": "Not Mounted",
+const STATE_TEXT = { connected: "Connected", "connected (used last)": "Connected", MISSING: "Missing", "NOT MOUNTED": "Not Mounted",
   "not connected to a pool": "Not in a Pool", "boot/system drive (never touched)": "Boot Drive" };      // (short words: they must fit in their column)
 const STATE_HINT = { "connected (used last)": "A backup copy on the boot drive. It is only used when the other backup drives are full.", "boot/system drive (never touched)": "The boot drive. The panel never changes it." };
 const JOB_TEXT = { add: "Adding the drive...", wipe: "Erasing the drive...", disconnect: "Taking the drive out of its pool...", move: "Moving the drive...", remount: "Mounting the drives again. This can take a minute...",
@@ -365,7 +365,7 @@ async function jobFinished(j) {
     if (go) startJob(last.action, Object.assign({}, last.body, { typed: (last.body.typed || []).concat(["NOW"]) }), last.okText);
     return was;
   }
-  toast(j.rc === 0 ? (okText || "Done.") : (j.message || "That did not work."), j.rc !== 0);
+  toast(j.rc === 0 ? (okText || "Done.") : (j.message || (j.rc === 4 ? "Stopped." : "That did not work.")), j.rc !== 0 && j.rc !== 4);      // (4: the person pressed Abort; the message says what was stopped and what was put back)
   await loadDrives();
   return was;
 }
@@ -500,9 +500,17 @@ async function eraseSpare(sp) {
     ok: () => "Erase Drive", danger: () => true });
   if (r) startJob("wipe", { id: sp.id, mode: r.answers.mode, typed: r.typed }, sp.name + " was erased" + (r.answers.mode === "format" ? " and formatted." : "."));
 }
-function poolFacts(tiles) {      // what is left in the pool when these drives go
-  const rens = tiles.map(t => t.ren), total = rens[0].others + 1, remaining = total - rens.length;
-  return { remaining, only: remaining <= 0, copyable: rens.some(a => a.has_data) && remaining > 0 };
+const DRAIN_SPARE = 2147483648;      // the drives tool keeps this much free on a drive it copies to
+function poolFacts(tiles) {      // what is left in the pool when these drives go, and whether the files that are on the leaving drives fit on the ones that stay
+  const rens = tiles.map(t => t.ren), total = rens[0].others + 1, remaining = total - rens.length, role = rens[0].role;
+  const copyable = rens.some(a => a.has_data) && remaining > 0;
+  const leaving = new Set(tiles.map(t => t.id));
+  const stay = tilesNow().filter(t => (t.kind === "pool" || t.kind === "boot") && t.d.role === role && t.ren && t.ren.connected && !leaving.has(t.id));
+  const free = stay.reduce((n, t) => n + (t.d.free_bytes || 0), 0), maxFree = stay.reduce((n, t) => Math.max(n, t.d.free_bytes || 0), 0);
+  const need = rens.reduce((n, a) => n + (a.used_bytes || 0), 0), maxNeed = rens.reduce((n, a) => Math.max(n, a.used_bytes || 0), 0);
+  const noRoom = copyable && (need + DRAIN_SPARE > free || maxNeed + DRAIN_SPARE > maxFree);
+  const roomText = "There is not enough free room on the " + role + " drives that stay (" + humanBytes(need) + " to copy, " + humanBytes(free) + " free, and " + humanBytes(DRAIN_SPARE) + " is kept free). A drive whose files do not fit is not taken out. Pick fewer drives, or choose not to copy.";
+  return { remaining, only: remaining <= 0, copyable, noRoom, roomText };
 }
 async function takeOutDrives(tiles) {
   const f = poolFacts(tiles), role = tiles[0].ren.role, R = cap(role), one = tiles.length === 1;
@@ -515,7 +523,7 @@ async function takeOutDrives(tiles) {
       { value: "yes", label: "Copy them to another " + role + " drive first (recommended)", hint: "Every file is copied and checked before the drive is taken out. Nothing is lost." },
       { value: "no", label: "Do not copy them", hint: "The files stay on the drive only. They disappear from the " + role + " storage." }] }] : [],
     refuse: () => f.only && role === "main" ? (one ? "This is the only Main drive. Taking it out would take away the storage your services use. Add another Main drive first." : "These are all the Main drives. Taking them out would take away the storage your services use. Leave at least one Main drive.") : null,
-    warn: s => f.only ? "Backups stop until another backup drive is added." : f.copyable && s.copy === "no" ? "Without copying, the files on " + (one ? "this drive" : "these drives") + " will not show in the " + role + " storage any more. They stay on the drive." : "The drive" + (one ? " is" : "s are") + " taken out of the " + role + " storage. The data on the drive is not touched. The containers that use the storage stop for a minute.",
+    warn: s => f.only ? "No " + role + " drive stays, so nothing can be copied: the files stay on the " + (one ? "drive" : "drives") + " only. Backups stop until another backup drive is added." : f.copyable && s.copy === "no" ? "Without copying, the files on " + (one ? "this drive" : "these drives") + " will not show in the " + role + " storage any more. They stay on the drive." : f.noRoom && s.copy === "yes" ? f.roomText : "The drive" + (one ? " is" : "s are") + " taken out of the " + role + " storage. The data on the drive is not touched. The containers that use the storage stop for a minute.",
     typed: s => f.only ? [{ word: "REMOVE" }] : f.copyable && s.copy === "no" ? [{ word: "CONTINUE" }] : [],
     sure: () => f.only ? "I understand that backups stop until another backup drive is added." : "I understand that the files on " + (one ? "this drive" : "these drives") + " will no longer show in the " + role + " storage.",
     ok: () => one ? "Take Drive Out" : "Take Drives Out", danger: s => f.only || (f.copyable && s.copy === "no") });
@@ -542,6 +550,8 @@ async function moveDrives(tiles) {
       const noCopy = f.copyable && s.copy === "no", e = erasing(s);
       if (e.length && noCopy) return "The files on " + (one ? "this drive" : "the erased drives") + " will be permanently lost: " + (one ? "the drive is" : "they are") + " erased and the files are not copied anywhere.";
       if (e.length) return "Everything on " + e.map(t => devOf(t)).join(", ") + " will be permanently deleted" + (f.copyable ? ", after its files are copied to the other " + role + " drives." : ".");
+      if (f.only) return "No " + role + " drive stays, so nothing can be copied: the files stay on the " + (one ? "drive" : "drives") + " and show in the " + T + " storage. The " + R + " storage is empty until another drive is added.";
+      if (f.noRoom && s.copy === "yes") return f.roomText;
       if (noCopy) return "The files go with the drive" + (one ? "" : "s") + " to the " + T + " storage. The " + R + " storage loses them.";
       return "The files stay on the drive" + (one ? "" : "s") + " and also show up in the " + T + " storage, while the " + R + " storage keeps its own copy. The two storages then hold some of the same files." + (f.only ? " This is the only Backup drive: backups stop until another backup drive is added." : "");
     },
@@ -808,11 +818,28 @@ function refreshCard() {
   put(DRcard.body, cardBody(t));
 }
 function closeCard() { if (DRcard) { const d = DRcard.dlg; DRcard = null; try { d.close(); } catch (e) { /* closed */ } d.remove(); } }
+async function abortJob() {      // the Abort button of a running add, move or take out
+  const act = DRbusy;
+  if (!/^(add|disconnect|move)$/.test(act) || (DRjob && DRjob.stopping)) return;
+  const text = act === "add"
+    ? "Drives that are not added yet are not added. A drive that is already added stays added. A drive that is being erased finishes that step first."
+    : "A drive that is still copying stops right away and stays where it is, with its files. A drive that is already done is put back into the pool it came from. A drive that is being erased finishes that step first. Files that were already copied to other drives stay there as extra copies.";
+  if (!await confirmBox("Abort This Change?", text, "Abort", true)) return;
+  try {
+    const r = await api("POST", "/api/drives/abort", {});
+    if (DRjob) DRjob.stopping = true;
+    toast(r.message || "Stopping.");
+  } catch (e) { fail(e); }
+  drawDrives();
+}
 function drivesBody() {
   const out = [];
   if (DRwait || DRbusy) {
     const lines = DRjob && DRjob.lines ? DRjob.lines.filter(l => !/\(typed in the panel\)|^Type /.test(l)).slice(-8) : [];
-    out.push(h("div", { class: "card working", role: "status" }, DRbusy ? (JOB_TEXT[DRbusy] || "Working...") : DRwait,
+    const stopping = !!(DRjob && DRjob.stopping), canStop = !!DRbusy && /^(add|disconnect|move)$/.test(DRbusy);
+    out.push(h("div", { class: "card working", role: "status" }, DRbusy ? (stopping ? "Stopping at the next safe moment..." : (JOB_TEXT[DRbusy] || "Working...")) : DRwait,
+      canStop ? h("div", { class: "row tight" }, h("button", { class: "danger small", disabled: stopping, onclick: abortJob, title: "Stops what is not finished yet, and puts the drives that are done back" }, stopping ? "Stopping..." : "Abort"),
+        stopping ? h("span", { class: "muted small" }, "A copy stops at once; a step that has started finishes first. Drives that are already done are put back.") : null) : null,
       DRbusy && /^(add|wipe|disconnect|move)$/.test(DRbusy) ? h("p", { class: "muted small" }, "Please keep this page open or come back later. Copying files can take a long time. You can leave the page: the work goes on.") : null,
       lines.length ? h("details", { class: "joblogbox" }, h("summary", {}, "Show the steps"), h("pre", { class: "joblog" }, lines.join("\n"))) : null));
   }

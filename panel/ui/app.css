@@ -276,6 +276,7 @@ svg.hdd { display: block; }
 dialog.dcard { width: min(640px, calc(100vw - 24px)); }
 .dcard .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin: 10px 0; }
 .dcard .st { background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; min-width: 0; overflow-wrap: anywhere; }
+.dcard .st .pill { max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
 .dcard .st small { display: block; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
 .dcard .row.tight { gap: 8px; flex-wrap: wrap; margin: 8px 0; }
 .dcard .result { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
@@ -285,3 +286,4 @@ details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-siz
   .dzone { padding: 12px; }
   .dzone .tiles { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 }
+.card.working .row.tight { gap: 10px; flex-wrap: wrap; align-items: center; margin: 10px 0 4px; }
