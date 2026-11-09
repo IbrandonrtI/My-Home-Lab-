@@ -110,5 +110,28 @@ OUT=$(P setup mirror "${L1#/dev/},${L2#/dev/}" mirror ERASE)
 has "mirror: it says it is ready" "$OUT" "is ready"
 check "mirror: one drive in Main and one in Backup" "$(pool_drives main)-$(pool_drives backup)" "1-1"
 
+# ---------------- SnapRAID: a data drive keeps its files, the biggest of the others holds the protection (a stand-in snapraid program is used)
+FAKEBIN=$(mktemp -d); printf '#!/bin/sh\nexit 0\n' >"$FAKEBIN/snapraid"; chmod +x "$FAKEBIN/snapraid"
+reset_env; $D test-setup 3 300M >/dev/null 2>&1
+L1=$(loop_of 1); L2=$(loop_of 2); L3=$(loop_of 3)
+for n in 1 2 3; do      # three drives that each hold a file and are then taken out again (so they are spare drives with files)
+  eval "LL=\$L$n"
+  P add "${LL#/dev/}" main erase "$LL" ERASE >/dev/null
+  echo "photos $n" >"/mnt/test-main/keep$n.txt"
+  IDN=$(basename "$(grep -v '^#' "$S/fstab" | grep -o '/mnt/test-disks/[A-Za-z0-9]*' | head -1)")
+  P disconnect "$IDN" no REMOVE >/dev/null
+done
+J=$(HOMELAB_EXTRA_PATH="$FAKEBIN" $D panel setups 2>/dev/null)
+check "snapraid keep: the scan says SnapRAID can keep files" "$(echo "$J" | jq_ "[o['can_keep'] for o in d['options'] if o['id'] == 'snapraid1'][0]")" "True"
+check "snapraid keep: and the ZFS setups cannot" "$(echo "$J" | jq_ "[o['can_keep'] for o in d['options'] if o['id'] == 'zfs-raidz1'][0]")" "False"
+check "snapraid keep: all three drives are spare drives with files" "$(echo "$J" | jq_ "len([x for x in d['spare'] if not x['blank'] and x['keep_ok']])")" "3"
+OUT=$(HOMELAB_EXTRA_PATH="$FAKEBIN" P setup snapraid1 "${L1#/dev/}:keep,${L2#/dev/}:keep,${L3#/dev/}:keep" snapraid1 ERASE)
+has "snapraid keep: when every drive keeps its files nothing is left for the protection" "$OUT" "none left for that"
+OUT=$(HOMELAB_EXTRA_PATH="$FAKEBIN" P setup snapraid1 "${L1#/dev/}:keep,${L2#/dev/}:keep,${L3#/dev/}:erase" snapraid1 ERASE)
+has "snapraid keep: it says it is ready" "$OUT" "is ready"
+check "snapraid keep: two data drives are in Main" "$(pool_drives main)" "2"
+check "snapraid keep: the files of the kept drives are there and show in Main" "$(cat /mnt/test-main/keep1.txt /mnt/test-main/keep2.txt 2>/dev/null | tr '\n' ',')" "photos 1,photos 2,"
+rm -rf "$FAKEBIN"
+
 echo
 if [ "$bad" = 0 ]; then echo OK; else echo "FAIL ($bad)"; exit 1; fi

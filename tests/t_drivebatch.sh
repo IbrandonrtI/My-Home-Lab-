@@ -200,6 +200,9 @@ check "empty Main: no drive is left in the Main storage" "$(pool_drives main)" "
 check "empty Main: the containers were stopped" "$(grep -c '^stop' "$S/docker.log")" "2"
 check "empty Main: and are NOT started again" "$(grep -c '^start' "$S/docker.log")" "0"
 has "empty Main: the report says they stay stopped" "$OUT" "stay stopped until a Main drive is added"
+STJ=$(HOMELAB_EXTRA_PATH="$S/bin3" P status)
+check "empty Main: the status says Main has no drive" "$(echo "$STJ" | python3 -c "import json,sys; print(json.load(sys.stdin)['main_empty'])")" "True"
+check "empty Main: and lists the services that wait" "$(echo "$STJ" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['main_held']))")" "2"
 SP=$(actions | jq_ "d['spare'][0]['id']")
 OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P add "$SP" main keep)
 has "empty Main: a drive can be added again" "$OUT" "connected to the main storage"
@@ -208,6 +211,7 @@ SP2=$(actions | jq_ "d['spare'][0]['id']")
 HOMELAB_EXTRA_PATH="$S/bin3" P add "$SP2" main keep >/dev/null
 check "empty Main: the files stayed on the drives that left and show again when they are added back" "$(cat /mnt/test-main/sa.txt 2>/dev/null)" "stay on A"
 check "empty Main: and the reminder is gone" "$(ls "$S"/main-empty-stopped 2>/dev/null | wc -l)" "0"
+check "empty Main: and the status says Main has a drive again" "$(HOMELAB_EXTRA_PATH="$S/bin3" P status | python3 -c "import json,sys; print(json.load(sys.stdin)['main_empty'])")" "False"
 # the only Backup drive and a single Main drive too
 setup 1 1
 fake_docker

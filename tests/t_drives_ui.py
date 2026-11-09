@@ -444,8 +444,13 @@ def main():
             tile(pg, "BACKUPBOOT").click()
             pg.wait_for_selector("dialog.dcard")
             pill = pg.locator("dialog.dcard .st:has-text('Status') .pill")
-            box = pg.locator("dialog.dcard .st:has-text('Status')").bounding_box()
-            pb = pill.bounding_box()
+            box = pb = None
+            for _ in range(20):      # (the card can be drawn again a moment after it opens)
+                box = pg.locator("dialog.dcard .st:has-text('Status')").bounding_box()
+                pb = pill.bounding_box()
+                if box and pb:
+                    break
+                pg.wait_for_timeout(150)
             check("boot section: the status word is just Connected", pill.inner_text() == "Connected", pill.inner_text())
             check("boot section: the status word stays inside its box", pb["x"] + pb["width"] <= box["x"] + box["width"] + 0.5, [pb, box])
             pg.keyboard.press("Escape")
@@ -608,7 +613,7 @@ def main():
                 check("configure (%s): the scan names the drives and the recommended setup" % cfg_mode, "Recommended: ZFS, RAIDZ1" in txt and "3 drives" in txt.replace("Scanned 3 drives", "3 drives"), txt[:300])
                 opts = pg.eval_on_selector_all(".cfgsel option", "els => els.map(e => [e.textContent, e.disabled])")
                 check("configure (%s): the dropdown lists the others from best to worst, the ones that do not fit are greyed out" % cfg_mode,
-                      len(opts) == 4 and "SnapRAID" in opts[1][0] and "Plain pool" in opts[2][0] and "RAIDZ2" in opts[3][0] and opts[3][1] and "needs 4 drives" in opts[3][0] and not opts[1][1], opts)
+                      len(opts) == 5 and "SnapRAID" in opts[1][0] and "Plain pool" in opts[2][0] and "Mirror" in opts[3][0] and "RAIDZ2" in opts[4][0] and opts[4][1] and "needs 4 drives" in opts[4][0] and not opts[1][1], opts)
                 check("configure (%s): nothing is sent by only looking" % cfg_mode, not any(c[1] in ("setup", "add", "wipe") for c in calls()[m:]), calls()[m:])
                 check("configure (%s): no side scroll" % cfg_mode, no_side_scroll(pg), "")
                 pg.click("button:has-text('Build Recommended Setup')")
@@ -637,9 +642,71 @@ def main():
                     ok_button(pg).click()
                     check("configure: a plain pool is added to Main, the drive with files kept and the empty ones formatted", wait_calls(pg, ["panel", "add", "sdc:keep,sde:erase,sdf:erase", "main", "each", "/dev/sde", "/dev/sdf", "ERASE"]), calls()[m:])
                     after_job(pg)
+                    # SnapRAID: the biggest drive holds the protection (erased) unless the person lets it keep its files, then another is erased
+                    if pg.locator(".cfgsel").count() == 0:
+                        pg.click("button:has-text('Configure Drives')")
+                    pg.wait_for_selector(".cfgsel")
+                    pg.select_option(".cfgsel", "snapraid1")
+                    pg.wait_for_selector("dialog")
+                    dt = dialog_text(pg)
+                    check("configure: SnapRAID offers to keep the files of a data drive", "Keep the files" in dt and "protection data" in dt, dt)
+                    pg.locator("dialog input[type=radio][value=keep]").check()
+                    sure_box(pg).check()
+                    m = len(calls())
+                    ok_button(pg).click()
+                    check("configure: SnapRAID is sent with the drive that keeps its files marked", wait_calls(pg, ["panel", "setup", "snapraid1", "sdc:keep,sde:erase,sdf:erase", "snapraid1", "ERASE"]), calls()[m:])
+                    after_job(pg)
+                    # a mirror: only one drive can keep its files
+                    if pg.locator(".cfgsel").count() == 0:
+                        pg.click("button:has-text('Configure Drives')")
+                    pg.wait_for_selector(".cfgsel")
+                    pg.select_option(".cfgsel", "mirror")
+                    pg.wait_for_selector("dialog")
+                    dt = dialog_text(pg)
+                    check("configure: a mirror keeps the files of one drive (the biggest by default) and copies to the other", "One drive can keep its files" in dt and pg.locator("dialog input[type=radio][value=keep]").is_checked(), dt)
+                    sure_box(pg).check()
+                    m = len(calls())
+                    ok_button(pg).click()
+                    check("configure: the mirror is sent with that drive kept", wait_calls(pg, ["panel", "setup", "mirror", "sdc:keep,sde:erase", "mirror", "ERASE"]), calls()[m:])
+                    after_job(pg)
                 else:
                     cancel_dialog(pg)
                 ctx.close()
+            # ---- Main has no drive: a warning names the services that wait, and how to fix it
+            p.stop()
+            p.env["FAKE_DRIVES_MODE"] = "nomain"
+            p.start()
+            ctx, pg, errors = open_drives(br)
+            pg.wait_for_selector(".warncard")
+            wt = pg.inner_text(".warncard")
+            check("no Main drive: the warning says Main has no drive and names the stopped services", "Main Has No Drive" in wt and "navidrome, immich_server" in wt, wt)
+            check("no Main drive: and says how to fix it", "drag a drive into Main" in wt and "Configure Drives" in wt, wt)
+            check("no Main drive: no side scroll", no_side_scroll(pg), "")
+            ctx.close()
+            p.stop()
+            p.env["FAKE_DRIVES_MODE"] = "ok"
+            p.start()
+            ctx, pg, errors = open_drives(br)
+            check("with a Main drive: there is no warning", pg.locator(".warncard").count() == 0, "")
+            ctx.close()
+            # ---- a RAID / ZFS setup while Main has drives: the dialog says the files are copied over and the old drives are released
+            p.stop()
+            p.env["FAKE_DRIVES_MODE"] = "migrate"
+            p.start()
+            ctx, pg, errors = open_drives(br)
+            m = len(calls())
+            pg.click("button:has-text('Configure Drives')")
+            pg.wait_for_selector(".cfg .cfgrec")
+            pg.click("button:has-text('Build Recommended Setup')")
+            pg.wait_for_selector("dialog")
+            dt = dialog_text(pg)
+            check("configure (move Main): the dialog shows the size check and says the files are copied over first", "20.0 GB of files" in dt and "copied into the new setup first" in dt and "old Main drives are released" in dt, dt[:600])
+            check("configure (move Main): and that nothing on the old drives is erased", "not erased" in dt, dt[:600])
+            sure_box(pg).check()
+            ok_button(pg).click()
+            check("configure (move Main): the setup is sent as usual", wait_calls(pg, ["panel", "setup", "zfs-raidz1", "sdc,sde,sdf", "zfs-raidz1", "ERASE"]), calls()[m:])
+            after_job(pg)
+            ctx.close()
 
             br.close()
     finally:

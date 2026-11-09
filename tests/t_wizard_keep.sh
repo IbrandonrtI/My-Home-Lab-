@@ -119,7 +119,7 @@ has "the plain pool is suggested instead" "$OUT" "Plain pool   [pool]"
 # 8. ZFS and RAID are refused from the full list when files are kept
 reset_env; $D test-setup 3 300M >/dev/null 2>&1
 make_part_disk 1 0
-OUT=$(wiz $'1\n2\n3\n')
+OUT=$(wiz $'1\n2\n7\n')
 has "from the full list a RAID setup is refused with a reason" "$OUT" "erases every drive, so it cannot keep the files"
 check "the old file is untouched" "$(L=$(loop_of 1); mkdir -p "$S/m"; mount "${L}p1" "$S/m" && cat "$S/m/old.txt"; umount "$S/m" 2>/dev/null)" "old file of drive 1"
 

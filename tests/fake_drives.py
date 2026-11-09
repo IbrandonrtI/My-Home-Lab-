@@ -39,6 +39,10 @@ if act == "status":
         STATUS["boot_limits"] = {"min_bytes": 10000000000, "max_bytes": 30000000000, "unit_bytes": 1000000000, "unit": "GB", "small": False, "main": False, "backup": "bootsec" in mode}
     if "bootsec" in mode:
         STATUS["drives"].append({"name": "546 GB boot drive section", "role": "backup", "device": "boot drive", "size_bytes": 536000000000, "used_bytes": 12000000000, "free_bytes": 524000000000, "state": "connected (used last)", "mount": "/mnt/disks/BACKUPBOOT"})
+    STATUS["main_empty"] = "nomain" in mode
+    STATUS["main_held"] = ["navidrome", "immich_server"] if "nomain" in mode else []
+    if "nomain" in mode:
+        STATUS["drives"] = [d for d in STATUS["drives"] if d["role"] != "main"]
     print(json.dumps(STATUS))
 elif act == "actions":
     ACTIONS = ({"rename": [{"id": "MAIN1", "name": "1 TB Toshiba HDD", "role": "main", "custom": False, "connected": True, "others": 0 if mode == "single" else 1, "has_data": True, "boot_section": False, "used_bytes": 250000000000},
@@ -96,16 +100,18 @@ elif act in ("add", "wipe", "disconnect", "move"):
 elif act == "setups":
     def opt(i, title, fits, usable, tol, drives, why="", kind="pool", nightly=False, mn=2):
         return {"id": i, "title": title, "blurb": "About " + title + ".", "kind": kind, "fits": fits, "min": mn, "drives": drives, "usable_bytes": usable, "used_bytes": usable * 2,
-                "tolerates": tol, "nightly": nightly, "score": 600, "can_build": fits and not why, "why": why if fits else "Needs %d empty drives; 3 found." % mn, "needs_tool": False}
+                "tolerates": tol, "nightly": nightly, "score": 600, "can_build": fits and not why, "why": why if fits else "Needs %d empty drives; 3 found." % mn, "needs_tool": False,
+                "can_keep": i in ("pool", "mirror", "snapraid1", "snapraid2"), "migrate": "migrate" in mode and kind != "pool"}
     block = "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first." if "blocked" in mode else ""
     print(json.dumps({"spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "blank": False, "keep_ok": True},
                                 {"id": "sde", "device": "/dev/sde", "name": "32 GB Kingston HDD", "size_bytes": 32000000000, "blank": True},
                                 {"id": "sdf", "device": "/dev/sdf", "name": "32 GB Kingston HDD 2", "size_bytes": 32000000000, "blank": True}],
-                      "total_bytes": 127100000000, "current": "",
+                      "total_bytes": 127100000000, "current": "", "main_used_bytes": 20000000000, "main_has_drives": "migrate" in mode,
                       "recommended": "zfs-raidz1",
                       "options": [opt("zfs-raidz1", "ZFS, RAIDZ1 (1 drive can die)", True, 64000000000, 1, ["sdc", "sde", "sdf"], block, "zfs", mn=3),
                                   opt("snapraid1", "SnapRAID, 1 protection drive", True, 64000000000, 1, ["sdc", "sde", "sdf"], block, "pool", True, 3),
                                   opt("pool", "Plain pool", True, 127100000000, 0, ["sdc", "sde", "sdf"], block, "pool", False, 1),
+                                  opt("mirror", "Mirror (nightly copy)", True, 32000000000, 1, ["sdc", "sde"], block, "pool", True, 2),
                                   opt("zfs-raidz2", "ZFS, RAIDZ2 (2 drives can die)", False, 0, 0, [], "", "zfs", False, 4)],
                       }))
 elif act == "bootadd":
