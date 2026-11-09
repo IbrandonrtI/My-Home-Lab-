@@ -129,6 +129,8 @@ PANEL_JOBS=3         # how many drives of one batch are worked on at the same ti
 CRIT_DEPTH=0         # >0 while this process holds the pool lock (the short steps that change a pool run one at a time)
 ABORTED=0            # 1 when the person pressed Stop and this drive was stopped because of it
 HOLDER_STOPPED=""
+PANEL_HOLD=0         # 1 while a batch of several drives runs: the containers are stopped once (at the first pool change) and started once (when every drive is done)
+PANEL_BARRIER=0      # 1 while a batch of several drives runs: the pool changes start only when every drive has finished its slow work (copying, formatting)
 PUTBACK=0            # 1 when a half-moved drive was put back into the pool it came from
 NOROOM=0            # 1 when a drive was left where it is because the drives that stay have no room for its files
 PANEL_UNDO=0         # 1 while drives are put back after Stop (typed words are not asked for)
@@ -234,6 +236,33 @@ rsync_run() {   # rsync_run FROM TO "Text" RSYNC-ARGS...: like rsync; in the pan
 abort_requested() {   # 0 when the person pressed Stop (not while a drive is being put back)
   [ "$ABORT_IGNORE" = 1 ] && return 1
   [ -e "$ABORT_FILE" ]
+}
+
+batch_all_ready() {   # 0 when every drive of the batch has finished its slow work or has ended
+  local id
+  for id in "${PANEL_IDS[@]}"; do
+    [ -e "$PANEL_RESERVE_DIR/ready-$id" ] || [ -e "$PANEL_RESERVE_DIR/$id.state" ] || return 1
+  done
+  return 0
+}
+batch_barrier() {   # a drive whose slow work (copying, formatting) is done waits here until every drive of the batch is done with it: then the pool changes follow one after the other, with the containers stopped only once. 1 when Stop was pressed while waiting
+  [ "$PANEL_BARRIER" = 1 ] && [ -n "$PANEL_RESERVE_DIR" ] || return 0
+  local f="$PANEL_RESERVE_DIR/ready-$PROG_ITEM"
+  [ -e "$f" ] && return 0
+  : >"$f"
+  progress 60 "Waiting for the other drives"
+  until [ -e "$PANEL_RESERVE_DIR/launched-all" ] && batch_all_ready; do
+    abort_requested && return 1
+    sleep 0.5
+  done
+  return 0
+}
+batch_copying() {   # how many drives of the batch are in their slow part right now
+  local id n=0
+  for id in "$@"; do
+    [ -e "$PANEL_RESERVE_DIR/ready-$id" ] || [ -e "$PANEL_RESERVE_DIR/$id.state" ] || n=$((n + 1))
+  done
+  echo "$n"
 }
 
 crit_enter() {   # crit_enter [abortable]: only one drive at a time may change a pool (stop containers, edit fstab, mount, start containers). Waits for its turn; 1 only when "abortable" and Stop was pressed while waiting
@@ -944,8 +973,20 @@ docker_each() {   # docker_each stop|start NAME...: the containers go together (
 }
 
 stop_containers() {   # stop_containers PATH...
-  local list bad
+  local list bad held n new=""
   list=$(containers_using "$@" | tr '\n' ' ')
+  if [ "$PANEL_HOLD" = 1 ] && [ -n "$PANEL_RESERVE_DIR" ]; then      # several drives at once: the batch stops each container once and starts it once, when every drive is done
+    held=$(cat "$PANEL_RESERVE_DIR/held" 2>/dev/null | tr '\n' ' ')
+    for n in $list; do case " $held " in *" $n "*) ;; *) new="$new $n" ;; esac; done
+    STOPPED=""
+    [ -n "${new// /}" ] || return 0
+    note "Stopping containers that use this storage (they stay stopped until every drive is done):$new"
+    # shellcheck disable=SC2086
+    bad=$(docker_each stop $new)
+    [ -z "${bad// /}" ] || warn "Some containers did not stop cleanly"
+    for n in $new; do echo "$n" >>"$PANEL_RESERVE_DIR/held"; done
+    return 0
+  fi
   [ -n "${list// /}" ] || { STOPPED=""; return 0; }
   note "Stopping containers that use this storage: $list"
   # shellcheck disable=SC2086
@@ -1074,6 +1115,20 @@ main_pool_ok() {   # true when the main storage is mounted the way fstab says (o
   mountpoint -q "$MAIN_POOL"
 }
 
+batch_start_held() {   # the end of a batch of several drives: the containers it stopped start again (when the pools are mounted the way fstab says)
+  local f="$PANEL_RESERVE_DIR/held" list
+  [ -s "$f" ] || return 0
+  list=$(tr '\n' ' ' <"$f"); rm -f "$f"
+  PANEL_HOLD=0
+  if main_pool_ok; then
+    STOPPED=$list
+    start_containers
+  else
+    STOPPED=$list
+    note "The pools are not mounted the way they should be, so the containers stay stopped."
+  fi
+}
+
 restore_services() {   # a step failed after the containers were stopped: when the old setup is back, mount it and start them again
   [ -n "${STOPPED// /}" ] && [ "$ROLLED_BACK" = 1 ] || return 0
   local role mp
@@ -1094,6 +1149,9 @@ on_exit() {
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
     note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
+  fi
+  if [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -s "$PANEL_RESERVE_DIR/held" ]; then
+    note ""; note "The containers ($(tr '\n' ' ' <"$PANEL_RESERVE_DIR/held")) are still STOPPED because something went wrong."; note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
   if [ -n "${PANEL_RESERVE_DIR:-}" ]; then rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; fi      # (a drive change of the panel that ended some other way)
@@ -1276,6 +1334,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
     fi
   fi
 
+  pool_is_live "$role" || batch_barrier || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }      # (a drive joins a running pool without stopping anything: it does not wait for the others)
   crit_enter || true      # from here the pool changes: one drive at a time
   uuid=$(blkid -s UUID -o value "$part") || true
   [ -n "$uuid" ] || die "Could not read the UUID of $part"
@@ -1400,6 +1459,9 @@ drain_branch_run() {   # copy everything from branch $1 to the emptiest other br
   fi
   space_release "$mp"
   if abort_requested; then ABORTED=1; note "Stopped. Nothing was changed."; return 1; fi
+  target_unlock      # (the other drives may copy to this drive while this one waits for them)
+  batch_barrier || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
+  target_lock "$target" || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
   crit_enter abortable || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }      # from here the containers are stopped and the pool changes: one drive at a time
   progress 62 "Stopping the containers"
   stop_containers "$pool"
@@ -1475,6 +1537,7 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
   if [ "$drain" = 1 ]; then drain_branch "$mp" || { note "Not removing $label."; return 1; }; fi
 
   if [ "$CRIT_DEPTH" = 0 ] && abort_requested; then ABORTED=1; note "Stopped. Nothing was changed."; return 1; fi
+  batch_barrier || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
   crit_enter abortable || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
   progress 75 "Stopping the containers"
   if [ -z "${STOPPED// /}" ]; then stop_containers "$pool"; fi
@@ -5087,6 +5150,8 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
   local par=$PANEL_JOBS      # (when every drive of a pool leaves there is nothing to copy to: the files stay on the drives, and the flow asks for the words)
   [ "$n" -gt 1 ] || par=1
   PANEL_LEAVING=()
+  [ "$n" -gt 1 ] && { PANEL_HOLD=1; PANEL_BARRIER=1; }
+  local -a started=()
   for id in "${PANEL_IDS[@]}"; do
     if [ "$act" = add ]; then nameof[$id]=$(disk_base_name "/dev/$id")
     else mp=$(panel_branch "$id"); nameof[$id]=$(branch_name "$mp"); PANEL_LEAVING+=("$mp"); fi
@@ -5098,12 +5163,16 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
       panel_one "$act" "$id" "$mode" || { if [ "$ABORTED" = 1 ]; then rc=4; else rc=1; fi; }
       continue
     fi
+    while [ "$(batch_copying "${started[@]}")" -ge "$par" ]; do sleep 0.5; done      # (a drive that is only waiting for the others does not count: the next one can start copying)
     if abort_requested; then printf 'notstarted\n' >"$PANEL_RESERVE_DIR/$id.state"; progress_for "$id" 0 "Not started"; continue; fi
-    while [ "$(jobs -rp | wc -l)" -ge "$par" ]; do wait -n 2>/dev/null || true; done
+    started+=("$id")
     ( trap 'panel_job_end "$id" $?' EXIT; panel_one "$act" "$id" "$mode" ) &
   done
+  : >"$PANEL_RESERVE_DIR/launched-all"
   wait
+  PANEL_BARRIER=0
   if [ "$n" -gt 1 ] && [ "$act" != add ] && abort_requested; then panel_undo_done "$act"; fi      # Stop was pressed: the drives that were already done go back where they were
+  batch_start_held; PANEL_HOLD=0
   [ "$n" = 1 ] && { rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; PANEL_RESERVE_DIR=""; PANEL_LEAVING=(); return "$rc"; }
   panel_batch_report "$act" nameof
   rc=$?
