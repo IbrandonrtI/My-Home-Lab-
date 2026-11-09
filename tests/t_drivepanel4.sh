@@ -196,7 +196,7 @@ check "wipe: the drive still has its partition" "$(lsblk -lnpo TYPE "$L1" | grep
 has "wipe: empty" "$(P wipe "$id1" empty "$L1" ERASE)" "was erased and is empty"
 check "wipe: no partition is left" "$(lsblk -lnpo TYPE "$L1" | grep -c part)" "0"
 has "wipe: format" "$(P wipe "$id2" format "$L2" ERASE)" "formatted as an empty ext4 drive"
-check "wipe: the old file is gone" "$(mkdir -p "$S/m"; mount "${L2}p1" "$S/m" 2>/dev/null; ls "$S/m" | grep -c old.txt; umount "$S/m" 2>/dev/null)" "0"
+check "wipe: the old file is gone" "$(mkdir -p "$S/m"; mount "${L2}p1" "$S/m" 2>/dev/null; find "$S/m" -name old.txt | wc -l; umount "$S/m" 2>/dev/null)" "0"
 # a pool drive is never erased
 setup3; A=$(label_of main 0)
 has "wipe: a pool drive is refused (no spare drive is left to erase)" "$(P wipe "$A" empty /dev/loop1 ERASE)" "No spare drive found"

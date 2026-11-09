@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A fake `drives` for the panel tests: it only records the words it was given (FAKE_DRIVES_LOG) and answers like the real one.
 FAKE_DRIVES_MODE: ok (default) | nosudo (sudo wants a password) | busy (remount is refused) | slow (remount takes 2 seconds) | bad (not JSON)
-| slowhealth (health takes 2 seconds) | single (each pool has just one drive) | jobslow (add / wipe / disconnect / move print progress lines for a few seconds) | jobfail (they end with a refusal, exit 1) | jobbusy (they are refused with Not a good moment unless the word NOW is among the words) | twospares (a second spare drive is plugged in) | tight (the other Main drive is nearly full) | bootsec (a boot drive section is in Backup)."""
+| slowhealth (health takes 2 seconds) | single (each pool has just one drive) | jobslow (add / wipe / disconnect / move print progress lines for a few seconds) | jobfail (they end with a refusal, exit 1) | jobbusy (they are refused with Not a good moment unless the word NOW is among the words) | twospares (a second spare drive is plugged in) | tight (the other Main drive is nearly full) | bootsec (a boot drive section is in Backup) | bootlend (the boot drive can lend space, no section yet)."""
 import json
 import os
 import sys
@@ -35,6 +35,8 @@ if act == "status":
         STATUS["drives"].append(SPARE2_DRIVE)
     if "tight" in mode:
         STATUS["drives"][2].update(used_bytes=1999000000000, free_bytes=1000000000)
+    if "bootsec" in mode or "bootlend" in mode:
+        STATUS["boot_limits"] = {"min_bytes": 10000000000, "max_bytes": 30000000000, "unit_bytes": 1000000000, "unit": "GB", "small": False, "main": False, "backup": "bootsec" in mode}
     if "bootsec" in mode:
         STATUS["drives"].append({"name": "546 GB boot drive section", "role": "backup", "device": "boot drive", "size_bytes": 536000000000, "used_bytes": 12000000000, "free_bytes": 524000000000, "state": "connected (used last)", "mount": "/mnt/disks/BACKUPBOOT"})
     print(json.dumps(STATUS))
@@ -91,6 +93,29 @@ elif act in ("add", "wipe", "disconnect", "move"):
         sys.stderr.write("Cancelled. Nothing was changed.\n")
         sys.exit(1)
     print("Done. 63 GB Cruzer HDD was %s." % {"add": "added", "wipe": "erased", "disconnect": "taken out of its pool", "move": "moved"}[act])
+elif act == "setups":
+    def opt(i, title, fits, usable, tol, drives, why="", kind="pool", nightly=False, mn=2):
+        return {"id": i, "title": title, "blurb": "About " + title + ".", "kind": kind, "fits": fits, "min": mn, "drives": drives, "usable_bytes": usable, "used_bytes": usable * 2,
+                "tolerates": tol, "nightly": nightly, "score": 600, "can_build": fits and not why, "why": why if fits else "Needs %d empty drives; 3 found." % mn, "needs_tool": False}
+    block = "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first." if "blocked" in mode else ""
+    print(json.dumps({"spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "blank": False},
+                                {"id": "sde", "device": "/dev/sde", "name": "32 GB Kingston HDD", "size_bytes": 32000000000, "blank": True},
+                                {"id": "sdf", "device": "/dev/sdf", "name": "32 GB Kingston HDD 2", "size_bytes": 32000000000, "blank": True}],
+                      "total_bytes": 127100000000, "current": "",
+                      "recommended": "zfs-raidz1",
+                      "options": [opt("zfs-raidz1", "ZFS, RAIDZ1 (1 drive can die)", True, 64000000000, 1, ["sdc", "sde", "sdf"], block, "zfs", mn=3),
+                                  opt("snapraid1", "SnapRAID, 1 protection drive", True, 64000000000, 1, ["sdc", "sde", "sdf"], block, "pool", True, 3),
+                                  opt("pool", "Plain pool", True, 127100000000, 0, ["sdc", "sde", "sdf"], block, "pool", False, 1),
+                                  opt("zfs-raidz2", "ZFS, RAIDZ2 (2 drives can die)", False, 0, 0, [], "", "zfs", False, 4)],
+                      }))
+elif act == "bootadd":
+    print("PROGRESS bootadd 50 Making the section")
+    print("Done. The boot drive section was added.")
+elif act == "setup":
+    if "NOW" not in args and mode == "jobbusy":
+        sys.stderr.write("Not a good moment: a backup is running right now. Nothing was changed. Try again when it has finished.\n")
+        sys.exit(1)
+    print("Setup: %s. Done. The setup is ready." % args[2])
 elif act == "abort":
     if not os.path.exists(os.environ["FAKE_DRIVES_LOG"] + ".running"):
         sys.stderr.write("No drive change is running right now. Nothing was changed.\n")

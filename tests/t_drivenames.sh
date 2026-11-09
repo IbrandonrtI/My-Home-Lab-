@@ -19,17 +19,21 @@ DISKS="/dev/sdb|TOSHIBA_MQ01ABD100|1000204886016|1|sata
 /dev/sde|ST1000DM010-2EP102|1000204886016|1|sata
 /dev/sdf|USB_DISK_3.0|500107862016|1|usb
 /dev/sdg||2000398934016||
+/dev/sdh|Cruzer_Blade|63100000000|1|usb|1
+/dev/sdi|My_Passport_25E2|2000398934016|1|usb|0
+/dev/sdj|Portable_SSD_T5|500107862016|0|usb|0
 /dev/nvme0n1|Samsung_SSD_980|500107862016|0|nvme"
 lsblk() {   # only the forms drives uses for names
   local d=${*: -1} line
   line=$(awk -F'|' -v d="$d" '$1 == d' <<<"$DISKS")
   [ -n "$line" ] || return 1
-  IFS='|' read -r _ model size rota tran <<<"$line"
+  IFS='|' read -r _ model size rota tran rm <<<"$line"
   case "$*" in
     *"-dno MODEL"*) echo "${model//_/ }" ;;
     *"-dnbo SIZE"*) echo "$size" ;;
     *"-dno SIZE"*) echo "$size" ;;
     *"-dnbo ROTA,TRAN"*) [ -n "$rota" ] && echo "$rota $tran" ;;
+    *"-dno RM"*) echo "${rm:-0}" ;;
     *"-dno TRAN"*) echo "$tran" ;;
   esac
 }
@@ -38,6 +42,9 @@ check "name: hard drive" "$(disk_base_name /dev/sdb)" "1 TB Toshiba HDD"
 check "name: SSD by the model text" "$(disk_base_name /dev/sdc)" "250 GB Samsung SSD"
 check "name: Seagate from its model number" "$(disk_base_name /dev/sdd)" "1 TB Seagate HDD"
 check "name: unknown maker keeps the model text" "$(disk_base_name /dev/sdf)" "500 GB USB DISK 3.0 HDD"
+check "name: a USB stick is Flash, not HDD" "$(disk_base_name /dev/sdh)" "63 GB Cruzer Blade Flash"
+check "name: a USB hard drive in a box stays HDD" "$(disk_base_name /dev/sdi)" "2 TB My Passport 25E2 HDD"
+check "name: a USB SSD stays SSD" "$(disk_base_name /dev/sdj)" "500 GB Portable SSD T5 SSD"
 check "name: nothing known but the size" "$(disk_base_name /dev/sdg)" "2 TB drive"
 check "name: NVMe is an SSD" "$(disk_base_name /dev/nvme0n1)" "500 GB Samsung SSD"
 

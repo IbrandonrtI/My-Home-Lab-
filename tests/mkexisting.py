@@ -17,7 +17,7 @@ for st, cs in stacks.items():
     for c in cs:
         w["containers"][c] = {"image": "x", "stack": st, "running": True}
 w["containers"]["portainer"] = {"image": "portainer/portainer-ce", "stack": "", "running": True}
-w["pkgs"] += ["curl", "ca-certificates", "gnupg", "rsync", "cron", "python3-yaml", "smartmontools", "hdparm", "mergerfs", "parted", "docker-ce", "tailscale"]
+w["pkgs"] += ["curl", "ca-certificates", "gnupg", "rsync", "cron", "python3-yaml", "smartmontools", "hdparm", "mergerfs", "parted", "mdadm", "snapraid", "zfsutils-linux", "docker-ce", "tailscale"]
 w["bin"] = ["docker"]
 w["units"].update({"systemd-resolved": "inactive", "tailscaled": "active", "docker": "active"})
 w["users_in_docker"] = ["testuser"]

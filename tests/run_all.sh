@@ -48,6 +48,8 @@ run drive-panel-door bash -c "bash '$HERE/t_drivepanel.sh' | tail -1 | grep -q '
 run drive-panel-stage4 bash -c "bash '$HERE/t_drivepanel4.sh' | tail -1 | grep -q '^OK'"
 run mount-scope bash -c "bash '$HERE/t_mountscope.sh' | tail -1 | grep -q '^OK'"
 run drive-batch bash -c "bash '$HERE/t_drivebatch.sh' | tail -1 | grep -q '^OK'"
+run drive-setups bash -c "bash '$HERE/t_drivesetups.sh' | tail -1 | grep -q '^OK'"
+run boot-panel bash -c "bash '$HERE/t_bootpanel.sh' | tail -1 | grep -q '^OK'"
 run docker-together bash -c "bash '$HERE/t_dockereach.sh' | tail -1 | grep -q '^OK'"
 run drive-pills bash -c "bash '$HERE/t_widgets.sh' | tail -1 | grep -q '^OK'"
 run update-command bash -c "bash '$HERE/t_update.sh' | tail -1 | grep -q '^OK'"
