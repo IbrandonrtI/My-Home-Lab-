@@ -116,6 +116,13 @@ PANEL_TYPED=()       # the words the person typed in the panel (checked by typed
 PANEL_ARG=""         # the extra choice of the panel command: empty|format (wipe), yes|no (copy first), keep|erase ...
 PANEL_KEEP=""        # move: yes = the drive keeps its files and joins the other pool as it is, no = it is erased and formatted
 PANEL_COPY=""        # disconnect and move: yes = copy the drive's files to the other drives of its pool first, no = do not
+PANEL_IDS=()         # the drives of a panel add, move or disconnect (one or several), and for each the choice "keep" or "erase" when the panel sends them one by one
+PANEL_MODES=()
+PANEL_ROLE=""        # add: the pool they join
+PANEL_ALL=""         # add and move: the one choice (keep or erase) for every drive
+PANEL_NOW=0          # the panel's "Go Ahead Anyway": do not wait for a running backup or upload (it sends the word NOW)
+PROG_ITEM=""         # the drive the progress lines are about (panel only)
+PROG_LO=0; PROG_HI=100   # the part of the bar a step may use (a move is two steps: leaving a pool, then joining the other)
 PANEL_ID=""          # set only by `drives panel ...`: the drive (a pool label, or sda) the control panel chose, so the flow does not ask
 PANEL_NAME=""        # ... and the new name for rename
 WANT_SPARE=0         # --spare: a ready-made array setup also gets a hot spare drive

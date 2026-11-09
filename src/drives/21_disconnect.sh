@@ -41,10 +41,13 @@ drain_branch() {   # copy everything from branch $1 to the emptiest other branch
   fi
   target=$best
   say "Copying $(human "$used") from $(branch_name "$mp") to $(branch_name "$target") (pass 1, services keep running)..."
-  rsync -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/" || { warn "Copy failed"; return 1; }
+  progress 5 "Copying files to $(branch_name "$target")"
+  rsync_run 5 60 "Copying files" -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/" || { warn "Copy failed"; return 1; }
+  progress 62 "Stopping the containers"
   stop_containers "$pool"
   say "Pass 2 (catching changes made during the first pass)..."
-  rsync -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/" || { warn "Second copy failed"; start_containers; return 1; }
+  progress 66 "Copying the last changes"
+  rsync_run 66 74 "Copying the last changes" -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/" || { warn "Second copy failed"; start_containers; return 1; }
   if rsync -aHn --numeric-ids --itemize-changes --exclude=/lost+found "$mp/" "$target/" | grep -q '^>f'; then
     warn "Verification found files that are not copied yet. Nothing was removed."
     start_containers
@@ -102,7 +105,9 @@ detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on th
   pre_change "${plan[@]}" && return 0
   if [ "$drain" = 1 ]; then drain_branch "$mp" || { note "Not removing $label."; return 1; }; fi
 
+  progress 75 "Stopping the containers"
   if [ -z "${STOPPED// /}" ]; then stop_containers "$pool"; fi
+  progress 78 "Taking the drive out of the pool"
   sync_fs "$mp"
   fstab_snapshot
   pool_umount "$pool"
@@ -114,6 +119,7 @@ detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on th
     mount_fstab "$mp" 2>/dev/null; mount_fstab "$pool" 2>/dev/null
     die "The pool did not mount after removing $label. fstab was restored."
   fi
+  progress 84 "Starting the containers"
   start_containers
   log "disconnected $label ($(basename "$mp")) from $role"
   if is_boot_section "$mp"; then
@@ -180,11 +186,14 @@ move_flow() {
     confirm_erase "$dev" || return 1
   fi
   DETACHED_DEV=""
-  if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole storage with its files as they are." || return 1
-  else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole storage." || return 1; fi
-  [ "$DRY_RUN" = 1 ] && return 0
+  PROG_LO=0; PROG_HI=55      # leaving the pool is the first part of the bar, joining the other pool the rest
+  if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole storage with its files as they are." || { PROG_HI=100; return 1; }
+  else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole storage." || { PROG_HI=100; return 1; }; fi
+  [ "$DRY_RUN" = 1 ] && { PROG_HI=100; return 0; }
   PENDING_NOTE="$(branch_name "$mp") already left the $role storage and was not added to the $newrole storage. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
-  connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1 || { note ""; note "$PENDING_NOTE"; PENDING_NOTE=""; return 1; }
+  PROG_LO=55; PROG_HI=100
+  connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1 || { PROG_LO=0; note ""; note "$PENDING_NOTE"; PENDING_NOTE=""; return 1; }
+  PROG_LO=0
   PENDING_NOTE=""
 }
 

@@ -44,13 +44,29 @@ sync_fs() {   # write out the data of just these drives (sync -f); a plain `sync
 }
 
 # ---------- before anything is changed: is a backup or an upload running? is this only a dry run? ----------
-pool_devices() {   # the whole drives behind the pools (not the boot drive), one name per line
-  local src dsk
-  while read -r src; do
+YOUNG_SECS="${YOUNG_SECS:-1800}"      # a drive that was added less than this long ago is not counted when looking for an upload (a new drive keeps writing by itself for a while)
+
+mark_added() {   # mark_added LABEL: remember when a drive joined a pool
+  mkdir -p "$STATE_DIR/added" 2>/dev/null && date +%s >"$STATE_DIR/added/$1" 2>/dev/null
+  return 0
+}
+
+young_drive() {   # young_drive LABEL -> 0 when it joined a pool a short while ago
+  local t now
+  t=$(cat "$STATE_DIR/added/$1" 2>/dev/null) || return 1
+  [[ "$t" =~ ^[0-9]+$ ]] || return 1
+  now=$(date +%s)
+  [ $(( now - t )) -lt "$YOUNG_SECS" ]
+}
+
+pool_devices() {   # the whole drives behind the pools (not the boot drive), one name per line; a drive that was added a short while ago is left out
+  local src tgt dsk
+  while read -r src tgt; do
     [[ "$src" == /dev/* ]] || continue
+    young_drive "$(basename "$tgt")" && continue
     dsk=$(lsblk -no pkname "$src" 2>/dev/null | head -n 1)
     printf '%s\n' "${dsk:-${src#/dev/}}"
-  done < <(findmnt -rn -o SOURCE,TARGET 2>/dev/null | awk -v d="$DISKS_DIR" 'index($2, d "/") == 1 {print $1}') | sort -u
+  done < <(findmnt -rn -o SOURCE,TARGET 2>/dev/null | awk -v d="$DISKS_DIR" 'index($2, d "/") == 1 {print $1, $2}') | sort -u
 }
 
 sectors_written() {   # sectors written to the pool drives so far (field 7 of /sys/block/DEV/stat)

@@ -60,6 +60,57 @@ panel_actions_json() {   # what the Drives tab may offer: pool drives (rename, m
   printf '],"can_sleep":%s}\n' "$(command -v hdparm >/dev/null 2>&1 && echo true || echo false)"
 }
 
+panel_list() {   # panel_list WORDS: "sdc" or "sdc,sdd" or "sdc:keep,sdd:erase" -> PANEL_IDS and PANEL_MODES (up to 8 drives, none twice)
+  local t id m seen=","
+  local -a toks
+  IFS=, read -ra toks <<<"$1"
+  if [ "${#toks[@]}" -lt 1 ] || [ "${#toks[@]}" -gt 8 ]; then panel_refuse "Choose between one and eight drives."; return 1; fi
+  for t in "${toks[@]}"; do
+    id=${t%%:*}; m=""; [ "$id" != "$t" ] && m=${t#*:}
+    [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] && { [ -z "$m" ] || [[ "$m" =~ ^(keep|erase)$ ]]; } || { panel_refuse "That drive id is not allowed."; return 1; }
+    case "$seen" in *",$id,"*) panel_refuse "A drive cannot be chosen twice."; return 1 ;; esac
+    seen="$seen$id,"
+    PANEL_IDS+=("$id"); PANEL_MODES+=("$m")
+  done
+  return 0
+}
+
+panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS one after the other (the busy check was made once, FileBrowser is told once at the end)
+  local act=$1 n=${#PANEL_IDS[@]} i id mode rc=0 done=0 sameall=${PANEL_ALL:-}
+  # every drive is checked before the first one is touched
+  if [ "$act" = add ]; then
+    for id in "${PANEL_IDS[@]}"; do
+      grep -qx "/dev/$id" <<<"$(candidate_disks)" || { panel_refuse "$id is not a spare drive that can be added."; return 1; }
+    done
+  else
+    for id in "${PANEL_IDS[@]}"; do panel_branch "$id" >/dev/null || return 1; done
+    if [ "$n" -gt 1 ]; then      # several drives at once must leave at least one Main drive (a single drive gets its own, longer explanation from the flow)
+      local keepleft
+      keepleft=$(branches_of main | wc -l)
+      for id in "${PANEL_IDS[@]}"; do [ "$(branch_role "$(panel_branch "$id" 2>/dev/null)")" = main ] && keepleft=$((keepleft - 1)); done
+      if [ "$keepleft" -lt 1 ]; then panel_refuse "That would take every drive out of the Main storage. Keep at least one Main drive."; return 1; fi
+    fi
+  fi
+  for ((i = 0; i < n; i++)); do
+    id=${PANEL_IDS[$i]}; mode=${PANEL_MODES[$i]:-$sameall}
+    PROG_ITEM=$id; PROG_LO=0; PROG_HI=100
+    progress 0 "Waiting to start"
+    case "$act" in
+      add) connect_flow "/dev/$id" "$PANEL_ROLE" "$([ "$mode" = keep ] && echo 2 || echo 1)" || rc=1 ;;
+      move) PANEL_ID=$id; PANEL_KEEP=$([ "$mode" = keep ] && echo yes || echo no); move_flow || rc=1 ;;
+      disconnect) PANEL_ID=$id; disconnect_flow || rc=1 ;;
+    esac
+    PROG_LO=0; PROG_HI=100
+    if [ "$rc" != 0 ]; then
+      [ "$n" -gt 1 ] && say "Stopped at $id: $done of $n drives were done."
+      return 1
+    fi
+    done=$((done + 1))
+    progress 100 "Done"
+  done
+  return 0
+}
+
 panel_refuse() { note "$1 Nothing was changed."; return 1; }
 
 panel_main() {
@@ -68,13 +119,17 @@ panel_main() {
     status|health|check|actions|remount) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
     rename)       [ "$n" -eq 3 ] || { panel_refuse "panel rename takes a drive and a name."; return 1; } ;;
     sleep|wake)   [ "$n" -eq 2 ] || { panel_refuse "panel $act takes one drive."; return 1; } ;;
-    add)          [ "$n" -ge 4 ] && [ "$n" -le 8 ] || { panel_refuse "panel add takes a drive, main or backup, keep or erase, and the typed words."; return 1; } ;;
+    add)          [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel add takes a drive, main or backup, keep or erase, and the typed words."; return 1; } ;;
     wipe)         [ "$n" -ge 3 ] && [ "$n" -le 7 ] || { panel_refuse "panel wipe takes a drive, empty or format, and the typed words."; return 1; } ;;
-    disconnect)   [ "$n" -ge 3 ] && [ "$n" -le 7 ] || { panel_refuse "panel disconnect takes a drive, yes or no, and the typed words."; return 1; } ;;
-    move)         [ "$n" -ge 4 ] && [ "$n" -le 8 ] || { panel_refuse "panel move takes a drive, keep or erase, yes or no, and the typed words."; return 1; } ;;
+    disconnect)   [ "$n" -ge 3 ] && [ "$n" -le 22 ] || { panel_refuse "panel disconnect takes a drive, yes or no, and the typed words."; return 1; } ;;
+    move)         [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel move takes a drive, keep or erase, yes or no, and the typed words."; return 1; } ;;
     *) panel_refuse "Unknown panel command."; return 1 ;;
   esac
-  if [ "$n" -ge 2 ] && ! [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then panel_refuse "That drive id is not allowed."; return 1; fi
+  PANEL_IDS=(); PANEL_MODES=()
+  case "$act" in
+    add|move|disconnect) panel_list "$2" || return 1 ;;      # one drive, or several (ID,ID,... and with "each" ID:keep or ID:erase)
+    *) if [ "$n" -ge 2 ] && ! [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then panel_refuse "That drive id is not allowed."; return 1; fi ;;
+  esac
   local typed_from=0 arg_ok=1 keep="" role=""
   case "$act" in
     rename)
@@ -83,18 +138,26 @@ panel_main() {
           panel_refuse "A name may have up to 40 letters, numbers, spaces and . ( ) + , - (no space, dot or dash at the start or the end)."; return 1
         fi
       fi ;;
-    add)        role=$3; [[ "$3" =~ ^(main|backup)$ ]] && [[ "$4" =~ ^(keep|erase)$ ]] || arg_ok=0; typed_from=5 ;;
+    add)        role=$3; [[ "$3" =~ ^(main|backup)$ ]] && [[ "$4" =~ ^(keep|erase|each)$ ]] || arg_ok=0; typed_from=5 ;;
     wipe)       [[ "$3" =~ ^(empty|format)$ ]] || arg_ok=0; typed_from=4 ;;
     disconnect) [[ "$3" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=4 ;;
-    move)       [[ "$3" =~ ^(keep|erase)$ ]] && [[ "$4" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=5 ;;
+    move)       [[ "$3" =~ ^(keep|erase|each)$ ]] && [[ "$4" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=5 ;;
   esac
+  # a drive with its own choice (ID:keep) needs the word "each"; without it every drive gets the same choice
+  if [ "$arg_ok" = 1 ] && [[ "$act" =~ ^(add|move)$ ]]; then
+    local m modeword=$3
+    [ "$act" = add ] && modeword=$4
+    for m in "${PANEL_MODES[@]}"; do
+      if [ "$modeword" = each ]; then [ -n "$m" ] || arg_ok=0; else [ -z "$m" ] || arg_ok=0; fi
+    done
+  fi
   [ "$arg_ok" = 1 ] || { panel_refuse "One of the choices is not allowed."; return 1; }
-  PANEL_TYPED=()
+  PANEL_TYPED=(); PANEL_NOW=0
   if [ "$typed_from" -gt 0 ]; then
     for ((i = typed_from; i <= n; i++)); do
       w=${!i}
-      [[ "$w" =~ ^(ERASE|CONTINUE|REMOVE|KEEP|/dev/[a-z0-9]{1,16})$ ]] || { panel_refuse "A typed word is not allowed."; return 1; }
-      PANEL_TYPED+=("$w")
+      [[ "$w" =~ ^(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16})$ ]] || { panel_refuse "A typed word is not allowed."; return 1; }
+      if [ "$w" = NOW ]; then PANEL_NOW=1; else PANEL_TYPED+=("$w"); fi
     done
   fi
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
@@ -109,7 +172,8 @@ panel_main() {
     rename|sleep|wake|status|health|check|actions) ASSUME_YES=1 ;;      # (these never ask anything that matters)
     *) why=""
        # a drive that joins a running pool stops nothing, so a backup or an upload may go on
-       if [ "$act" = add ] && [[ "${3:-}" =~ ^(main|backup)$ ]] && pool_is_live "$3"; then :; else why=$(busy_reason); fi
+       if [ "$PANEL_NOW" = 1 ]; then :      # the person chose "Go Ahead Anyway"
+       elif [ "$act" = add ] && [[ "${3:-}" =~ ^(main|backup)$ ]] && pool_is_live "$3"; then :; else why=$(busy_reason); fi
        if [ -n "$why" ]; then note "Not a good moment: $why. Nothing was changed. Try again when it has finished."; return 1; fi
        NOW=1 ;;
   esac
@@ -123,14 +187,15 @@ panel_main() {
     wake)    PANEL_ID=$2; wake_flow ;;
     remount) ASSUME_YES=1; run_changing remount_flow ;;
     add)
-      # the drive must be one of the spare drives; keep needs one ext4 partition (connect_flow checks that again before it changes anything)
-      grep -qx "/dev/$2" <<<"$(candidate_disks)" || { panel_refuse "$2 is not a spare drive that can be added."; return 1; }
-      run_changing connect_flow "/dev/$2" "$3" "$([ "$4" = keep ] && echo 2 || echo 1)" ;;
+      PANEL_ROLE=$3; PANEL_ALL=$4
+      run_changing panel_batch add ;;
     wipe)
       PANEL_ID=$2; PANEL_ARG=$3; run_changing wipe_flow ;;
     disconnect)
-      PANEL_ID=$2; PANEL_COPY=$3; run_changing disconnect_flow ;;
+      PANEL_COPY=$3
+      run_changing panel_batch disconnect ;;
     move)
-      PANEL_ID=$2; PANEL_KEEP=$([ "$3" = keep ] && echo yes || echo no); PANEL_COPY=$4; run_changing move_flow ;;
+      PANEL_ALL=$3; PANEL_COPY=$4
+      run_changing panel_batch move ;;
   esac
 }

@@ -45,3 +45,26 @@ other_role()  { if [ "$1" = main ]; then echo backup; else echo main; fi; }
 
 sd_reload() { [ "$TEST_MODE" = 1 ] || systemctl daemon-reload; }
 
+
+progress() {   # progress PERCENT "Text": the control panel shows a bar on the drive that is being changed (only inside `drives panel`; PERCENT is the drive's own 0-100)
+  [ "$PANEL_MODE" = 1 ] || return 0
+  printf 'PROGRESS %s %s %s\n' "${PROG_ITEM:--}" "$(( PROG_LO + $1 * (PROG_HI - PROG_LO) / 100 ))" "$2"
+}
+
+rsync_run() {   # rsync_run FROM TO "Text" RSYNC-ARGS...: like rsync; in the panel its percent moves the bar from FROM to TO
+  local from=$1 to=$2 text=$3 rc=0 rcfile; shift 3
+  if [ "$PANEL_MODE" != 1 ]; then rsync "$@"; return $?; fi
+  rcfile=$(mktemp) || { rsync "$@"; return $?; }
+  local line pct last=-1
+  { rsync --info=progress2 --no-inc-recursive "$@" 2>&1; echo "RSYNC_RC=$?"; } | tr '\r' '\n' | while IFS= read -r line; do
+    case "$line" in
+      RSYNC_RC=*) echo "${line#RSYNC_RC=}" >"$rcfile" ;;
+      *%*) if [[ "$line" =~ ([0-9]+)% ]]; then
+             pct=${BASH_REMATCH[1]}
+             if [ "$pct" != "$last" ]; then last=$pct; progress $(( from + pct * (to - from) / 100 )) "$text $pct%"; fi
+           fi ;;
+    esac
+  done
+  rc=$(cat "$rcfile" 2>/dev/null || echo 1); rm -f "$rcfile"
+  return "${rc:-1}"
+}

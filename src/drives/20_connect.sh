@@ -87,12 +87,14 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
                "Stop the containers that use the $role storage for a minute." \
                "Add the drive to the $role storage and mount the pool again." \
                "Start the containers again." && return 0
+    progress 10 "Erasing and formatting the drive"
     part=$(format_disk "$dev" "$label") || return 1
   else
     $gate "Keep the files on $dev and add the drive as it is ($base)." \
                "Stop the containers that use the $role storage for a minute." \
                "Add the drive to the $role storage and mount the pool again." \
                "Start the containers again." && return 0
+    progress 10 "Getting the drive ready"
     umount_disk_parts "$dev"
     if [ "$(fs_label "$part")" != "$label" ]; then
       e2label "$part" "$label" || die "Could not set the label on $part"
@@ -103,6 +105,8 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
   [ -n "$uuid" ] || die "Could not read the UUID of $part"
   mp="$DISKS_DIR/$label"
   name_store_put "$label" "$base"
+  mark_added "$label"
+  progress 60 "Mounting the drive"
 
   local live=0
   pool_is_live "$role" && live=1      # the pool is running: the new drive joins it as it runs, and no container has to stop
@@ -112,6 +116,7 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
   fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"
   sd_reload
   if ! mount_fstab "$mp"; then fstab_rollback; die "Could not mount $part at $mp. fstab was restored."; fi
+  progress 75 "Adding the drive to the $role pool"
   if [ "$live" = 1 ]; then
     if [ "$mode" = erase ] && [ "$role" = main ]; then give_to_owner "$mp"; fi
     fstab_set_pool "$role"      # (for the next start of the computer)
@@ -121,6 +126,7 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
       [ "$role" = main ] && snapraid_active && snapraid_conf_write
       power_apply "$mp" "$role"
       say ""
+      progress 100 "Done"
       say "Done. $(branch_name "$mp") is connected to the $role storage ($(role_pool "$role"))."
       log "connected $label ($part, $base) to $role (live)"
       return 0
@@ -142,8 +148,10 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
     pool_umount "$mp"
     die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
   fi
+  progress 90 "Starting the containers"
   start_containers
   power_apply "$mp" "$role"
+  progress 100 "Done"
   say ""
   say "Done. $(branch_name "$mp") is connected to the $role storage ($(role_pool "$role"))."
   log "connected $label ($part, $base) to $role"
