@@ -1828,8 +1828,8 @@ def job_words(action, body):
         name, ids = body.get("setup"), body.get("ids")
         if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9-]{3,12}", name):
             raise Fail("Choose a setup first.")
-        if not isinstance(ids, list) or not 1 <= len(ids) <= 16 or not all(isinstance(t, str) and DRIVE_ID.match(t) for t in ids) or len(set(ids)) != len(ids):
-            raise Fail("Choose the drives for the setup.")
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 16 or not all(isinstance(t, str) and DRIVE_TOKEN.match(t) for t in ids) or len({t.split(":")[0] for t in ids}) != len(ids):
+            raise Fail("Choose the drives for the setup.")      # (each is 'ID', or 'ID:keep' to keep its files, 'ID:erase')
         return ["setup", name, ",".join(ids)] + typed
     if action == "wipe":
         ident = body.get("id")
@@ -1906,7 +1906,7 @@ def job_thread(words):
 
 def api_drives_job_start(action, body):
     words = job_words(action, body)
-    items = [t.split(":")[0] for t in job_ids(body)] if action not in ("wipe", "setup", "bootadd") else ([body.get("id")] if action == "wipe" else ["bootadd"] if action == "bootadd" else list(body.get("ids") or []))
+    items = [t.split(":")[0] for t in job_ids(body)] if action not in ("wipe", "setup", "bootadd") else ([body.get("id")] if action == "wipe" else ["bootadd"] if action == "bootadd" else [str(t).split(":")[0] for t in (body.get("ids") or [])])
     drives_change_begin()
     with JOB_LOCK:
         JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), items=items, progress={}, current="", stopping=False)

@@ -1533,11 +1533,13 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
 
   if is_boot_section "$mp" && [ "$KEEP_IMG" != 1 ] && mountpoint -q "$mp" && has_data "$mp"; then
     if [ ${#others[@]} -eq 0 ]; then
-      note "$label holds files and there is no other $role drive to copy them to. Nothing was changed."
-      return 1
+      warn "$label holds files and there is no other $role drive to copy them to."
+      warn "Taking the section out deletes it, and every file in it is permanently lost."
+      typed "ERASE" "Type ERASE to delete the section and its files: " || { say "Cancelled. Nothing was changed."; return 1; }
+    else
+      say "$label holds files. Removing the section deletes it, so they are copied to another $role drive first."
+      drain=1
     fi
-    say "$label holds files. Removing the section deletes it, so they are copied to another $role drive first."
-    drain=1
   fi
 
   if [ ${#others[@]} -eq 0 ]; then
@@ -5569,7 +5571,7 @@ setup_blocker() {   # setup_blocker ID -> why this setup cannot be built right n
 }
 
 panel_setups_json() {
-  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank
+  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep
   local -a devs=() sizes=() rows=() chosen=()
   local line
   while read -r s d; do devs+=("$d"); sizes+=("$s"); total=$((total + s)); done < <(for d in $(candidate_disks); do s=$(disk_size_bytes "$d"); [[ "$s" =~ ^[0-9]+$ ]] && echo "$s $d"; done | sort -rn -k1,1)
@@ -5577,8 +5579,9 @@ panel_setups_json() {
   printf '{"spare":['
   for i in "${!devs[@]}"; do
     d=${devs[$i]}; blank=false; disk_is_blank "$d" && blank=true
+    keep=false; [ "$blank" = false ] && keepable_disk "$d" && keep=true      # (its files can stay: one partition with an ext4 file system)
     [ "$i" = 0 ] || printf ','
-    printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${sizes[$i]}")" "$blank"
+    printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s,"keep_ok":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${sizes[$i]}")" "$blank" "$keep"
   done
   printf '],"total_bytes":%s,"options":[' "$(json_num "$total")"
   for id in $PRESET_IDS; do
@@ -5595,10 +5598,10 @@ panel_setups_json() {
     ids_json=""
     if [ "$fits" = true ]; then for ((i = 0; i < k; i++)); do ids_json="${ids_json:+$ids_json,}$(json_str "$(basename "${devs[$i]}")")"; done; fi
     hint=false; [ -n "$(preset_tool_hint "$id")" ] && hint=true
-    rows+=("$score|$(printf '{"id":%s,"title":%s,"blurb":%s,"kind":%s,"fits":%s,"min":%s,"drives":[%s],"usable_bytes":%s,"used_bytes":%s,"tolerates":%s,"nightly":%s,"score":%s,"can_build":%s,"why":%s,"needs_tool":%s}' \
+    rows+=("$score|$(printf '{"id":%s,"title":%s,"blurb":%s,"kind":%s,"fits":%s,"min":%s,"drives":[%s],"usable_bytes":%s,"used_bytes":%s,"tolerates":%s,"nightly":%s,"score":%s,"can_build":%s,"why":%s,"needs_tool":%s,"can_keep":%s}' \
       "$(json_str "$id")" "$(json_str "$(preset_title "$id")")" "$(json_str "$(preset_blurb "$id")")" "$(json_str "$(preset_kind "$id")")" "$fits" "$(json_num "$(preset_min "$id")")" "$ids_json" \
       "$(json_num "$cap")" "$(json_num "$used")" "$(json_num "$tol")" "$(setup_soft "$id" && echo true || echo false)" "$score" \
-      "$([ "$fits" = true ] && [ -z "$why" ] && echo true || echo false)" "$(json_str "$why")" "$hint")")
+      "$([ "$fits" = true ] && [ -z "$why" ] && echo true || echo false)" "$(json_str "$why")" "$hint" "$(case "$id" in pool|mirror) echo true ;; *) echo false ;; esac)")")
   done
   local sorted rec="" r
   sorted=$(printf '%s\n' "${rows[@]}" | sort -t'|' -k1,1nr -s)
@@ -5622,11 +5625,18 @@ panel_setup_run() {   # panel_setup_run ID DISK,DISK,...: build a ready-made set
   WIZARD_DEVS=""; WIZARD_ERASE=""; WIZARD_KEEP=""
   spare=$(candidate_disks)
   for t in "${toks[@]}"; do
+    local want=""
+    case "$t" in *:keep) want=keep; t=${t%:keep} ;; *:erase) want=erase; t=${t%:erase} ;; esac
     [[ "$t" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { panel_refuse "That drive id is not allowed."; return 1; }
     d="/dev/$t"
     grep -qx "$d" <<<"$spare" || { panel_refuse "$t is not a spare drive that can be used."; return 1; }
     WIZARD_DEVS="${WIZARD_DEVS:+$WIZARD_DEVS$'\n'}$d"
-    disk_is_blank "$d" || WIZARD_ERASE="${WIZARD_ERASE:+$WIZARD_ERASE }$d"      # a drive with files is erased too: the person typed ERASE for the whole setup
+    if [ "$want" = keep ] && ! disk_is_blank "$d"; then
+      keepable_disk "$d" || { panel_refuse "The files on $t cannot be kept: it needs exactly one ext4 partition."; return 1; }
+      WIZARD_KEEP="${WIZARD_KEEP:+$WIZARD_KEEP$'\n'}$d"      # its files stay as they are (only the plain pool and the mirror can do that: the flow says so for the others)
+    else
+      disk_is_blank "$d" || WIZARD_ERASE="${WIZARD_ERASE:+$WIZARD_ERASE$'\n'}$d"      # a drive with files that was not marked "keep" is erased: the person typed ERASE for the setup
+    fi
   done
   preset_flow "$id"
 }
