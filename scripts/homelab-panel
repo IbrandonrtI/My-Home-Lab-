@@ -1652,8 +1652,8 @@ DRIVES_GATE = threading.Condition()           # looking at the drives (any numbe
 DRIVES_STATE = {"readers": 0, "changing": False}
 DRIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 DRIVE_NAME = re.compile(r"[A-Za-z0-9 .()+,-]{1,40}\Z")
-DRIVE_TIMEOUT = {"status": 90, "actions": 90, "health": 180, "check": 180, "remount": 600}
-DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16})\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
+DRIVE_TIMEOUT = {"status": 90, "actions": 90, "setups": 120, "health": 180, "check": 180, "remount": 600}
+DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
 JOB_MAX_SECONDS = 8 * 3600
 JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "items": [], "progress": {}, "current": "", "stopping": False}      # the drive change that runs (or ran last) in the background
 JOB_LOCK = threading.Lock()
@@ -1746,7 +1746,7 @@ def api_drives_state():
     return {"status": st, "actions": ac}
 
 
-def drive_message(out, err):
+def drive_message(out, err, limit=600):
     """What the drives tool said, for a toast: its own sentences, without the progress lines."""
     lines = []
     for x in (out + "\n" + err).splitlines():
@@ -1754,7 +1754,7 @@ def drive_message(out, err):
         if not x or x.startswith(("Starting containers", "Stopping", "WARNING: Not a good moment")):
             continue
         lines.append(x)
-    return " ".join(lines)[-600:]
+    return " ".join(lines)[-limit:]
 
 
 def api_drives_do(action, body):
@@ -1819,6 +1819,18 @@ def job_words(action, body):
         if v not in allowed:
             raise Fail("Choose %s first." % key)
         return v
+    if action == "bootadd":
+        units = body.get("units")
+        if not isinstance(units, int) or isinstance(units, bool) or not 1 <= units <= 999999:
+            raise Fail("Choose a size first.")
+        return ["bootadd", pick("role", ("main", "backup")), str(units)] + typed
+    if action == "setup":
+        name, ids = body.get("setup"), body.get("ids")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9-]{3,12}", name):
+            raise Fail("Choose a setup first.")
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 16 or not all(isinstance(t, str) and DRIVE_ID.match(t) for t in ids) or len(set(ids)) != len(ids):
+            raise Fail("Choose the drives for the setup.")
+        return ["setup", name, ",".join(ids)] + typed
     if action == "wipe":
         ident = body.get("id")
         if not isinstance(ident, str) or not DRIVE_ID.match(ident):
@@ -1886,7 +1898,7 @@ def job_thread(words):
             if rc == 0:
                 for it in JOB["items"]:
                     JOB["progress"][it] = {"pct": 100, "text": "Done"}
-            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else (tail[-1] if rc == 4 and tail else drive_message(text, ""))      # (4 = the person pressed Stop: the tool's last line says what happened)
+            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else (tail[-1] if rc == 4 and tail else drive_message(text, "", 1500))      # (4 = the person pressed Stop: the tool's last line says what happened)
             JOB["running"] = False
             JOB["stopping"] = False
             drives_change_end()      # (inside the same lock: whoever sees "not running" can look at the drives at once)
@@ -1894,7 +1906,7 @@ def job_thread(words):
 
 def api_drives_job_start(action, body):
     words = job_words(action, body)
-    items = [t.split(":")[0] for t in job_ids(body)] if action != "wipe" else [body.get("id")]
+    items = [t.split(":")[0] for t in job_ids(body)] if action not in ("wipe", "setup", "bootadd") else ([body.get("id")] if action == "wipe" else ["bootadd"] if action == "bootadd" else list(body.get("ids") or []))
     drives_change_begin()
     with JOB_LOCK:
         JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), items=items, progress={}, current="", stopping=False)
@@ -1905,7 +1917,7 @@ def api_drives_job_start(action, body):
 
 def api_drives_job():
     with JOB_LOCK:
-        return {"id": JOB["id"], "running": JOB["running"], "action": JOB["action"], "lines": JOB["lines"][-12:], "rc": JOB["rc"], "message": JOB["message"], "started": JOB["started"], "items": JOB["items"], "progress": JOB["progress"], "current": JOB["current"], "stopping": JOB["stopping"]}
+        return {"id": JOB["id"], "running": JOB["running"], "action": JOB["action"], "lines": JOB["lines"][-(12 if JOB["running"] else 60):], "rc": JOB["rc"], "message": JOB["message"], "started": JOB["started"], "items": JOB["items"], "progress": JOB["progress"], "current": JOB["current"], "stopping": JOB["stopping"]}
 
 
 def api_drives_abort():
@@ -2039,7 +2051,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, api_drives_job())
-            if path in ("/api/drives", "/api/drives/health", "/api/drives/check"):
+            if path in ("/api/drives", "/api/drives/health", "/api/drives/check", "/api/drives/setups"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, api_drives_state() if path == "/api/drives" else drives_json(path.rsplit("/", 1)[1]))
@@ -2170,7 +2182,7 @@ class Handler(BaseHTTPRequestHandler):
                 raise Fail("The request is not understood.")
             if path == "/api/drives/abort":
                 return self.send(200, dict(api_drives_abort(), ok=True))
-            if path in ("/api/drives/add", "/api/drives/wipe", "/api/drives/disconnect", "/api/drives/move"):
+            if path in ("/api/drives/add", "/api/drives/wipe", "/api/drives/disconnect", "/api/drives/move", "/api/drives/setup", "/api/drives/bootadd"):
                 return self.send(200, api_drives_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/drives/job
             if path in ("/api/drives/rename", "/api/drives/sleep", "/api/drives/wake", "/api/drives/remount"):
                 return self.send(200, dict(api_drives_do(path.rsplit("/", 1)[1], body), ok=True))      # not under LOCK: a remount takes a while

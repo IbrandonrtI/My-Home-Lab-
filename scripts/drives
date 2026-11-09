@@ -119,6 +119,7 @@ PANEL_COPY=""        # disconnect and move: yes = copy the drive's files to the 
 PANEL_IDS=()         # the drives of a panel add, move or disconnect (one or several), and for each the choice "keep" or "erase" when the panel sends them one by one
 PANEL_MODES=()
 PANEL_ROLE=""        # add: the pool they join
+PANEL_UNITS=""       # bootadd: the size of the boot drive section, in GB
 PANEL_ALL=""         # add and move: the one choice (keep or erase) for every drive
 PANEL_NOW=0          # the panel's "Go Ahead Anyway": do not wait for a running backup or upload (it sends the word NOW)
 PROG_ITEM=""         # the drive the progress lines are about (panel only)
@@ -129,6 +130,7 @@ PANEL_JOBS=3         # how many drives of one batch are worked on at the same ti
 CRIT_DEPTH=0         # >0 while this process holds the pool lock (the short steps that change a pool run one at a time)
 ABORTED=0            # 1 when the person pressed Stop and this drive was stopped because of it
 HOLDER_STOPPED=""
+KEEP_IMG=0           # 1 while a boot drive section moves to the other pool with its file (the file is not deleted when it leaves)
 PANEL_HOLD=0         # 1 while a batch of several drives runs: the containers are stopped once (at the first pool change) and started once (when every drive is done)
 PANEL_BARRIER=0      # 1 while a batch of several drives runs: the pool changes start only when every drive has finished its slow work (copying, formatting)
 PUTBACK=0            # 1 when a half-moved drive was put back into the pool it came from
@@ -668,13 +670,17 @@ clean_name() {   # safe as a folder name and inside a Docker volume line
   printf '%s' "$s"
 }
 
-drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, or nothing when it cannot be told
+drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, Flash (a USB stick), or nothing when it cannot be told
   local LC_ALL=C model=${2^^} line rota tran
   model=${model//_/ }
   if [[ $model =~ (^|[^A-Z0-9])SSD([^A-Z0-9]|$)|NVME ]]; then printf SSD; return 0; fi
   line=$(lsblk -dnbo ROTA,TRAN "$1" 2>/dev/null); line=${line%%$'\n'*}
   read -r rota tran <<<"$line"
   [ "${tran,,}" = nvme ] && { printf SSD; return 0; }
+  # a USB stick: it plugs in with USB, can be pulled out (removable) and often claims to spin like a hard drive; or its model says so
+  if [ "${tran,,}" = usb ]; then
+    if [[ $model =~ CRUZER|DATATRAVELER|FLASH|JUMPDRIVE|ULTRA\ FIT|STORE\ N\ GO|TRANSMEMORY|MICRO\ SD|CARD\ READER ]] || [ "$(lsblk -dno RM "$1" 2>/dev/null | head -1 | tr -d ' ')" = 1 ]; then printf Flash; return 0; fi
+  fi
   case "$rota" in 1) printf HDD ;; 0) printf SSD ;; esac
   return 0
 }
@@ -1497,7 +1503,7 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
   part=$(branch_part "$mp"); dev=""; [ -n "$part" ] && ! is_boot_section "$mp" && dev=$(disk_of_part "$part")
   local drain=0 copyq=""
 
-  if is_boot_section "$mp" && mountpoint -q "$mp" && has_data "$mp"; then
+  if is_boot_section "$mp" && [ "$KEEP_IMG" != 1 ] && mountpoint -q "$mp" && has_data "$mp"; then
     if [ ${#others[@]} -eq 0 ]; then
       note "$label holds files and there is no other $role drive to copy them to. Nothing was changed."
       return 1
@@ -1514,7 +1520,7 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
     fi
     warn "$label is the only backup drive. Backups will stop until another backup drive is connected."
     typed "REMOVE" "Type REMOVE to continue: " || { say "Cancelled."; return 1; }
-  elif ! is_boot_section "$mp" && mountpoint -q "$mp" && has_data "$mp"; then
+  elif { ! is_boot_section "$mp" || [ "$KEEP_IMG" = 1 ]; } && mountpoint -q "$mp" && has_data "$mp"; then
     say "$label holds files. They will disappear from the $role storage unless they are copied to another $role drive."
     if [ "$PANEL_MODE" = 1 ] && [ -n "$PANEL_COPY" ]; then copyq=$PANEL_COPY      # the control panel already asked
     elif yn "Copy them to another $role drive first (recommended)?"; then copyq=yes
@@ -1557,11 +1563,11 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
   start_containers
   log "disconnected $label ($(basename "$mp")) from $role"
   if is_boot_section "$mp"; then
-    rm -f "$img"
+    if [ "$KEEP_IMG" != 1 ]; then rm -f "$img"; fi      # (a section that moves to the other pool keeps its file)
     name_store_del "$(basename "$mp")"
     chattr -i "$mp" 2>/dev/null || true
     rmdir "$mp" 2>/dev/null || true
-    say "$label is removed. Its space went back to the boot drive."
+    if [ "$KEEP_IMG" = 1 ]; then say "$label is out of the $role storage."; else say "$label is removed. Its space went back to the boot drive."; fi
   else
     say "$label is disconnected from the $role storage. The data on the drive was not touched."
   fi
@@ -1596,7 +1602,7 @@ move_flow() {
   if [ "$PANEL_MODE" = 1 ]; then mp=$(panel_branch "$PANEL_ID") || return 1; keep=$PANEL_KEEP
   else mp=$(pick_branch "Which drive do you want to move? ") || return 1; fi
   role=$(branch_role "$mp"); newrole=$(other_role "$role"); oldname=$(branch_name "$mp")
-  if is_boot_section "$mp"; then note "A boot drive section cannot be moved. Remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; fi
+  if is_boot_section "$mp"; then bootmove_flow "$mp"; return $?; fi
   part=$(branch_part "$mp"); [ -n "$part" ] || die "That drive is not connected, so it cannot be moved."
   dev=$(disk_of_part "$part")
   # everything that can still be refused or cancelled is checked BEFORE the drive leaves its pool
@@ -2491,6 +2497,40 @@ lvm_unused_bytes() {   # unused space of the drive's LVM volume group (when the 
   lvs --noheadings --nosuffix --units b -o vg_free "$src" 2>/dev/null | awk 'NF {printf "%d", $1; exit}'
 }
 
+bootsection_attach() {   # bootsection_attach ROLE REUSE: the section file of that pool (made or saved before) becomes the last drive of the pool
+  local role=$1 reuse=$2 label mp img
+  label="$(role_prefix "$role")BOOT"; mp="$DISKS_DIR/$label"; img="$BOOT_SECTION_DIR/$role.img"
+  crit_enter || true      # from here the pool changes: one drive at a time
+  stop_containers "$(role_pool "$role")"
+  fstab_snapshot
+  ensure_mp "$mp"
+  fstab_add "$img  $mp  ext4  $BOOT_OPTS  0  0"
+  sd_reload
+  if ! mount_fstab "$mp"; then
+    fstab_rollback
+    [ "$reuse" = 1 ] || rm -f "$img"
+    start_containers
+    die "Could not mount the section at $mp. fstab was restored."
+  fi
+  if ! absorb_plain_pool "$role" "$mp"; then
+    fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
+    die "The files in $(role_pool "$role") could not be moved into the section. fstab was restored."
+  fi
+  if [ "$reuse" = 0 ] && [ "$role" = main ]; then give_to_owner "$mp"; fi
+  if ! apply_pool "$role"; then
+    fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
+    die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
+  fi
+  start_containers
+  name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
+  timeshift_protect
+  say ""
+  say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
+  log "connected $label ($img) to $role"
+  crit_release
+  return 0
+}
+
 bootsection_flow() {
   array_guard || return 1
   need_tools || return 1
@@ -2580,35 +2620,89 @@ bootsection_flow() {
                "Stop the containers that use the $role storage for a minute." \
                "Add the section to the $role storage as its last drive, then start the containers again." && return 0
   fi
-  stop_containers "$(role_pool "$role")"
-  fstab_snapshot
-  ensure_mp "$mp"
-  fstab_add "$img  $mp  ext4  $BOOT_OPTS  0  0"
-  sd_reload
-  if ! mount_fstab "$mp"; then
-    fstab_rollback
-    [ "$reuse" = 1 ] || rm -f "$img"
-    start_containers
-    die "Could not mount the section at $mp. fstab was restored."
-  fi
-  if ! absorb_plain_pool "$role" "$mp"; then
-    fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
-    die "The files in $(role_pool "$role") could not be moved into the section. fstab was restored."
-  fi
-  if [ "$reuse" = 0 ] && [ "$role" = main ]; then give_to_owner "$mp"; fi
-  if ! apply_pool "$role"; then
-    fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
-    die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
-  fi
-  start_containers
-  name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
-  timeshift_protect
-  say ""
-  say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
-  log "connected $label ($img) to $role"
-  return 0
+  bootsection_attach "$role" "$reuse"
 }
 
+
+bootsection_limits() {   # bootsection_limits -> "MIN MAX UNIT SMALL" in bytes: the smallest and the biggest section the boot drive can lend now (MAX rounded down to whole units), its unit, and 1 when the boot drive is too small to lend anything
+  local total free max small=0
+  total=$(boot_total_bytes); free=$(boot_free_bytes)
+  [[ "${free:-}" =~ ^[0-9]+$ ]] || free=0
+  if [[ "${total:-}" =~ ^[0-9]+$ ]] && [ "$total" -le "$BOOT_SMALL_BYTES" ]; then small=1; fi
+  max=$(( free - BOOT_KEEP_FREE_BYTES ))
+  [ "$max" -gt 0 ] || max=0
+  max=$(( max / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))
+  echo "$BOOT_MIN_BYTES $max $BOOT_UNIT_BYTES $small"
+}
+bootsection_limits_json() {
+  local lim min max unit small
+  lim=$(bootsection_limits); read -r min max unit small <<<"$lim"
+  printf '{"min_bytes":%s,"max_bytes":%s,"unit_bytes":%s,"unit":%s,"small":%s,"main":%s,"backup":%s}' "$(json_num "$min")" "$(json_num "$max")" "$(json_num "$unit")" "$(json_str "$BOOT_UNIT_NAME")" \
+    "$([ "$small" = 1 ] && echo true || echo false)" "$([ -n "$(boot_section_of main)" ] && echo true || echo false)" "$([ -n "$(boot_section_of backup)" ] && echo true || echo false)"
+}
+
+panel_bootadd_flow() {   # the control panel: part of the boot drive becomes a drive of Main or Backup (PANEL_ROLE, PANEL_UNITS = how many GB)
+  local role=$PANEL_ROLE units=$PANEL_UNITS label mp img min max unit small bytes lim
+  array_guard || return 1
+  need_tools || return 1
+  command -v fallocate >/dev/null 2>&1 || { note "The tool 'fallocate' is missing (package util-linux)."; return 1; }
+  lim=$(bootsection_limits); read -r min max unit small <<<"$lim"
+  if [ "$small" = 1 ]; then note "The boot drive is too small to lend a part of it for a storage pool. Nothing was changed."; return 1; fi
+  if [ -n "$(boot_section_of "$role")" ]; then note "The $role storage already has a boot drive section. Take it out first to make a different size. Nothing was changed."; return 1; fi
+  label="$(role_prefix "$role")BOOT"; mp="$DISKS_DIR/$label"; img="$BOOT_SECTION_DIR/$role.img"
+  if [ -f "$img" ]; then note "A boot drive section that was used for the $role storage before is still saved. Use it or delete it with  sudo drives  on the server. Nothing was changed."; return 1; fi
+  pool_can_grow "$role" "a section" || return 1
+  [[ "$units" =~ ^[0-9]{1,6}$ ]] || { note "Please choose a size in $BOOT_UNIT_NAME. Nothing was changed."; return 1; }
+  bytes=$(( units * unit ))
+  if [ "$bytes" -lt "$min" ]; then note "That is too small. The smallest section is $(pretty_size "$min"). Nothing was changed."; return 1; fi
+  if [ "$bytes" -gt "$max" ]; then note "That is too big. The boot drive must keep $(pretty_size "$BOOT_KEEP_FREE_BYTES") free, so the most is $(( max / unit )) $BOOT_UNIT_NAME. Nothing was changed."; return 1; fi
+  typed "CONTINUE" "Type CONTINUE to go on: " || { say "Cancelled. Nothing was changed."; return 1; }
+  mkdir -p "$BOOT_SECTION_DIR"; chmod 700 "$BOOT_SECTION_DIR" 2>/dev/null || true
+  pre_change "Reserve $(pretty_size "$bytes") on the boot drive and format it as a new drive section." \
+             "Stop the containers that use the $role storage for a minute." \
+             "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+  progress_for "$PROG_ITEM" 10 "Reserving the space"
+  if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(pretty_size "$bytes") on the boot drive."; fi
+  if ! mkfs.ext4 -F -q -L "$label" -m 0 "$img" >&2; then rm -f "$img"; die "Could not format the section."; fi
+  log "made the boot drive section $img ($bytes bytes) for $role"
+  bootsection_attach "$role" 0
+}
+
+bootmove_flow() {   # the control panel: a boot drive section goes to the other pool (keep = the section with its files; erase = a new, empty section of the same size)
+  local mp=$1 role newrole oldname img size newlabel newimg keep=$PANEL_KEEP lim min max unit small
+  role=$(branch_role "$mp"); newrole=$(other_role "$role"); oldname=$(branch_name "$mp"); img=$(boot_image_of "$mp")
+  [ "$PANEL_MODE" = 1 ] || { note "A boot drive section is moved in the Drives tab of the dashboard. Here: remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; }
+  [ -f "$img" ] || die "The file behind $oldname is not there. Nothing was changed."
+  size=$(stat -c %s "$img")
+  if [ -n "$(boot_section_of "$newrole")" ]; then note "The $newrole storage already has a boot drive section. Nothing was changed."; return 1; fi
+  pool_can_grow "$newrole" "a section" || return 1
+  newlabel="$(role_prefix "$newrole")BOOT"; newimg="$BOOT_SECTION_DIR/$newrole.img"
+  [ ! -e "$newimg" ] || { note "A saved boot drive section for the $newrole storage is in the way ($newimg). Nothing was changed."; return 1; }
+  if [ "$keep" = yes ]; then
+    typed KEEP "Type KEEP to move the section with its files: " || { say "Cancelled. Nothing was changed."; return 1; }
+    KEEP_IMG=1
+  else
+    typed ERASE "Type ERASE to move the section as a new, empty one: " || { say "Cancelled. Nothing was changed."; return 1; }
+    KEEP_IMG=0
+  fi
+  say "$oldname moves from the $role storage to the $newrole storage."
+  PROG_LO=0; PROG_HI=55
+  detach_branch "$mp" "Then put the section into the $newrole storage." || { PROG_HI=100; KEEP_IMG=0; return 1; }
+  [ "$DRY_RUN" = 1 ] && { PROG_HI=100; KEEP_IMG=0; return 0; }
+  KEEP_IMG=0
+  PENDING_NOTE="$oldname already left the $role storage and was not added to the $newrole storage."
+  PROG_LO=55; PROG_HI=100
+  if [ "$keep" = yes ]; then
+    mv "$img" "$newimg" || die "Could not move the section file. It is at $img."
+    e2label "$newimg" "$newlabel" || die "Could not rename the section. It is at $newimg."
+  else
+    if ! fallocate -l "$size" "$newimg" 2>/dev/null; then rm -f "$newimg"; die "Could not reserve $(pretty_size "$size") on the boot drive."; fi
+    if ! mkfs.ext4 -F -q -L "$newlabel" -m 0 "$newimg" >&2; then rm -f "$newimg"; die "Could not format the section."; fi
+  fi
+  bootsection_attach "$newrole" "$([ "$keep" = yes ] && echo 1 || echo 0)" || return 1
+  PROG_LO=0; PENDING_NOTE=""
+  return 0
+}
 # ---------- balance: even out the used space between the drives of one storage ----------
 BALANCE_TMP=""
 
@@ -5027,6 +5121,8 @@ EOF
 #   panel disconnect LABEL yes|no [WORD...]           take a drive out of its pool; yes = copy its files to the other drives first (no needs CONTINUE typed)
 #   panel move LABEL keep|erase yes|no [WORD...]      move a drive to the other pool; keep|erase = what happens to the files on the drive (erase needs
 #                                                     /dev/DISK and ERASE, keep needs KEEP); yes|no = copy its files to the other drives of its old pool first
+#   panel setups | panel setup NAME DISK,DISK,... [WORD...]   Configure Drives: rank the ready-made setups for the spare drives / build one (needs NAME and ERASE typed)
+#   panel bootadd main|backup GB [WORD...]            part of the boot drive becomes a drive of that pool (needs CONTINUE typed)
 #   WORD is what the person typed: ERASE, CONTINUE, REMOVE, KEEP or a /dev/NAME. A word only counts when the question that asks for it gets exactly it.
 
 panel_branch() {   # panel_branch LABEL -> the mount point of the pool drive with that label (nothing and 1 when there is none)
@@ -5301,10 +5397,12 @@ panel_refuse() { note "$1 Nothing was changed."; return 1; }
 panel_main() {
   local act=${1:-} n=$# i w
   case "$act" in
-    status|health|check|actions|remount|abort) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
+    status|health|check|actions|remount|abort|setups) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
     rename)       [ "$n" -eq 3 ] || { panel_refuse "panel rename takes a drive and a name."; return 1; } ;;
     sleep|wake)   [ "$n" -eq 2 ] || { panel_refuse "panel $act takes one drive."; return 1; } ;;
     add)          [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel add takes a drive, main or backup, keep or erase, and the typed words."; return 1; } ;;
+    bootadd)      [ "$n" -ge 3 ] && [ "$n" -le 6 ] || { panel_refuse "panel bootadd takes main or backup, a size in GB and the typed words."; return 1; } ;;
+    setup)        [ "$n" -ge 4 ] && [ "$n" -le 8 ] || { panel_refuse "panel setup takes a setup name, the drives and the typed words."; return 1; } ;;
     wipe)         [ "$n" -ge 3 ] && [ "$n" -le 7 ] || { panel_refuse "panel wipe takes a drive, empty or format, and the typed words."; return 1; } ;;
     disconnect)   [ "$n" -ge 3 ] && [ "$n" -le 22 ] || { panel_refuse "panel disconnect takes a drive, yes or no, and the typed words."; return 1; } ;;
     move)         [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel move takes a drive, keep or erase, yes or no, and the typed words."; return 1; } ;;
@@ -5313,6 +5411,7 @@ panel_main() {
   PANEL_IDS=(); PANEL_MODES=()
   case "$act" in
     add|move|disconnect) panel_list "$2" || return 1 ;;      # one drive, or several (ID,ID,... and with "each" ID:keep or ID:erase)
+    setup) [[ "$2" =~ ^[a-z0-9-]{3,12}$ ]] || { panel_refuse "That setup name is not allowed."; return 1; } ;;
     *) if [ "$n" -ge 2 ] && ! [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then panel_refuse "That drive id is not allowed."; return 1; fi ;;
   esac
   local typed_from=0 arg_ok=1 keep="" role=""
@@ -5327,6 +5426,8 @@ panel_main() {
     wipe)       [[ "$3" =~ ^(empty|format)$ ]] || arg_ok=0; typed_from=4 ;;
     disconnect) [[ "$3" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=4 ;;
     move)       [[ "$3" =~ ^(keep|erase|each)$ ]] && [[ "$4" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=5 ;;
+    setup)      typed_from=4 ;;
+    bootadd)    [[ "$2" =~ ^(main|backup)$ ]] && [[ "$3" =~ ^[0-9]{1,6}$ ]] || arg_ok=0; typed_from=4 ;;
   esac
   # a drive with its own choice (ID:keep) needs the word "each"; without it every drive gets the same choice
   if [ "$arg_ok" = 1 ] && [[ "$act" =~ ^(add|move)$ ]]; then
@@ -5341,20 +5442,20 @@ panel_main() {
   if [ "$typed_from" -gt 0 ]; then
     for ((i = typed_from; i <= n; i++)); do
       w=${!i}
-      [[ "$w" =~ ^(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16})$ ]] || { panel_refuse "A typed word is not allowed."; return 1; }
+      [[ "$w" =~ ^(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)$ ]] || { panel_refuse "A typed word is not allowed."; return 1; }
       if [ "$w" = NOW ]; then PANEL_NOW=1; else PANEL_TYPED+=("$w"); fi
     done
   fi
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
   case "$act" in
-    status|health|check|actions|abort) ;;      # looking only (and Stop): these may run beside each other and beside a change (the panel does not start the looking ones during a change)
+    status|health|check|actions|abort|setups) ;;      # looking only (and Stop): these may run beside each other and beside a change (the panel does not start the looking ones during a change)
     *) take_lock ;;
   esac
   PANEL_MODE=1
   ASSUME_YES=0      # nothing is ever answered with yes for the person; a question nobody can answer means no
   local why
   case "$act" in
-    rename|sleep|wake|status|health|check|actions|abort) ASSUME_YES=1 ;;      # (these never ask anything that matters)
+    rename|sleep|wake|status|health|check|actions|abort|setups) ASSUME_YES=1 ;;      # (these never ask anything that matters)
     *) why=""
        # a drive that joins a running pool stops nothing, so a backup or an upload may go on
        if [ "$PANEL_NOW" = 1 ]; then :      # the person chose "Go Ahead Anyway"
@@ -5363,11 +5464,14 @@ panel_main() {
        NOW=1 ;;
   esac
   case "$act" in
-    status)  JSON=1; with_name_cache json_drives; printf ',"last_backup":%s,"boot_free_bytes":%s}\n' "$(json_str "$(last_backup_line)")" "$(json_num "$(boot_free_bytes)")" ;;
+    status)  JSON=1; with_name_cache json_drives; printf ',"last_backup":%s,"boot_free_bytes":%s,"boot_limits":%s}\n' "$(json_str "$(last_backup_line)")" "$(json_num "$(boot_free_bytes)")" "$(bootsection_limits_json)" ;;
     health)  JSON=1; health_flow ;;
     check)   JSON=1; check_flow ;;
     actions) with_name_cache panel_actions_json ;;
     abort)   panel_abort ;;
+    setups)  panel_setups_json ;;
+    bootadd) PANEL_ROLE=$2; PANEL_UNITS=$3; PROG_ITEM=bootadd; run_changing panel_bootadd_flow ;;
+    setup)   PANEL_ID=$2; run_changing panel_setup_run "$2" "$3" ;;
     rename)  PANEL_ID=$2; PANEL_NAME=$3; run_changing rename_flow ;;
     sleep)   PANEL_ID=$2; sleep_flow ;;
     wake)    PANEL_ID=$2; wake_flow ;;
@@ -5384,6 +5488,119 @@ panel_main() {
       PANEL_ALL=$3; PANEL_COPY=$4
       run_changing panel_batch move ;;
   esac
+}
+# ---------- Configure Drives (the control panel): what the spare drives could become, ranked, and building the one that was picked ----------
+#   panel setups                                  look only (JSON): the spare drives, and every ready-made setup ranked from best to worst for them
+#   panel setup ID DISK,DISK,... [WORD...]        build that setup on those spare drives (needs the setup's name and ERASE typed)
+# The setups themselves are the ready-made setups of `sudo drives preset` (32_preset.sh, 33_zfs_md.sh): the panel only chooses the drives and asks.
+
+setup_tolerates() {   # setup_tolerates ID N -> how many drives may die at the same time without losing files
+  case "$1" in
+    zfs-mirror|md-raid1) echo $(( $2 - 1 )) ;;
+    mirror|snapraid1|zfs-raidz1|md-raid5|md-raid10) echo 1 ;;
+    snapraid2|zfs-raidz2|md-raid6) echo 2 ;;
+    zfs-raidz3) echo 3 ;;
+    *) echo 0 ;;
+  esac
+}
+setup_soft() { case "$1" in mirror|snapraid1|snapraid2) return 0 ;; *) return 1 ;; esac; }      # protection that is updated every night, not at once
+
+setup_score() {   # setup_score ID TOLERATES CAPACITY TOTAL -> a balanced score (tenths of a point): half protection, half usable space; ZFS wins a tie with Linux RAID
+  local id=$1 t=$2 cap=$3 total=$4 prot space s
+  case "$t" in 0) prot=0 ;; 1) prot=60 ;; 2) prot=85 ;; *) prot=95 ;; esac
+  if [ "$t" -gt 0 ] && setup_soft "$id"; then prot=$((prot - 10)); fi
+  space=0; [ "$total" -gt 0 ] && space=$(( cap * 100 / total ))
+  s=$(( (prot + space) * 5 ))
+  case "$id" in zfs-*) [ "$t" -gt 0 ] && s=$((s + 5)) ;; esac
+  echo "$s"
+}
+
+setup_choose() {   # setup_choose ID SIZE... (the biggest first) -> "K CAPACITY": how many of the biggest drives give the most usable space
+  local id=$1; shift
+  local -a s=("$@"); local n=${#s[@]} min max k best=0 bestcap=0 cap
+  min=$(preset_min "$id"); max=$(preset_max "$id")
+  [ "$n" -ge "$min" ] || return 1
+  if [ "$max" -gt 0 ] && [ "$n" -gt "$max" ]; then n=$max; fi
+  for ((k = min; k <= n; k++)); do
+    cap=$(preset_capacity "$id" "${s[@]:0:k}")
+    [ -n "$cap" ] || continue
+    if [ "$cap" -gt "$bestcap" ]; then best=$k; bestcap=$cap; fi
+  done
+  [ "$best" -gt 0 ] || return 1
+  echo "$best $bestcap"
+}
+
+setup_blocker() {   # setup_blocker ID -> why this setup cannot be built right now (nothing when it can)
+  local id=$1
+  if array_active; then echo "The Main storage already is a $(preset_title "$(preset_current)") setup. It has to be taken apart first (sudo drives release)."; return 0; fi
+  if [ -n "$(branches_of main)" ] || [ -n "$(parity_mounts)" ]; then echo "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+  if [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; then echo "The Backup storage still has drives in it. The mirror builds a new Backup storage, so take its drives out first."; return 0; fi
+  if preset_is_array "$id" && mountpoint -q "$MAIN_POOL"; then echo "$MAIN_POOL is already in use by something else."; return 0; fi
+  if [ -n "$(preset_tool_hint "$id")" ]; then echo "The program for this setup is not installed yet. Run  sudo homelab-setup upgrade  on the server to install it."; return 0; fi
+  return 0
+}
+
+panel_setups_json() {
+  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank
+  local -a devs=() sizes=() rows=() chosen=()
+  local line
+  while read -r s d; do devs+=("$d"); sizes+=("$s"); total=$((total + s)); done < <(for d in $(candidate_disks); do s=$(disk_size_bytes "$d"); [[ "$s" =~ ^[0-9]+$ ]] && echo "$s $d"; done | sort -rn -k1,1)
+  n=${#devs[@]}
+  printf '{"spare":['
+  for i in "${!devs[@]}"; do
+    d=${devs[$i]}; blank=false; disk_is_blank "$d" && blank=true
+    [ "$i" = 0 ] || printf ','
+    printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${sizes[$i]}")" "$blank"
+  done
+  printf '],"total_bytes":%s,"options":[' "$(json_num "$total")"
+  for id in $PRESET_IDS; do
+    local fits=false k=0 cap=0 used=0 why="" tol=0 score
+    score=$(( -10 * $(preset_min "$id") ))
+    if [ "$n" -ge "$(preset_min "$id")" ] && line=$(setup_choose "$id" "${sizes[@]}"); then
+      fits=true; k=${line% *}; cap=${line#* }
+      tol=$(setup_tolerates "$id" "$k"); score=$(setup_score "$id" "$tol" "$cap" "$total")
+      used=0; for ((i = 0; i < k; i++)); do used=$((used + sizes[i])); done
+      why=$(setup_blocker "$id")
+    else
+      why="Needs $(preset_drives_text "$id") empty drives; $n found."
+    fi
+    ids_json=""
+    if [ "$fits" = true ]; then for ((i = 0; i < k; i++)); do ids_json="${ids_json:+$ids_json,}$(json_str "$(basename "${devs[$i]}")")"; done; fi
+    hint=false; [ -n "$(preset_tool_hint "$id")" ] && hint=true
+    rows+=("$score|$(printf '{"id":%s,"title":%s,"blurb":%s,"kind":%s,"fits":%s,"min":%s,"drives":[%s],"usable_bytes":%s,"used_bytes":%s,"tolerates":%s,"nightly":%s,"score":%s,"can_build":%s,"why":%s,"needs_tool":%s}' \
+      "$(json_str "$id")" "$(json_str "$(preset_title "$id")")" "$(json_str "$(preset_blurb "$id")")" "$(json_str "$(preset_kind "$id")")" "$fits" "$(json_num "$(preset_min "$id")")" "$ids_json" \
+      "$(json_num "$cap")" "$(json_num "$used")" "$(json_num "$tol")" "$(setup_soft "$id" && echo true || echo false)" "$score" \
+      "$([ "$fits" = true ] && [ -z "$why" ] && echo true || echo false)" "$(json_str "$why")" "$hint")")
+  done
+  local sorted rec="" r
+  sorted=$(printf '%s\n' "${rows[@]}" | sort -t'|' -k1,1nr -s)
+  first=1
+  while IFS= read -r r; do
+    [ "$first" = 1 ] || printf ','
+    first=0
+    printf '%s' "${r#*|}"
+    [ -z "$rec" ] && case "${r#*|}" in *'"fits":true'*) rec=$(printf '%s' "${r#*|}" | sed 's/^{"id":"\([^"]*\)".*/\1/') ;; esac
+  done <<<"$sorted"
+  printf '],"recommended":%s,"current":%s}\n' "$(json_str "$rec")" "$(json_str "$(preset_current)")"
+}
+
+panel_setup_run() {   # panel_setup_run ID DISK,DISK,...: build a ready-made setup on spare drives the person chose (the confirmation words were checked by the flow)
+  local id=$1 idlist=$2 t d spare
+  local -a toks=()
+  id=$(preset_alias "$id")
+  preset_known "$id" || { panel_refuse "That setup does not exist."; return 1; }
+  IFS=, read -ra toks <<<"$idlist"
+  [ "${#toks[@]}" -ge 1 ] && [ "${#toks[@]}" -le 16 ] || { panel_refuse "Choose the drives for the setup."; return 1; }
+  WIZARD_DEVS=""; WIZARD_ERASE=""; WIZARD_KEEP=""
+  spare=$(candidate_disks)
+  for t in "${toks[@]}"; do
+    [[ "$t" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || { panel_refuse "That drive id is not allowed."; return 1; }
+    d="/dev/$t"
+    grep -qx "$d" <<<"$spare" || { panel_refuse "$t is not a spare drive that can be used."; return 1; }
+    WIZARD_DEVS="${WIZARD_DEVS:+$WIZARD_DEVS$'\n'}$d"
+    disk_is_blank "$d" || WIZARD_ERASE="${WIZARD_ERASE:+$WIZARD_ERASE }$d"      # a drive with files is erased too: the person typed ERASE for the whole setup
+  done
+  preset_flow "$id"
 }
 run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser; the exit code is the flow's (1 also when containers did not start)
   local rc=0
