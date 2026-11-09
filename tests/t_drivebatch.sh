@@ -138,5 +138,17 @@ has "a drive that cannot be formatted: the report says what went wrong" "$OUT" "
 has "a drive that cannot be formatted: with the reason" "$OUT" "mkfs failed"
 has "a drive that cannot be formatted: and how many were done" "$OUT" "0 of 2 drives were done"
 
+# ---------------- a drive that something else still holds (it has the old mount in its own view): it is told to let go, the move works
+setup 1 3
+B=(); for i in 0 1 2; do B+=("$(label_of backup $i)"); done
+L1=$(loop_of 3)
+unshare -m --propagation private sleep 300 & HOLDER=$!
+sleep 1
+OUT=$(P move "${B[1]}:erase" each yes "$L1" ERASE)
+check "a drive that is held in another view: the holder lets go and the program keeps running" "$(kill -0 "$HOLDER" 2>/dev/null && echo alive)" "alive"
+kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
+hasnt "a drive that is held in another view: no busy error" "$OUT" "the drive is busy"
+check "a drive that is held in another view: it joined Main" "$(pool_drives main)-$(pool_drives backup)" "2-2"
+
 echo
 if [ "$bad" = 0 ]; then echo OK; else echo "FAIL ($bad)"; exit 1; fi
