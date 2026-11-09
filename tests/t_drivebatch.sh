@@ -101,6 +101,7 @@ unset RSYNC_TRACE
 setup 3
 A=$(label_of main 0); B=$(label_of main 1); C=$(label_of main 2)
 fallocate -l 120M "/mnt/test-disks/$A/bigA.bin"; echo "hello" >"/mnt/test-disks/$C/c.txt"
+mkdir -p "$S/bin"; printf '#!/bin/sh\nexec /usr/bin/rsync --bwlimit=20000 "$@"\n' >"$S/bin/rsync"; chmod +x "$S/bin/rsync"      # (a slow copy, so that Stop is pressed while it runs)
 has "stop: there is nothing to stop right now" "$(P abort)" "No drive change is running"
 RSYNC_TRACE=/dev/null HOMELAB_EXTRA_PATH="$S/bin" P move "$A,$B" keep yes KEEP >"$S/out" &
 for _ in $(seq 1 100); do grep -q "PROGRESS $A [0-9]* Copying files" "$S/out" 2>/dev/null && break; sleep 0.3; done
@@ -112,7 +113,7 @@ has "stop: the report says it was stopped" "$OUT" "Stopped as you asked"
 check "stop: the big file is still on the drive it was on" "$(find /mnt/test-disks/$A -maxdepth 1 -name bigA.bin | wc -l)" "1"
 check "stop: and in the pool" "$(find /mnt/test-main -maxdepth 1 -name bigA.bin | wc -l)" "1"
 check "stop: Main has all three drives, Backup only its own" "$(pool_drives main)-$(pool_drives backup)" "3-1"
-check "stop: the other drive (already done) was put back too" "$(printf '%s\n' "$OUT" | grep -c 'put back where it was')" "1"
+has "stop: the other drive had not started its pool change yet (it waits for the copy), so there was nothing to put back" "$OUT" "Stopped with nothing lost"
 check "stop: the small file is untouched" "$(cat /mnt/test-main/c.txt)" "hello"
 check "stop: Stop did not leave its request behind" "$([ -e "$S/panel-abort" ] && echo left || echo clean)" "clean"
 has "stop: a new change can start right away" "$(P rename "$A" "Photos")" "Photos"
@@ -149,6 +150,41 @@ check "a drive that is held in another view: the holder lets go and the program 
 kill "$HOLDER" 2>/dev/null; wait "$HOLDER" 2>/dev/null
 hasnt "a drive that is held in another view: no busy error" "$OUT" "the drive is busy"
 check "a drive that is held in another view: it joined Main" "$(pool_drives main)-$(pool_drives backup)" "2-2"
+
+# ---------------- containers: stopped once and started once for the whole batch (a fake docker counts)
+fake_docker() {
+  mkdir -p "$S/bin3"
+  cat >"$S/bin3/docker" <<'DOCKER_END'
+#!/bin/sh
+case "$1" in
+  info) exit 0 ;;
+  ps) printf 'c1\nc2\n' ;;
+  inspect) shift; shift; fmt=$1; shift
+    for n in "$@"; do case "$fmt" in *Mounts*) echo "/$n|/mnt/test-backup /mnt/test-main " ;; *) echo "0 /$n" ;; esac; done ;;
+  stop|start) echo "$1 $2" >>"$FAKE_DOCKER_LOG" ;;
+esac
+exit 0
+DOCKER_END
+  chmod +x "$S/bin3/docker"; : >"$S/docker.log"; export FAKE_DOCKER_LOG="$S/docker.log"
+}
+setup 1 3
+fake_docker
+B=(); for i in 0 1 2; do B+=("$(label_of backup $i)"); done
+echo "keep me" >"/mnt/test-disks/${B[1]}/m1.txt"; echo "keep me too" >"/mnt/test-disks/${B[2]}/m2.txt"
+L1=$(loop_of 3); L2=$(loop_of 4)
+OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P move "${B[1]}:erase,${B[2]}:erase" each yes "$L1" "$L2" ERASE)
+check "containers: both drives moved" "$(pool_drives main)-$(pool_drives backup)" "3-1"
+check "containers: each container stopped once for the two drives" "$(grep -c '^stop' "$S/docker.log")" "2"
+check "containers: each container started once for the two drives" "$(grep -c '^start' "$S/docker.log")" "2"
+check "containers: nothing starts before the last stop" "$(awk '$1 == "stop" {s = NR} $1 == "start" && !f {f = NR} END {print (f > s) ? "ok" : "early"}' "$S/docker.log")" "ok"
+check "containers: the files of both drives are in the Backup pool" "$(cat /mnt/test-backup/m1.txt /mnt/test-backup/m2.txt 2>/dev/null | tr '\n' ',')" "keep me,keep me too,"
+
+setup 3
+fake_docker
+A=$(label_of main 0); B2=$(label_of main 1)
+OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A,$B2" yes)
+check "containers: taking two drives out stops each container once" "$(grep -c '^stop' "$S/docker.log")" "2"
+check "containers: and starts each once" "$(grep -c '^start' "$S/docker.log")" "2"
 
 echo
 if [ "$bad" = 0 ]; then echo OK; else echo "FAIL ($bad)"; exit 1; fi
