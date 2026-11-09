@@ -25,44 +25,69 @@ pick_branch() {
   echo "${mps[$idx]}"
 }
 
-drain_branch() {   # copy everything from branch $1 to the emptiest other branch of the same role
-  local mp=$1 role others o best="" bestfree=0 free used target pool
-  role=$(branch_role "$mp"); pool=$(role_pool "$role")
-  mapfile -t others < <(branches_of "$role" | grep -vx "$mp")
-  for o in "${others[@]}"; do
-    mountpoint -q "$o" || continue
-    free=$(avail_bytes "$o")
-    if [ "$free" -gt "$bestfree" ]; then best=$o; bestfree=$free; fi
+not_leaving() {   # a filter: the mount points on stdin that do not leave their pool in this batch
+  local l
+  while IFS= read -r l; do
+    local x leave=0
+    for x in "${PANEL_LEAVING[@]}"; do [ "$x" = "$l" ] && leave=1; done
+    [ "$leave" = 1 ] || printf '%s\n' "$l"
   done
+  return 0
+}
+
+drain_branch() {   # copy everything from branch $1 to the emptiest other branch of the same role
+  local mp=$1 role used target pool
+  local -a cands=()
+  role=$(branch_role "$mp"); pool=$(role_pool "$role")
+  mapfile -t cands < <(branches_of "$role" | grep -vx "$mp" | not_leaving)      # a drive that leaves in the same batch is not a place to copy to
   used=$(used_bytes "$mp")
-  if [ -z "$best" ] || [ "$bestfree" -lt $((used + DRAIN_SPARE_BYTES)) ]; then
-    warn "No other $role drive has enough free space ($(human "$used") needed plus $(human "$DRAIN_SPARE_BYTES") spare)."
+  if ! target=$(space_pick "$mp" "$used" "${cands[@]}") || [ -z "$target" ]; then
+    warn "No other $role drive has enough free space ($(human "$used") needed plus $(human "$DRAIN_SPARE_BYTES") spare). $(branch_name "$mp") stays where it is."
+    NOROOM=1
     return 1
   fi
-  target=$best
+  if abort_requested; then ABORTED=1; space_release "$mp"; note "Stopped before copying. Nothing was changed."; return 1; fi
   say "Copying $(human "$used") from $(branch_name "$mp") to $(branch_name "$target") (pass 1, services keep running)..."
   progress 5 "Copying files to $(branch_name "$target")"
-  rsync_run 5 60 "Copying files" -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/" || { warn "Copy failed"; return 1; }
+  if ! rsync_run 5 60 "Copying files" -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/"; then
+    space_release "$mp"
+    if abort_requested; then ABORTED=1; note "Stopped while copying. Nothing was removed. The files copied so far stay as extra copies on $(branch_name "$target")."; else warn "Copy failed"; fi
+    return 1
+  fi
+  space_release "$mp"
+  if abort_requested; then ABORTED=1; note "Stopped. Nothing was changed."; return 1; fi
+  crit_enter abortable || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }      # from here the containers are stopped and the pool changes: one drive at a time
   progress 62 "Stopping the containers"
   stop_containers "$pool"
   say "Pass 2 (catching changes made during the first pass)..."
   progress 66 "Copying the last changes"
-  rsync_run 66 74 "Copying the last changes" -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/" || { warn "Second copy failed"; start_containers; return 1; }
+  if ! rsync_run 66 74 "Copying the last changes" -aH --numeric-ids --exclude=/lost+found "$mp/" "$target/"; then
+    if abort_requested; then ABORTED=1; note "Stopped. Nothing was removed."; else warn "Second copy failed"; fi
+    start_containers; crit_release; return 1
+  fi
   if rsync -aHn --numeric-ids --itemize-changes --exclude=/lost+found "$mp/" "$target/" | grep -q '^>f'; then
     warn "Verification found files that are not copied yet. Nothing was removed."
     start_containers
+    crit_release
     return 1
   fi
   say "Verified: every file from $(branch_name "$mp") is also on $(branch_name "$target")."
   return 0
 }
 
-detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on the drive untouched; the STEPs are extra lines for the dry-run plan)
+detach_branch() {   # (the real work is below; the pool lock is let go however it ends)
+  detach_branch_run "$@"
+  local rc=$?
+  crit_release
+  return "$rc"
+}
+
+detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data on the drive untouched; the STEPs are extra lines for the dry-run plan)
   local mp=$1 role label pool others dev part img
   shift
   role=$(branch_role "$mp"); label=$(branch_name "$mp"); pool=$(role_pool "$role")
   img=$(boot_image_of "$mp")
-  mapfile -t others < <(branches_of "$role" | grep -vx "$mp")
+  mapfile -t others < <(branches_of "$role" | grep -vx "$mp" | not_leaving)      # (a drive that leaves in the same batch does not count: nothing is copied to it)
   part=$(branch_part "$mp"); dev=""; [ -n "$part" ] && ! is_boot_section "$mp" && dev=$(disk_of_part "$part")
   local drain=0 copyq=""
 
@@ -105,6 +130,8 @@ detach_branch() {   # detach_branch mountpoint [STEP...]  (leaves the data on th
   pre_change "${plan[@]}" && return 0
   if [ "$drain" = 1 ]; then drain_branch "$mp" || { note "Not removing $label."; return 1; }; fi
 
+  if [ "$CRIT_DEPTH" = 0 ] && abort_requested; then ABORTED=1; note "Stopped. Nothing was changed."; return 1; fi
+  crit_enter abortable || { ABORTED=1; note "Stopped. Nothing was changed."; return 1; }
   progress 75 "Stopping the containers"
   if [ -z "${STOPPED// /}" ]; then stop_containers "$pool"; fi
   progress 78 "Taking the drive out of the pool"
@@ -158,10 +185,10 @@ disconnect_flow() {
 
 move_flow() {
   array_guard || return 1
-  local mp role newrole part dev keep=no
+  local mp role newrole part dev keep=no oldname
   if [ "$PANEL_MODE" = 1 ]; then mp=$(panel_branch "$PANEL_ID") || return 1; keep=$PANEL_KEEP
   else mp=$(pick_branch "Which drive do you want to move? ") || return 1; fi
-  role=$(branch_role "$mp"); newrole=$(other_role "$role")
+  role=$(branch_role "$mp"); newrole=$(other_role "$role"); oldname=$(branch_name "$mp")
   if is_boot_section "$mp"; then note "A boot drive section cannot be moved. Remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; fi
   part=$(branch_part "$mp"); [ -n "$part" ] || die "That drive is not connected, so it cannot be moved."
   dev=$(disk_of_part "$part")
@@ -192,7 +219,19 @@ move_flow() {
   [ "$DRY_RUN" = 1 ] && { PROG_HI=100; return 0; }
   PENDING_NOTE="$(branch_name "$mp") already left the $role storage and was not added to the $newrole storage. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
   PROG_LO=55; PROG_HI=100
-  connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1 || { PROG_LO=0; note ""; note "$PENDING_NOTE"; PENDING_NOTE=""; return 1; }
+  if ! connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1; then
+    if [ "$ABORTED" = 1 ]; then      # Stop was pressed before the drive was erased: it goes back where it came from, with all its files
+      PROG_LO=0; PROG_HI=100
+      progress 90 "Putting the drive back"
+      say "Stopped. Putting $oldname back into the $role storage with its files..."
+      ABORT_IGNORE=1
+      if connect_flow "$dev" "$role" 2 1; then PUTBACK=1; say "$oldname is back in the $role storage."
+      else note ""; note "$PENDING_NOTE"; fi
+      ABORT_IGNORE=0; PENDING_NOTE=""
+      return 1
+    fi
+    PROG_LO=0; note ""; note "$PENDING_NOTE"; PENDING_NOTE=""; return 1
+  fi
   PROG_LO=0
   PENDING_NOTE=""
 }

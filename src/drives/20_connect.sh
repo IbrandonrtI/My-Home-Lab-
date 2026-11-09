@@ -47,7 +47,14 @@ confirm_erase() {   # confirm_erase /dev/sdX: the two typed confirmations before
   typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
 }
 
-connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without asking, 2 = keep the files without asking] [already_confirmed]
+connect_flow() {   # (the real work is below; the pool lock is let go however it ends)
+  connect_flow_run "$@"
+  local rc=$?
+  crit_release
+  return "$rc"
+}
+
+connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase without asking, 2 = keep the files without asking] [already_confirmed]
   array_guard || return 1
   local dev=${1:-} role=${2:-} force=${3:-0} confirmed=${4:-0} label part mode="erase" idx uuid mp
   local gate=pre_change; [ "$confirmed" = 1 ] && gate=dry_gate   # called from move: the check for a running backup was done before the drive left its pool
@@ -60,7 +67,7 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
     if [ "$idx" = 0 ]; then role=main; else role=backup; fi
   fi
   pool_can_grow "$role" "this drive" || return 1
-  label=$(next_label "$role")
+  label=$(take_label "$role")
   local base same=0 b
   base=$(disk_base_name "$dev")
   for b in $(all_branches); do [ "$(branch_base_name "$b")" = "$base" ] && same=$((same + 1)); done
@@ -87,13 +94,15 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
                "Stop the containers that use the $role storage for a minute." \
                "Add the drive to the $role storage and mount the pool again." \
                "Start the containers again." && return 0
-    progress 10 "Erasing and formatting the drive"
+    if abort_requested; then ABORTED=1; note "Stopped before $dev was erased. Nothing was changed."; return 1; fi
+    progress 10 "Erasing and formatting (cannot be stopped)"
     part=$(format_disk "$dev" "$label") || return 1
   else
     $gate "Keep the files on $dev and add the drive as it is ($base)." \
                "Stop the containers that use the $role storage for a minute." \
                "Add the drive to the $role storage and mount the pool again." \
                "Start the containers again." && return 0
+    if abort_requested; then ABORTED=1; note "Stopped before $dev was added. Nothing was changed."; return 1; fi
     progress 10 "Getting the drive ready"
     umount_disk_parts "$dev"
     if [ "$(fs_label "$part")" != "$label" ]; then
@@ -101,6 +110,7 @@ connect_flow() {   # connect_flow [dev] [role] [force_erase: 1 = erase without a
     fi
   fi
 
+  crit_enter || true      # from here the pool changes: one drive at a time
   uuid=$(blkid -s UUID -o value "$part") || true
   [ -n "$uuid" ] || die "Could not read the UUID of $part"
   mp="$DISKS_DIR/$label"

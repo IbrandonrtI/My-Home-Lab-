@@ -13,6 +13,7 @@ yn()   {
 typed() {   # typed WORD "Prompt: ": the person must type WORD. --confirm-erase types it for a script; a dry run changes nothing, so it needs no typing
   if [ "$PANEL_MODE" = 1 ]; then      # the control panel passes what the person typed; it counts only when it is exactly the word asked for
     local w
+    [ "${PANEL_UNDO:-0}" = 1 ] && return 0      # (putting a drive back after Stop: nothing is lost, so nothing has to be confirmed)
     for w in "${PANEL_TYPED[@]}"; do [ "$w" = "$1" ] && { note "${2}$1   (typed in the panel)"; return 0; }; done
     note "${2}(not typed)"
     return 1
@@ -67,4 +68,71 @@ rsync_run() {   # rsync_run FROM TO "Text" RSYNC-ARGS...: like rsync; in the pan
   done
   rc=$(cat "$rcfile" 2>/dev/null || echo 1); rm -f "$rcfile"
   return "${rc:-1}"
+}
+
+# ---------- several drives at once, and the Stop button (the control panel only) ----------
+abort_requested() {   # 0 when the person pressed Stop (not while a drive is being put back)
+  [ "$ABORT_IGNORE" = 1 ] && return 1
+  [ -e "$ABORT_FILE" ]
+}
+
+crit_enter() {   # crit_enter [abortable]: only one drive at a time may change a pool (stop containers, edit fstab, mount, start containers). Waits for its turn; 1 only when "abortable" and Stop was pressed while waiting
+  if [ "$CRIT_DEPTH" -gt 0 ]; then CRIT_DEPTH=$((CRIT_DEPTH + 1)); return 0; fi
+  mkdir -p "$(dirname "$POOL_LOCK")" 2>/dev/null || true
+  { exec 8>"$POOL_LOCK"; } 2>/dev/null || return 0      # (no lock file: one drive at a time anyway)
+  until flock -w 1 8; do
+    if [ "${1:-}" = abortable ] && abort_requested; then { exec 8>&-; } 2>/dev/null; return 1; fi
+  done
+  CRIT_DEPTH=1
+  return 0
+}
+crit_leave() {
+  [ "$CRIT_DEPTH" -gt 0 ] || return 0
+  CRIT_DEPTH=$((CRIT_DEPTH - 1))
+  if [ "$CRIT_DEPTH" -eq 0 ]; then { exec 8>&-; } 2>/dev/null; fi
+  return 0
+}
+crit_release() {   # leave however deep this process is in
+  if [ "$CRIT_DEPTH" -gt 0 ]; then CRIT_DEPTH=0; { exec 8>&-; } 2>/dev/null; fi
+  return 0
+}
+
+take_label() {   # take_label main|backup -> the next free drive name; in a batch with several drives the name is also reserved, so two drives never get the same one
+  local l
+  if [ -z "$PANEL_RESERVE_DIR" ]; then next_label "$1"; return 0; fi
+  crit_enter || true
+  l=$(next_label "$1")
+  : >"$PANEL_RESERVE_DIR/label-$l"
+  crit_leave
+  echo "$l"
+}
+
+space_pick() {   # space_pick SOURCE-MOUNT BYTES TARGET...: the emptiest of the target drives that still has BYTES (and the spare margin) free after what other copies of this batch have reserved; reserves it
+  local src=$1 need=$2 o free res best="" bestfree=0; shift 2
+  crit_enter || true
+  for o in "$@"; do
+    mountpoint -q "$o" || continue
+    free=$(avail_bytes "$o")
+    res=0
+    [ -n "$PANEL_RESERVE_DIR" ] && res=$(awk -v t="$o" '$2 == t {s += $3} END {print s + 0}' "$PANEL_RESERVE_DIR/space" 2>/dev/null)
+    free=$((free - ${res:-0}))
+    if [ "$free" -gt "$bestfree" ]; then best=$o; bestfree=$free; fi
+  done
+  if [ -n "$best" ] && [ "$bestfree" -ge $((need + DRAIN_SPARE_BYTES)) ]; then
+    [ -n "$PANEL_RESERVE_DIR" ] && printf '%s %s %s\n' "$src" "$best" "$need" >>"$PANEL_RESERVE_DIR/space"
+    crit_leave
+    echo "$best"
+    return 0
+  fi
+  crit_leave
+  return 1
+}
+
+space_release() {   # space_release SOURCE-MOUNT: the copy is over (the files are on the target now, so the drive's own numbers show them)
+  [ -n "$PANEL_RESERVE_DIR" ] && [ -f "$PANEL_RESERVE_DIR/space" ] || return 0
+  crit_enter || true
+  grep -v "^$1 " "$PANEL_RESERVE_DIR/space" >"$PANEL_RESERVE_DIR/space.new" 2>/dev/null
+  mv -f "$PANEL_RESERVE_DIR/space.new" "$PANEL_RESERVE_DIR/space"
+  crit_leave
+  return 0
 }

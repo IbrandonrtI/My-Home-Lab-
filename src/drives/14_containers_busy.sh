@@ -21,7 +21,7 @@ docker_each() {   # docker_each stop|start NAME...: the containers go together (
   local act=$1 n tmp; shift
   tmp=$(mktemp) || return 0
   for n in "$@"; do
-    ( docker "$act" "$n" >/dev/null 2>&1 || echo "$n" >>"$tmp" ) 9>&- &
+    ( docker "$act" "$n" >/dev/null 2>&1 || echo "$n" >>"$tmp" ) 8>&- 9>&- &
     if [ "$(jobs -rp | wc -l)" -ge 8 ]; then wait -n 2>/dev/null || true; fi
   done
   wait
@@ -180,6 +180,7 @@ on_exit() {
     note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
+  if [ -n "${PANEL_RESERVE_DIR:-}" ]; then rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; fi      # (a drive change of the panel that ended some other way)
   [ -n "${BALANCE_TMP:-}" ] && rm -rf "$BALANCE_TMP"
   [ -n "${SETTINGS_SNAP:-}" ] && rm -f "$SETTINGS_SNAP"
   [ -n "${NAME_CACHE:-}" ] && rm -rf "$NAME_CACHE"

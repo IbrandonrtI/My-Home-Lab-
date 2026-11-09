@@ -123,6 +123,18 @@ PANEL_ALL=""         # add and move: the one choice (keep or erase) for every dr
 PANEL_NOW=0          # the panel's "Go Ahead Anyway": do not wait for a running backup or upload (it sends the word NOW)
 PROG_ITEM=""         # the drive the progress lines are about (panel only)
 PROG_LO=0; PROG_HI=100   # the part of the bar a step may use (a move is two steps: leaving a pool, then joining the other)
+PANEL_LEAVING=()     # the pool folders of the drives that leave their pools in this batch (a copy never goes to one of them)
+PANEL_RESERVE_DIR="" # the folder of a batch with several drives: reserved drive names and reserved space
+PANEL_JOBS=3         # how many drives of one batch are worked on at the same time
+CRIT_DEPTH=0         # >0 while this process holds the pool lock (the short steps that change a pool run one at a time)
+ABORTED=0            # 1 when the person pressed Stop and this drive was stopped because of it
+PUTBACK=0            # 1 when a half-moved drive was put back into the pool it came from
+NOROOM=0            # 1 when a drive was left where it is because the drives that stay have no room for its files
+PANEL_UNDO=0         # 1 while drives are put back after Stop (typed words are not asked for)
+ABORT_IGNORE=0       # 1 while putting a drive back (the Stop request is then not looked at)
+POOL_LOCK="${POOL_LOCK:-$STATE_DIR/pool-change.lock}"
+ABORT_FILE="${ABORT_FILE:-$STATE_DIR/panel-abort}"           # the Stop button: this file exists = stop as soon as it is safe
+BATCH_PID_FILE="${BATCH_PID_FILE:-$STATE_DIR/panel-batch.pid}"
 PANEL_ID=""          # set only by `drives panel ...`: the drive (a pool label, or sda) the control panel chose, so the flow does not ask
 PANEL_NAME=""        # ... and the new name for rename
 WANT_SPARE=0         # --spare: a ready-made array setup also gets a hot spare drive

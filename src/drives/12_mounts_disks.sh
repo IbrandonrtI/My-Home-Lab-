@@ -9,13 +9,13 @@ ensure_mp() {
   if ! mountpoint -q "$1"; then chattr +i "$1" 2>/dev/null || true; fi
 }
 
-mount_fstab() {   # fd 9 is the lock: the mergerfs daemon must not inherit it
+mount_fstab() {   # fd 9 is the lock (and fd 8 the pool lock of a batch): the mergerfs daemon must not inherit them
   # From the control panel the daemon of a pool would live inside the panel's service, and a restart of the panel (an upgrade does that) would end it and
   # unmount the pool. In its own scope it belongs to the system instead.
   if [ "$PANEL_MODE" = 1 ] && [ -d "${SYSTEMD_DIR:-/run/systemd/system}" ] && command -v systemd-run >/dev/null 2>&1; then
-    systemd-run --scope --quiet --collect --slice=system.slice mount -T "$FSTAB" "$1" 9>&- || return 1
+    systemd-run --scope --quiet --collect --slice=system.slice mount -T "$FSTAB" "$1" 8>&- 9>&- || return 1
   else
-    mount -T "$FSTAB" "$1" 9>&- || return 1
+    mount -T "$FSTAB" "$1" 8>&- 9>&- || return 1
   fi
   mountpoint -q "$1"   # a mount that "succeeds" without mounting counts as a failure
 }

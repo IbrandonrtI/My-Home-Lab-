@@ -224,7 +224,7 @@ umount_disk_parts() {
 next_label() {
   local p n=1
   p=$(role_prefix "$1")
-  while grep -Eq "^[^#]*[[:space:]]${DISKS_DIR}/${p}${n}[[:space:]]" "$FSTAB" || [ -e "/dev/disk/by-label/${p}${n}" ]; do n=$((n + 1)); done
+  while grep -Eq "^[^#]*[[:space:]]${DISKS_DIR}/${p}${n}[[:space:]]" "$FSTAB" || [ -e "/dev/disk/by-label/${p}${n}" ] || { [ -n "$PANEL_RESERVE_DIR" ] && [ -e "$PANEL_RESERVE_DIR/label-${p}${n}" ]; }; do n=$((n + 1)); done
   echo "$p$n"
 }
 
