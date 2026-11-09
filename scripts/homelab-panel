@@ -1232,7 +1232,7 @@ def api_card(body):
     if op == "add":
         group = check_group_name(body.get("group"))
         if group in AUTOMATIC or group in PROTECTED:
-            raise Fail("The group '%s' is kept up to date by the lab. Put the card in another group." % group)
+            raise Fail("The group '%s' is kept up to date by HomeLab. Put the card in another group." % group)
         v = card_values(body)
         if any(c["name"] == v["name"] for g in services_parse(lines) for c in g["cards"]):
             raise Fail("There is already a card called '%s'. Choose another name." % v["name"])
@@ -1243,7 +1243,7 @@ def api_card(body):
         g, c = find_card(lines, body.get("group"), body.get("old"))
         pub = card_public(lines, c, g["name"])
         if pub["locked"]:
-            raise Fail("This card is kept up to date by the lab and cannot be changed here.")
+            raise Fail("This card is kept up to date by HomeLab and cannot be changed here.")
         v = card_values(body, pub["managed"])
         if v["name"] != c["name"] and any(x["name"] == v["name"] for gg in services_parse(lines) for x in gg["cards"]):
             raise Fail("There is already a card called '%s'." % v["name"])
@@ -1258,7 +1258,7 @@ def api_card(body):
         g, c = find_card(lines, body.get("group"), body.get("name"))
         pub = card_public(lines, c, g["name"])
         if pub["locked"]:
-            raise Fail("This card is kept up to date by the lab and cannot be removed here.")
+            raise Fail("This card is kept up to date by HomeLab and cannot be removed here.")
         del lines[c["start"]:c["end"]]
         tidy_blank(lines, c["start"])
         left = next((x for x in services_parse(lines) if x["name"] == g["name"]), None)
@@ -1271,10 +1271,10 @@ def api_card(body):
     elif op == "move":
         g, c = find_card(lines, body.get("group"), body.get("name"))
         if card_public(lines, c, g["name"])["locked"]:
-            raise Fail("This card is kept up to date by the lab and cannot be moved here.")
+            raise Fail("This card is kept up to date by HomeLab and cannot be moved here.")
         to = check_group_name(body.get("to") or g["name"])
         if to in AUTOMATIC or to in PROTECTED:
-            raise Fail("The group '%s' is kept up to date by the lab. Choose another group." % to)
+            raise Fail("The group '%s' is kept up to date by HomeLab. Choose another group." % to)
         block = lines[c["start"]:c["end"]]
         del lines[c["start"]:c["end"]]
         tidy_blank(lines, c["start"])
@@ -1450,11 +1450,11 @@ def api_link(body):
 
 
 def api_group(body):
-    """Groups of cards: rename or remove a whole group of the dashboard (not the ones the lab keeps up to date)."""
+    """Groups of cards: rename or remove a whole group of the dashboard (not the ones HomeLab keeps up to date)."""
     op = body.get("op")
     name = body.get("group")
     if name in AUTOMATIC or name in PROTECTED:
-        raise Fail("The group '%s' is kept up to date by the lab and cannot be changed here." % name)
+        raise Fail("The group '%s' is kept up to date by HomeLab and cannot be changed here." % name)
     tx = Tx("Group changed")
     lines = tx.get(SERVICES).split("\n")
     g = next((x for x in services_parse(lines) if x["name"] == name), None)
@@ -1474,7 +1474,7 @@ def api_group(body):
         tx.put(SETTINGS, layout_write(text, gs))
     elif op == "remove":
         if any(card_public(lines, c, name)["locked"] for c in g["cards"]):
-            raise Fail("This group has a card the lab keeps up to date. Remove the other cards one by one.")
+            raise Fail("This group has a card HomeLab keeps up to date. Remove the other cards one by one.")
         del lines[g["start"]:g["end"]]
         tx.put(SERVICES, "\n".join(lines))
         drop_layout_group(tx, name)

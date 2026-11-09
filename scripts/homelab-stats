@@ -82,17 +82,17 @@ def write_atomic(path, text, mode=0o644):
 
 # ---------------------------------------------------------------- number and time text
 def human(n):
-    """1536 -> '1.5 KB'. Binary units (the same ones the Homepage disk pills use)."""
+    """1500 -> '1.5 KB'. Decimal units, as drives are sold and as the Drives tab shows them (a 1 TB drive is 1 TB)."""
     try:
         n = float(n)
     except (TypeError, ValueError):
         return "-"
     for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024 or unit == "TB":
+        if n < 1000 or unit == "TB":
             if unit == "B":
                 return "%d B" % n
             return ("%.1f %s" % (n, unit)) if n < 100 else ("%d %s" % (round(n), unit))
-        n /= 1024.0
+        n /= 1000.0
     return "-"
 
 
@@ -115,8 +115,64 @@ def took(seconds):
     return "%d h %02d min" % (s // 3600, (s % 3600) // 60)
 
 
+# ---------------------------------------------------------------- the time zone the times are shown in
+# The server may keep UTC while you live somewhere else. The times on the Stats tab are shown where the weather city is (the city of the
+# weather pill of the dashboard): its time zone is asked from Open-Meteo once and remembered. No answer: the server's own time zone.
+TZ_FILE = os.path.join(STATE_DIR, "display-timezone")
+TZ_API = os.environ.get("HOMELAB_TZ_API", "https://api.open-meteo.com/v1/forecast")
+_tz = []
+
+
+def weather_place(hp):
+    """(latitude, longitude) of the weather pill in widgets.yaml, or None."""
+    txt = read(os.path.join(hp, "widgets.yaml")) if hp else ""
+    m = re.search(r"(?m)^\s*-?\s*openmeteo:\s*$(.*?)(?=^\s*-\s|\Z)", txt, re.S)
+    if not m:
+        return None
+    la = re.search(r"latitude:\s*(-?[0-9.]+)", m.group(1))
+    lo = re.search(r"longitude:\s*(-?[0-9.]+)", m.group(1))
+    return (la.group(1), lo.group(1)) if la and lo else None
+
+
+def display_tz():
+    """The time zone (a ZoneInfo) the times are shown in, or None for the server's own."""
+    if _tz:
+        return _tz[0]
+    name = os.environ.get("HOMELAB_DISPLAY_TZ", "")
+    if not name:
+        place = weather_place(homepage_dir())
+        saved = read(TZ_FILE).strip().split()
+        key = "%s,%s" % place if place else ""
+        if key and len(saved) >= 2 and saved[0] == key and (saved[1] != "none" or time.time() - float(saved[2] if len(saved) > 2 else 0) < 6 * 3600):
+            name = saved[1] if saved[1] != "none" else ""
+        elif key:
+            try:
+                with urllib.request.urlopen("%s?latitude=%s&longitude=%s&timezone=auto&forecast_days=1&current=temperature_2m" % ((TZ_API,) + place), timeout=5) as r:
+                    name = str(json.load(r).get("timezone") or "")
+            except (OSError, ValueError, urllib.error.URLError):
+                name = ""
+            try:
+                write_atomic(TZ_FILE, "%s %s %d\n" % (key, name or "none", int(time.time())))
+            except OSError:
+                pass
+    tz = None
+    if name:
+        try:
+            import zoneinfo
+            tz = zoneinfo.ZoneInfo(name)
+        except Exception:      # no such zone on this machine: the server's own time zone
+            tz = None
+    _tz.append(tz)
+    return tz
+
+
+def at(t):
+    """A moment (seconds since 1970) as a date and time in the display time zone."""
+    return datetime.datetime.fromtimestamp(t, display_tz())
+
+
 def clock(t):
-    return time.strftime("%I:%M %p", time.localtime(t)).lstrip("0")
+    return at(t).strftime("%I:%M %p").lstrip("0")
 
 
 # ---------------------------------------------------------------- where Homepage keeps its files
@@ -306,7 +362,23 @@ def temp_rows():
         rank = 0 if f[0].lower() == "boot" else 1 if f[0].upper().startswith("MAIN") else 2 if f[0].upper().startswith("BACKUP") else 3
         rows.append((rank, f[0], {"name": drive_name(f[0]), "label": temp_text(f[2], warn, bad)}))
     rows.sort(key=lambda r: (r[0], r[1]))
-    return [r[2] for r in rows] or [{"name": "No readings yet", "label": "-"}]
+    return [r[2] for r in rows] or [{"name": "No readings yet", "label": ""}]
+
+
+def array_health():
+    """(health text, 'RAID' or 'ZFS') of a RAID or ZFS setup that `drives` built, or None when Main is not one."""
+    preset = read(os.path.join(STATE_DIR, "preset")).split("|")[0].strip()
+    if preset.startswith("zfs-"):
+        rc, out = run(["zpool", "list", "-H", "-o", "health", os.environ.get("ZFS_POOL_NAME", "tank")], timeout=20)
+        st = out.strip().upper()
+        return (("Healthy" if st == "ONLINE" else "PROBLEM: " + (st.lower() or "no answer")) if rc == 0 else "Not checked yet"), "ZFS"
+    if preset.startswith("md-"):
+        txt = read("/proc/mdstat")
+        if not txt:
+            return "Not checked yet", "RAID"
+        bad = re.search(r"\[[U_]*_[U_]*\]", txt)
+        return ("PROBLEM: a drive is missing" if bad else "Healthy"), "RAID"
+    return None
 
 
 def pool_block(path, role, roles, old_drives, new_drives):
@@ -326,7 +398,10 @@ def pool_block(path, role, roles, old_drives, new_drives):
             st = prev["health"]          # asleep: keep what the last reading said
         new_drives.append({"label": label, "device": dev, "health": st, "temp": hot.get(dev)})
         states.append(st)
-    if not states:
+    arr = array_health() if role == "main" and not roles.get(role) else None
+    if arr:
+        health = arr[0]
+    elif not states:
         health = "No drives found"
     elif "failed" in states:
         health = "PROBLEM: check drives"
@@ -339,7 +414,7 @@ def pool_block(path, role, roles, old_drives, new_drives):
     else:
         health = "Not checked yet"
     return {"used": human(used), "free": human(free), "total": human(total), "percent": "%d%%" % pct,
-            "health": health, "drives": "%d" % len(states) if states else "-"}, (total, used)
+            "health": health, "drives": "%d" % len(states) if states else (arr[1] if arr else "-")}, (total, used)
 
 
 # ---------------------------------------------------------------- the last backup
@@ -352,14 +427,14 @@ def backup_info(now):
     ago, nice_when, short = "-", when, when
     try:
         t = time.mktime(time.strptime(when, "%Y-%m-%d %H:%M"))
-        days = (datetime.date.fromtimestamp(now) - datetime.date.fromtimestamp(t)).days
-        hm = time.strftime("%H:%M", time.localtime(t))
+        days = (at(now).date() - at(t).date()).days
+        hm = at(t).strftime("%H:%M")
         if days == 0:
             nice_when = short = "Today %s" % hm
         elif days == 1:
             nice_when = short = "Yesterday %s" % hm
         else:
-            nice_when = "%s %d, %s" % (MONTHS[time.localtime(t).tm_mon - 1], time.localtime(t).tm_mday, hm)
+            nice_when = "%s %d, %s" % (MONTHS[at(t).month - 1], at(t).day, hm)
             short = "%d days ago" % days
         age = int(now - t)
         ago = "%d min ago" % (age // 60) if age < 3600 else "%d h ago" % (age // 3600) if age < 86400 else "%d days ago" % (age // 86400)
@@ -418,14 +493,14 @@ RECENT_SONGS = 5
 
 def song_age(mtime, now):
     """'Today', 'Yesterday', '3 days ago' or 'Oct 12' for the day a song was saved."""
-    days = (datetime.date.fromtimestamp(now) - datetime.date.fromtimestamp(mtime)).days
+    days = (at(now).date() - at(mtime).date()).days
     if days <= 0:
         return "Today"
     if days == 1:
         return "Yesterday"
     if days < 7:
         return "%d days ago" % days
-    d = datetime.date.fromtimestamp(mtime)
+    d = at(mtime).date()
     return "%s %d" % (MONTHS[d.month - 1], d.day)
 
 
@@ -455,11 +530,11 @@ def count_music(root):
 
 def recent_rows(c, now):
     rows = [{"name": n, "label": song_age(t, now)} for t, n in c.get("newest", [])]
-    return rows or [{"name": "No songs yet", "label": "-"}]
+    return rows or [{"name": "No songs yet", "label": ""}]
 
 
 def music_block(quick):
-    none = {"songs": "Not found", "artists": "-", "size": "-", "folder": "Not found", "recent": [{"name": "No music folder found", "label": "-"}]}
+    none = {"songs": "Not found", "artists": "-", "size": "-", "folder": "Not found", "recent": [{"name": "No music folder found", "label": ""}]}
     root = music_dir()
     if not root:
         return none
@@ -467,7 +542,7 @@ def music_block(quick):
     if cache.get("path") == root and (quick or time.time() - cache.get("at", 0) < 600):
         c = cache
     elif quick:
-        return {"songs": "Counting...", "artists": "-", "size": "-", "folder": root, "recent": [{"name": "Counting...", "label": "-"}]}
+        return {"songs": "Counting...", "artists": "-", "size": "-", "folder": root, "recent": [{"name": "Counting...", "label": ""}]}
     else:
         try:
             n, a, b, newest = count_music(root)

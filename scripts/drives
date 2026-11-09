@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # drives - menu for the home lab storage pools.
 #
-# Main storage   = mergerfs pool at /mnt/storage (services already use this path)
-# Backup storage = mergerfs pool at /mnt/backup
+# Main pool   = mergerfs pool at /mnt/storage (services already use this path)
+# Backup pool = mergerfs pool at /mnt/backup
 # Every drive is mounted by UUID under /mnt/disks/ with a label (MAIN1, BACKUP1, ...).
 # A pool can also get one "boot drive section": a file of a fixed size on the boot drive, mounted as MAINBOOT / BACKUPBOOT.
 # It is always the LAST branch of its pool, so it is used only when the real drives are full.
@@ -57,7 +57,7 @@ else
   FSTAB="${FSTAB:-/etc/fstab}"
   DISKS_DIR="${DISKS_DIR:-/mnt/disks}"
   MAIN_POOL="${MAIN_POOL:-/mnt/storage}"
-  MIGRATE_DIR="${MIGRATE_DIR:-/mnt/storage-new}"                    # where a new ZFS / RAID setup is built and filled while the old Main storage is still in use
+  MIGRATE_DIR="${MIGRATE_DIR:-/mnt/storage-new}"                    # where a new ZFS / RAID setup is built and filled while the old Main pool is still in use
   BACKUP_POOL="${BACKUP_POOL:-/mnt/backup}"
   MAIN_PREFIX="${MAIN_PREFIX:-MAIN}"
   BACKUP_PREFIX="${BACKUP_PREFIX:-BACKUP}"
@@ -541,7 +541,7 @@ apply_pool() {   # rebuild the pool line for a role and (re)mount the pool
   sd_reload
   pool_umount "$mp"
   if [ -n "$(branches_of "$role")" ]; then mount_fstab "$mp" || return 1; fi
-  [ "$role" = main ] && snapraid_active && snapraid_conf_write   # the drives of the Main storage changed: SnapRAID has to know
+  [ "$role" = main ] && snapraid_active && snapraid_conf_write   # the drives of the Main pool changed: SnapRAID has to know
   return 0
 }
 
@@ -1103,20 +1103,20 @@ pre_change() {   # pre_change STEP...: the last stop before the first change. 0 
   dry_gate "$@"
 }
 
-# The Main storage can be left empty on purpose (every Main drive taken out). The services that use it must NOT start then: they would
+# The Main pool can be left empty on purpose (every Main drive taken out). The services that use it must NOT start then: they would
 # write into the bare folder on the boot drive. They are written down here and start again when a Main drive is back.
 main_hold_file() { printf '%s' "$STATE_DIR/main-empty-stopped"; }
 
-main_hold_apply() {   # takes the containers that use the Main storage out of STOPPED when Main has no drive
+main_hold_apply() {   # takes the containers that use the Main pool out of STOPPED when Main has no drive
   [ -z "$(branches_of main)" ] || return 0
-  array_active && return 0      # (a ZFS / RAID setup is the Main storage too)
+  array_active && return 0      # (a ZFS / RAID setup is the Main pool too)
   local keep n rest="" mine=""
   keep=$(containers_using "$MAIN_POOL" | tr '\n' ' ')
   for n in $STOPPED; do case " $keep " in *" $n "*) mine="$mine $n" ;; *) rest="$rest $n" ;; esac; done
   [ -n "${mine// /}" ] || return 0
   mkdir -p "$STATE_DIR" 2>/dev/null
   for n in $mine; do echo "$n" >>"$(main_hold_file)"; done
-  note "The Main storage is empty, so these containers stay stopped until a Main drive is added:$mine"
+  note "The Main pool is empty, so these containers stay stopped until a Main drive is added:$mine"
   STOPPED=${rest# }
 }
 
@@ -1147,7 +1147,7 @@ start_containers() {
   fi
 }
 
-main_pool_ok() {   # true when the main storage is mounted the way fstab says (or it is not set up at all)
+main_pool_ok() {   # true when the main pool is mounted the way fstab says (or it is not set up at all)
   [ -n "$(branches_of main)" ] || pool_in_fstab "$MAIN_POOL" || return 0
   mountpoint -q "$MAIN_POOL"
 }
@@ -1324,7 +1324,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   refuse_unsafe_disk "$dev"
   describe_disk "$dev"
   if [ -z "$role" ]; then
-    idx=$(choose "Use this drive for: " "Main storage (photos and files used by your services)" "Backup storage (daily copy of main)") || return 1
+    idx=$(choose "Use this drive for: " "Main pool (photos and files used by your services)" "Backup pool (daily copy of main)") || return 1
     if [ "$idx" = 0 ]; then role=main; else role=backup; fi
   fi
   pool_can_grow "$role" "this drive" || return 1
@@ -1352,22 +1352,24 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   if [ "$mode" = erase ]; then
     [ "$confirmed" = 1 ] || confirm_erase "$dev" || return 1
     $gate "Erase $dev and format it as a new drive ($base)." \
-               "Stop the containers that use the $role storage for a minute." \
-               "Add the drive to the $role storage and mount the pool again." \
+               "Stop the containers that use the $role pool for a minute." \
+               "Add the drive to the $role pool and mount the pool again." \
                "Start the containers again." && return 0
     if abort_requested; then ABORTED=1; note "Stopped before $dev was erased. Nothing was changed."; return 1; fi
     progress 10 "Erasing and formatting (cannot be stopped)"
     part=$(format_disk "$dev" "$label") || return 1
   else
     $gate "Keep the files on $dev and add the drive as it is ($base)." \
-               "Stop the containers that use the $role storage for a minute." \
-               "Add the drive to the $role storage and mount the pool again." \
+               "Stop the containers that use the $role pool for a minute." \
+               "Add the drive to the $role pool and mount the pool again." \
                "Start the containers again." && return 0
     if abort_requested; then ABORTED=1; note "Stopped before $dev was added. Nothing was changed."; return 1; fi
     progress 10 "Getting the drive ready"
     umount_disk_parts "$dev"
-    if [ "$(fs_label "$part")" != "$label" ]; then
+    local oldlabel; oldlabel=$(fs_label "$part")
+    if [ "$oldlabel" != "$label" ]; then
       e2label "$part" "$label" || die "Could not set the label on $part"
+      carry_name "$oldlabel" "$label"      # a name you chose follows the drive to its new place
     fi
   fi
 
@@ -1394,12 +1396,12 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
     fstab_set_pool "$role"      # (for the next start of the computer)
     sd_reload
     if pool_live_apply "$role"; then
-      note "The drive joined the running $role storage. No container was stopped."
+      note "The drive joined the running $role pool. No container was stopped."
       [ "$role" = main ] && snapraid_active && snapraid_conf_write
       power_apply "$mp" "$role"
       say ""
       progress 100 "Done"
-      say "Done. $(branch_name "$mp") is connected to the $role storage ($(role_pool "$role"))."
+      say "Done. $(branch_name "$mp") is connected to the $role pool ($(role_pool "$role"))."
       log "connected $label ($part, $base) to $role (live)"
       return 0
     fi
@@ -1425,7 +1427,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   power_apply "$mp" "$role"
   progress 100 "Done"
   say ""
-  say "Done. $(branch_name "$mp") is connected to the $role storage ($(role_pool "$role"))."
+  say "Done. $(branch_name "$mp") is connected to the $role pool ($(role_pool "$role"))."
   log "connected $label ($part, $base) to $role"
   return 0
 }
@@ -1547,14 +1549,14 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
 
   if [ ${#others[@]} -eq 0 ]; then
     if [ "$role" = main ]; then
-      warn "$label is the only main drive. Taking it out leaves the Main storage empty."
+      warn "$label is the only main drive. Taking it out leaves the Main pool empty."
       warn "The services that use it (Immich, Nextcloud, FileBrowser...) stay stopped until a main drive is added again. Nothing on the drive is deleted."
     else
       warn "$label is the only backup drive. Backups will stop until another backup drive is connected."
     fi
     typed "REMOVE" "Type REMOVE to continue: " || { say "Cancelled."; return 1; }
   elif { ! is_boot_section "$mp" || [ "$KEEP_IMG" = 1 ]; } && mountpoint -q "$mp" && has_data "$mp"; then
-    say "$label holds files. They will disappear from the $role storage unless they are copied to another $role drive."
+    say "$label holds files. They will disappear from the $role pool unless they are copied to another $role drive."
     if [ "$PANEL_MODE" = 1 ] && [ -n "$PANEL_COPY" ]; then copyq=$PANEL_COPY      # the control panel already asked
     elif yn "Copy them to another $role drive first (recommended)?"; then copyq=yes
     else copyq=no; fi
@@ -1568,9 +1570,9 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
 
   local -a plan=()
   [ "$drain" = 1 ] && plan+=("Copy the files of $label to another $role drive and check every file.")
-  plan+=("Stop the containers that use the $role storage for a minute.")
-  if is_boot_section "$mp"; then plan+=("Take $label out of the $role storage and delete the section file (its space goes back to the boot drive).")
-  else plan+=("Take $label out of the $role storage (the data on the drive is not touched)."); fi
+  plan+=("Stop the containers that use the $role pool for a minute.")
+  if is_boot_section "$mp"; then plan+=("Take $label out of the $role pool and delete the section file (its space goes back to the boot drive).")
+  else plan+=("Take $label out of the $role pool (the data on the drive is not touched)."); fi
   plan+=("Start the containers again." "$@")
   pre_change "${plan[@]}" && return 0
   if [ "$drain" = 1 ]; then drain_branch "$mp" || { note "Not removing $label."; return 1; }; fi
@@ -1600,9 +1602,9 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
     name_store_del "$(basename "$mp")"
     chattr -i "$mp" 2>/dev/null || true
     rmdir "$mp" 2>/dev/null || true
-    if [ "$KEEP_IMG" = 1 ]; then say "$label is out of the $role storage."; else say "$label is removed. Its space went back to the boot drive."; fi
+    if [ "$KEEP_IMG" = 1 ]; then say "$label is out of the $role pool."; else say "$label is removed. Its space went back to the boot drive."; fi
   else
-    say "$label is disconnected from the $role storage. The data on the drive was not touched."
+    say "$label is disconnected from the $role pool. The data on the drive was not touched."
   fi
   DETACHED_DEV=$dev
   return 0
@@ -1646,32 +1648,32 @@ move_flow() {
     local -a kparts; mapfile -t kparts < <(parts_of "$dev")
     if ! { [ ${#kparts[@]} -eq 1 ] && [ "$(fs_type "${kparts[0]}")" = ext4 ]; }; then note "$dev does not have one ext4 partition, so its files cannot be kept. Nothing was changed."; return 1; fi
   fi
-  say "$(branch_name "$mp") will move from $role to $newrole storage."
+  say "$(branch_name "$mp") will move from $role to $newrole pool."
   if [ "$keep" = yes ]; then
-    say "The drive keeps its files and is added to the $newrole storage as it is, so the files on it show up in the $newrole storage."
+    say "The drive keeps its files and is added to the $newrole pool as it is, so the files on it show up in the $newrole pool."
   else
     say "The drive is erased and formatted for $newrole, so the files on it are gone from the drive."
   fi
   if [ "$PANEL_MODE" != 1 ]; then yn "Continue?" || { say "Cancelled."; return 1; }; fi
   if [ "$keep" = yes ]; then
-    if [ "$PANEL_MODE" = 1 ]; then typed KEEP "Type KEEP to add the files on the drive to the $newrole storage as they are: " || { say "Cancelled. Nothing was changed."; return 1; }; fi
+    if [ "$PANEL_MODE" = 1 ]; then typed KEEP "Type KEEP to add the files on the drive to the $newrole pool as they are: " || { say "Cancelled. Nothing was changed."; return 1; }; fi
   else
     confirm_erase "$dev" || return 1
   fi
   DETACHED_DEV=""
   PROG_LO=0; PROG_HI=55      # leaving the pool is the first part of the bar, joining the other pool the rest
-  if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole storage with its files as they are." || { PROG_HI=100; return 1; }
-  else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole storage." || { PROG_HI=100; return 1; }; fi
+  if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole pool with its files as they are." || { PROG_HI=100; return 1; }
+  else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole pool." || { PROG_HI=100; return 1; }; fi
   [ "$DRY_RUN" = 1 ] && { PROG_HI=100; return 0; }
-  PENDING_NOTE="$(branch_name "$mp") already left the $role storage and was not added to the $newrole storage. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
+  PENDING_NOTE="$(branch_name "$mp") already left the $role pool and was not added to the $newrole pool. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
   PROG_LO=55; PROG_HI=100
   if ! connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1; then
     if [ "$ABORTED" = 1 ]; then      # Stop was pressed before the drive was erased: it goes back where it came from, with all its files
       PROG_LO=0; PROG_HI=100
       progress 90 "Putting the drive back"
-      say "Stopped. Putting $oldname back into the $role storage with its files..."
+      say "Stopped. Putting $oldname back into the $role pool with its files..."
       ABORT_IGNORE=1
-      if connect_flow "$dev" "$role" 2 1; then PUTBACK=1; say "$oldname is back in the $role storage."
+      if connect_flow "$dev" "$role" 2 1; then PUTBACK=1; say "$oldname is back in the $role pool."
       else note ""; note "$PENDING_NOTE"; fi
       ABORT_IGNORE=0; PENDING_NOTE=""
       return 1
@@ -1711,7 +1713,7 @@ adopt_flow() {
   fstab_snapshot
   sync_fs "$pool"
   umount "$pool" 2>/dev/null || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
-  if [ "$cur" != "$label" ]; then e2label "$part" "$label" || { fstab_rollback; mount_fstab "$pool"; start_containers; die "Could not set the label."; }; fi
+  if [ "$cur" != "$label" ]; then e2label "$part" "$label" || { fstab_rollback; mount_fstab "$pool"; start_containers; die "Could not set the label."; }; carry_name "$cur" "$label"; fi
   ensure_mp "$mp"
   fstab_remove_mp "$pool"
   fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"
@@ -1773,7 +1775,7 @@ status_flow() {
     fi
   done
   if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$TEST_MODE" != 1 ] && ! array_active; then
-    say "Note: main storage is still one plain drive. Run  sudo drives  and choose Settings and upgrades > Convert to turn it into a pool."
+    say "Note: main pool is still one plain drive. Run  sudo drives  and choose Settings and upgrades > Convert to turn it into a pool."
   fi
   for role in main backup; do
     [ -n "$(branches_of "$role")" ] || continue
@@ -1891,7 +1893,7 @@ remount_flow() {
     HOLD_HINT="They stay stopped on purpose: with a main drive missing they would write to an incomplete storage. Plug the drive in and run  sudo drives remount  again. If it is dead:  sudo drives replace"
     return 1
   fi
-  # main storage: the pool, or the plain drive before it is converted
+  # main pool: the pool, or the plain drive before it is converted
   if pool_in_fstab "$MAIN_POOL"; then
     mount_fstab "$MAIN_POOL" || { echo "The main pool did not mount. Check the cable."; return 1; }
   fi
@@ -1987,8 +1989,8 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
   fi
   typed "RESTORE" "Type RESTORE (capitals) to copy these $n files: " || { say "Cancelled. Nothing was copied."; return 1; }
   if [ -z "${STOPPED// /}" ]; then   # the check above changes nothing: the containers are stopped only now, for the copy
-    pre_change "Stop the containers that use the main storage." \
-               "Copy the $n missing files ($(human "$bytes")) from the backup into the main storage. Files already there are never overwritten." \
+    pre_change "Stop the containers that use the main pool." \
+               "Copy the $n missing files ($(human "$bytes")) from the backup into the main pool. Files already there are never overwritten." \
                "Check that every file is there, then start the containers again." && return 0
     stop_containers "$MAIN_POOL"
     HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo drives remount  to start them without restoring."
@@ -2029,7 +2031,7 @@ restore_flow() {   # restore only the missing files from the backup into the mai
   need_tools || return 1
   mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive and run sudo drives remount first."; return 1; }
   local src
-  src=$(find_backup_source) || { note "No backup copy of the main storage was found, so there is nothing to restore from."; return 1; }
+  src=$(find_backup_source) || { note "No backup copy of the main pool was found, so there is nothing to restore from."; return 1; }
   show_backup_source "$src" || { say "Cancelled."; return 1; }
   restore_files "$src" || return 1
   [ "$DRY_RUN" = 1 ] && return 0
@@ -2060,10 +2062,10 @@ replace_flow() {
   local shown; shown=$(branch_name "$mp")
 
   say ""
-  say "$shown will be replaced by a new drive. The new drive takes its place in the $role storage and is named by what it is."
+  say "$shown will be replaced by a new drive. The new drive takes its place in the $role pool and is named by what it is."
   if [ "$role" = main ]; then
     say "The files that were on the dead drive are copied back from the backup. Only missing files are copied."
-    src=$(find_backup_source) || { note "No backup copy of the main storage was found. Nothing was changed."; return 1; }
+    src=$(find_backup_source) || { note "No backup copy of the main pool was found. Nothing was changed."; return 1; }
     show_backup_source "$src" || { say "Cancelled. Nothing was changed."; return 1; }
     say "Measuring the backup copy (this can take a minute)..."
     need=$(du -sb "$src/main" 2>/dev/null | awk '{print $1}'); need=${need:-0}
@@ -2086,9 +2088,9 @@ replace_flow() {
     typed "CONTINUE" "Type CONTINUE to use it anyway, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
   fi
   confirm_erase "$dev" || return 1
-  pre_change "Stop the containers that use the $role storage." \
+  pre_change "Stop the containers that use the $role pool." \
              "Erase $dev and format it as the new drive for $shown." \
-             "Add it to the $role storage and mount the pool again." \
+             "Add it to the $role pool and mount the pool again." \
              "$([ "$role" = main ] && echo "Copy the missing files back from the backup, then start the containers." || echo "Start the containers. The next backup run fills the new drive.")" && return 0
 
   stop_containers "$pool"
@@ -2266,7 +2268,7 @@ pool_reconfigure() {   # pool_reconfigure main|backup: the saved policy, order o
     say "It is in use right now; nothing had to stop."
     return 0
   fi
-  if mountpoint -q "$pool" && yn "The $role storage cannot take the change while it runs. Apply it now? Its containers stop for a minute while the pool mounts again."; then
+  if mountpoint -q "$pool" && yn "The $role pool cannot take the change while it runs. Apply it now? Its containers stop for a minute while the pool mounts again."; then
     if ! ( busy_gate ); then settings_rollback; return 1; fi   # a subshell: when you answer no it stops here and the change is undone
     stop_containers "$pool"
     if apply_pool "$role"; then
@@ -2329,18 +2331,18 @@ fillorder_flow() {   # how a pool picks a drive for a new file, and which drive 
     0|1)
       local want=ff; [ "$act" = 1 ] && want=mfs
       if [ "$now" = "$want" ] && pool_has_limits "$pool"; then
-        settings_discard; say "The $role storage already works like that. Nothing was changed."; return 0
+        settings_discard; say "The $role pool already works like that. Nothing was changed."; return 0
       fi
-      dry_gate "Save the setting '$(policy_text "$want")' for the $role storage." \
+      dry_gate "Save the setting '$(policy_text "$want")' for the $role pool." \
                "Use it in the running pool if possible (nothing stops). Otherwise you are asked before the pool is mounted again." && { settings_discard; return 0; }
       if [ "$want" = ff ]; then setting_del policy "$role"; else setting_put policy "$role" mfs; fi
       pool_reconfigure "$role" || { settings_rollback; return 1; }
       settings_discard
-      say ""; say "Done. The $role storage now puts a new file on $(policy_text "$want" | sed 's/^[^(]*(a new file goes to //; s/)$//')."
+      say ""; say "Done. The $role pool now puts a new file on $(policy_text "$want" | sed 's/^[^(]*(a new file goes to //; s/)$//')."
       log "pool $role policy $want"
       ;;
     2)
-      if [ ${#real[@]} -lt 2 ]; then settings_discard; note "The $role storage has only one drive, so there is no order to change. Nothing was changed."; return 1; fi
+      if [ ${#real[@]} -lt 2 ]; then settings_discard; note "The $role pool has only one drive, so there is no order to change. Nothing was changed."; return 1; fi
       for mp in "${real[@]}"; do
         mps+=("$mp")
         items+=("$(branch_name "$mp")   [position $(( ${#mps[@]} ))]")
@@ -2356,7 +2358,7 @@ fillorder_flow() {   # how a pool picks a drive for a new file, and which drive 
       setting_put order "$role" "$cur"
       pool_reconfigure "$role" || { settings_rollback; return 1; }
       settings_discard
-      say ""; say "Done. Order of the drives in the $role storage: $(order_text "$role")"
+      say ""; say "Done. Order of the drives in the $role pool: $(order_text "$role")"
       log "pool $role order $cur"
       ;;
   esac
@@ -2403,7 +2405,7 @@ limit_flow() {   # how much free space a pool drive keeps before the pool uses t
   if ! mountpoint -q "$mp"; then note "$(branch_name "$mp") is not connected. Reconnect it first (sudo drives remount). Nothing was changed."; return 1; fi
   size=$(total_bytes "$mp")
   say ""
-  say "$(branch_name "$mp") is $(human "$size"). It keeps this much free before the $role storage uses the next drive: $(limit_text "$mp")"
+  say "$(branch_name "$mp") is $(human "$size"). It keeps this much free before the $role pool uses the next drive: $(limit_text "$mp")"
   say "(A drive that is nearly full works badly; a limit from 1% to 50% of the drive is accepted. Type  auto  for the automatic ${POOL_FREE_PERCENT}%.)"
   new=$(ask "New free-space limit (for example 50GB or 8%; Enter cancels): ")
   [ -n "$new" ] || { say "Cancelled. Nothing was changed."; return 1; }
@@ -2415,7 +2417,7 @@ limit_flow() {   # how much free space a pool drive keeps before the pool uses t
   else
     parsed=$(parse_limit "$new" "$size") || { settings_discard; note "Nothing was changed."; return 1; }
     if [ "$(setting_get limit "$label")" = "$parsed" ]; then settings_discard; say "That is already the limit. Nothing was changed."; return 0; fi
-    dry_gate "Keep $new free on $(branch_name "$mp") before the $role storage uses the next drive." "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
+    dry_gate "Keep $new free on $(branch_name "$mp") before the $role pool uses the next drive." "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
     setting_put limit "$label" "$parsed"
   fi
   pool_reconfigure "$role" || { settings_rollback; return 1; }
@@ -2558,7 +2560,7 @@ bootsection_attach() {   # bootsection_attach ROLE REUSE: the section file of th
   name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
   timeshift_protect
   say ""
-  say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
+  say "Done. $(branch_name "$mp") is part of the $role pool ($(role_pool "$role")). It is the last place that storage uses."
   log "connected $label ($img) to $role"
   crit_release
   return 0
@@ -2581,11 +2583,11 @@ bootsection_flow() {
     fi
     return 1
   fi
-  idx=$(choose "Add a boot drive section to which storage? " "Main storage (photos and files used by your services)" "Backup storage (daily copy of main)") || return 1
+  idx=$(choose "Add a boot drive section to which storage? " "Main pool (photos and files used by your services)" "Backup pool (daily copy of main)") || return 1
   if [ "$idx" = 0 ]; then role=main; else role=backup; fi
   other=$(other_role "$role")
   if [ -n "$(boot_section_of "$role")" ]; then
-    say "The $role storage already has a boot drive section: $(branch_name "$(boot_section_of "$role")")."
+    say "The $role pool already has a boot drive section: $(branch_name "$(boot_section_of "$role")")."
     say "To change its size, remove it (sudo drives > Add or remove drives > Disconnect) and add it again."
     return 1
   fi
@@ -2595,7 +2597,7 @@ bootsection_flow() {
 
   if [ -f "$img" ]; then
     old=$(stat -c %s "$img")
-    say "A boot drive section of $(pretty_size "$old") that was used for the $role storage before is still saved."
+    say "A boot drive section of $(pretty_size "$old") that was used for the $role pool before is still saved."
     idx=$(choose "What should I do? " "Use it again, with its files" "Delete it and make a new one") || return 1
     [ "$idx" = 0 ] && reuse=1
   fi
@@ -2605,7 +2607,7 @@ bootsection_flow() {
     say "!! USING PART OF THE BOOT DRIVE !!"
     say "  - The boot drive also holds the operating system and your apps. If it fails, you lose everything in this section too."
     say "  - The space is taken from the boot drive right away and stays reserved, even while the section is empty."
-    say "  - The section is the LAST place the $role storage uses. It gets files only when the other $role drives are full."
+    say "  - The section is the LAST place the $role pool uses. It gets files only when the other $role drives are full."
     if [ "$role" = backup ]; then
       say "  - A backup on the boot drive helps if a main drive dies, but NOT if the boot drive dies: the backup goes with it."
     fi
@@ -2640,8 +2642,8 @@ bootsection_flow() {
     say "The section will have $(pretty_size "$bytes") ($(role_pool "$role"), last in line)."
     yn "Make it now?" || { say "Cancelled. Nothing was changed."; return 1; }
     pre_change "Reserve $(pretty_size "$bytes") on the boot drive and format it as a new drive section." \
-               "Stop the containers that use the $role storage for a minute." \
-               "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+               "Stop the containers that use the $role pool for a minute." \
+               "Add the section to the $role pool as its last drive, then start the containers again." && return 0
     [ "$old" -gt 0 ] && rm -f "$img"
     if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(pretty_size "$bytes") on the boot drive."; fi
     if ! mkfs.ext4 -F -q -L "$label" -m 0 "$img" >&2; then rm -f "$img"; die "Could not format the section."; fi
@@ -2650,8 +2652,8 @@ bootsection_flow() {
 
   if [ "$reuse" = 1 ]; then
     pre_change "Use the saved boot drive section again, with its files." \
-               "Stop the containers that use the $role storage for a minute." \
-               "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+               "Stop the containers that use the $role pool for a minute." \
+               "Add the section to the $role pool as its last drive, then start the containers again." && return 0
   fi
   bootsection_attach "$role" "$reuse"
 }
@@ -2681,9 +2683,9 @@ panel_bootadd_flow() {   # the control panel: part of the boot drive becomes a d
   command -v fallocate >/dev/null 2>&1 || { note "The tool 'fallocate' is missing (package util-linux)."; return 1; }
   lim=$(bootsection_limits); read -r min max unit small <<<"$lim"
   if [ "$small" = 1 ]; then note "The boot drive is too small to lend a part of it for a storage pool. Nothing was changed."; return 1; fi
-  if [ -n "$(boot_section_of "$role")" ]; then note "The $role storage already has a boot drive section. Take it out first to make a different size. Nothing was changed."; return 1; fi
+  if [ -n "$(boot_section_of "$role")" ]; then note "The $role pool already has a boot drive section. Take it out first to make a different size. Nothing was changed."; return 1; fi
   label="$(role_prefix "$role")BOOT"; mp="$DISKS_DIR/$label"; img="$BOOT_SECTION_DIR/$role.img"
-  if [ -f "$img" ]; then note "A boot drive section that was used for the $role storage before is still saved. Use it or delete it with  sudo drives  on the server. Nothing was changed."; return 1; fi
+  if [ -f "$img" ]; then note "A boot drive section that was used for the $role pool before is still saved. Use it or delete it with  sudo drives  on the server. Nothing was changed."; return 1; fi
   pool_can_grow "$role" "a section" || return 1
   [[ "$units" =~ ^[0-9]{1,6}$ ]] || { note "Please choose a size in $BOOT_UNIT_NAME. Nothing was changed."; return 1; }
   bytes=$(( units * unit ))
@@ -2692,8 +2694,8 @@ panel_bootadd_flow() {   # the control panel: part of the boot drive becomes a d
   typed "CONTINUE" "Type CONTINUE to go on: " || { say "Cancelled. Nothing was changed."; return 1; }
   mkdir -p "$BOOT_SECTION_DIR"; chmod 700 "$BOOT_SECTION_DIR" 2>/dev/null || true
   pre_change "Reserve $(pretty_size "$bytes") on the boot drive and format it as a new drive section." \
-             "Stop the containers that use the $role storage for a minute." \
-             "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+             "Stop the containers that use the $role pool for a minute." \
+             "Add the section to the $role pool as its last drive, then start the containers again." && return 0
   progress_for "$PROG_ITEM" 10 "Reserving the space"
   if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(pretty_size "$bytes") on the boot drive."; fi
   if ! mkfs.ext4 -F -q -L "$label" -m 0 "$img" >&2; then rm -f "$img"; die "Could not format the section."; fi
@@ -2707,10 +2709,10 @@ bootmove_flow() {   # the control panel: a boot drive section goes to the other 
   [ "$PANEL_MODE" = 1 ] || { note "A boot drive section is moved in the Drives tab of the dashboard. Here: remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; }
   [ -f "$img" ] || die "The file behind $oldname is not there. Nothing was changed."
   size=$(stat -c %s "$img")
-  if [ -n "$(boot_section_of "$newrole")" ]; then note "The $newrole storage already has a boot drive section. Nothing was changed."; return 1; fi
+  if [ -n "$(boot_section_of "$newrole")" ]; then note "The $newrole pool already has a boot drive section. Nothing was changed."; return 1; fi
   pool_can_grow "$newrole" "a section" || return 1
   newlabel="$(role_prefix "$newrole")BOOT"; newimg="$BOOT_SECTION_DIR/$newrole.img"
-  [ ! -e "$newimg" ] || { note "A saved boot drive section for the $newrole storage is in the way ($newimg). Nothing was changed."; return 1; }
+  [ ! -e "$newimg" ] || { note "A saved boot drive section for the $newrole pool is in the way ($newimg). Nothing was changed."; return 1; }
   if [ "$keep" = yes ]; then
     typed KEEP "Type KEEP to move the section with its files: " || { say "Cancelled. Nothing was changed."; return 1; }
     KEEP_IMG=1
@@ -2718,12 +2720,12 @@ bootmove_flow() {   # the control panel: a boot drive section goes to the other 
     typed ERASE "Type ERASE to move the section as a new, empty one: " || { say "Cancelled. Nothing was changed."; return 1; }
     KEEP_IMG=0
   fi
-  say "$oldname moves from the $role storage to the $newrole storage."
+  say "$oldname moves from the $role pool to the $newrole pool."
   PROG_LO=0; PROG_HI=55
-  detach_branch "$mp" "Then put the section into the $newrole storage." || { PROG_HI=100; KEEP_IMG=0; return 1; }
+  detach_branch "$mp" "Then put the section into the $newrole pool." || { PROG_HI=100; KEEP_IMG=0; return 1; }
   [ "$DRY_RUN" = 1 ] && { PROG_HI=100; KEEP_IMG=0; return 0; }
   KEEP_IMG=0
-  PENDING_NOTE="$oldname already left the $role storage and was not added to the $newrole storage."
+  PENDING_NOTE="$oldname already left the $role pool and was not added to the $newrole pool."
   PROG_LO=55; PROG_HI=100
   if [ "$keep" = yes ]; then
     mv "$img" "$newimg" || die "Could not move the section file. It is at $img."
@@ -2780,7 +2782,7 @@ balance_main() {
     mps+=("$mp")
   done
   say ""
-  say "Used space in the $role storage now (the boot drive section is left out: it is only used when the others are full):"
+  say "Used space in the $role pool now (the boot drive section is left out: it is only used when the others are full):"
   balance_table "${mps[@]}"
   lo=100; hi=0
   for mp in "${mps[@]}"; do
@@ -2833,8 +2835,8 @@ balance_main() {
   say "Your services keep running while the files are copied; they stop for a short time at the end to catch the last changes."
   say "A big move can take hours. New files still go where the fill order says (see: sudo drives fillorder)."
   yn "Move the files now?" || { say "Cancelled. Nothing was changed."; return 1; }
-  pre_change "Copy the chosen files ($(human "$total")) between the drives of the $role storage, while the services run." \
-             "Stop the containers that use the $role storage for a short time and copy the last changes." \
+  pre_change "Copy the chosen files ($(human "$total")) between the drives of the $role pool, while the services run." \
+             "Stop the containers that use the $role pool for a short time and copy the last changes." \
              "Check every copied file, then remove the old copies, and start the containers again." && return 0
   for i in "${!steps[@]}"; do
     [ "${cnt[$i]}" -gt 0 ] || continue
@@ -2875,7 +2877,7 @@ balance_main() {
   start_containers
   log "balanced $role: moved $total bytes ($files files)"
   say ""
-  say "Done. Used space in the $role storage now:"
+  say "Done. Used space in the $role pool now:"
   balance_table "${mps[@]}"
   return 0
 }
@@ -2938,12 +2940,12 @@ resize_flow() {
   if [ "$shrink" = 1 ]; then
     say ""
     say "Making the section smaller rewrites its file system. It is safe when nothing goes wrong, but if the power fails halfway the section can be damaged."
-    say "The files in it are in the backup only if the main storage is backed up (a section of the backup storage has no second copy)."
+    say "The files in it are in the backup only if the main pool is backed up (a section of the backup pool has no second copy)."
     typed "CONTINUE" "Type CONTINUE to go on, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
   fi
   yn "Change the section from $(pretty_size "$cur") to $(pretty_size "$new_gb") now? The $role containers stop for a minute or more." || { say "Cancelled. Nothing was changed."; return 1; }
-  pre_change "Stop the containers that use the $role storage." \
-             "Unmount the $role storage and $(branch_name "$mp"), check its file system." \
+  pre_change "Stop the containers that use the $role pool." \
+             "Unmount the $role pool and $(branch_name "$mp"), check its file system." \
              "$([ "$shrink" = 1 ] && echo "Shrink the file system, then the file, to $(pretty_size "$new_gb")." || echo "Make the file $(pretty_size "$new_gb") big and grow the file system into it.")" \
              "Mount everything again, compare the files, and start the containers." && return 0
   before_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l); before_used=$used
@@ -2969,7 +2971,7 @@ resize_flow() {
   fi
   e2fsck -fn "$img" >/dev/null 2>&1 || warn "The check after the change reports problems. Run: sudo drives check --full"
   if ! mount_fstab "$mp"; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not mount the section again. Run  sudo drives remount"; fi
-  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role storage again. Run  sudo drives remount"; fi
+  if ! mount_fstab "$pool"; then start_containers; die "Could not mount the $role pool again. Run  sudo drives remount"; fi
   after_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l)
   start_containers
   name_store_put "$(basename "$mp")" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
@@ -3016,6 +3018,16 @@ chosen_name_del() {   # chosen_name_del LABEL
   awk -v k="$1" '{ key = $0; sub(/=.*/, "", key); gsub(/^[ \t]+|[ \t]+$/, "", key) } !(key == k && $0 !~ /^[ \t]*#/)' "$DRIVE_NAMES_FILE" >"$tmp"
   cat "$tmp" >"$DRIVE_NAMES_FILE" || true
   rm -f "$tmp"
+}
+
+carry_name() {   # carry_name OLDLABEL NEWLABEL: a drive that gets a new label keeps the name you chose for it (names are kept by label)
+  local nm
+  [ -n "$1" ] && [ "$1" != "$2" ] || return 0
+  nm=$(chosen_name "$1")
+  [ -n "$nm" ] || return 0
+  [ -z "$(chosen_name "$2")" ] || return 0
+  chosen_name_put "$2" "$nm"
+  chosen_name_del "$1"
 }
 
 rename_flow() {   # give a pool drive a name of your own (kept by the drive's label, so it stays when the drive is plugged in again)
@@ -3114,7 +3126,7 @@ power_action() {   # power_action sleep|wake: pick a spinning hard drive and put
   name=$(disk_base_name "$dev"); role=$(disk_role_of "$dev"); state=$(power_state "$dev")
   if [ "$verb" = sleep ]; then
     if [ "$state" = asleep ]; then say "$name is already asleep. Nothing was changed."; return 0; fi
-    case "$role" in main|backup) say "Note: $name is in the $role storage. Anything that reads it wakes it up again at once$([ "$role" = main ] && echo " (main drives are set to never sleep)")." ;; esac
+    case "$role" in main|backup) say "Note: $name is in the $role pool. Anything that reads it wakes it up again at once$([ "$role" = main ] && echo " (main drives are set to never sleep)")." ;; esac
     dry_gate "Tell $dev ($name) to go to sleep (spin down)." && return 0
     hdparm -y "$dev" >/dev/null 2>&1 || true
     log "sleep $dev ($name)"
@@ -3293,7 +3305,7 @@ actions_menu() {
 sync_filebrowser() {
   [ "$TEST_MODE" = 1 ] && return 0
   [ "$DRY_RUN" = 1 ] && return 0
-  # the Homepage drive pills ("Main pool" / "Connect Backup Drive" ...) follow the pools
+  # the Homepage drive pills ("Main Pool" / "Connect Backup Drive" ...) follow the pools
   command -v homelab-sample >/dev/null 2>&1 && { homelab-sample widgets 9>&- >/dev/null 2>&1 || true; }
   command -v homelab-setup >/dev/null 2>&1 || return 0
   # Homepage can only measure a pool that is mounted inside its own container: after a pool was mounted or changed it must see it
@@ -3341,7 +3353,7 @@ drives_menu() {
     case "$c" in
       1) intro_ask "Connect a new drive" \
            "Next I list the drives that are plugged in and not used yet. You pick one," \
-           "then you say if it is for the Main storage or the Backup storage." \
+           "then you say if it is for the Main pool or the Backup pool." \
            "If the drive has files on it you can keep them. Nothing is erased without you typing ERASE." &&
          { connect_flow && sync_filebrowser; } ;;
       2) intro_ask "Disconnect a drive" \
@@ -3354,7 +3366,7 @@ drives_menu() {
            "then the drive is erased and formatted for the other storage." &&
          { move_flow && sync_filebrowser; } ;;
       4) intro "Use part of the boot drive for a pool" \
-           "Next you choose the Main or the Backup storage, read the warning and choose the size." \
+           "Next you choose the Main or the Backup pool, read the warning and choose the size." \
            "You are asked again before anything is made. Cancel any time by pressing Enter." &&
          { bootsection_flow && sync_filebrowser; } ;;
       5) intro "Take all drives out of the pools" \
@@ -3393,7 +3405,7 @@ problem_menu() {
          { replace_flow && sync_filebrowser; } ;;
       3) intro "Copy back only the files that are missing from the backup" \
            "Next I look for the backup copy and show what it holds." \
-           "Only files that are missing in the main storage are copied back. Nothing is overwritten." &&
+           "Only files that are missing in the main pool are copied back. Nothing is overwritten." &&
          { restore_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
@@ -3424,7 +3436,7 @@ settings_menu() {
            "${POOL_FREE_PERCENT}% of it is free, then the next one, or it can spread by free space. No files are moved." &&
          fillorder_flow ;;
       3) intro "Convert the current single data drive into the main pool" \
-           "Only for older setups where one drive is mounted directly as the main storage." \
+           "Only for older setups where one drive is mounted directly as the main pool." \
            "Next you see what changes and are asked before anything is done." &&
          { adopt_flow && sync_filebrowser; } ;;
       4) intro "Even out the used space (balance)" \
@@ -3573,7 +3585,7 @@ snapraid_conf_write() {   # the SnapRAID settings: the protection drives, a list
   local mp i=0 n=0
   mkdir -p "$(dirname "$SNAPRAID_CONF")" "$SNAPRAID_CONTENT_DIR" 2>/dev/null || true
   {
-    echo "# Written by 'sudo drives preset'. It is written again whenever the drives of the Main storage change."
+    echo "# Written by 'sudo drives preset'. It is written again whenever the drives of the Main pool change."
     for mp in $(parity_mounts); do
       i=$((i + 1))
       if [ "$i" -eq 1 ]; then echo "parity $mp/snapraid.parity"; else echo "$i-parity $mp/snapraid.$i-parity"; fi
@@ -3624,8 +3636,8 @@ snapraid_flow() {   # snapraid status|diff|sync|scrub: SnapRAID by hand, with th
 }
 
 
-# ---------- moving the Main storage into a new ZFS / RAID setup ----------
-# The new setup is built on spare drives and filled from the old Main storage while that is still in use (the containers are stopped).
+# ---------- moving the Main pool into a new ZFS / RAID setup ----------
+# The new setup is built on spare drives and filled from the old Main pool while that is still in use (the containers are stopped).
 # Only when the copy is checked does the new setup take the Main path; then the old Main drives are released (their files are not touched).
 ARRAY_MOUNT=""      # where zfs_build / md_build mount the new setup (empty = the Main path)
 
@@ -3640,10 +3652,10 @@ fstab_move_mp() {   # fstab_move_mp OLD NEW: the line that mounts at OLD mounts 
   log "fstab move mount point: $1 -> $2"
 }
 
-migrate_copy() {   # copy everything from the Main storage into the new setup, then compare
+migrate_copy() {   # copy everything from the Main pool into the new setup, then compare
   local rc=0 changed
   local -a skip=(--exclude=/.mergerfs --exclude=/lost+found)
-  say "Copying the files of the Main storage into the new setup. This can take a long time on big drives..."
+  say "Copying the files of the Main pool into the new setup. This can take a long time on big drives..."
   rsync -aHAX --numeric-ids "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- >&2 || rc=$?
   case $rc in 0|24) ;; *) warn "The copy stopped with an error (code $rc)."; return 1 ;; esac
   say "Checking the copy..."
@@ -3652,7 +3664,7 @@ migrate_copy() {   # copy everything from the Main storage into the new setup, t
   say "The copy is complete and matches."
 }
 
-migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setup apart again (the old Main storage was not changed)
+migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setup apart again (the old Main pool was not changed)
   local id=$1 d; shift
   pool_umount "$MIGRATE_DIR" || true
   if [ "$(preset_kind "$id")" = zfs ]; then
@@ -3668,7 +3680,7 @@ migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setu
   rmdir "$MIGRATE_DIR" 2>/dev/null || true
 }
 
-migrate_retire_main() {   # the old Main drives leave the Main storage; their files stay on them and they are spare drives now
+migrate_retire_main() {   # the old Main drives leave the Main pool; their files stay on them and they are spare drives now
   local mp
   for mp in "$@"; do
     mountpoint -q "$mp" && { umount "$mp" 2>/dev/null || umount -l "$mp"; }
@@ -3704,7 +3716,7 @@ migrate_switch() {   # migrate_switch ID: the new setup (mounted at MIGRATE_DIR,
   if [ "$ok" != 1 ]; then
     if [ "$kind" = zfs ]; then zfs set mountpoint="$MIGRATE_DIR" "$ZFS_POOL_NAME" >/dev/null 2>&1 || true; fi
     fstab_rollback
-    apply_pool main || warn "The old Main storage could not be mounted again. Run  sudo drives remount"
+    apply_pool main || warn "The old Main pool could not be mounted again. Run  sudo drives remount"
     return 1
   fi
   migrate_retire_main "${old_mps[@]}"
@@ -3743,9 +3755,9 @@ disk_stable_name() {   # disk_stable_name /dev/sdX -> /dev/disk/by-id/ata-MODEL_
   done
   echo "$1"
 }
-array_guard() {   # array_guard: 0 when the command may go on; says why not when the Main storage is a ZFS / RAID array
+array_guard() {   # array_guard: 0 when the command may go on; says why not when the Main pool is a ZFS / RAID array
   array_active || return 0
-  note "The Main storage is a $(preset_title "$(preset_current)") array (built with  sudo drives preset)."
+  note "The Main pool is a $(preset_title "$(preset_current)") array (built with  sudo drives preset)."
   note "This command is for pools of separate drives, so it does not apply to an array."
   note "Look at the array:  sudo drives status.   To take it apart (this DELETES its files):  sudo drives release."
   return 1
@@ -3896,18 +3908,18 @@ array_add_spare() {   # array_add_spare NAME: the drive waits and takes over by 
 }
 array_add_cache() { zpool add -f "$ZFS_POOL_NAME" cache "$1" 9>&- >&2; }
 
-array_release_flow() {   # release when the Main storage is a ZFS / RAID array: the array and everything on it is deleted
+array_release_flow() {   # release when the Main pool is a ZFS / RAID array: the array and everything on it is deleted
   local id d m
   local -a disks=()
   id=$(preset_current)
   mapfile -t disks < <(array_disks)
-  say "The Main storage ($MAIN_POOL) is a $(preset_title "$id") array on these drives:"
+  say "The Main pool ($MAIN_POOL) is a $(preset_title "$id") array on these drives:"
   for d in ${disks[@]+"${disks[@]}"}; do say "  - $(disk_base_name "$d")  ($d)"; done
   [ ${#disks[@]} -gt 0 ] || say "  (the drives could not be found right now)"
   say ""
   say "!! Releasing an array DELETES THE ARRAY AND EVERYTHING STORED ON IT. This cannot be undone. !!"
   say "The drives are emptied and can be used again (for a new ready-made setup, or sudo drives connect)."
-  say "The Backup storage ($BACKUP_POOL) is not touched: make sure it holds a recent copy of what you want to keep."
+  say "The Backup pool ($BACKUP_POOL) is not touched: make sure it holds a recent copy of what you want to keep."
   yn "Delete the array and all its files?" || { say "Cancelled. Nothing was changed."; return 1; }
   typed DESTROY "Type DESTROY (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
   pre_change "Stop the containers that use the storage." \
@@ -3996,7 +4008,7 @@ preset_list_flow() {   # preset: what can be built, and what the empty drives th
     say ""
   done
   say "Build one with:  sudo drives preset NAME      (for example  sudo drives preset snapraid1  or  sudo drives preset raidz1;  add --dry-run to see the plan first)"
-  say "A ZFS or RAID setup becomes the Main storage. If Main has drives already, the files of Main are copied into the new setup first, and the old Main drives are released afterwards (their files are not erased)."
+  say "A ZFS or RAID setup becomes the Main pool. If Main has drives already, the files of Main are copied into the new setup first, and the old Main drives are released afterwards (their files are not erased)."
   if [ -n "$(preset_current)" ]; then say "Built here: $(preset_title "$(preset_current)")"; fi
 }
 
@@ -4087,14 +4099,14 @@ preset_flow() {   # preset_flow ID
   hint=$(preset_tool_hint "$id")
   if [ -n "$hint" ]; then note "$(preset_title "$id") needs a program that is not installed yet. Install it with:  $hint"; return 1; fi
   if array_active; then
-    note "The Main storage is already a $(preset_title "$(preset_current)") array."
+    note "The Main pool is already a $(preset_title "$(preset_current)") array."
     note "To start over, take it apart first:  sudo drives release   (this DELETES the array and its files)."
     return 1
   fi
   if preset_is_array "$id" && [ -n "$(branches_of main)" ] && [ -z "$(parity_mounts)" ]; then
-    migrate=1      # the Main storage has drives: the new setup is built on spare drives, the files are copied over, then the old drives are released
+    migrate=1      # the Main pool has drives: the new setup is built on spare drives, the files are copied over, then the old drives are released
     if ! main_is_pool; then
-      note "The Main storage is not mounted right now, so its files cannot be copied into a new setup. Mount it first:  sudo drives remount"
+      note "The Main pool is not mounted right now, so its files cannot be copied into a new setup. Mount it first:  sudo drives remount"
       return 1
     fi
     need_cmds rsync || return 1
@@ -4176,10 +4188,10 @@ preset_flow() {   # preset_flow ID
   if [ -n "$WIZARD_KEEP" ]; then case "$id" in snapraid1|snapraid2)      # (the protection drives are not the biggest ones here: the space is what the data drives hold)
     usable=0; for d in "${main_devs[@]}"; do usable=$((usable + $(disk_size_bytes "$d"))); done ;; esac; fi
   for s in "${sizes[@]}"; do total=$((total + s)); done
-  if [ "$migrate" = 1 ]; then      # will everything of the Main storage fit into the new setup? (checked before anything is changed)
+  if [ "$migrate" = 1 ]; then      # will everything of the Main pool fit into the new setup? (checked before anything is changed)
     main_used=$(pool_used_bytes); main_need=$(migrate_need_bytes "$main_used")
     if [ "$usable" -lt "$main_need" ]; then
-      note "The new setup is too small. $(preset_title "$id") on these drives holds about $(pretty_size "$usable"), but the Main storage has $(pretty_size "$main_used") of files (about $(pretty_size "$main_need") are needed for the copy)."
+      note "The new setup is too small. $(preset_title "$id") on these drives holds about $(pretty_size "$usable"), but the Main pool has $(pretty_size "$main_used") of files (about $(pretty_size "$main_need") are needed for the copy)."
       note "Nothing was changed. Choose more or bigger drives, or a setup that gives more room."
       return 1
     fi
@@ -4233,10 +4245,10 @@ preset_flow() {   # preset_flow ID
   for d in "${main_devs[@]}"; do
     i=$((i + 1))
     printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$d")" "$d" "$(pretty_size "$(disk_size_bytes "$d")")" \
-      "$(if preset_is_array "$id"; then echo "Main storage, array member $i"; else echo "Main storage, drive $i"; fi)$(in_list "$d" "$WIZARD_KEEP" && echo "  [its files are KEPT]")"
+      "$(if preset_is_array "$id"; then echo "Main pool, array member $i"; else echo "Main pool, drive $i"; fi)$(in_list "$d" "$WIZARD_KEEP" && echo "  [its files are KEPT]")"
   done
   if [ "$id" = mirror ]; then
-    printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$bk_dev")" "$bk_dev" "$(pretty_size "$(disk_size_bytes "$bk_dev")")" "Backup storage (the nightly copy)$(in_list "$bk_dev" "$WIZARD_ERASE" && echo "  [ERASED: it has files]")"
+    printf '  %-28s %-12s %-9s %s\n' "$(disk_base_name "$bk_dev")" "$bk_dev" "$(pretty_size "$(disk_size_bytes "$bk_dev")")" "Backup pool (the nightly copy)$(in_list "$bk_dev" "$WIZARD_ERASE" && echo "  [ERASED: it has files]")"
     if [ -n "$WIZARD_KEEP" ]; then
       used_b=$(disk_used_bytes "${main_devs[0]}")
       if [ -n "$used_b" ] && [ "$(disk_size_bytes "$bk_dev")" -lt "$used_b" ]; then
@@ -4253,10 +4265,10 @@ preset_flow() {   # preset_flow ID
   say ""
   say "You can use $(pretty_size "$usable") of the $(pretty_size "$total") on the ${#devs[@]} drives of the setup."
   if [ "$migrate" = 1 ]; then
-    say "Size check: your Main storage has $(pretty_size "$main_used") of files and the new setup holds $(pretty_size "$usable"). Everything fits."
-    say "Your Main storage is not erased: its files are copied into the new setup first. Only when the copy is checked does the new setup take over."
+    say "Size check: your Main pool has $(pretty_size "$main_used") of files and the new setup holds $(pretty_size "$usable"). Everything fits."
+    say "Your Main pool is not erased: its files are copied into the new setup first. Only when the copy is checked does the new setup take over."
     say "Then the old Main drives are released: their files stay on them, and they show up as spare drives."
-    say "The containers that use the Main storage are stopped while the files are copied (this can take hours for a lot of data)."
+    say "The containers that use the Main pool are stopped while the files are copied (this can take hours for a lot of data)."
     for mp in $(branches_of main); do say "  - old Main drive: $(branch_name "$mp")  (released afterwards, not erased)"; done
   fi
   if [ "$enc" = 1 ]; then
@@ -4267,10 +4279,10 @@ preset_flow() {   # preset_flow ID
     mirror) say "The Backup drive gets a copy of the Main drive every day (your backup schedule: sudo homelab status shows when). A file added today is on the Backup tomorrow." ;;
     snapraid*) say "The protection data is updated every night at 04:00, not at once: files added today are protected from tonight." ;;
     zfs-*|md-*)
-      say "The array becomes the Main storage ($MAIN_POOL): your containers keep using the same path. The Backup storage stays as it is."
+      say "The array becomes the Main pool ($MAIN_POOL): your containers keep using the same path. The Backup pool stays as it is."
       smallest=$(printf '%s\n' "${sizes[@]}" | sort -n | head -1); biggest=$(printf '%s\n' "${sizes[@]}" | sort -n | tail -1)
       case "$id" in
-        zfs-stripe|md-raid0) say "!! There is NO protection: if any one drive dies, ALL the files are lost. Keep a good backup (your Backup storage does that every night). !!" ;;
+        zfs-stripe|md-raid0) say "!! There is NO protection: if any one drive dies, ALL the files are lost. Keep a good backup (your Backup pool does that every night). !!" ;;
         *) [ $((biggest - smallest)) -gt $((smallest / 10)) ] && say "Note: the drives are not the same size. A RAID setup only uses as much of each drive as the smallest one has ($(pretty_size "$smallest")), so part of the bigger drives stays unused." ;;
       esac
       case "$id" in
@@ -4292,14 +4304,14 @@ preset_flow() {   # preset_flow ID
   [ ${#erase_list[@]} -eq 0 ] || typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
   if preset_is_array "$id"; then
     pre_change "Erase the ${#erase_list[@]} drives and build the $(preset_title "$id") array on them." \
-               "$([ "$migrate" = 1 ] && echo "Stop the containers that use the Main storage while its files are copied into the new array, check the copy, then let the array take over $MAIN_POOL and release the old Main drives (their files stay)." || echo "Stop the containers that use the Main storage for a minute.")" \
+               "$([ "$migrate" = 1 ] && echo "Stop the containers that use the Main pool while its files are copied into the new array, check the copy, then let the array take over $MAIN_POOL and release the old Main drives (their files stay)." || echo "Stop the containers that use the Main pool for a minute.")" \
                "$([ "$(preset_kind "$id")" = zfs ] && echo "Create the ZFS pool '$ZFS_POOL_NAME'$([ "$enc" = 1 ] && echo ", encrypted with a new key file,") and mount it at $MAIN_POOL." || echo "Create the RAID array$([ "$enc" = 1 ] && echo ", encrypt it with a new key file,"), format it and mount it at $MAIN_POOL (and write it into fstab and mdadm.conf).")" \
                "$([ -n "$spare_dev$cache_dev" ] && echo "Add the $([ -n "$spare_dev" ] && echo "hot spare")$([ -n "$spare_dev" ] && [ -n "$cache_dev" ] && echo " and the ")$([ -n "$cache_dev" ] && echo "read cache").")" \
                "Start the containers again." && return 0
     PRESET_TOUCHED=1
     for d in "${devs[@]}"; do refuse_unsafe_disk "$d"; ids+=("$(disk_stable_name "$d")"); done
     stop_containers "$MAIN_POOL"
-    [ "$migrate" != 1 ] || ARRAY_MOUNT=$MIGRATE_DIR      # (built beside the old Main storage; it takes the Main path after the copy)
+    [ "$migrate" != 1 ] || ARRAY_MOUNT=$MIGRATE_DIR      # (built beside the old Main pool; it takes the Main path after the copy)
     if [ "$(preset_kind "$id")" = zfs ]; then
       zfs_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The ZFS pool could not be created. Look at the messages above. See: sudo drives status"; return 1; }
     else
@@ -4310,7 +4322,7 @@ preset_flow() {   # preset_flow ID
       if ! migrate_copy || ! migrate_switch "$id"; then
         migrate_discard "$id" "${ids[@]}"
         start_containers
-        warn "The move to the new setup did not finish. Your Main storage is as it was and its files are untouched; the new setup was taken apart again and its drives are empty."
+        warn "The move to the new setup did not finish. Your Main pool is as it was and its files are untouched; the new setup was taken apart again and its drives are empty."
         return 1
       fi
     fi
@@ -4330,7 +4342,7 @@ preset_flow() {   # preset_flow ID
     log "preset $id built on ${#devs[@]} drives: ${ids[*]}"
     say ""
     say "Done. $(preset_title "$id") is ready at $MAIN_POOL: about $(pretty_size "$usable") usable."
-    [ "$migrate" != 1 ] || say "The files of the old Main storage were copied over. Its drives are spare drives now (their files are still on them until you use or erase them)."
+    [ "$migrate" != 1 ] || say "The files of the old Main pool were copied over. Its drives are spare drives now (their files are still on them until you use or erase them)."
     [ "$enc" != 1 ] || say "IMPORTANT: copy the key file $key_path to a safe place now (for example a USB stick). Without it the files cannot be read again."
     case "$id" in
       md-*) say "Watch the background build:  cat /proc/mdstat      Health any time:  sudo drives status" ;;
@@ -4341,12 +4353,12 @@ preset_flow() {   # preset_flow ID
   PRESET_TOUCHED=1
   pre_change "$([ "$kept_n" -gt 0 ] && echo "Format ${#erase_list[@]} drive(s) and keep the files on the other $kept_n." || echo "Format the ${#devs[@]} drives.")" \
              "Stop the containers that use the storage while each drive is added (once per drive), then start them again." \
-             "Make the Main storage from the data drives$([ "$id" = mirror ] && echo ", and the Backup storage from the other drive")." \
+             "Make the Main pool from the data drives$([ "$id" = mirror ] && echo ", and the Backup pool from the other drive")." \
              "$([ -n "${par_devs[*]:-}" ] && echo "Make the protection drives, write the SnapRAID settings and the 04:00 schedule." || echo "Write down what was built.")" && return 0
 
   for d in "${main_devs[@]}"; do
     force=1; in_list "$d" "$WIZARD_KEEP" && force=2
-    connect_flow "$d" main "$force" 1 || { warn "Stopped at $d. The drives before it are already in the Main storage; the rest were not touched. See: sudo drives list"; return 1; }
+    connect_flow "$d" main "$force" 1 || { warn "Stopped at $d. The drives before it are already in the Main pool; the rest were not touched. See: sudo drives list"; return 1; }
     n=$((n + 1))
   done
   if [ "$id" = mirror ]; then
@@ -4708,6 +4720,11 @@ json_drives() {   # {"pools":[...],"drives":[...]} (usage, list and status all u
   held=$(sort -u "$(main_hold_file)" 2>/dev/null)
   for n in $held; do [ "$hf" = 1 ] || printf ','; hf=0; printf '%s' "$(json_str "$n")"; done
   printf ']'
+  # a RAID or ZFS setup: its name and health (the panel shows it as one tile inside Main, with its drives)
+  if array_active; then
+    local ah; ah=$(array_health_text); ah=${ah%%   (*}
+    printf ',"array":{"title":%s,"health":%s}' "$(json_str "$(preset_title "$(preset_current)")")" "$(json_str "$ah")"
+  else printf ',"array":null'; fi
 }
 
 list_flow() {
@@ -4748,7 +4765,7 @@ usage_flow() {
     while IFS=$US read -r role pool mounted fst size used free; do
       [ "$mounted" = 1 ] || continue
       say ""
-      say "Biggest folders in the $role storage ($pool). This can take a while on a big drive."
+      say "Biggest folders in the $role pool ($pool). This can take a while on a big drive."
       while IFS=$US read -r fb fp; do printf '  %-9s %s\n' "$(hs "$fb")" "$fp"; done < <(folder_rows "$pool")
     done < <(pool_rows)
   else
@@ -4919,7 +4936,7 @@ check_flow() {
     fi
   done
   if [ "$JSON" = 1 ]; then printf '],"ok":%s}\n' "$([ "$nprob" = 0 ] && echo true || echo false)"; [ "$nprob" = 0 ]; return; fi
-  if [ "$n" = 0 ] && array_active; then say "The Main storage is a $(preset_title "$(preset_current)") array. Array health: $(array_health_text)"; say "(The health of every plugged-in drive:  sudo drives health)"; say ""; return 0; fi
+  if [ "$n" = 0 ] && array_active; then say "The Main pool is a $(preset_title "$(preset_current)") array. Array health: $(array_health_text)"; say "(The health of every plugged-in drive:  sudo drives health)"; say ""; return 0; fi
   if [ "$n" = 0 ]; then say "No drives are connected to a pool yet, so there is nothing to check."; say "(The health of every plugged-in drive, pooled or not:  sudo drives health)"; say ""; return 0; fi
   say ""
   say "Checked $n drive(s): $nok ok, $nwarn with a warning, $nprob with a problem. Nothing was changed."
@@ -4936,13 +4953,13 @@ check_full_flow() {   # a full read-only scan of one drive: it is taken offline 
   part=$(branch_part "$mp")
   if [ -z "$part" ] || ! mountpoint -q "$mp"; then note "$name is not connected, so it cannot be scanned."; return 1; fi
   say "$name will be scanned from start to finish. The scan is read-only: nothing on the drive is changed."
-  say "For the scan the drive is taken offline, so the containers that use the $role storage stop until it is done."
+  say "For the scan the drive is taken offline, so the containers that use the $role pool stop until it is done."
   say "A big drive can take an hour or more."
   yn "Continue?" || { say "Cancelled. Nothing was changed."; return 1; }
-  pre_change "Stop the containers that use the $role storage." \
-             "Unmount the $role storage and $name." \
+  pre_change "Stop the containers that use the $role pool." \
+             "Unmount the $role pool and $name." \
              "Scan $part (read-only)." \
-             "Mount $name and the $role storage again, then start the containers." && return 0
+             "Mount $name and the $role pool again, then start the containers." && return 0
   stop_containers "$pool"
   ROLLED_BACK=1    # nothing in fstab changes, so if a step fails the old mounts can simply be restored
   pool_umount "$pool" || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
@@ -4954,7 +4971,7 @@ check_full_flow() {   # a full read-only scan of one drive: it is taken offline 
   say "Scanning $part (read-only)..."
   e2fsck -fn "$part" || rc=$?
   mount_fstab "$mp" || die "Could not mount $name again. Run  sudo drives remount"
-  mount_fstab "$pool" || die "Could not mount the $role storage again. Run  sudo drives remount"
+  mount_fstab "$pool" || die "Could not mount the $role pool again. Run  sudo drives remount"
   start_containers
   say ""
   if [ "$rc" = 0 ]; then
@@ -5004,7 +5021,7 @@ Look at the drives (these change nothing):
   check         quick check of every pool drive for file system errors
 
 Change the drives:
-  connect       connect a new drive to the Main or the Backup storage
+  connect       connect a new drive to the Main or the Backup pool
   disconnect    take a drive out of its pool (its files can be copied to the other drives first)
   move          move a drive between Main and Backup (its files are copied away first)
   bootsection   use part of the boot drive as a pool drive, with a size limit
@@ -5126,7 +5143,7 @@ EOF
     ;;
     adopt) cat <<'EOF'
 sudo drives adopt [--dry-run] [--yes] [--now]
-  Turns the old single data drive (mounted directly at the main storage path) into the first drive of a pool. Its files
+  Turns the old single data drive (mounted directly at the main pool path) into the first drive of a pool. Its files
   are not moved or copied. The containers stop for a minute.
 EOF
     ;;
@@ -5151,7 +5168,7 @@ EOF
     ;;
     restore) cat <<'EOF'
 sudo drives restore [--dry-run] [--yes] [--confirm-erase] [--now]
-  Copies back only the files that are in the backup but missing from the main storage. Files that are already there are
+  Copies back only the files that are in the backup but missing from the main pool. Files that are already there are
   never overwritten. Shows the list first and asks you to type RESTORE.
 EOF
     ;;
@@ -5239,12 +5256,12 @@ sudo drives preset [NAME] [--dry-run] [--yes] [--confirm-erase] [--spare] [--cac
   With a name: builds it. You pick the drives, see the plan and what you can use, and type the setup name and ERASE
   before anything is erased. Only EMPTY or new drives are used (a drive with files: use  sudo drives wizard  to keep or erase its files,
   or erase it first with  sudo drives wipe).
-  The Main storage must not have drives yet (to add to it use connect).
+  The Main pool must not have drives yet (to add to it use connect).
     pool        all the drives in one pool (no protection)
     mirror      exactly 2 drives: the smaller one is Main, the bigger one is Backup; the backup copies Main to it every day
     snapraid1   3 or more drives: the biggest holds protection data (updated every night at 04:00, not at once)
     snapraid2   4 or more drives: the two biggest hold protection data
-  Real RAID arrays (they become the Main storage at /mnt/storage; the drives must all be empty):
+  Real RAID arrays (they become the Main pool at /mnt/storage; the drives must all be empty):
     zfs-stripe  2 or more drives, ZFS, all the space, NO protection        zfs-mirror  2 or more drives, same data on each
     zfs-raidz1  3 or more drives, ZFS, 1 drive can die                     zfs-raidz2  4 or more, 2 can die    zfs-raidz3  5 or more, 3 can die
     md-raid0    2 or more drives, Linux RAID, NO protection                md-raid1    2 or more, same data on each
@@ -5426,7 +5443,7 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
       local keepleft
       keepleft=$(branches_of main | wc -l)
       for id in "${PANEL_IDS[@]}"; do [ "$(branch_role "$(panel_branch "$id" 2>/dev/null)")" = main ] && keepleft=$((keepleft - 1)); done
-      if [ "$keepleft" -lt 1 ]; then panel_refuse "That would take every drive out of the Main storage. Keep at least one Main drive."; return 1; fi
+      if [ "$keepleft" -lt 1 ]; then panel_refuse "That would take every drive out of the Main pool. Keep at least one Main drive."; return 1; fi
     fi
   fi
   PANEL_RESERVE_DIR=$(mktemp -d) || { panel_refuse "No room for working files."; return 1; }
@@ -5721,13 +5738,13 @@ setup_choose() {   # setup_choose ID SIZE... (the biggest first) -> "K CAPACITY"
 
 setup_blocker() {   # setup_blocker ID -> why this setup cannot be built right now (nothing when it can)
   local id=$1
-  if array_active; then echo "The Main storage already is a $(preset_title "$(preset_current)") setup. It has to be taken apart first (sudo drives release)."; return 0; fi
-  if [ -n "$(parity_mounts)" ]; then echo "The Main storage uses SnapRAID protection drives. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
+  if array_active; then echo "The Main pool already is a $(preset_title "$(preset_current)") setup. It has to be taken apart first (sudo drives release)."; return 0; fi
+  if [ -n "$(parity_mounts)" ]; then echo "The Main pool uses SnapRAID protection drives. A new setup builds a new Main pool, so take the drives out of Main first."; return 0; fi
   if [ -n "$(branches_of main)" ]; then
-    if ! preset_is_array "$id"; then echo "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first."; return 0; fi
-    main_is_pool || { echo "The Main storage is not mounted right now, so its files cannot be copied into a new setup. Mount it first (sudo drives remount)."; return 0; }
+    if ! preset_is_array "$id"; then echo "The Main pool still has drives in it. A new setup builds a new Main pool, so take the drives out of Main first."; return 0; fi
+    main_is_pool || { echo "The Main pool is not mounted right now, so its files cannot be copied into a new setup. Mount it first (sudo drives remount)."; return 0; }
   fi
-  if [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; then echo "The Backup storage still has drives in it. The mirror builds a new Backup storage, so take its drives out first."; return 0; fi
+  if [ "$id" = mirror ] && [ -n "$(branches_of backup)" ]; then echo "The Backup pool still has drives in it. The mirror builds a new Backup pool, so take its drives out first."; return 0; fi
   if preset_is_array "$id" && [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL"; then echo "$MAIN_POOL is already in use by something else."; return 0; fi
   if [ -n "$(preset_tool_hint "$id")" ]; then echo "The program for this setup is not installed yet. Run  sudo homelab-setup upgrade  on the server to install it."; return 0; fi
   return 0
