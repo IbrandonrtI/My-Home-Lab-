@@ -1655,7 +1655,7 @@ DRIVE_NAME = re.compile(r"[A-Za-z0-9 .()+,-]{1,40}\Z")
 DRIVE_TIMEOUT = {"status": 90, "actions": 90, "health": 180, "check": 180, "remount": 600}
 DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16})\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
 JOB_MAX_SECONDS = 8 * 3600
-JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "items": [], "progress": {}, "current": ""}      # the drive change that runs (or ran last) in the background
+JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "items": [], "progress": {}, "current": "", "stopping": False}      # the drive change that runs (or ran last) in the background
 JOB_LOCK = threading.Lock()
 
 
@@ -1840,16 +1840,13 @@ def job_words(action, body):
 
 
 def job_progress(line):
-    """A progress line of the drives tool: `PROGRESS ID PERCENT text`. Keeps the bar of that drive (it never goes back); the drives before it are done. True when the line was one."""
+    """A progress line of the drives tool: `PROGRESS ID PERCENT text`. Keeps the bar of that drive (it never goes back; several drives report at the same time). True when the line was one."""
     m = re.match(r"PROGRESS (\S+) (\d{1,3}) ?(.*)\Z", line)
     if not m:
         return False
     item, pct, text = m.group(1), min(100, int(m.group(2))), m.group(3)[:80]
     prog = JOB["progress"]
-    if item in JOB["items"] and JOB["current"] != item:
-        for earlier in JOB["items"][:JOB["items"].index(item)]:
-            prog[earlier] = {"pct": 100, "text": "Done"}
-        JOB["current"] = item
+    JOB["current"] = item
     old = prog.get(item, {"pct": 0})
     prog[item] = {"pct": max(old["pct"], pct), "text": text}
     return True
@@ -1889,8 +1886,9 @@ def job_thread(words):
             if rc == 0:
                 for it in JOB["items"]:
                     JOB["progress"][it] = {"pct": 100, "text": "Done"}
-            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else drive_message(text, "")
+            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else (tail[-1] if rc == 4 and tail else drive_message(text, ""))      # (4 = the person pressed Stop: the tool's last line says what happened)
             JOB["running"] = False
+            JOB["stopping"] = False
             drives_change_end()      # (inside the same lock: whoever sees "not running" can look at the drives at once)
 
 
@@ -1899,7 +1897,7 @@ def api_drives_job_start(action, body):
     items = [t.split(":")[0] for t in job_ids(body)] if action != "wipe" else [body.get("id")]
     drives_change_begin()
     with JOB_LOCK:
-        JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), items=items, progress={}, current="")
+        JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), items=items, progress={}, current="", stopping=False)
         jid = JOB["id"]
     threading.Thread(target=job_thread, args=(words,), daemon=True).start()
     return {"ok": True, "job": jid}
@@ -1907,7 +1905,29 @@ def api_drives_job_start(action, body):
 
 def api_drives_job():
     with JOB_LOCK:
-        return {"id": JOB["id"], "running": JOB["running"], "action": JOB["action"], "lines": JOB["lines"][-12:], "rc": JOB["rc"], "message": JOB["message"], "started": JOB["started"], "items": JOB["items"], "progress": JOB["progress"], "current": JOB["current"]}
+        return {"id": JOB["id"], "running": JOB["running"], "action": JOB["action"], "lines": JOB["lines"][-12:], "rc": JOB["rc"], "message": JOB["message"], "started": JOB["started"], "items": JOB["items"], "progress": JOB["progress"], "current": JOB["current"], "stopping": JOB["stopping"]}
+
+
+def api_drives_abort():
+    """The Stop button: asks the drives tool to stop the running change at the next safe moment (it does not wait for the change, and it is not held back by the drive gate)."""
+    with JOB_LOCK:
+        running, action = JOB["running"], JOB["action"]
+    if not running:
+        raise Fail("No drive change is running right now.", 409)
+    if action not in ("add", "move", "disconnect"):
+        raise Fail("That cannot be stopped: erasing a drive is not something to cut off halfway.", 409)
+    try:
+        p = subprocess.run(DRIVES_CMD + ["panel", "abort"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        raise Fail("The drives tool did not answer. Try Stop again.", 504) from None
+    except FileNotFoundError:
+        raise Fail("The drives tool is not installed.", 502) from None
+    msg = drive_message(p.stdout or "", p.stderr or "")
+    if p.returncode != 0:
+        raise Fail(msg or "The change could not be stopped.", 409)
+    with JOB_LOCK:
+        JOB["stopping"] = True
+    return {"message": msg or "Stopping."}
 
 
 # ================================================================ the web server
@@ -2148,6 +2168,8 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.read_body(1 << 20) or b"{}")
             if not isinstance(body, dict):
                 raise Fail("The request is not understood.")
+            if path == "/api/drives/abort":
+                return self.send(200, dict(api_drives_abort(), ok=True))
             if path in ("/api/drives/add", "/api/drives/wipe", "/api/drives/disconnect", "/api/drives/move"):
                 return self.send(200, api_drives_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/drives/job
             if path in ("/api/drives/rename", "/api/drives/sleep", "/api/drives/wake", "/api/drives/remount"):
