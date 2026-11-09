@@ -2,8 +2,9 @@
 log()  { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE" 2>/dev/null || true; }
 say()  { printf '%s\n' "$*"; }
 note() { printf '%s\n' "$*" >&2; }
-warn() { printf 'WARNING: %s\n' "$*" >&2; log "WARN $*"; }
-die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; restore_services; exit 1; }
+why() { [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -d "$PANEL_RESERVE_DIR" ] && printf '%s\n' "$2" >"$PANEL_RESERVE_DIR/${PROG_ITEM:-none}.$1" 2>/dev/null; return 0; }      # why KIND TEXT: in a batch, what this drive's process complained about last (the batch tells it in its report)
+warn() { printf 'WARNING: %s\n' "$*" >&2; log "WARN $*"; why warn "$*"; }
+die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; why err "$*"; restore_services; exit 1; }
 
 ask()  { local v=""; printf '%s' "$1" >&2; IFS= read -r v || true; printf '%s' "$v"; }
 yn()   {
@@ -106,6 +107,17 @@ take_label() {   # take_label main|backup -> the next free drive name; in a batc
   crit_leave
   echo "$l"
 }
+
+target_lock() {   # target_lock TARGET-MOUNT: only one drive of a batch copies to the same drive at a time (two drives can hold different versions of the same file, and a copy must not be overwritten while it is being checked). Waits for its turn; 1 only when Stop was pressed while waiting
+  local f
+  f="$STATE_DIR/target-$(basename "$1").lock"
+  { exec 6>"$f"; } 2>/dev/null || return 0
+  until flock -w 1 6; do
+    if abort_requested; then { exec 6>&-; } 2>/dev/null; return 1; fi
+  done
+  return 0
+}
+target_unlock() { { exec 6>&-; } 2>/dev/null; return 0; }
 
 space_pick() {   # space_pick SOURCE-MOUNT BYTES TARGET...: the emptiest of the target drives that still has BYTES (and the spare margin) free after what other copies of this batch have reserved; reserves it
   local src=$1 need=$2 o free res best="" bestfree=0; shift 2

@@ -228,6 +228,15 @@ next_label() {
   echo "$p$n"
 }
 
+retry_busy() {   # retry_busy COMMAND...: a drive that was just unplugged from a pool or just changed is sometimes still looked at by the system for a moment ("busy"): try again a few times
+  local i
+  for i in 1 2 3 4 5 6; do
+    "$@" && return 0
+    sleep 2; udevadm settle 2>/dev/null || true
+  done
+  "$@"
+}
+
 format_disk() {   # format_disk /dev/sdX LABEL -> prints partition path
   local dev=$1 label=$2 p vg
   refuse_unsafe_disk "$dev"
@@ -239,13 +248,14 @@ format_disk() {   # format_disk /dev/sdX LABEL -> prints partition path
     done
   fi
   for p in $(parts_of "$dev"); do wipefs -a "$p" >/dev/null 2>&1 || true; done
-  wipefs -a "$dev" >/dev/null 2>&1 || die "wipefs failed on $dev"
-  parted -s "$dev" mklabel gpt mkpart storage ext4 1MiB 100% >/dev/null 2>&1 || die "parted failed on $dev"
+  udevadm settle 2>/dev/null || true
+  retry_busy wipefs -a "$dev" >/dev/null 2>&1 || die "wipefs failed on $dev (the drive is busy: $(wipefs -a "$dev" 2>&1 | tail -1))"
+  retry_busy parted -s "$dev" mklabel gpt mkpart storage ext4 1MiB 100% >/dev/null 2>&1 || die "parted failed on $dev"
   partprobe "$dev" >/dev/null 2>&1 || true
   udevadm settle 2>/dev/null || true
   p=$(first_part "$dev") || die "The new partition did not appear on $dev"
   wipefs -a "$p" >/dev/null 2>&1 || true
-  mkfs.ext4 -F -q -L "$label" -m 0 "$p" >&2 || die "mkfs failed on $p"
+  retry_busy mkfs.ext4 -F -q -L "$label" -m 0 "$p" >&2 || die "mkfs failed on $p"
   udevadm settle 2>/dev/null || true
   log "formatted $dev -> $p label $label"
   echo "$p"

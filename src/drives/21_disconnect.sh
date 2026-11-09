@@ -35,7 +35,14 @@ not_leaving() {   # a filter: the mount points on stdin that do not leave their 
   return 0
 }
 
-drain_branch() {   # copy everything from branch $1 to the emptiest other branch of the same role
+drain_branch() {   # (the real work is below; the lock on the drive that is copied to is let go however it ends)
+  drain_branch_run "$@"
+  local rc=$?
+  target_unlock
+  return "$rc"
+}
+
+drain_branch_run() {   # copy everything from branch $1 to the emptiest other branch of the same role
   local mp=$1 role used target pool
   local -a cands=()
   role=$(branch_role "$mp"); pool=$(role_pool "$role")
@@ -46,6 +53,7 @@ drain_branch() {   # copy everything from branch $1 to the emptiest other branch
     NOROOM=1
     return 1
   fi
+  if ! target_lock "$target"; then ABORTED=1; space_release "$mp"; note "Stopped before copying. Nothing was changed."; return 1; fi
   if abort_requested; then ABORTED=1; space_release "$mp"; note "Stopped before copying. Nothing was changed."; return 1; fi
   say "Copying $(human "$used") from $(branch_name "$mp") to $(branch_name "$target") (pass 1, services keep running)..."
   progress 5 "Copying files to $(branch_name "$target")"

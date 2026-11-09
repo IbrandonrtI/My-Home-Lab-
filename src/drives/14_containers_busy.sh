@@ -21,7 +21,7 @@ docker_each() {   # docker_each stop|start NAME...: the containers go together (
   local act=$1 n tmp; shift
   tmp=$(mktemp) || return 0
   for n in "$@"; do
-    ( docker "$act" "$n" >/dev/null 2>&1 || echo "$n" >>"$tmp" ) 8>&- 9>&- &
+    ( docker "$act" "$n" >/dev/null 2>&1 || echo "$n" >>"$tmp" ) 6>&- 8>&- 9>&- &
     if [ "$(jobs -rp | wc -l)" -ge 8 ]; then wait -n 2>/dev/null || true; fi
   done
   wait

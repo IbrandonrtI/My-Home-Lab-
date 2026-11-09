@@ -233,6 +233,13 @@ panel_batch_report() {   # panel_batch_report ACT NAMEOF: read what each drive's
   if [ ${#failed[@]} -gt 0 ]; then
     [ ${#stopped[@]} -gt 0 ] && say "The other drives were stopped with nothing lost: $(joinl "${stopped[@]}")."
     [ ${#back[@]} -gt 0 ] && say "Put back where they were: $(joinl "${back[@]}")."
+    local why_f why_all=""
+    for id in "${PANEL_IDS[@]}"; do      # what each failed drive complained about
+      [ "$(cat "$PANEL_RESERVE_DIR/$id.state" 2>/dev/null)" = failed ] || [ ! -f "$PANEL_RESERVE_DIR/$id.state" ] || continue
+      why_f=$(cat "$PANEL_RESERVE_DIR/$id.err" 2>/dev/null || tail -1 "$PANEL_RESERVE_DIR/$id.warn" 2>/dev/null)
+      [ -n "$why_f" ] && why_all="${why_all:+$why_all; }${nm[$id]:-$id}: $why_f"
+    done
+    [ -n "$why_all" ] && say "What went wrong: $why_all"
     say "Stopped because of a problem with $(joinl "${failed[@]}"): ${#okl[@]} of ${#PANEL_IDS[@]} drives were done."
     return 1
   fi
