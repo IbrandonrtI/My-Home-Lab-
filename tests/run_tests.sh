@@ -72,8 +72,8 @@ ok "S1 fill writes the tested Tailscale key" 'grep -q "tskey-api-VALID123" $HLS_
 H0=$(sha256sum $HLS_ROOT/home/testuser/homepage-config/services.yaml | cut -d' ' -f1)
 # (re-run fill on a done step does nothing; tested in S5)
 ok "S1 fill does not tell the user to start the walk-through while inside it" '! grep -q "start the walk-through" $SIM_DIR/s1c.out && grep -q "then paste it below" $SIM_DIR/s1c.out'
-ok "S1 with no backup drive FileBrowser shows no drive folder (no boot drive, no main storage)" '! wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv"'
-ok "S1 the FileBrowser card on Homepage no longer names a 750GB drive" '! grep -q "750GB HDD" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "View and edit the backups" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
+ok "S1 with no backup drive FileBrowser shows no drive folder (no boot drive, no main pool)" '! wj "w[\"containers\"][\"filebrowser-filebrowser-1\"][\"mounts\"]" | grep -q "/srv"'
+ok "S1 the FileBrowser card on Homepage no longer names a 750GB drive" '! grep -q "750GB HDD" $HLS_ROOT/home/testuser/homepage-config/services.yaml && grep -q "Browse and Edit Files" $HLS_ROOT/home/testuser/homepage-config/services.yaml'
 ok "S1 the first Homepage resources pill is the shipped HomeLab label, not the original server" '! grep -q "label: Server" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml && grep -q "label: HomeLab" $HLS_ROOT/home/testuser/homepage-config/widgets.yaml'
 ok "S1 the Next step section is the last thing printed after the passwords" '[ "$(grep -n "── Next step" $SIM_DIR/s1.out | tail -1 | cut -d: -f1)" -gt "$(grep -n "Generated passwords and keys" $SIM_DIR/s1.out | head -1 | cut -d: -f1)" ] && tail -8 $SIM_DIR/s1.out | grep -q "sudo homelab-setup"'
 ok "S1 the Next step section names the HTTPS step (the first thing that waits for a person)" 'sed -n "/── Next step/,\$p" $SIM_DIR/s1.out | grep -q "MagicDNS and HTTPS" && sed -n "/── Next step/,\$p" $SIM_DIR/s1.out | grep -q "sudo homelab-setup refresh"'
@@ -978,7 +978,7 @@ names=re.findall(r"(?m)^    - (.+):$", g)
 assert names[:2]==["Navidrome","Metube"], names
 assert "navidrome-player" not in g.replace("name: navidrome-player",""), g
 card=g[g.index("id: navidrome-card"):g.index("id: metube-card")]
-assert "description: Spotify Music Player\n" in card and "Music streaming server" not in card, card
+assert "description: Music Streaming Server\n" in card and "Music streaming server" not in card, card
 assert "widget:\n          type: iframe\n" in card and "src: http://192.168.50.23:4533" in card and "href: https://pc.example.ts.net:1011" in card, card
 assert "CorrectHorse1234" not in card and "token:" not in card
 PY'
@@ -992,7 +992,7 @@ import os,re
 p=os.environ["HP40"]+"/services.yaml"
 t=open(p).read()
 # the dashboard of zip 33: live numbers in the Navidrome card and a second card for the player
-t=re.sub(r"(id: navidrome-card.*?description: Spotify Music Player\n)        widget:\n(?:          [^\n]*\n)+", r"\1        widget:\n          type: navidrome\n          url: http://192.168.50.23:4533\n          user: Tester\n          token: abc\n          salt: xyz\n", t, count=1, flags=re.S)
+t=re.sub(r"(id: navidrome-card.*?description: Music Streaming Server\n)        widget:\n(?:          [^\n]*\n)+", r"\1        widget:\n          type: navidrome\n          url: http://192.168.50.23:4533\n          user: Tester\n          token: abc\n          salt: xyz\n", t, count=1, flags=re.S)
 t=t.rstrip("\n")+"\n\n    - Navidrome Player:\n        id: navidrome-player\n        icon: navidrome.svg\n        widget:\n          type: iframe\n          name: navidrome-player\n          src: http://192.168.50.23:4533\n"
 open(p,"w").write(t)
 PY

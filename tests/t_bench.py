@@ -155,9 +155,9 @@ with tempfile.TemporaryDirectory() as td:
 import truth  # noqa: E402
 check("truth: sizes are written like numfmt does", [truth.iec(27013182), truth.iec(1024), truth.iec(5), truth.iec(3 * 1024 ** 3)], ["26MB", "1.0KB", "5B", "3.0GB"])
 check("truth: a size one unit away is accepted, a far one is not", (truth.close("26M", 27013182), truth.close("40M", 27013182)), (True, False))
-rows = truth.status_rows("   x  1 problem needs you.  Details in Status below.\n\n  -- Status ---\n\n   +  Main pool        mounted, 26M used of 81M\n"
+rows = truth.status_rows("   x  1 problem needs you.  Details in Status below.\n\n  -- Status ---\n\n   +  Main Pool        mounted, 26M used of 81M\n"
                          "   !  Last backup      no result found\n\n  -- Suggested Commands ---\n   sudo drives\n")
-check("truth: the status lines are read, the summary line is not", sorted(rows), ["Last backup", "Main pool"])
+check("truth: the status lines are read, the summary line is not", sorted(rows), ["Last backup", "Main Pool"])
 good = "   !  2 things to look at.  Details in Status below.\n\n  -- Status ---\n   !  Updates   3 system update(s)\n   !  Last backup   old\n   +  Boot drive   1% used\n"
 check("truth: the login count agrees with the lines", truth.login_count(None, 0, good), [])
 check("truth: a wrong count is found", len(truth.login_count(None, 0, good.replace("2 things", "5 things"))), 1)

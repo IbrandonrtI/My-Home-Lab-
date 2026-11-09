@@ -48,7 +48,7 @@ has "bootadd: too small is refused" "$(P bootadd backup 5 CONTINUE)" "too small"
 has "bootadd: without CONTINUE nothing happens" "$(P bootadd backup 40)" "Cancelled"
 check "bootadd: so no section was made" "$(ls "$S/boot-sections" 2>/dev/null | wc -l)" "0"
 OUT=$(P bootadd backup 40 CONTINUE)
-has "bootadd: a 40 MB section is made for Backup" "$OUT" "is part of the backup storage"
+has "bootadd: a 40 MB section is made for Backup" "$OUT" "is part of the backup pool"
 check "bootadd: the Backup pool has two drives now" "$(pool_drives backup)" "2"
 check "bootadd: the file is 40 MB" "$(stat -c %s "$(img backup)")" "40000000"
 has "bootadd: a second one for the same pool is refused" "$(P bootadd backup 40 CONTINUE)" "already has a boot drive section"

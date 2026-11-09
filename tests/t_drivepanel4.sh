@@ -71,13 +71,13 @@ has "add erase: the drive name alone is not enough" "$(P add "$id1" main erase "
 has "add erase: ERASE alone is not enough" "$(P add "$id1" main erase ERASE)" "Cancelled. Nothing was changed."
 has "add erase: a wrong drive name is not enough" "$(P add "$id1" main erase /dev/loop99 ERASE)" "Cancelled. Nothing was changed."
 check "still nothing added" "$(fstab_lines)" "0"
-has "add erase: both words add the drive to Main" "$(P add "$id1" main erase "$L1" ERASE)" "connected to the main storage"
+has "add erase: both words add the drive to Main" "$(P add "$id1" main erase "$L1" ERASE)" "connected to the main pool"
 check "the pool has one drive" "$(fstab_lines)" "1"
 has "add keep on an empty drive (no partition) is refused" "$(P add "$(loop_of 2 | sed 's|/dev/||')" backup keep)" "does not have one ext4 partition"
 make_part_disk 2
 check "a drive with one ext4 partition is offered as keepable" "$(actions | jq_ "[s['keep_ok'] for s in d['spare']][0]")" "True"
-has "add keep: the drive joins Backup with its files" "$(P add "$(loop_of 2 | sed 's|/dev/||')" backup keep)" "connected to the backup storage"
-check "its file is in the Backup storage" "$(cat /mnt/test-backup/old.txt 2>/dev/null)" "old file of drive 2"
+has "add keep: the drive joins Backup with its files" "$(P add "$(loop_of 2 | sed 's|/dev/||')" backup keep)" "connected to the backup pool"
+check "its file is in the Backup pool" "$(cat /mnt/test-backup/old.txt 2>/dev/null)" "old file of drive 2"
 
 # ---------------- add to a RUNNING pool: the drive joins it as it runs (no container stops, so a backup or an upload may go on); a pool that is not running is mounted the usual way
 if command -v setfattr >/dev/null && command -v getfattr >/dev/null; then
@@ -86,7 +86,7 @@ if command -v setfattr >/dev/null && command -v getfattr >/dev/null; then
   P add "${L1#/dev/}" main erase "$L1" ERASE >/dev/null
   echo "a backup is running right now" >"$S/busy"; export DRIVES_BUSY_FILE="$S/busy"
   LIVE=$(P add "${L2#/dev/}" main erase "$L2" ERASE)
-  has "a second Main drive joins the running pool" "$LIVE" "joined the running main storage. No container was stopped."
+  has "a second Main drive joins the running pool" "$LIVE" "joined the running main pool. No container was stopped."
   hasnt "a backup that runs does not hold back a drive that joins a running pool" "$LIVE" "Not a good moment"
   has "the same while a backup runs is refused for a pool that is not running" "$(P add "${L3#/dev/}" backup erase "$L3" ERASE)" "Not a good moment"
   unset DRIVES_BUSY_FILE
@@ -110,7 +110,7 @@ has "several: a choice for a drive needs the word 'each'" "$(P add "$i2:erase,$i
 has "several: a drive that is not a spare stops the whole batch before anything changes" "$(P add "$i2,sda" main erase "$L2" ERASE)" "is not a spare drive"
 check "several: nothing was added by the refusals" "$(fstab_lines)" "1"
 OUT=$(P add "$i2:erase,$i3:erase" main each "$L2" "$L3" ERASE)
-check "several: two drives joined the Main storage one after the other" "$(printf '%s\n' "$OUT" | grep -c 'is connected to the main storage')" "2"
+check "several: two drives joined the Main pool one after the other" "$(printf '%s\n' "$OUT" | grep -c 'is connected to the main pool')" "2"
 has "several: the progress names the first drive" "$OUT" "PROGRESS $i2 100 Done"
 has "several: and the second" "$OUT" "PROGRESS $i3 100 Done"
 check "several: Main has three drives now" "$(fstab_lines)" "3"
@@ -121,14 +121,14 @@ echo "a backup is running right now" >"$S/busy"; export DRIVES_BUSY_FILE="$S/bus
 has "several: moving is refused while a backup runs" "$(P move "$A,$B" keep yes KEEP)" "Not a good moment"
 OUT=$(P move "$A,$B" keep yes KEEP NOW)
 unset DRIVES_BUSY_FILE
-check "several: the word NOW goes on anyway and both drives moved" "$(printf '%s\n' "$OUT" | grep -c 'is connected to the backup storage')" "2"
+check "several: the word NOW goes on anyway and both drives moved" "$(printf '%s\n' "$OUT" | grep -c 'is connected to the backup pool')" "2"
 has "several: a move shows its own progress for the first drive" "$OUT" "PROGRESS $A 100 Done"
 pool_drives() { grep -v '^#' "$S/fstab" | grep " /mnt/test-$1 fuse.mergerfs" | grep -o '/mnt/test-disks/[A-Za-z0-9]*' | sort -u | wc -l; }
 check "several: Backup has three drives, Main has one" "$(pool_drives backup)-$(pool_drives main)" "3-1"
 check "several: the files that were in Main are still in Main" "$(cat /mnt/test-main/one.txt /mnt/test-main/two.txt 2>/dev/null | tr '\n' ' ')" "one two "
 has "several: all the Main drives cannot be moved in one batch" "$(P move "$(label_of main 0),$(label_of backup 0)" keep yes KEEP)" "Keep at least one Main drive"
 C=$(label_of backup 0); D2=$(label_of backup 1)
-has "several: two drives are taken out together" "$(P disconnect "$C,$D2" yes)" "is disconnected from the backup storage"
+has "several: two drives are taken out together" "$(P disconnect "$C,$D2" yes)" "is disconnected from the backup pool"
 check "several: both are spare drives now" "$(actions | jq_ "len(d['spare'])")" "2"
 
 # ---------------- disconnect
@@ -140,18 +140,18 @@ has "the only Backup drive: backups would stop, so REMOVE is asked for" "$(P dis
 check "the only Backup drive: without REMOVE nothing happens" "$(P disconnect "$C" yes | grep -c 'Cancelled')" "1"
 check "the Backup drive is still there" "$(actions | jq_ "len([r for r in d['rename'] if r['role']=='backup'])")" "1"
 FULL=$A; EMPTY=$B; [ "$(actions | jq_ "[r['has_data'] for r in d['rename'] if r['id']=='$A'][0]")" = True ] || { FULL=$B; EMPTY=$A; }
-has "disconnect with copy: the drive with files goes after its files are copied" "$(P disconnect "$FULL" yes)" "is disconnected from the main storage"
+has "disconnect with copy: the drive with files goes after its files are copied" "$(P disconnect "$FULL" yes)" "is disconnected from the main pool"
 check "all 5 files are still in Main" "$(ls /mnt/test-main/f*.txt | wc -l)" "5"
 check "the drive is a spare drive now" "$(actions | jq_ "len(d['spare'])")" "1"
 has "disconnect the last Main drive warns and waits for REMOVE" "$(P disconnect "$EMPTY" yes)" "is the only main drive"
 check "Main still has its drive" "$(ls /mnt/test-main/f*.txt | wc -l)" "5"
 # add it back (keep: its files are still on it), then take it out without copying
 SP=$(actions | jq_ "d['spare'][0]['id']")
-has "the disconnected drive keeps its files and can be added again with keep" "$(P add "$SP" main keep)" "connected to the main storage"
+has "the disconnected drive keeps its files and can be added again with keep" "$(P add "$SP" main keep)" "connected to the main pool"
 FULL=$(label_of main 0); [ "$(actions | jq_ "[r['has_data'] for r in d['rename'] if r['id']=='$FULL'][0]")" = True ] || FULL=$(label_of main 1)
 has "disconnect without copying needs CONTINUE" "$(P disconnect "$FULL" no)" "Cancelled."
 check "nothing was disconnected" "$(actions | jq_ "len(d['spare'])")" "0"
-has "disconnect without copying: with CONTINUE it goes" "$(P disconnect "$FULL" no CONTINUE)" "is disconnected from the main storage"
+has "disconnect without copying: with CONTINUE it goes" "$(P disconnect "$FULL" no CONTINUE)" "is disconnected from the main pool"
 
 # ---------------- move: the four choices
 move_case() {   # move_case NAME KEEP COPY WORDS... : a Main drive with files moves to Backup
@@ -161,7 +161,7 @@ move_case() {   # move_case NAME KEEP COPY WORDS... : a Main drive with files mo
 }
 # 1. erase the drive, copy its files to the old pool first
 move_case x; OUT=$(P move "$MOVED" erase yes "$MOVED_DEV" ERASE)
-has "move (erase, copy first): done" "$OUT" "is connected to the backup storage"
+has "move (erase, copy first): done" "$OUT" "is connected to the backup pool"
 check "move (erase, copy first): all Main files are still in Main" "$(ls /mnt/test-main/m*.txt | wc -l)" "4"
 check "move (erase, copy first): the drive is empty in Backup" "$(ls /mnt/test-backup/m*.txt 2>/dev/null | wc -l)" "0"
 check "move (erase, copy first): Backup has 2 drives, Main has 1" "$(actions | jq_ "sorted([r['role'] for r in d['rename']])")" "['backup', 'backup', 'main']"
@@ -170,18 +170,18 @@ move_case x
 has "move (erase, no copy): without CONTINUE it is cancelled" "$(P move "$MOVED" erase no "$MOVED_DEV" ERASE)" "Cancelled."
 check "move (erase, no copy): nothing moved" "$(actions | jq_ "sorted([r['role'] for r in d['rename']])")" "['backup', 'main', 'main']"
 check "move (erase, no copy): the files are still all there" "$(ls /mnt/test-main/m*.txt | wc -l)" "4"
-has "move (erase, no copy): with CONTINUE it moves" "$(P move "$MOVED" erase no "$MOVED_DEV" ERASE CONTINUE)" "is connected to the backup storage"
+has "move (erase, no copy): with CONTINUE it moves" "$(P move "$MOVED" erase no "$MOVED_DEV" ERASE CONTINUE)" "is connected to the backup pool"
 check "move (erase, no copy): the files of that drive are gone from Main" "$(ls /mnt/test-main/m*.txt 2>/dev/null | wc -l)" "0"
 # 3. keep the files on the drive and copy them to the old pool first: the files are in both pools
 move_case x
 has "move (keep, copy first): needs KEEP typed" "$(P move "$MOVED" keep yes)" "Cancelled."
 check "move (keep, copy first): nothing moved without KEEP" "$(actions | jq_ "sorted([r['role'] for r in d['rename']])")" "['backup', 'main', 'main']"
-has "move (keep, copy first): with KEEP it moves" "$(P move "$MOVED" keep yes KEEP)" "is connected to the backup storage"
+has "move (keep, copy first): with KEEP it moves" "$(P move "$MOVED" keep yes KEEP)" "is connected to the backup pool"
 check "move (keep, copy first): Main still has all its files" "$(ls /mnt/test-main/m*.txt | wc -l)" "4"
 check "move (keep, copy first): the files are also shown in Backup" "$(ls /mnt/test-backup/m*.txt | wc -l)" "4"
 # 4. keep the files on the drive, do not copy: the files go with the drive to the other pool
 move_case x
-has "move (keep, no copy): the files go with the drive" "$(P move "$MOVED" keep no KEEP CONTINUE)" "is connected to the backup storage"
+has "move (keep, no copy): the files go with the drive" "$(P move "$MOVED" keep no KEEP CONTINUE)" "is connected to the backup pool"
 check "move (keep, no copy): Main lost them" "$(ls /mnt/test-main/m*.txt 2>/dev/null | wc -l)" "0"
 check "move (keep, no copy): Backup has them" "$(ls /mnt/test-backup/m*.txt | wc -l)" "4"
 # a drive that cannot be moved with its files kept (no single ext4 partition) is refused before it leaves its pool

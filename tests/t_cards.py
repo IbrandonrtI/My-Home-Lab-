@@ -250,8 +250,8 @@ try:
     check("the lab's own containers get no card", "filebrowser-card" in svc and svc.count("id: filebrowser-card") == 1)
     check("the hand written Metube card is not touched", svc.count("id: metube-card") == 1 and "icon: metube.svg" in svc)
     check("the new cards keep the section order of the file", g.get("Media & Entertainment", [])[:4] == ["navidrome-card", "metube-card", "downtify-card", "jellyfin-card"], g)
-    check("an image that calls itself navidrome gets the card Navidrome, described as Spotify Music Player",
-          "    - Navidrome:\n        id: navidrome-card" in svc and "description: Spotify Music Player" in svc.split("id: navidrome-card")[1].split("\n\n")[0], svc)
+    check("an image that calls itself navidrome gets the card Navidrome, described as Music Streaming Server",
+          "    - Navidrome:\n        id: navidrome-card" in svc and "description: Music Streaming Server" in svc.split("id: navidrome-card")[1].split("\n\n")[0], svc)
     check("the Navidrome card is put first in its section, the others at the end", g.get("Media & Entertainment", [])[0] == "navidrome-card", g)
     ports = sorted(int(k.split(":")[1]) for k in json.load(open(lab.ts))["Web"])
     check("each new service got its own Tailscale port from 1009 on", ports == [1009, 1010, 1011, 1012, 1013, 1014, 1015, 1016], ports)

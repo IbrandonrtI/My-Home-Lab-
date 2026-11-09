@@ -114,7 +114,7 @@ def main():
                 body = pg.inner_text("#app")
                 # ---- the three boxes
                 heads = pg.eval_on_selector_all(".dzone h2", "els => els.map(e => e.textContent)")
-                check("%s: three boxes: Drives, Main Storage and Backup Storage" % label, heads == ["Drives", "Main Storage", "Backup Storage"], heads)
+                check("%s: three boxes: Drives, Main Pool and Backup Pool" % label, heads == ["Drives", "Main Pool", "Backup Pool"], heads)
                 check("%s: the spare drive is in the Drives box, the Main drives in Main, the other in Backup" % label,
                       ids_of(pg, "drives") == ["sdc"] and ids_of(pg, "main") == ["MAIN1", "MAIN2"] and ids_of(pg, "backup") == ["BACKUP1"], [ids_of(pg, "drives"), ids_of(pg, "main"), ids_of(pg, "backup")])
                 check("%s: the Main box shows Online and its ring (25%%), the Backup box Offline" % label,
@@ -128,7 +128,7 @@ def main():
                 dot, sym = t1.locator(".dot").bounding_box(), t1.locator(".ticon").bounding_box()
                 check("%s: the dot sits at the top right of the symbol" % label, dot["x"] + dot["width"] / 2 > sym["x"] + sym["width"] * 0.8 and dot["y"] + dot["height"] / 2 < sym["y"] + sym["height"] * 0.3, [dot, sym])
                 check("%s: a connected drive has a green dot, a missing one a red dot" % label, "ok" in t1.locator(".dot").get_attribute("class") and "bad" in tile(pg, "BACKUP1").locator(".dot").get_attribute("class"), "")
-                check("%s: a long name is cut with dots (full name on hover)" % label, t1.locator(".tname").evaluate("e => getComputedStyle(e).textOverflow") == "ellipsis" and t1.get_attribute("title").startswith("1 TB Toshiba HDD"), "")
+                check("%s: a long name is cut with dots (full name on hover)" % label, t1.locator(".tname").evaluate("e => getComputedStyle(e).webkitLineClamp") == "2" and t1.get_attribute("title").startswith("1 TB Toshiba HDD"), "")
                 check("%s: temperature and the other stats are not on the tile (they open with a press)" % label, "61" not in t1.inner_text() and "Failing" not in t1.inner_text(), t1.inner_text())
                 check("%s: only a connected pool drive or a spare can be dragged; a missing one cannot" % label,
                       t1.get_attribute("draggable") == "true" and tile(pg, "sdc").get_attribute("draggable") == "true" and tile(pg, "BACKUP1").get_attribute("draggable") == "false", "")
@@ -144,7 +144,7 @@ def main():
                 pg.wait_for_selector("dialog.dcard")
                 t = pg.inner_text("dialog.dcard")
                 check("%s: pressing a drive opens its card with status, power, temperature, health, hours on, model and serial" % label,
-                      all(x in t for x in ("Connected", "Awake", "61 °C", "Failing", "12,345", "TOSHIBA DT01ACA100", "Serial X7ABCDEF", "Main Storage")), t)
+                      all(x in t for x in ("Connected", "Awake", "61 °C", "Failing", "12,345", "TOSHIBA DT01ACA100", "Serial X7ABCDEF", "Main Pool")), t)
                 cbtns = pg.eval_on_selector_all("dialog.dcard button", "els => els.map(e => e.textContent.trim())")
                 check("%s: the card has the buttons Check Health, Quick Check, Rename, Put to Sleep, Move to Backup, Take Out" % label,
                       all(b in cbtns for b in ("Check Health Again", "Run Quick Check", "Rename", "Put to Sleep", "Move to Backup", "Take Out", "Close")), cbtns)
@@ -195,11 +195,11 @@ def main():
                 # ---- drag and drop: the spare drive into the Backup box
                 move_to(pg, label, "sdc", "backup", "Add to Backup")
                 pg.wait_for_selector("dialog")
-                check("%s: dropping the spare drive in the Backup box asks about keeping its files" % label, "Add Drive to Backup Storage" in dialog_text(pg), dialog_text(pg))
+                check("%s: dropping the spare drive in the Backup box asks about keeping its files" % label, "Add Drive to Backup Pool" in dialog_text(pg), dialog_text(pg))
                 ok_button(pg).click()
                 check("%s: the drop sends: add, keep" % label, wait_calls(pg, ["panel", "add", "sdc", "backup", "keep"]), calls()[n:])
                 after_job(pg)
-                check("%s: the message after a change is one short sentence" % label, pg.inner_text("#toast") == "63 GB Cruzer HDD was added to the Backup Storage.", pg.inner_text("#toast"))
+                check("%s: the message after a change is one short sentence" % label, pg.inner_text("#toast") == "63 GB Cruzer HDD was added to the Backup pool.", pg.inner_text("#toast"))
                 js_ = open(os.path.join(ROOT, "panel", "ui", "app.js"), encoding="utf-8").read()
                 drive_code = js_[js_.index("async function jobFinished"):js_.index("// ---- a dialog with questions")]
                 check("%s: a drive change does not reload the whole dashboard" % label, "reload" not in drive_code, "")
@@ -223,7 +223,7 @@ def main():
                 move_to(pg, label, "MAIN1", "backup", "Move to Backup")
                 pg.wait_for_selector("dialog")
                 d = dialog_text(pg)
-                check("%s: Move asks what happens to the files and whether to copy them first" % label, "Move Drive to the Backup Storage" in d and "What should happen to the files on this drive?" in d and "Copy its files to the other main drives first?" in d, d)
+                check("%s: Move asks what happens to the files and whether to copy them first" % label, "Move Drive to the Backup Pool" in d and "What should happen to the files on this drive?" in d and "Copy its files to the other main drives first?" in d, d)
                 check("%s: Move (keep, copy first) has nothing to tick" % label, sure_box(pg).count() == 0 and ok_button(pg).is_enabled() and ok_button(pg).inner_text() == "Move Drive", d)
                 pg.locator("dialog input[type=radio][name=dq-copy][value=no]").check()
                 check("%s: not copying adds the box to tick" % label, sure_box(pg).count() == 1 and ok_button(pg).is_disabled() and "will lose the files of this drive" in dialog_text(pg), dialog_text(pg))
@@ -244,7 +244,7 @@ def main():
                 move_to(pg, label, "MAIN1", "drives", "Take Out")
                 pg.wait_for_selector("dialog")
                 d = dialog_text(pg)
-                check("%s: dropping a pool drive in the Drives box takes it out; with files it offers to copy them first" % label, "Take Drive Out of the Main Storage" in d and "Copy them to another main drive first (recommended)" in d and ok_button(pg).is_enabled(), d)
+                check("%s: dropping a pool drive in the Drives box takes it out; with files it offers to copy them first" % label, "Take Drive Out of the Main Pool" in d and "Copy them to another main drive first (recommended)" in d and ok_button(pg).is_enabled(), d)
                 pg.locator("dialog input[type=radio][value=no]").check()
                 check("%s: not copying asks to tick the box" % label, sure_box(pg).count() == 1 and ok_button(pg).is_disabled(), dialog_text(pg))
                 sure_box(pg).check()
@@ -295,7 +295,7 @@ def main():
                 check("%s: with Select on, a plain press picks a drive" % label, pg.locator("dialog").count() == 0 and "sel" in tile(pg, "MAIN2").get_attribute("class") and "1 Drive selected" in pg.inner_text(".selbar"), "")
                 pg.locator(".selbar").get_by_role("button", name="Take Out").click()
                 pg.wait_for_selector("dialog")
-                check("%s: Take Out from the bar asks the same question for the picked drive" % label, "Take Drive Out of the Main Storage" in dialog_text(pg), dialog_text(pg))
+                check("%s: Take Out from the bar asks the same question for the picked drive" % label, "Take Drive Out of the Main Pool" in dialog_text(pg), dialog_text(pg))
                 cancel_dialog(pg)
                 pg.get_by_role("button", name="Done Selecting").click()
                 check("%s: no page errors" % label, not errors, errors)
@@ -312,7 +312,7 @@ def main():
             pg.locator(".selbar").get_by_role("button", name="Add to Main").click()
             pg.wait_for_selector("dialog")
             d = dialog_text(pg)
-            check("two spares: one dialog asks about each drive; the one that cannot keep its files has to be erased", "Add 2 Drives to Main Storage" in d and "32 GB Kingston HDD" in d and "This drive has to be erased first" not in d and pg.locator("dialog input[type=radio][name='dq-m-sde'][value=keep]").count() == 0, d)
+            check("two spares: one dialog asks about each drive; the one that cannot keep its files has to be erased", "Add 2 Drives to Main Pool" in d and "32 GB Kingston HDD" in d and "This drive has to be erased first" not in d and pg.locator("dialog input[type=radio][name='dq-m-sde'][value=keep]").count() == 0, d)
             check("two spares: erasing one asks to tick the box", sure_box(pg).count() == 1 and ok_button(pg).is_disabled() and ok_button(pg).inner_text() == "Erase and Add Drives", dialog_text(pg))
             if SHOTS:
                 pg.screenshot(path=os.path.join(SHOTS, "drives-two-add.png"))
@@ -386,7 +386,7 @@ def main():
             pg.get_by_role("button", name="Go Ahead Anyway").click()
             check("busy pool: Go Ahead Anyway sends the same change again with the word NOW", wait_calls(pg, ["panel", "add", "sdc", "backup", "keep", "NOW"]), calls()[m:])
             after_job(pg)
-            check("busy pool: it then ends well", pg.inner_text("#toast") == "63 GB Cruzer HDD was added to the Backup Storage.", pg.inner_text("#toast"))
+            check("busy pool: it then ends well", pg.inner_text("#toast") == "63 GB Cruzer HDD was added to the Backup pool.", pg.inner_text("#toast"))
             ctx.close()
 
             # ---- the Abort button
@@ -462,12 +462,12 @@ def main():
             tile(pg, "BOOTFREE").drag_to(pg.locator(".zone-main"))
             pg.wait_for_selector("dialog")
             d = dialog_text(pg)
-            check("boot tile: dropping it on Main asks for a size with the limits", "Boot Drive for the Main Storage" in d and "10 to 30 GB" in d and "LAST place" in d, d)
+            check("boot tile: dropping it on Main asks for a size with the limits", "Boot Drive for the Main Pool" in d and "10 to 30 GB" in d and "last place" in d, d)
             size = pg.locator("dialog input[type=number]")
             size.fill("5")
             check("boot tile: a size below the limit is refused", "whole number from 10 to 30" in dialog_text(pg) and ok_button(pg).is_disabled(), dialog_text(pg))
             size.fill("20")
-            check("boot tile: the button has fixed plain words (no size in it, so it never shows an old number)", ok_button(pg).inner_text() == "Add to Main Storage", ok_button(pg).inner_text())
+            check("boot tile: the button has fixed plain words (no size in it, so it never shows an old number)", ok_button(pg).inner_text() == "Add to Main Pool", ok_button(pg).inner_text())
             check("boot tile: the I-understand box is needed", sure_box(pg).count() == 1 and ok_button(pg).is_disabled(), "")
             sure_box(pg).check()
             check("boot tile: a good size and the box enable the button", ok_button(pg).is_enabled(), "")
@@ -490,7 +490,7 @@ def main():
             check("boot section move: the choices talk about the space, not a drive", "Keep the files in the space" in d and "Start with a new, empty space" in d and "Erase the drive" not in d, d)
             pg.locator("dialog input[type=radio][value=erase]").check()
             d = dialog_text(pg)
-            check("boot section move: erasing names the space, no device word", "the boot drive space will be permanently deleted" in d, d)
+            check("boot section move: erasing names the space, no device word", "the boot drive space will be permanently deleted" in d.lower(), d)
             cancel_dialog(pg)
             card_button(pg, "BACKUPBOOT", "Take Out")
             pg.wait_for_selector("dialog")
@@ -556,7 +556,7 @@ def main():
             card_button(pg, "MAIN1", "Take Out")
             pg.wait_for_selector("dialog")
             d = pg.inner_text("dialog")
-            check("single: the only Main drive CAN be taken out, with a warning that the services stay stopped", "Main storage will be empty" in d and "stay stopped until you add a Main drive again" in d and "nothing is deleted" in d, d)
+            check("single: the only Main drive CAN be taken out, with a warning that the services stay stopped", "Main pool will be empty" in d and "stay stopped until you add a Main drive again" in d and "nothing is deleted" in d, d)
             check("single: it needs the I-understand box", sure_box(pg).count() == 1 and ok_button(pg).is_disabled(), d)
             sure_box(pg).check()
             ok_button(pg).click()
@@ -635,7 +635,7 @@ def main():
                 pg.wait_for_selector("dialog")
                 dt = dialog_text(pg)
                 check("configure (%s): picking another setup from the dropdown opens its own dialog" % cfg_mode, "Build: Plain pool" in dt, dt[:200])
-                check("configure (%s): a plain pool lets the drives that hold files keep them" % cfg_mode, "can keep them" in dt and "Keep the files" in dt and "Erase the drive and format it" in dt, dt)
+                check("configure (%s): a plain pool lets the drives that hold files keep them" % cfg_mode, "can keep their files" in dt and "Keep the files" in dt and "Erase the drive and format it" in dt, dt)
                 if cfg_mode == "ok":
                     m = len(calls())
                     sure_box(pg).check()

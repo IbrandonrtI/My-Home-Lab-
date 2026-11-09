@@ -74,7 +74,7 @@ fill_main() {
   echo "hello" >/mnt/test-main/photos/2026/a.txt; echo "secret" >/mnt/test-main/.hidden/s.txt
   head -c 30000000 /dev/urandom >/mnt/test-main/photos/big.bin; ln -s photos/big.bin /mnt/test-main/link
 }
-two_pool() {   # a Main pool of two drives and two more spare drives
+two_pool() {   # a Main Pool of two drives and two more spare drives
   reset_env; $D test-setup 4 300M >/dev/null 2>&1
   L1=$(loop_of 1); L2=$(loop_of 2); L3=$(loop_of 3); L4=$(loop_of 4)
   P setup pool "${L1#/dev/},${L2#/dev/}" pool ERASE >/dev/null
@@ -95,7 +95,7 @@ has "raid1: it says it is ready" "$OUT" "is ready"
 check "raid1: Main is the new file system now (not a pool)" "$(main_fs)" "ext4"
 check "raid1: every file is there and the same" "$(sums)" "$BEFORE"
 check "raid1: the link is kept" "$(readlink /mnt/test-main/link)" "photos/big.bin"
-check "raid1: no drive is in the Main pool any more" "$(pool_drives main)" "0"
+check "raid1: no drive is in the Main Pool any more" "$(pool_drives main)" "0"
 check "raid1: the build folder is gone" "$([ -e /mnt/test-newmain ] && echo there || echo gone)" "gone"
 check "raid1: the fstab line is at the Main path" "$(grep -v '^#' "$S/fstab" | awk '$2 == "/mnt/test-main" {print $3}')" "ext4"
 check "raid1: nothing is left of the build path in fstab" "$(grep -v '^#' "$S/fstab" | grep -c test-newmain)" "0"
@@ -137,7 +137,7 @@ OUT=$(P setup zfs-mirror "${L3#/dev/},${L4#/dev/}" zfs-mirror ERASE)
 has "zfs: it says it is ready" "$OUT" "is ready"
 check "zfs: Main is the new file system" "$(main_fs)" "ext4"
 check "zfs: every file is there and the same" "$(sums)" "$BEFORE"
-check "zfs: no drive is in the Main pool any more" "$(pool_drives main)" "0"
+check "zfs: no drive is in the Main Pool any more" "$(pool_drives main)" "0"
 check "zfs: the pool is mounted at the Main path" "$(awk '{print $2}' "$S/zfs-state")" "/mnt/test-main"
 
 echo

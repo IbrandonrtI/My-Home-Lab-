@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests of what the installer says when the Main storage has no drive (/mnt/storage is a locked, unmounted folder): the steps that need it are marked
+"""Tests of what the installer says when the Main pool has no drive (/mnt/storage is a locked, unmounted folder): the steps that need it are marked
 as waiting for a Main drive, the notice explains what is paused and what to do, and the control panel is still updated. No file outside a temp folder is touched.
 Run: python3 tests/t_storage_notice.py   (last line is OK or FAIL)"""
 import contextlib
@@ -45,9 +45,9 @@ buf = io.StringIO()
 with contextlib.redirect_stdout(buf):
     g["storage_notice"](res)
 txt = " ".join(buf.getvalue().split())
-check("the notice has a title and says the update itself is fine", "The Main storage has no drive" in txt and "the new scripts and the control panel are installed" in txt, txt)
+check("the notice has a title and says the update itself is fine", "The Main pool has no drive" in txt and "the new scripts and the control panel are installed" in txt, txt)
 check("it names what waits (the groups and the web terminal)", "steps wait for it" in txt and "Services (" in txt and "web terminal" in txt, txt)
-check("it says what to do: the panel Drives tab or sudo drives, then refresh", "drag a drive into Main Storage" in txt and "sudo drives" in txt and "sudo homelab-setup refresh" in txt, txt)
+check("it says what to do: the panel Drives tab or sudo drives, then refresh", "drag a drive into Main pool" in txt and "sudo drives" in txt and "sudo homelab-setup refresh" in txt, txt)
 
 buf = io.StringIO()
 res2 = dict(res)

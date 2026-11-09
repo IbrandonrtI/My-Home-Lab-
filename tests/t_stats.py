@@ -170,9 +170,9 @@ esac
     r = run()
     check("runs and exits 0", r.returncode == 0, r.stdout)
     d = load()
-    check("Immich totals", d["immich"]["photos"] == "12,345" and d["immich"]["videos"] == "678" and d["immich"]["storage"] == "5.0 GB"
+    check("Immich totals", d["immich"]["photos"] == "12,345" and d["immich"]["videos"] == "678" and d["immich"]["storage"] == "5.4 GB"
           and d["immich"]["users"] == "2", d["immich"])
-    check("Nextcloud totals", d["nextcloud"]["files"] == "4,321" and d["nextcloud"]["shares"] == "7" and d["nextcloud"]["free"] == "200 GB"
+    check("Nextcloud totals", d["nextcloud"]["files"] == "4,321" and d["nextcloud"]["shares"] == "7" and d["nextcloud"]["free"] == "215 GB"
           and d["nextcloud"]["users"] == "2", d["nextcloud"])
     check("the keys from the cards are used", ("/api/server/statistics", "immich-secret", None) in srv.seen
           and any(s[2] == "nc-secret" for s in srv.seen), srv.seen)
@@ -183,14 +183,14 @@ esac
           == [("Boot Drive", "30 °C"), ("Main 1", "36 °C"), ("Backup 1", "41 °C")], d["temps"])
     check("the Updated text is a clock time", re.match(r"^\d{1,2}:\d{2} (AM|PM)$", d["updated_text"]) is not None, d["updated_text"])
     check("music library: songs, artists, size (found through the Downtify container)", d["music"]["songs"] == "4" and d["music"]["artists"] == "3"
-          and d["music"]["size"] == "14.6 KB" and d["music"]["folder"] == music, d["music"])
+          and d["music"]["size"] == "15.0 KB" and d["music"]["folder"] == music, d["music"])
     rec = d["music"]["recent"]
     check("recently saved songs: newest first, with when", [(x["name"], x["label"]) for x in rec][:3] == [
         ("Artist A - Song One", "Today"), ("Artist A, Guest - Song Two", "Yesterday"), ("Artist B - Song Three", "3 days ago")]
           and rec[3]["name"] == "track" and re.match(r"^[A-Z][a-z]{2} \d{1,2}$", rec[3]["label"]) and len(rec) == 4, rec)
     check("last backup saved to the backup pool", d["last_backup"]["saved_to"] == "Backup pool" and d["glance"]["backup_saved"] == "Backup pool", d["last_backup"])
     lb = d["last_backup"]
-    check("last backup", lb["result"] == "OK" and lb["size"] == "3.0 GB" and lb["took"] == "1 min 12 s" and lb["ago"] == "3 h ago", lb)
+    check("last backup", lb["result"] == "OK" and lb["size"] == "3.2 GB" and lb["took"] == "1 min 12 s" and lb["ago"] == "3 h ago", lb)
     check("containers", d["containers"]["running"] == "2 of 3" and "1 stopped" in d["containers"]["problems"]
           and "1 unhealthy" in d["containers"]["problems"], d["containers"])
     check("updates", d["updates"]["images"] == "1 waiting" and d["updates"]["system"] == "3 waiting" and d["updates"]["total"] == "4"
@@ -307,7 +307,7 @@ esac
           == [("Boot Drive", "63 °C, Hot"), ("Main 1", "Resting"), ("Backup 1", "52 °C, Warm"), ("WDC Blue", "40 °C")], d["temps"])
     os.remove(os.path.join(state, "temps"))
     run()
-    check("no readings yet is said in words", load()["temps"] == [{"name": "No readings yet", "label": "-"}])
+    check("no readings yet is said in words", load()["temps"] == [{"name": "No readings yet", "label": ""}])
 
     # --- the music folder: chosen by hand, changed, missing
     os.makedirs(os.path.join(T, "mine"))
@@ -358,6 +358,42 @@ esac
     run()
     d = load()
     check("no backup yet", d["last_backup"]["when"] == "Never" and d["last_backup"]["saved_to"] == "-", d["last_backup"])
+
+    # --- the times are shown in the time zone of the weather city (the server may keep UTC), and the sizes use the units a drive is sold in
+    os.makedirs(backup, exist_ok=True)
+    with open(bk, "w") as f:
+        f.write("%s|OK|%s|72|%d\n" % (time.strftime("%Y-%m-%d %H:%M", time.localtime(time.time() - 3 * 3600)), backup, 3 * 1000 ** 3))
+    import zoneinfo
+    env["HOMELAB_DISPLAY_TZ"] = "Pacific/Kiritimati"
+    run()
+    d = load()
+    now_k = datetime.datetime.now(zoneinfo.ZoneInfo("Pacific/Kiritimati"))
+    ok_clock = {t.strftime("%I:%M %p").lstrip("0") for t in (now_k, now_k - datetime.timedelta(minutes=1))}
+    check("the Updated time is the clock of the chosen time zone", d["updated_text"] in ok_clock, (d["updated_text"], ok_clock))
+    check("the last backup is told in that time zone too", re.match(r"^(Today|Yesterday) \d\d:\d\d$", d["last_backup"]["when"]) is not None, d["last_backup"])
+    check("sizes are decimal: 3,000,000,000 bytes are 3.0 GB", d["last_backup"]["size"] == "3.0 GB", d["last_backup"])
+    del env["HOMELAB_DISPLAY_TZ"]
+    with open(os.path.join(hp, "widgets.yaml"), "w") as f:
+        f.write("- openmeteo:\n    label: \"New York\"\n    latitude: 40.7143\n    longitude: -74.0060\n    units: imperial\n- search:\n    provider: google\n")
+    with open(os.path.join(state, "display-timezone"), "w") as f:
+        f.write("40.7143,-74.0060 Asia/Tokyo %d\n" % int(time.time()))
+    run()
+    d = load()
+    now_t = datetime.datetime.now(zoneinfo.ZoneInfo("Asia/Tokyo"))
+    check("the time zone of the weather pill is remembered and used", d["updated_text"] in {t.strftime("%I:%M %p").lstrip("0") for t in (now_t, now_t - datetime.timedelta(minutes=1))}, d["updated_text"])
+
+    # --- a RAID or ZFS Main pool: its health is the array's, not "No drives found"
+    os.remove(os.path.join(state, "display-timezone"))
+    script(os.path.join(bindir, "zpool"), "#!/bin/sh\necho ONLINE\n")
+    with open(os.path.join(state, "preset"), "w") as f:
+        f.write("zfs-mirror|2026-11-09|sdc,sdd\n")
+    script(os.path.join(bindir, "lsblk"), "#!/bin/sh\ncase \"$*\" in\n  *-dno*) printf 'sda disk\\n' ;;\n  *sda) echo 'LABEL=\"\" MOUNTPOINT=\"/\"' ;;\nesac\n")
+    run()
+    d = load()
+    check("a ZFS Main pool says Healthy", d["main"]["health"] == "Healthy" and d["main"]["drives"] == "ZFS", d["main"])
+    script(os.path.join(bindir, "zpool"), "#!/bin/sh\necho DEGRADED\n")
+    run()
+    check("a degraded ZFS Main pool is a problem", load()["main"]["health"].startswith("PROBLEM"), load()["main"])
 
     # --- help
     r = run("nonsense")

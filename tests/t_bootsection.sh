@@ -50,7 +50,7 @@ check "a real drive is the first main drive" "$(grep -c 'TMAIN1' "$S/fstab")" "2
 
 # 1. the warning and the size rules
 OUT=$(printf '1\nCONTINUE\n9999999999\n5\n40\ny\n' | $D bootsection 2>&1)
-case "$OUT" in *"USING PART OF THE BOOT DRIVE"*"LAST place the main storage uses"*) r=yes ;; *) r=no ;; esac; yes_ "the warning says it is used last and that the boot drive can fail" "$r"
+case "$OUT" in *"USING PART OF THE BOOT DRIVE"*"LAST place the main pool uses"*) r=yes ;; *) r=no ;; esac; yes_ "the warning says it is used last and that the boot drive can fail" "$r"
 case "$OUT" in *"too big"*) r=yes ;; *) r=no ;; esac; yes_ "a size above the limit is refused" "$r"
 case "$OUT" in *"too small"*) r=yes ;; *) r=no ;; esac; yes_ "a size below the smallest is refused" "$r"
 case "$OUT" in *"always keeps at least"*) r=yes ;; *) r=no ;; esac; yes_ "it says how much the boot drive keeps free" "$r"

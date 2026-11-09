@@ -88,7 +88,7 @@ has "build: an unknown setup is refused" "$OUT" "does not exist"
 # ---------------- build a plain pool on the three drives
 OUT=$(P setup pool "${L1#/dev/},${L2#/dev/},${L3#/dev/}" pool ERASE)
 has "build: the plain pool says it is ready" "$OUT" "is ready"
-check "build: the three drives joined the Main storage" "$(pool_drives main)" "3"
+check "build: the three drives joined the Main pool" "$(pool_drives main)" "3"
 J=$($D panel setups 2>/dev/null)
 check "after: no spare drive is left" "$(echo "$J" | jq_ "len(d['spare'])")" "0"
 

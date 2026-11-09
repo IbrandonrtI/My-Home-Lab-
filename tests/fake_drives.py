@@ -102,7 +102,7 @@ elif act == "setups":
         return {"id": i, "title": title, "blurb": "About " + title + ".", "kind": kind, "fits": fits, "min": mn, "drives": drives, "usable_bytes": usable, "used_bytes": usable * 2,
                 "tolerates": tol, "nightly": nightly, "score": 600, "can_build": fits and not why, "why": why if fits else "Needs %d empty drives; 3 found." % mn, "needs_tool": False,
                 "can_keep": i in ("pool", "mirror", "snapraid1", "snapraid2"), "migrate": "migrate" in mode and kind != "pool"}
-    block = "The Main storage still has drives in it. A new setup builds a new Main storage, so take the drives out of Main first." if "blocked" in mode else ""
+    block = "The Main pool still has drives in it. A new setup builds a new Main pool, so take the drives out of Main first." if "blocked" in mode else ""
     print(json.dumps({"spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "blank": False, "keep_ok": True},
                                 {"id": "sde", "device": "/dev/sde", "name": "32 GB Kingston HDD", "size_bytes": 32000000000, "blank": True},
                                 {"id": "sdf", "device": "/dev/sdf", "name": "32 GB Kingston HDD 2", "size_bytes": 32000000000, "blank": True}],

@@ -59,7 +59,7 @@ hasnt "no ZFS suggestion when files are kept" "$OUT" "[zfs-mirror]"
 has "the plan says the files are kept" "$OUT" "[its files are KEPT]"
 has "the plan lists the kept drive" "$OUT" "are KEPT as they are"
 has "the setup is built" "$OUT" "Mirror (nightly copy) is ready"
-check "the old file is still there in the Main storage" "$(cat /mnt/test-main/old.txt 2>/dev/null)" "old file of drive 1"
+check "the old file is still there in the Main pool" "$(cat /mnt/test-main/old.txt 2>/dev/null)" "old file of drive 1"
 check "the erase warning lists only the empty drive" "$(printf '%s' "$OUT" | sed -n '/ERASE WARNING/,/KEPT as they are/p' | grep -c '^  - /dev/')" "1"
 
 # 2. erase the drive that holds files: it is used like an empty drive, and the old file is gone

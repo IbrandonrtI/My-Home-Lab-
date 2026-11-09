@@ -46,7 +46,7 @@ setup 3
 A=$(label_of main 0); B=$(label_of main 1); C=$(label_of main 2)
 echo "from A" >"/mnt/test-disks/$A/fa.txt"; echo "from B" >"/mnt/test-disks/$B/fb.txt"; echo "from C" >"/mnt/test-disks/$C/fc.txt"
 OUT=$(P disconnect "$A,$B" yes)
-has "two drives are taken out together" "$OUT" "is disconnected from the main storage"
+has "two drives are taken out together" "$OUT" "is disconnected from the main pool"
 has "the progress of both drives is reported" "$OUT" "PROGRESS $A 100 Done"
 check "the files of both went to the drive that stays" "$(cat /mnt/test-disks/$C/fa.txt /mnt/test-disks/$C/fb.txt /mnt/test-disks/$C/fc.txt 2>/dev/null | tr '\n' ',')" "from A,from B,from C,"
 check "the pool still shows every file" "$(cat /mnt/test-main/fa.txt /mnt/test-main/fb.txt /mnt/test-main/fc.txt 2>/dev/null | tr '\n' ',')" "from A,from B,from C,"
@@ -81,7 +81,7 @@ RS
 chmod +x "$S/bin/rsync"
 export RSYNC_TRACE="$S/trace"; : >"$RSYNC_TRACE"
 OUT=$(HOMELAB_EXTRA_PATH="$S/bin" P disconnect "${M[0]},${M[1]},${M[2]}" yes)
-has "three drives were taken out" "$(printf '%s\n' "$OUT" | grep -c 'is disconnected from the main storage')" "3"
+has "three drives were taken out" "$(printf '%s\n' "$OUT" | grep -c 'is disconnected from the main pool')" "3"
 # the first copies of the three drives overlap in time: the second one starts before the first one ends
 python3 - "$RSYNC_TRACE" >"$S/overlap" <<'PY'
 import sys
@@ -186,7 +186,7 @@ OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A,$B2" yes)
 check "containers: taking two drives out stops each container once" "$(grep -c '^stop' "$S/docker.log")" "2"
 check "containers: and starts each once" "$(grep -c '^start' "$S/docker.log")" "2"
 
-# ---------------- every Main drive can leave: the Main storage is empty, and the services that use it stay stopped until a drive is back
+# ---------------- every Main drive can leave: the Main pool is empty, and the services that use it stay stopped until a drive is back
 setup 2 1
 fake_docker
 A=$(label_of main 0); B2=$(label_of main 1)
@@ -195,8 +195,8 @@ OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A,$B2" yes)
 has "empty Main: without the word REMOVE nothing happens" "$OUT" "Cancelled"
 check "empty Main: both drives are still in" "$(pool_drives main)" "2"
 OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A,$B2" yes REMOVE)
-has "empty Main: the drives leave" "$OUT" "is disconnected from the main storage"
-check "empty Main: no drive is left in the Main storage" "$(pool_drives main)" "0"
+has "empty Main: the drives leave" "$OUT" "is disconnected from the main pool"
+check "empty Main: no drive is left in the Main pool" "$(pool_drives main)" "0"
 check "empty Main: the containers were stopped" "$(grep -c '^stop' "$S/docker.log")" "2"
 check "empty Main: and are NOT started again" "$(grep -c '^start' "$S/docker.log")" "0"
 has "empty Main: the report says they stay stopped" "$OUT" "stay stopped until a Main drive is added"
@@ -205,7 +205,7 @@ check "empty Main: the status says Main has no drive" "$(echo "$STJ" | python3 -
 check "empty Main: and lists the services that wait" "$(echo "$STJ" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['main_held']))")" "2"
 SP=$(actions | jq_ "d['spare'][0]['id']")
 OUT=$(HOMELAB_EXTRA_PATH="$S/bin3" P add "$SP" main keep)
-has "empty Main: a drive can be added again" "$OUT" "connected to the main storage"
+has "empty Main: a drive can be added again" "$OUT" "connected to the main pool"
 check "empty Main: now the containers start" "$(grep -c '^start' "$S/docker.log")" "2"
 SP2=$(actions | jq_ "d['spare'][0]['id']")
 HOMELAB_EXTRA_PATH="$S/bin3" P add "$SP2" main keep >/dev/null
@@ -217,7 +217,7 @@ setup 1 1
 fake_docker
 A=$(label_of main 0)
 has "empty Main: a single last Main drive asks for REMOVE" "$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A" yes)" "Cancelled"
-has "empty Main: and goes with REMOVE" "$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A" yes REMOVE)" "is disconnected from the main storage"
+has "empty Main: and goes with REMOVE" "$(HOMELAB_EXTRA_PATH="$S/bin3" P disconnect "$A" yes REMOVE)" "is disconnected from the main pool"
 
 echo
 if [ "$bad" = 0 ]; then echo OK; else echo "FAIL ($bad)"; exit 1; fi
