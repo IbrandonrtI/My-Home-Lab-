@@ -408,8 +408,7 @@ function driveDialog(cfg) {
     const dynamic = h("div", {});
     (cfg.fields || []).forEach(f => { state[f.id] = f.value; });
     const fieldBox = (cfg.fields || []).map(f => h("label", { class: "dfield" }, h("span", {}, h("b", {}, f.label), f.hint ? h("small", {}, f.hint) : null),
-      h("input", { type: "number", min: f.min, max: f.max, step: 1, value: f.value, inputmode: "numeric", oninput: ev => { state[f.id] = ev.target.value; if (checkNow) checkNow(); } })));
-    let checkNow = null;
+      h("input", { type: "number", min: f.min, max: f.max, step: 1, value: f.value, inputmode: "numeric", oninput: ev => { state[f.id] = ev.target.value; refresh(); } })));
     const okBtn = h("button", { class: "primary" }, "OK");
     let sure = false;      // the "I understand" box
     const finish = v => { if (!done) { done = true; resolve(v); } d.close(); };
@@ -421,7 +420,6 @@ function driveDialog(cfg) {
       const needSure = typed.some(t => !t.auto);      // (the drives tool still wants its exact words; the panel sends them, nobody has to type)
       const bad = refuse ? null : (cfg.invalid ? cfg.invalid(state) : null);
       const check = () => { const b = cfg.invalid && !refuse ? cfg.invalid(state) : null; okBtn.disabled = !!b || (!refuse && needSure && !sure); if (invalidBox) invalidBox.textContent = b || ""; };
-      checkNow = check;
       const invalidBox = h("p", { class: "dwarn", role: "alert" }, bad || "");
       put(dynamic, [
         qs.map(q => h("fieldset", { class: "dq" }, h("legend", {}, q.label),
@@ -607,7 +605,7 @@ async function bootAdd(role) {      // part of the boot drive becomes a drive of
     warn: () => "If the boot drive fails, you lose everything in this space together with the system." + (role === "backup" ? " A backup on the boot drive helps if a Main drive dies, but not if the boot drive dies: the backup goes with it." : ""),
     typed: () => [{ word: "CONTINUE" }],
     sure: () => "I understand that this part of the boot drive is used for storage and goes with it if it fails.",
-    ok: st => "Make " + (st.size || "") + " " + bl.unit + " Space", danger: () => false });
+    ok: () => "Add to " + R + " Storage", danger: () => false });
   if (r) startJob("bootadd", { role, units: Number(r.answers.size), typed: r.typed }, "The boot drive space was added to the " + R + " Storage.");
 }
 function poolFacts(tiles) {      // what is left in the pool when these drives go, and whether the files that are on the leaving drives fit on the ones that stay
