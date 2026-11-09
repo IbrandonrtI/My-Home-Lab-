@@ -103,6 +103,40 @@ lvm_unused_bytes() {   # unused space of the drive's LVM volume group (when the 
   lvs --noheadings --nosuffix --units b -o vg_free "$src" 2>/dev/null | awk 'NF {printf "%d", $1; exit}'
 }
 
+bootsection_attach() {   # bootsection_attach ROLE REUSE: the section file of that pool (made or saved before) becomes the last drive of the pool
+  local role=$1 reuse=$2 label mp img
+  label="$(role_prefix "$role")BOOT"; mp="$DISKS_DIR/$label"; img="$BOOT_SECTION_DIR/$role.img"
+  crit_enter || true      # from here the pool changes: one drive at a time
+  stop_containers "$(role_pool "$role")"
+  fstab_snapshot
+  ensure_mp "$mp"
+  fstab_add "$img  $mp  ext4  $BOOT_OPTS  0  0"
+  sd_reload
+  if ! mount_fstab "$mp"; then
+    fstab_rollback
+    [ "$reuse" = 1 ] || rm -f "$img"
+    start_containers
+    die "Could not mount the section at $mp. fstab was restored."
+  fi
+  if ! absorb_plain_pool "$role" "$mp"; then
+    fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
+    die "The files in $(role_pool "$role") could not be moved into the section. fstab was restored."
+  fi
+  if [ "$reuse" = 0 ] && [ "$role" = main ]; then give_to_owner "$mp"; fi
+  if ! apply_pool "$role"; then
+    fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
+    die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
+  fi
+  start_containers
+  name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
+  timeshift_protect
+  say ""
+  say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
+  log "connected $label ($img) to $role"
+  crit_release
+  return 0
+}
+
 bootsection_flow() {
   array_guard || return 1
   need_tools || return 1
@@ -192,32 +226,86 @@ bootsection_flow() {
                "Stop the containers that use the $role storage for a minute." \
                "Add the section to the $role storage as its last drive, then start the containers again." && return 0
   fi
-  stop_containers "$(role_pool "$role")"
-  fstab_snapshot
-  ensure_mp "$mp"
-  fstab_add "$img  $mp  ext4  $BOOT_OPTS  0  0"
-  sd_reload
-  if ! mount_fstab "$mp"; then
-    fstab_rollback
-    [ "$reuse" = 1 ] || rm -f "$img"
-    start_containers
-    die "Could not mount the section at $mp. fstab was restored."
-  fi
-  if ! absorb_plain_pool "$role" "$mp"; then
-    fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
-    die "The files in $(role_pool "$role") could not be moved into the section. fstab was restored."
-  fi
-  if [ "$reuse" = 0 ] && [ "$role" = main ]; then give_to_owner "$mp"; fi
-  if ! apply_pool "$role"; then
-    fstab_rollback; pool_umount "$mp"; [ "$reuse" = 1 ] || rm -f "$img"; start_containers
-    die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
-  fi
-  start_containers
-  name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
-  timeshift_protect
-  say ""
-  say "Done. $(branch_name "$mp") is part of the $role storage ($(role_pool "$role")). It is the last place that storage uses."
-  log "connected $label ($img) to $role"
-  return 0
+  bootsection_attach "$role" "$reuse"
 }
 
+
+bootsection_limits() {   # bootsection_limits -> "MIN MAX UNIT SMALL" in bytes: the smallest and the biggest section the boot drive can lend now (MAX rounded down to whole units), its unit, and 1 when the boot drive is too small to lend anything
+  local total free max small=0
+  total=$(boot_total_bytes); free=$(boot_free_bytes)
+  [[ "${free:-}" =~ ^[0-9]+$ ]] || free=0
+  if [[ "${total:-}" =~ ^[0-9]+$ ]] && [ "$total" -le "$BOOT_SMALL_BYTES" ]; then small=1; fi
+  max=$(( free - BOOT_KEEP_FREE_BYTES ))
+  [ "$max" -gt 0 ] || max=0
+  max=$(( max / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))
+  echo "$BOOT_MIN_BYTES $max $BOOT_UNIT_BYTES $small"
+}
+bootsection_limits_json() {
+  local lim min max unit small
+  lim=$(bootsection_limits); read -r min max unit small <<<"$lim"
+  printf '{"min_bytes":%s,"max_bytes":%s,"unit_bytes":%s,"unit":%s,"small":%s,"main":%s,"backup":%s}' "$(json_num "$min")" "$(json_num "$max")" "$(json_num "$unit")" "$(json_str "$BOOT_UNIT_NAME")" \
+    "$([ "$small" = 1 ] && echo true || echo false)" "$([ -n "$(boot_section_of main)" ] && echo true || echo false)" "$([ -n "$(boot_section_of backup)" ] && echo true || echo false)"
+}
+
+panel_bootadd_flow() {   # the control panel: part of the boot drive becomes a drive of Main or Backup (PANEL_ROLE, PANEL_UNITS = how many GB)
+  local role=$PANEL_ROLE units=$PANEL_UNITS label mp img min max unit small bytes lim
+  array_guard || return 1
+  need_tools || return 1
+  command -v fallocate >/dev/null 2>&1 || { note "The tool 'fallocate' is missing (package util-linux)."; return 1; }
+  lim=$(bootsection_limits); read -r min max unit small <<<"$lim"
+  if [ "$small" = 1 ]; then note "The boot drive is too small to lend a part of it for a storage pool. Nothing was changed."; return 1; fi
+  if [ -n "$(boot_section_of "$role")" ]; then note "The $role storage already has a boot drive section. Take it out first to make a different size. Nothing was changed."; return 1; fi
+  label="$(role_prefix "$role")BOOT"; mp="$DISKS_DIR/$label"; img="$BOOT_SECTION_DIR/$role.img"
+  if [ -f "$img" ]; then note "A boot drive section that was used for the $role storage before is still saved. Use it or delete it with  sudo drives  on the server. Nothing was changed."; return 1; fi
+  pool_can_grow "$role" "a section" || return 1
+  [[ "$units" =~ ^[0-9]{1,6}$ ]] || { note "Please choose a size in $BOOT_UNIT_NAME. Nothing was changed."; return 1; }
+  bytes=$(( units * unit ))
+  if [ "$bytes" -lt "$min" ]; then note "That is too small. The smallest section is $(pretty_size "$min"). Nothing was changed."; return 1; fi
+  if [ "$bytes" -gt "$max" ]; then note "That is too big. The boot drive must keep $(pretty_size "$BOOT_KEEP_FREE_BYTES") free, so the most is $(( max / unit )) $BOOT_UNIT_NAME. Nothing was changed."; return 1; fi
+  typed "CONTINUE" "Type CONTINUE to go on: " || { say "Cancelled. Nothing was changed."; return 1; }
+  mkdir -p "$BOOT_SECTION_DIR"; chmod 700 "$BOOT_SECTION_DIR" 2>/dev/null || true
+  pre_change "Reserve $(pretty_size "$bytes") on the boot drive and format it as a new drive section." \
+             "Stop the containers that use the $role storage for a minute." \
+             "Add the section to the $role storage as its last drive, then start the containers again." && return 0
+  progress_for "$PROG_ITEM" 10 "Reserving the space"
+  if ! fallocate -l "$bytes" "$img" 2>/dev/null; then rm -f "$img"; die "Could not reserve $(pretty_size "$bytes") on the boot drive."; fi
+  if ! mkfs.ext4 -F -q -L "$label" -m 0 "$img" >&2; then rm -f "$img"; die "Could not format the section."; fi
+  log "made the boot drive section $img ($bytes bytes) for $role"
+  bootsection_attach "$role" 0
+}
+
+bootmove_flow() {   # the control panel: a boot drive section goes to the other pool (keep = the section with its files; erase = a new, empty section of the same size)
+  local mp=$1 role newrole oldname img size newlabel newimg keep=$PANEL_KEEP lim min max unit small
+  role=$(branch_role "$mp"); newrole=$(other_role "$role"); oldname=$(branch_name "$mp"); img=$(boot_image_of "$mp")
+  [ "$PANEL_MODE" = 1 ] || { note "A boot drive section is moved in the Drives tab of the dashboard. Here: remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; }
+  [ -f "$img" ] || die "The file behind $oldname is not there. Nothing was changed."
+  size=$(stat -c %s "$img")
+  if [ -n "$(boot_section_of "$newrole")" ]; then note "The $newrole storage already has a boot drive section. Nothing was changed."; return 1; fi
+  pool_can_grow "$newrole" "a section" || return 1
+  newlabel="$(role_prefix "$newrole")BOOT"; newimg="$BOOT_SECTION_DIR/$newrole.img"
+  [ ! -e "$newimg" ] || { note "A saved boot drive section for the $newrole storage is in the way ($newimg). Nothing was changed."; return 1; }
+  if [ "$keep" = yes ]; then
+    typed KEEP "Type KEEP to move the section with its files: " || { say "Cancelled. Nothing was changed."; return 1; }
+    KEEP_IMG=1
+  else
+    typed ERASE "Type ERASE to move the section as a new, empty one: " || { say "Cancelled. Nothing was changed."; return 1; }
+    KEEP_IMG=0
+  fi
+  say "$oldname moves from the $role storage to the $newrole storage."
+  PROG_LO=0; PROG_HI=55
+  detach_branch "$mp" "Then put the section into the $newrole storage." || { PROG_HI=100; KEEP_IMG=0; return 1; }
+  [ "$DRY_RUN" = 1 ] && { PROG_HI=100; KEEP_IMG=0; return 0; }
+  KEEP_IMG=0
+  PENDING_NOTE="$oldname already left the $role storage and was not added to the $newrole storage."
+  PROG_LO=55; PROG_HI=100
+  if [ "$keep" = yes ]; then
+    mv "$img" "$newimg" || die "Could not move the section file. It is at $img."
+    e2label "$newimg" "$newlabel" || die "Could not rename the section. It is at $newimg."
+  else
+    if ! fallocate -l "$size" "$newimg" 2>/dev/null; then rm -f "$newimg"; die "Could not reserve $(pretty_size "$size") on the boot drive."; fi
+    if ! mkfs.ext4 -F -q -L "$newlabel" -m 0 "$newimg" >&2; then rm -f "$newimg"; die "Could not format the section."; fi
+  fi
+  bootsection_attach "$newrole" "$([ "$keep" = yes ] && echo 1 || echo 0)" || return 1
+  PROG_LO=0; PENDING_NOTE=""
+  return 0
+}

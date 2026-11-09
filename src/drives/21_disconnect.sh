@@ -102,7 +102,7 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
   part=$(branch_part "$mp"); dev=""; [ -n "$part" ] && ! is_boot_section "$mp" && dev=$(disk_of_part "$part")
   local drain=0 copyq=""
 
-  if is_boot_section "$mp" && mountpoint -q "$mp" && has_data "$mp"; then
+  if is_boot_section "$mp" && [ "$KEEP_IMG" != 1 ] && mountpoint -q "$mp" && has_data "$mp"; then
     if [ ${#others[@]} -eq 0 ]; then
       note "$label holds files and there is no other $role drive to copy them to. Nothing was changed."
       return 1
@@ -119,7 +119,7 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
     fi
     warn "$label is the only backup drive. Backups will stop until another backup drive is connected."
     typed "REMOVE" "Type REMOVE to continue: " || { say "Cancelled."; return 1; }
-  elif ! is_boot_section "$mp" && mountpoint -q "$mp" && has_data "$mp"; then
+  elif { ! is_boot_section "$mp" || [ "$KEEP_IMG" = 1 ]; } && mountpoint -q "$mp" && has_data "$mp"; then
     say "$label holds files. They will disappear from the $role storage unless they are copied to another $role drive."
     if [ "$PANEL_MODE" = 1 ] && [ -n "$PANEL_COPY" ]; then copyq=$PANEL_COPY      # the control panel already asked
     elif yn "Copy them to another $role drive first (recommended)?"; then copyq=yes
@@ -162,11 +162,11 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
   start_containers
   log "disconnected $label ($(basename "$mp")) from $role"
   if is_boot_section "$mp"; then
-    rm -f "$img"
+    if [ "$KEEP_IMG" != 1 ]; then rm -f "$img"; fi      # (a section that moves to the other pool keeps its file)
     name_store_del "$(basename "$mp")"
     chattr -i "$mp" 2>/dev/null || true
     rmdir "$mp" 2>/dev/null || true
-    say "$label is removed. Its space went back to the boot drive."
+    if [ "$KEEP_IMG" = 1 ]; then say "$label is out of the $role storage."; else say "$label is removed. Its space went back to the boot drive."; fi
   else
     say "$label is disconnected from the $role storage. The data on the drive was not touched."
   fi
@@ -201,7 +201,7 @@ move_flow() {
   if [ "$PANEL_MODE" = 1 ]; then mp=$(panel_branch "$PANEL_ID") || return 1; keep=$PANEL_KEEP
   else mp=$(pick_branch "Which drive do you want to move? ") || return 1; fi
   role=$(branch_role "$mp"); newrole=$(other_role "$role"); oldname=$(branch_name "$mp")
-  if is_boot_section "$mp"; then note "A boot drive section cannot be moved. Remove it (sudo drives > Add or remove drives > Disconnect) and add one to the other pool (Use part of the boot drive)."; return 1; fi
+  if is_boot_section "$mp"; then bootmove_flow "$mp"; return $?; fi
   part=$(branch_part "$mp"); [ -n "$part" ] || die "That drive is not connected, so it cannot be moved."
   dev=$(disk_of_part "$part")
   # everything that can still be refused or cancelled is checked BEFORE the drive leaves its pool

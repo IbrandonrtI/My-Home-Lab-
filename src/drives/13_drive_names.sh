@@ -58,13 +58,17 @@ clean_name() {   # safe as a folder name and inside a Docker volume line
   printf '%s' "$s"
 }
 
-drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, or nothing when it cannot be told
+drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, Flash (a USB stick), or nothing when it cannot be told
   local LC_ALL=C model=${2^^} line rota tran
   model=${model//_/ }
   if [[ $model =~ (^|[^A-Z0-9])SSD([^A-Z0-9]|$)|NVME ]]; then printf SSD; return 0; fi
   line=$(lsblk -dnbo ROTA,TRAN "$1" 2>/dev/null); line=${line%%$'\n'*}
   read -r rota tran <<<"$line"
   [ "${tran,,}" = nvme ] && { printf SSD; return 0; }
+  # a USB stick: it plugs in with USB, can be pulled out (removable) and often claims to spin like a hard drive; or its model says so
+  if [ "${tran,,}" = usb ]; then
+    if [[ $model =~ CRUZER|DATATRAVELER|FLASH|JUMPDRIVE|ULTRA\ FIT|STORE\ N\ GO|TRANSMEMORY|MICRO\ SD|CARD\ READER ]] || [ "$(lsblk -dno RM "$1" 2>/dev/null | head -1 | tr -d ' ')" = 1 ]; then printf Flash; return 0; fi
+  fi
   case "$rota" in 1) printf HDD ;; 0) printf SSD ;; esac
   return 0
 }

@@ -119,6 +119,7 @@ PANEL_COPY=""        # disconnect and move: yes = copy the drive's files to the 
 PANEL_IDS=()         # the drives of a panel add, move or disconnect (one or several), and for each the choice "keep" or "erase" when the panel sends them one by one
 PANEL_MODES=()
 PANEL_ROLE=""        # add: the pool they join
+PANEL_UNITS=""       # bootadd: the size of the boot drive section, in GB
 PANEL_ALL=""         # add and move: the one choice (keep or erase) for every drive
 PANEL_NOW=0          # the panel's "Go Ahead Anyway": do not wait for a running backup or upload (it sends the word NOW)
 PROG_ITEM=""         # the drive the progress lines are about (panel only)
@@ -129,6 +130,7 @@ PANEL_JOBS=3         # how many drives of one batch are worked on at the same ti
 CRIT_DEPTH=0         # >0 while this process holds the pool lock (the short steps that change a pool run one at a time)
 ABORTED=0            # 1 when the person pressed Stop and this drive was stopped because of it
 HOLDER_STOPPED=""
+KEEP_IMG=0           # 1 while a boot drive section moves to the other pool with its file (the file is not deleted when it leaves)
 PANEL_HOLD=0         # 1 while a batch of several drives runs: the containers are stopped once (at the first pool change) and started once (when every drive is done)
 PANEL_BARRIER=0      # 1 while a batch of several drives runs: the pool changes start only when every drive has finished its slow work (copying, formatting)
 PUTBACK=0            # 1 when a half-moved drive was put back into the pool it came from
