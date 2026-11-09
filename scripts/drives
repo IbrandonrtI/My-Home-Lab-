@@ -1101,7 +1101,35 @@ pre_change() {   # pre_change STEP...: the last stop before the first change. 0 
   dry_gate "$@"
 }
 
+# The Main storage can be left empty on purpose (every Main drive taken out). The services that use it must NOT start then: they would
+# write into the bare folder on the boot drive. They are written down here and start again when a Main drive is back.
+main_hold_file() { printf '%s' "$STATE_DIR/main-empty-stopped"; }
+
+main_hold_apply() {   # takes the containers that use the Main storage out of STOPPED when Main has no drive
+  [ -z "$(branches_of main)" ] || return 0
+  local keep n rest="" mine=""
+  keep=$(containers_using "$MAIN_POOL" | tr '\n' ' ')
+  for n in $STOPPED; do case " $keep " in *" $n "*) mine="$mine $n" ;; *) rest="$rest $n" ;; esac; done
+  [ -n "${mine// /}" ] || return 0
+  mkdir -p "$STATE_DIR" 2>/dev/null
+  for n in $mine; do echo "$n" >>"$(main_hold_file)"; done
+  note "The Main storage is empty, so these containers stay stopped until a Main drive is added:$mine"
+  STOPPED=${rest# }
+}
+
+main_hold_resume() {   # a Main drive is back and mounted: the containers that were kept stopped join the ones to start
+  local f; f=$(main_hold_file)
+  [ -s "$f" ] || return 0
+  [ -n "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
+  # shellcheck disable=SC2046
+  STOPPED=$({ printf '%s\n' $STOPPED; cat "$f"; } | sort -u | grep . | tr '\n' ' ')
+  rm -f "$f"
+}
+
 start_containers() {
+  main_hold_resume
+  [ -n "${STOPPED// /}" ] || return 0
+  main_hold_apply
   [ -n "${STOPPED// /}" ] || return 0
   local failed=""
   note "Starting containers: $STOPPED"
@@ -1123,7 +1151,7 @@ main_pool_ok() {   # true when the main storage is mounted the way fstab says (o
 
 batch_start_held() {   # the end of a batch of several drives: the containers it stopped start again (when the pools are mounted the way fstab says)
   local f="$PANEL_RESERVE_DIR/held" list
-  [ -s "$f" ] || return 0
+  [ -s "$f" ] || { start_containers; return 0; }      # (nothing was stopped by this batch; containers kept stopped for an empty Main may start now)
   list=$(tr '\n' ' ' <"$f"); rm -f "$f"
   PANEL_HOLD=0
   if main_pool_ok; then
@@ -1514,11 +1542,11 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
 
   if [ ${#others[@]} -eq 0 ]; then
     if [ "$role" = main ]; then
-      note "$label is the only main drive. Removing it would take away the storage your services use."
-      note "Add another main drive first (sudo drives > Add or remove drives > Connect a new drive), then try again."
-      return 1
+      warn "$label is the only main drive. Taking it out leaves the Main storage empty."
+      warn "The services that use it (Immich, Nextcloud, FileBrowser...) stay stopped until a main drive is added again. Nothing on the drive is deleted."
+    else
+      warn "$label is the only backup drive. Backups will stop until another backup drive is connected."
     fi
-    warn "$label is the only backup drive. Backups will stop until another backup drive is connected."
     typed "REMOVE" "Type REMOVE to continue: " || { say "Cancelled."; return 1; }
   elif { ! is_boot_section "$mp" || [ "$KEEP_IMG" = 1 ]; } && mountpoint -q "$mp" && has_data "$mp"; then
     say "$label holds files. They will disappear from the $role storage unless they are copied to another $role drive."
@@ -5233,7 +5261,7 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
     done
   else
     for id in "${PANEL_IDS[@]}"; do panel_branch "$id" >/dev/null || return 1; done
-    if [ "$n" -gt 1 ]; then      # several drives at once must leave at least one Main drive (a single drive gets its own, longer explanation from the flow)
+    if [ "$n" -gt 1 ] && [ "$act" = move ]; then      # several drives moving at once must leave at least one Main drive (a single drive gets its own, longer explanation from the flow)
       local keepleft
       keepleft=$(branches_of main | wc -l)
       for id in "${PANEL_IDS[@]}"; do [ "$(branch_role "$(panel_branch "$id" 2>/dev/null)")" = main ] && keepleft=$((keepleft - 1)); done
