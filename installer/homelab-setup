@@ -1427,7 +1427,7 @@ def drive_brand(model):
 
 
 def drive_kind(mountpoint, model=""):
-    """'SSD' or 'HDD' for the drive behind a mount point; empty when it cannot be told.
+    """'SSD', 'HDD' or 'Flash' (a USB stick) for the drive behind a mount point; empty when it cannot be told.
     The model text wins (a USB box often says 'spinning disk' for an SSD), then NVMe, then the drive's own flag."""
     if re.search(r"\bSSD\b|NVME", model.upper().replace("_", " ")):
         return "SSD"
@@ -1440,6 +1440,10 @@ def drive_kind(mountpoint, model=""):
         return ""
     if len(parts) > 1 and parts[1].lower() == "nvme":
         return "SSD"
+    if len(parts) > 1 and parts[1].lower() == "usb":      # a USB stick: it can be pulled out (or its model says so) and often claims to spin like a hard drive
+        rc2, rm = run(["lsblk", "-dno", "RM", disk], timeout=15)
+        if re.search(r"CRUZER|DATATRAVELER|FLASH|JUMPDRIVE|ULTRA FIT|STORE N GO|TRANSMEMORY|MICRO SD|CARD READER", model.upper().replace("_", " ")) or (rc2 == 0 and rm.strip().split("\n")[0].strip() == "1"):
+            return "Flash"
     return {"1": "HDD", "0": "SSD"}.get(parts[0], "")
 
 
@@ -2775,7 +2779,7 @@ class AptUpgrade(Step):
 
 
 REQUIRED_PKGS = ["curl", "ca-certificates", "gnupg", "rsync", "cron", "python3-yaml", "smartmontools", "hdparm"]
-OPTIONAL_PKGS = ["mergerfs", "parted"]
+OPTIONAL_PKGS = ["mergerfs", "parted", "mdadm", "snapraid", "zfsutils-linux"]      # (mdadm, snapraid and zfsutils-linux are for the ready-made RAID, SnapRAID and ZFS setups of the Drives tab)
 
 
 @step
@@ -2783,7 +2787,7 @@ class Packages(Step):
     id, group, title = "packages", "System", "Helper programs installed (rsync, cron, smartmontools, mergerfs, ...)"
 
     def probe(self):
-        missing = [p for p in REQUIRED_PKGS if not pkg_installed(p)]
+        missing = [p for p in REQUIRED_PKGS + OPTIONAL_PKGS if not pkg_installed(p)]
         return "done" if not missing else "todo"
 
     def run(self):
@@ -5379,9 +5383,9 @@ PANEL_UNIT = "/etc/systemd/system/homelab-panel.service"
 PANEL_UI_FILES = ["index.html", "app.js", "app.css", "icon.svg"]
 PANEL_SUDOERS = "/etc/sudoers.d/homelab-panel"
 # the only commands the panel's user may run as root without a password (the Drives tab); `drives panel` checks every word again, and the
-# ones that erase or move drives (add, wipe, disconnect, move) also ask for the typed confirmations inside the drives tool and refuse while a backup runs
-PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort"]
-PANEL_SUDO_WITH_WORDS = ["rename", "sleep", "wake", "add", "wipe", "disconnect", "move"]
+# ones that erase or move drives (add, wipe, disconnect, move, setup, bootadd) also ask for the typed confirmations inside the drives tool and refuse while a backup runs
+PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", "setups"]
+PANEL_SUDO_WITH_WORDS = ["rename", "sleep", "wake", "add", "wipe", "disconnect", "move", "setup", "bootadd"]
 
 
 def panel_applies():
