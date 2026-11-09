@@ -33,12 +33,12 @@ actions() { $D panel actions 2>/dev/null; }
 jq_() { python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 label_of() { actions | jq_ "[r['id'] for r in d['rename'] if r['role']=='$1'][$2]"; }
 pool_drives() { grep -v '^#' "$S/fstab" | grep " /mnt/test-$1 fuse.mergerfs" | grep -o '/mnt/test-disks/[A-Za-z0-9]*' | sort -u | wc -l; }
-# N drives: the first $1 are Main, the last one Backup
+# setup MAIN [BACKUP]: MAIN drives for Main, then BACKUP drives (default 1) for Backup, all added with erase
 setup() {
-  local n=$1 i L
-  reset_env; $D test-setup "$((n + 1))" 300M >/dev/null 2>&1
+  local n=$1 b=${2:-1} i L
+  reset_env; $D test-setup "$((n + b))" 300M >/dev/null 2>&1
   for i in $(seq 1 "$n"); do L=$(loop_of "$i"); P add "${L#/dev/}" main erase "$L" ERASE >/dev/null; done
-  L=$(loop_of "$((n + 1))"); P add "${L#/dev/}" backup erase "$L" ERASE >/dev/null
+  for i in $(seq "$((n + 1))" "$((n + b))"); do L=$(loop_of "$i"); P add "${L#/dev/}" backup erase "$L" ERASE >/dev/null; done
 }
 
 # ---------------- files are copied only to a drive that stays
@@ -116,6 +116,27 @@ check "stop: the other drive (already done) was put back too" "$(printf '%s\n' "
 check "stop: the small file is untouched" "$(cat /mnt/test-main/c.txt)" "hello"
 check "stop: Stop did not leave its request behind" "$([ -e "$S/panel-abort" ] && echo left || echo clean)" "clean"
 has "stop: a new change can start right away" "$(P rename "$A" "Photos")" "Photos"
+
+# ---------------- two leaving drives hold different versions of the same file: both leave, nothing fails
+setup 1 3
+B=(); for i in 0 1 2; do B+=("$(label_of backup $i)"); done
+echo "version from one" >"/mnt/test-disks/${B[1]}/same.txt"; echo "version from two" >"/mnt/test-disks/${B[2]}/same.txt"; echo "kept" >"/mnt/test-disks/${B[1]}/only1.txt"
+L1=$(loop_of 3); L2=$(loop_of 4)  # (the drives of the 2nd and 3rd Backup labels)
+OUT=$(P move "${B[1]}:erase,${B[2]}:erase" each yes "$L1" "$L2" ERASE)
+hasnt "same file on two leaving drives: no verification failure" "$OUT" "Verification found files"
+check "same file on two leaving drives: both drives joined Main" "$(pool_drives main)-$(pool_drives backup)" "3-1"
+check "same file on two leaving drives: the file is in the Backup pool (one of the versions)" "$(find /mnt/test-backup -maxdepth 1 -name same.txt | wc -l)" "1"
+check "same file on two leaving drives: the other files came along" "$(cat /mnt/test-backup/only1.txt 2>/dev/null)" "kept"
+
+# ---------------- a drive that cannot be formatted: the report says why
+setup 1 3
+B=(); for i in 0 1 2; do B+=("$(label_of backup $i)"); done
+mkdir -p "$S/bin2"; printf '#!/bin/sh\necho "mkfs.ext4: pretend the drive is broken" >&2\nexit 1\n' >"$S/bin2/mkfs.ext4"; chmod +x "$S/bin2/mkfs.ext4"
+L1=$(loop_of 3); L2=$(loop_of 4)  # (the drives of the 2nd and 3rd Backup labels)
+OUT=$(HOMELAB_EXTRA_PATH="$S/bin2" P move "${B[1]}:erase,${B[2]}:erase" each yes "$L1" "$L2" ERASE)
+has "a drive that cannot be formatted: the report says what went wrong" "$OUT" "What went wrong:"
+has "a drive that cannot be formatted: with the reason" "$OUT" "mkfs failed"
+has "a drive that cannot be formatted: and how many were done" "$OUT" "0 of 2 drives were done"
 
 echo
 if [ "$bad" = 0 ]; then echo OK; else echo "FAIL ($bad)"; exit 1; fi
