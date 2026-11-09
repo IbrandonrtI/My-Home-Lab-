@@ -287,3 +287,16 @@ details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-siz
   .dzone .tiles { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
 }
 .card.working .row.tight { gap: 10px; flex-wrap: wrap; align-items: center; margin: 10px 0 4px; }
+
+/* Configure Drives */
+.cfg { margin: 10px 0 14px; padding: 12px 14px; border: 1px solid var(--line, rgba(255,255,255,.14)); border-radius: 12px; display: grid; gap: 10px; }
+.cfg .cfgrec { display: grid; gap: 2px; }
+.cfg .cfgsel { max-width: 100%; min-width: 0; flex: 1 1 260px; }
+.cfg .row.tight { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+/* number field in the drive dialogs (for example the size of a boot drive section) */
+.dfield { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
+.dfield small { display: block; color: var(--muted); font-weight: 400; }
+.dfield input { width: 7.5em; min-height: 44px; font: inherit; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: inherit; }
+.card.failcard { border-color: rgba(255, 107, 107, 0.7); }
+.card.failcard .joblog { max-height: 50vh; overflow: auto; }

@@ -288,7 +288,7 @@ const STATE_TEXT = { connected: "Connected", "connected (used last)": "Connected
   "not connected to a pool": "Not in a Pool", "boot/system drive (never touched)": "Boot Drive" };      // (short words: they must fit in their column)
 const STATE_HINT = { "connected (used last)": "A backup copy on the boot drive. It is only used when the other backup drives are full.", "boot/system drive (never touched)": "The boot drive. The panel never changes it." };
 const JOB_TEXT = { add: "Adding the drive...", wipe: "Erasing the drive...", disconnect: "Taking the drive out of its pool...", move: "Moving the drive...", remount: "Mounting the drives again. This can take a minute...",
-  rename: "Saving the name...", sleep: "Telling the drive to sleep...", wake: "Waking the drive up..." };
+  setup: "Building the new setup. This can take a few minutes...", bootadd: "Setting aside part of the boot drive...", rename: "Saving the name...", sleep: "Telling the drive to sleep...", wake: "Waking the drive up..." };
 function humanBytes(n) {
   if (typeof n !== "number" || !(n >= 0)) return "-";
   const u = ["B", "KB", "MB", "GB", "TB", "PB"];
@@ -365,14 +365,18 @@ async function jobFinished(j) {
     if (go) startJob(last.action, Object.assign({}, last.body, { typed: (last.body.typed || []).concat(["NOW"]) }), last.okText);
     return was;
   }
+  if (j.rc !== 0 && j.rc !== 4) DRfail = { what: JOB_TEXT[j.action] ? JOB_TEXT[j.action].replace(/\.\.\..*$/, "") : "That change", message: j.message || "That did not work.", lines: (j.lines || []).filter(l => !/\(typed in the panel\)|^Type /.test(l)), time: new Date() };
+  else DRfail = null;
   toast(j.rc === 0 ? (okText || "Done.") : (j.message || (j.rc === 4 ? "Stopped." : "That did not work.")), j.rc !== 0 && j.rc !== 4);      // (4: the person pressed Abort; the message says what was stopped and what was put back)
   await loadDrives();
   return was;
 }
 let DRokText = "";
+let DRfail = null;      // the last change that did not work: it stays on the page until it is dismissed (a toast is gone in seconds)
 async function startJob(action, body, okText) {
   if (DRbusy) return;
   DRbusy = action;
+  DRfail = null;
   DRokText = okText || "";
   DRlast = { action, body, okText };
   const items = (body.ids || [body.id]).filter(Boolean).map(x => String(x).split(":")[0]);
@@ -402,6 +406,10 @@ function driveDialog(cfg) {
     const state = {};
     (cfg.questions || []).forEach(q => { state[q.id] = q.value; });
     const dynamic = h("div", {});
+    (cfg.fields || []).forEach(f => { state[f.id] = f.value; });
+    const fieldBox = (cfg.fields || []).map(f => h("label", { class: "dfield" }, h("span", {}, h("b", {}, f.label), f.hint ? h("small", {}, f.hint) : null),
+      h("input", { type: "number", min: f.min, max: f.max, step: 1, value: f.value, inputmode: "numeric", oninput: ev => { state[f.id] = ev.target.value; if (checkNow) checkNow(); } })));
+    let checkNow = null;
     const okBtn = h("button", { class: "primary" }, "OK");
     let sure = false;      // the "I understand" box
     const finish = v => { if (!done) { done = true; resolve(v); } d.close(); };
@@ -411,13 +419,17 @@ function driveDialog(cfg) {
       const refuse = cfg.refuse ? cfg.refuse(state) : null;
       const typed = refuse ? [] : (cfg.typed ? cfg.typed(state) : []);
       const needSure = typed.some(t => !t.auto);      // (the drives tool still wants its exact words; the panel sends them, nobody has to type)
-      const check = () => { okBtn.disabled = !refuse && needSure && !sure; };
+      const bad = refuse ? null : (cfg.invalid ? cfg.invalid(state) : null);
+      const check = () => { const b = cfg.invalid && !refuse ? cfg.invalid(state) : null; okBtn.disabled = !!b || (!refuse && needSure && !sure); if (invalidBox) invalidBox.textContent = b || ""; };
+      checkNow = check;
+      const invalidBox = h("p", { class: "dwarn", role: "alert" }, bad || "");
       put(dynamic, [
         qs.map(q => h("fieldset", { class: "dq" }, h("legend", {}, q.label),
           q.options.map(o => h("label", { class: "dopt" },
             h("input", Object.assign({ type: "radio", name: "dq-" + q.id, value: o.value, onchange: () => { state[q.id] = o.value; sure = false; refresh(); } }, state[q.id] === o.value ? { checked: true } : {})),
             h("span", {}, h("b", {}, o.label), o.hint ? h("small", {}, o.hint) : null))))),
         cfg.note && cfg.note(state) ? h("p", { class: "muted" }, cfg.note(state)) : null,
+        cfg.fields && !refuse ? invalidBox : null,
         refuse ? h("p", { class: "dwarn", role: "alert" }, refuse) : (cfg.warn && cfg.warn(state) ? h("p", { class: "dwarn", role: "alert" }, cfg.warn(state)) : null),
         needSure ? h("label", { class: "dopt sure" },
           h("input", { type: "checkbox", checked: sure, onchange: ev => { sure = ev.target.checked; check(); } }),
@@ -427,13 +439,61 @@ function driveDialog(cfg) {
       okBtn.onclick = () => refuse ? finish(null) : finish({ answers: Object.assign({}, state), typed: typed.map(t => t.word) });
       check();
     };
-    const d = h("dialog", { class: "wide" }, h("h2", {}, cfg.title), (cfg.lead || []).map(t => h("p", {}, t)), dynamic,
+    const d = h("dialog", { class: "wide" }, h("h2", {}, cfg.title), (cfg.lead || []).map(t => h("p", {}, t)), fieldBox, dynamic,
       h("div", { class: "actions" }, h("button", { onclick: () => finish(null) }, "Cancel"), okBtn));
     d.addEventListener("close", () => { d.remove(); finish(null); });
     refresh();
     document.body.append(d);
     d.showModal();
   });
+}
+// ---- Configure Drives: scan the spare drives, recommend a setup, list the others from best to worst
+let DRcfg = null;      // null = hidden, { loading } or { err } or the answer of /api/drives/setups
+async function openConfig() {
+  if (DRcfg && !DRcfg.loading) { DRcfg = null; drawDrives(); return; }
+  DRcfg = { loading: true };
+  drawDrives();
+  try { DRcfg = await api("GET", "/api/drives/setups"); } catch (e) { DRcfg = { err: String((e && e.message) || e || "The drives could not be scanned.") }; }
+  drawDrives();
+}
+const protectText = o => o.tolerates > 0 ? (o.tolerates === 1 ? "1 drive can fail" : o.tolerates + " drives can fail") + (o.nightly ? " (copied every night)" : "") : "no protection";
+const setupLine = o => o.title + (o.fits ? "  -  " + humanBytes(o.usable_bytes) + " usable, " + protectText(o) : "  -  needs " + o.min + " drives");
+async function buildSetup(o) {
+  const c = DRcfg || { spare: [] };
+  const drives = o.drives.map(id => c.spare.find(sp => sp.id === id)).filter(Boolean);
+  const left = c.spare.filter(sp => !o.drives.includes(sp.id));
+  const withFiles = drives.filter(sp => !sp.blank);
+  const r = await driveDialog({
+    title: "Build: " + o.title,
+    lead: [o.blurb, "Drives used (" + drives.length + " of " + c.spare.length + "): " + drives.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", "),
+      "You get about " + humanBytes(o.usable_bytes) + " of the " + humanBytes(o.used_bytes) + " on these drives. " + (o.tolerates > 0 ? cap(protectText(o)) + " without losing files." : "No drive may fail: one dead drive loses the files."),
+      left.length ? "Not used: " + left.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", ") + ". They stay as spare drives." : "Every spare drive is used."],
+    questions: [],
+    refuse: () => o.can_build ? null : o.why,
+    warn: () => "Everything on " + drives.map(sp => sp.device).join(", ") + " will be permanently deleted" + (withFiles.length ? " (" + withFiles.map(sp => sp.name).join(", ") + " already hold files)" : "") + "." + (o.kind !== "pool" && o.id !== "mirror" && !/^snapraid/.test(o.id) ? " The new storage becomes your Main storage." : ""),
+    typed: () => [{ word: o.id }, { word: "ERASE" }],
+    sure: () => "I understand that everything on these drives will be permanently deleted.",
+    ok: () => "Erase and Build Setup", danger: () => true });
+  if (r) startJob("setup", { setup: o.id, ids: o.drives, typed: r.typed }, o.title + " is ready.");
+}
+function cfgBox() {
+  if (!DRcfg) return null;
+  const off = !!DRbusy || !!DRwait;
+  if (DRcfg.loading) return h("div", { class: "cfg", role: "status" }, h("p", { class: "muted" }, "Scanning the drives..."));
+  if (DRcfg.err) return h("div", { class: "cfg", role: "alert" }, h("p", { class: "dwarn" }, DRcfg.err), h("button", { class: "small", onclick: () => { DRcfg = null; openConfig(); } }, "Try Again"));
+  const c = DRcfg, rec = (c.options || []).find(o => o.id === c.recommended);
+  const sizes = (c.spare || []).map(sp => humanBytes(sp.size_bytes)).join(", ");
+  if (!(c.spare || []).length || !rec) return h("div", { class: "cfg" }, h("p", { class: "muted" }, "No spare drives to build a setup on. Plug drives in (or take them out of Main and Backup), then press Configure Drives again."));
+  const others = c.options.filter(o => o.id !== rec.id);
+  return h("div", { class: "cfg" },
+    h("p", { class: "muted small" }, "Scanned " + nDrives(c.spare.length).toLowerCase() + " that are not in a pool: " + sizes + ". Setups are ranked by a balance of protection and usable space. Every setup erases the drives it uses."),
+    h("div", { class: "cfgrec" }, h("b", {}, "Recommended: " + rec.title), h("span", { class: "muted small" }, humanBytes(rec.usable_bytes) + " usable, " + protectText(rec) + ", uses " + rec.drives.length + " drives"),
+      !rec.can_build ? h("span", { class: "dwarn small" }, rec.why) : null),
+    h("div", { class: "row tight" },
+      h("button", { class: "primary", disabled: off, onclick: () => buildSetup(rec) }, "Build Recommended Setup"),
+      h("select", { class: "cfgsel", disabled: off, "aria-label": "Other setups, best to worst", onchange: ev => { const o = others.find(x => x.id === ev.target.value); ev.target.value = ""; if (o && o.fits) buildSetup(o); } },
+        h("option", { value: "" }, "Other setups, best to worst..."),
+        others.map(o => h("option", Object.assign({ value: o.id }, o.fits ? {} : { disabled: true }), setupLine(o) + (o.fits && !o.can_build ? "  (not possible yet)" : ""))))));
 }
 const other = r => (r === "main" ? "backup" : "main");
 const cap = t => t[0].toUpperCase() + t.slice(1);
@@ -501,6 +561,24 @@ async function eraseSpare(sp) {
   if (r) startJob("wipe", { id: sp.id, mode: r.answers.mode, typed: r.typed }, sp.name + " was erased" + (r.answers.mode === "format" ? " and formatted." : "."));
 }
 const DRAIN_SPARE = 2147483648;      // the drives tool keeps this much free on a drive it copies to
+async function bootAdd(role) {      // part of the boot drive becomes a drive of this pool
+  const bl = bootLimits(), R = cap(role);
+  if (!bl) { toast("The boot drive cannot lend any space right now.", true); return; }
+  if (bootIn(role)) { toast("The " + R + " storage already has a boot drive section. Take it out first to make a different size.", true); return; }
+  const free = (DR.status || {}).boot_free_bytes;
+  const r = await driveDialog({
+    title: "Use Part of the Boot Drive for the " + R + " Storage",
+    lead: ["The boot drive also holds the system and your apps. Free now: " + humanBytes(free) + ". It always keeps " + humanBytes(typeof free === "number" ? free - bl.max_bytes : 0) + " or more free for the system.",
+      "The space is taken from the boot drive right away and stays reserved, even while the section is empty. The section is the LAST place the " + role + " storage uses: it gets files only when the other " + role + " drives are full."],
+    fields: [{ id: "size", label: "Size in " + bl.unit, value: Math.max(bl.lo, Math.min(bl.hi, 100)), min: bl.lo, max: bl.hi, hint: "From " + bl.lo + " to " + bl.hi + " " + bl.unit }],
+    questions: [],
+    invalid: st => { const n = Number(st.size); return !Number.isInteger(n) || n < bl.lo || n > bl.hi ? "Choose a whole number from " + bl.lo + " to " + bl.hi + " " + bl.unit + "." : null; },
+    warn: () => "If the boot drive fails, you lose everything in this section together with the system." + (role === "backup" ? " A backup on the boot drive helps if a Main drive dies, but not if the boot drive dies: the backup goes with it." : ""),
+    typed: () => [{ word: "CONTINUE" }],
+    sure: () => "I understand that this part of the boot drive is used for storage and goes with it if it fails.",
+    ok: st => "Make " + (st.size || "") + " " + bl.unit + " Section", danger: () => false });
+  if (r) startJob("bootadd", { role, units: Number(r.answers.size), typed: r.typed }, "The boot drive section was added to the " + R + " Storage.");
+}
 function poolFacts(tiles) {      // what is left in the pool when these drives go, and whether the files that are on the leaving drives fit on the ones that stay
   const rens = tiles.map(t => t.ren), total = rens[0].others + 1, remaining = total - rens.length, role = rens[0].role;
   const copyable = rens.some(a => a.has_data) && remaining > 0;
@@ -516,25 +594,30 @@ async function takeOutDrives(tiles) {
   const f = poolFacts(tiles), role = tiles[0].ren.role, R = cap(role), one = tiles.length === 1;
   const names = tiles.map(t => t.d.name).join(", ");
   const held = tiles.reduce((n, t) => n + (t.ren.used_bytes || 0), 0);
+  const bootData = tiles.some(t => t.kind === "boot" && t.ren.has_data);      // a boot drive section is deleted when it leaves, so its files must be copied first
   const r = await driveDialog({
     title: one ? "Take Drive Out of the " + R + " Storage" : "Take " + tiles.length + " Drives Out of the " + R + " Storage",
     lead: [one ? tiles[0].d.name + (tiles[0].ren.has_data ? "  ·  holds " + humanBytes(held) : "  ·  holds no files") : names],
-    questions: f.copyable ? [{ id: "copy", label: (one ? "Its files are" : "Their files are") + " in the " + role + " storage. What should happen to them?", value: "yes", options: [
+    questions: f.copyable && !bootData ? [{ id: "copy", label: (one ? "Its files are" : "Their files are") + " in the " + role + " storage. What should happen to them?", value: "yes", options: [
       { value: "yes", label: "Copy them to another " + role + " drive first (recommended)", hint: "Every file is copied and checked before the drive is taken out. Nothing is lost." },
       { value: "no", label: "Do not copy them", hint: "The files stay on the drive only. They disappear from the " + role + " storage." }] }] : [],
-    refuse: () => f.only && role === "main" ? (one ? "This is the only Main drive. Taking it out would take away the storage your services use. Add another Main drive first." : "These are all the Main drives. Taking them out would take away the storage your services use. Leave at least one Main drive.") : null,
+    refuse: () => bootData && f.only ? "The files in the boot drive section have nowhere to go: there is no other " + role + " drive to copy them to, and taking a section out deletes it. Add another " + role + " drive first." : f.only && role === "main" ? (one ? "This is the only Main drive. Taking it out would take away the storage your services use. Add another Main drive first." : "These are all the Main drives. Taking them out would take away the storage your services use. Leave at least one Main drive.") : null,
+    note: () => bootData ? "The files in the boot drive section are copied to the other " + role + " drives first. Taking the section out gives its space back to the boot drive, which deletes the section." : null,
     warn: s => f.only ? "No " + role + " drive stays, so nothing can be copied: the files stay on the " + (one ? "drive" : "drives") + " only. Backups stop until another backup drive is added." : f.copyable && s.copy === "no" ? "Without copying, the files on " + (one ? "this drive" : "these drives") + " will not show in the " + role + " storage any more. They stay on the drive." : f.noRoom && s.copy === "yes" ? f.roomText : "The drive" + (one ? " is" : "s are") + " taken out of the " + role + " storage. The data on the drive is not touched. The containers that use the storage stop for a minute.",
     typed: s => f.only ? [{ word: "REMOVE" }] : f.copyable && s.copy === "no" ? [{ word: "CONTINUE" }] : [],
     sure: () => f.only ? "I understand that backups stop until another backup drive is added." : "I understand that the files on " + (one ? "this drive" : "these drives") + " will no longer show in the " + role + " storage.",
     ok: () => one ? "Take Drive Out" : "Take Drives Out", danger: s => f.only || (f.copyable && s.copy === "no") });
-  if (r) startJob("disconnect", { ids: tiles.map(t => t.ren.id), copy: r.answers.copy || "no", typed: r.typed }, one ? tiles[0].d.name + " was taken out of the " + R + " Storage." : nDrives(tiles.length) + " were taken out of the " + R + " Storage.");
+  if (r) startJob("disconnect", { ids: tiles.map(t => t.ren.id), copy: bootData ? "yes" : (r.answers.copy || "no"), typed: r.typed }, one ? tiles[0].d.name + " was taken out of the " + R + " Storage." : nDrives(tiles.length) + " were taken out of the " + R + " Storage.");
 }
 async function moveDrives(tiles) {
   const f = poolFacts(tiles), role = tiles[0].ren.role, to = other(role), T = cap(to), R = cap(role), one = tiles.length === 1;
-  const keepQ = (id, label, a) => ({ id, label, value: a.has_data ? "keep" : "erase", options: [
+  const keepQ = (id, label, t) => ({ id, label, value: t.ren.has_data ? "keep" : "erase", options: t.kind === "boot" ? [
+    { value: "keep", label: "Keep the files in the section", hint: "The section moves as it is, so its files show up in the " + T + " storage." },
+    { value: "erase", label: "Start with a new, empty section", hint: "The files in the section are deleted. A new, empty section of the same size joins the " + T + " storage." }] : [
     { value: "keep", label: "Keep the files on the drive", hint: "The drive is added to the " + T + " storage as it is, so its files show up in the " + T + " storage." },
     { value: "erase", label: "Erase the drive and format it", hint: "Everything on the drive is deleted. It joins the " + T + " storage as a new, empty drive." }] });
-  const questions = (one ? [keepQ("keep", "What should happen to the files on this drive?", tiles[0].ren)] : tiles.map(t => keepQ("k-" + t.ren.id, t.d.name, t.ren)))
+  const clash = tiles.some(t => t.kind === "boot") && bootIn(to);
+  const questions = (one ? [keepQ("keep", "What should happen to the files on this drive?", tiles[0])] : tiles.map(t => keepQ("k-" + t.ren.id, t.d.name, t)))
     .concat([{ id: "copy", label: (one ? "Copy its files" : "Copy their files") + " to the other " + role + " drives first?", value: "yes", show: () => f.copyable, options: [
       { value: "yes", label: "Yes, copy them first (recommended)", hint: "Every file is copied and checked, so the " + role + " storage keeps them." },
       { value: "no", label: "No, do not copy them", hint: "The " + role + " storage loses the files of " + (one ? "this drive" : "these drives") + "." }] }]);
@@ -545,11 +628,12 @@ async function moveDrives(tiles) {
     lead: [one ? tiles[0].d.name + " moves from the " + R + " storage to the " + T + " storage." + (tiles[0].ren.has_data ? "  It holds " + humanBytes(tiles[0].ren.used_bytes) + "." : "  It holds no files.")
       : tiles.map(t => t.d.name).join(", ") + " move from the " + R + " storage to the " + T + " storage."],
     questions,
-    refuse: () => f.only && role === "main" ? (one ? "This is the only Main drive. Moving it would take away the storage your services use. Add another Main drive first." : "These are all the Main drives. Moving them would take away the storage your services use. Leave at least one Main drive.") : null,
+    refuse: () => clash ? "The " + T + " storage already has a boot drive section. A pool can have only one." : f.only && role === "main" ? (one ? "This is the only Main drive. Moving it would take away the storage your services use. Add another Main drive first." : "These are all the Main drives. Moving them would take away the storage your services use. Leave at least one Main drive.") : null,
     warn: s => {
       const noCopy = f.copyable && s.copy === "no", e = erasing(s);
+      const devs = x => x.map(t => t.kind === "boot" ? "the boot drive section" : devOf(t)).join(", ");
       if (e.length && noCopy) return "The files on " + (one ? "this drive" : "the erased drives") + " will be permanently lost: " + (one ? "the drive is" : "they are") + " erased and the files are not copied anywhere.";
-      if (e.length) return "Everything on " + e.map(t => devOf(t)).join(", ") + " will be permanently deleted" + (f.copyable ? ", after its files are copied to the other " + role + " drives." : ".");
+      if (e.length) return "Everything on " + devs(e) + " will be permanently deleted" + (f.copyable ? ", after its files are copied to the other " + role + " drives." : ".");
       if (f.only) return "No " + role + " drive stays, so nothing can be copied: the files stay on the " + (one ? "drive" : "drives") + " and show in the " + T + " storage. The " + R + " storage is empty until another drive is added.";
       if (f.noRoom && s.copy === "yes") return f.roomText;
       if (noCopy) return "The files go with the drive" + (one ? "" : "s") + " to the " + T + " storage. The " + R + " storage loses them.";
@@ -557,7 +641,7 @@ async function moveDrives(tiles) {
     },
     typed: s => {
       const t = [];
-      erasing(s).forEach(x => t.push({ word: devOf(x) }));
+      erasing(s).forEach(x => { if (x.kind !== "boot") t.push({ word: devOf(x) }); });
       if (erasing(s).length) t.push({ word: "ERASE" });
       if (erasing(s).length < tiles.length) t.push({ word: "KEEP", auto: true });      // (keeping the files is not risky: no box to tick)
       if (f.copyable && s.copy === "no") t.push({ word: "CONTINUE" });
@@ -659,14 +743,25 @@ function tilesNow() {      // every drive as one tile: where it is, and what can
     const ren = (act.rename || []).find(a => d.mount && d.mount.split("/").pop() === a.id) || null;
     const sp = ren ? null : (act.spare || []).find(a => diskOf(d.device) === a.id) || null;
     const kind = ren ? (ren.boot_section ? "boot" : "pool") : sp ? "spare" : "other";
-    const group = kind === "spare" ? "spare" : kind === "pool" && ren.connected ? ren.role : "";      // "" = it cannot be dragged
+    const group = kind === "spare" ? "spare" : (kind === "pool" || kind === "boot") && ren.connected ? ren.role : "";      // "" = it cannot be dragged
     return { d, ren, sp, kind, group, id: ren ? ren.id : sp ? sp.id : (d.device && d.device !== "-" ? d.device : d.name) };
-  });
+  }).concat(bootTile());
+}
+function bootLimits() {      // what the boot drive can lend now (in the unit the drives tool uses: GB, or MB in its test mode)
+  const bl = ((DR && DR.status) || {}).boot_limits;
+  if (!bl || bl.small || typeof bl.max_bytes !== "number" || bl.max_bytes < bl.min_bytes || (bl.main && bl.backup)) return null;
+  return Object.assign({ lo: Math.ceil(bl.min_bytes / bl.unit_bytes), hi: Math.floor(bl.max_bytes / bl.unit_bytes) }, bl);
+}
+const bootIn = role => ((DR && DR.actions && DR.actions.rename) || []).some(a => a.boot_section && a.role === role);
+function bootTile() {      // the part of the boot drive that can be lent to a pool: a tile of its own in the Drives box
+  const bl = bootLimits();
+  if (!bl || bl.hi < bl.lo) return [];
+  return [{ d: { name: "Boot Drive", device: "-", role: "bootfree", state: "connected", size_bytes: bl.max_bytes, used_bytes: null, free_bytes: null, mount: "" }, ren: null, sp: null, kind: "bootfree", group: "bootfree", id: "BOOTFREE" }];
 }
 const tileById = id => tilesNow().find(t => t.id === id) || null;
 function selTiles() { return tilesNow().filter(t => DRsel.has(t.id)); }
 function toggleSel(t) {
-  if (!t.group || DRbusy) return;
+  if (!t.group || DRbusy || t.kind === "bootfree") return;
   if (DRsel.has(t.id)) DRsel.delete(t.id);
   else {
     const have = selTiles()[0];
@@ -682,7 +777,7 @@ function tile(t) {
   const prog = DRjob && DRjob.running && (DRjob.items || []).includes(t.id) ? ((DRjob.progress || {})[t.id] || { pct: 0, text: "Waiting" }) : null;
   const dim = DRbusy && !prog;
   const sel = DRsel.has(t.id);
-  const used = typeof d.used_bytes === "number" ? humanBytes(d.used_bytes) + " of " + humanBytes(d.size_bytes) + " used" : typeof d.size_bytes === "number" ? humanBytes(d.size_bytes) + " drive" : "";
+  const used = t.kind === "bootfree" ? "up to " + humanBytes(d.size_bytes) + " to lend" : typeof d.used_bytes === "number" ? humanBytes(d.used_bytes) + " of " + humanBytes(d.size_bytes) + " used" : typeof d.size_bytes === "number" ? humanBytes(d.size_bytes) + " drive" : "";
   const draggable = !!t.group && !DRbusy;
   const el = h("div", {
     class: "tile" + (sel ? " sel" : "") + (t.group ? "" : " locked") + (dim ? " dim" : "") + (prog ? " working" : "") + (pw && pw.state === "asleep" ? " asleep" : ""),
@@ -697,7 +792,7 @@ function tile(t) {
     h("div", { class: "ticon" }, hddIcon(),
       h("span", { class: "dot " + (dotBad(t) ? "bad" : "ok"), title: dotBad(t) ? stateText(d.state) : "Connected", role: "img", "aria-label": dotBad(t) ? stateText(d.state) : "Connected" }),
       bad ? h("span", { class: "warnmark", title: "The drive reports a problem. Press it for the health." }, "!") : null,
-      (t.kind === "boot" || t.kind === "other") ? h("span", { class: "lock", title: t.kind === "boot" ? "The boot drive section stays where it is." : "This drive is managed outside the pools.", "aria-hidden": "true" }, "🔒") : null),
+      (t.kind === "other" || (t.kind === "boot" && !t.group)) ? h("span", { class: "lock", title: t.kind === "boot" ? "This boot drive section is not connected." : "This drive is managed outside the pools.", "aria-hidden": "true" }, "🔒") : null),
     prog ? h("div", { class: "tprog", role: "progressbar", "aria-valuenow": prog.pct, "aria-valuemin": 0, "aria-valuemax": 100, "aria-label": d.name + ": " + prog.text },
         h("div", { class: "bar" }, h("i", { style: { width: Math.max(4, prog.pct) + "%" } })), h("small", {}, prog.text + (/%$/.test(prog.text) ? "" : "  " + prog.pct + "%")))
       : [usageBar(d.used_bytes, d.size_bytes) || h("div", { class: "usebar ghost" }), h("div", { class: "tused" }, used || "Size unknown")]);
@@ -733,7 +828,8 @@ function dropOn(kind) {
   if (!drag || DRbusy) return;
   const tiles = drag.ids.map(tileById).filter(Boolean);
   if (!tiles.length) return;
-  if (drag.group === "spare" && (kind === "main" || kind === "backup")) addDrives(tiles, kind);
+  if (drag.group === "bootfree" && (kind === "main" || kind === "backup")) bootAdd(kind);
+  else if (drag.group === "spare" && (kind === "main" || kind === "backup")) addDrives(tiles, kind);
   else if ((drag.group === "main" || drag.group === "backup") && kind === other(drag.group)) moveDrives(tiles);
   else if ((drag.group === "main" || drag.group === "backup") && kind === "drives") takeOutDrives(tiles);
 }
@@ -750,7 +846,7 @@ function selBar() {
 }
 function poolBox(p, tiles) {
   const T = (ROLE_TEXT[p.role] || p.role) + " Storage";
-  return zone(p.role, ["spare", other(p.role)], [
+  return zone(p.role, ["spare", other(p.role)].concat(bootIn(p.role) ? [] : ["bootfree"]), [
     h("div", { class: "ph" },
       h("div", { class: "pt" }, h("h2", {}, T), h("span", { class: "sub" }, p.path + (p.mounted ? "  ·  " + (p.filesystem || "") : ""))),
       p.mounted ? [ring(p.used_bytes, p.size_bytes), h("div", { class: "pu" }, h("b", {}, humanBytes(p.used_bytes) + " used"), h("span", { class: "sub" }, humanBytes(p.free_bytes) + " free of " + humanBytes(p.size_bytes)))] : h("div", { class: "pu" }, h("span", { class: "sub" }, "Not mounted")),
@@ -759,7 +855,20 @@ function poolBox(p, tiles) {
 }
 // ---- the card that opens when a drive is pressed: its facts, and everything that can be done with it
 function cardStat(label, ...kids) { return h("div", { class: "st" }, h("small", {}, label), h("div", {}, kids)); }
+function bootCardBody(t) {
+  const bl = bootLimits(), dis = !!DRbusy || !!DRwait, go = f => () => { closeCard(); f(); };
+  const btn = (role, label) => h("button", { class: "small", disabled: dis || bootIn(role), title: bootIn(role) ? "The " + cap(role) + " storage already has a boot drive section" : "", onclick: go(() => bootAdd(role)) }, label);
+  return [
+    h("p", { class: "muted" }, "The drive the system runs from. A part of its free space can be used as a drive of Main or Backup (a boot drive section)."),
+    h("div", { class: "stats" },
+      cardStat("Free Space", typeof ((DR.status || {}).boot_free_bytes) === "number" ? humanBytes(DR.status.boot_free_bytes) : "-"),
+      cardStat("Can Lend", bl ? bl.lo + " to " + bl.hi + " " + bl.unit : "-"),
+      cardStat("Always Kept Free", bl ? humanBytes(bl.max_bytes > 0 ? DR.status.boot_free_bytes - bl.max_bytes : 0) : "-")),
+    h("div", { class: "row tight cardactions" }, btn("main", "Add to Main"), btn("backup", "Add to Backup")),
+    h("p", { class: "muted small" }, "You can also drag this tile into Main or Backup. A section is the last place its pool uses, and it can be moved to the other pool or taken out again whenever you like.")];
+}
 function cardBody(t) {
+  if (t.kind === "bootfree") return bootCardBody(t);
   const d = t.d, act = DR.actions || {}, pw = powerFor(d, act.power), hr = rowFor(d, DRhealth && DRhealth.drives);
   const dis = !!DRbusy, ren = t.ren, sp = t.sp, wait = !!DRwait;
   const dev = devOf(t);
@@ -773,8 +882,8 @@ function cardBody(t) {
     ren && ren.custom && btn("Automatic Name", go(() => autoName(ren))),
     pw && pw.state !== "asleep" && btn("Put to Sleep", go(() => driveDo("sleep", { id: pw.id }))),
     pw && pw.state === "asleep" && btn("Wake Up", go(() => driveDo("wake", { id: pw.id }))),
-    t.kind === "pool" && ren.connected && btn("Move to " + cap(other(ren.role)), go(() => moveDrives([t]))),
-    t.kind === "pool" && ren.connected && btn("Take Out", go(() => takeOutDrives([t])), { danger: true }),
+    (t.kind === "pool" || t.kind === "boot") && ren.connected && btn("Move to " + cap(other(ren.role)), go(() => moveDrives([t]))),
+    (t.kind === "pool" || t.kind === "boot") && ren.connected && btn("Take Out", go(() => takeOutDrives([t])), { danger: true }),
     sp && btn("Add to Main", go(() => addDrives([t], "main"))),
     sp && btn("Add to Backup", go(() => addDrives([t], "backup"))),
     sp && btn("Erase", go(() => eraseSpare(sp)), { danger: true })].filter(Boolean);
@@ -843,6 +952,11 @@ function drivesBody() {
       DRbusy && /^(add|wipe|disconnect|move)$/.test(DRbusy) ? h("p", { class: "muted small" }, "Please keep this page open or come back later. Copying files can take a long time. You can leave the page: the work goes on.") : null,
       lines.length ? h("details", { class: "joblogbox" }, h("summary", {}, "Show the steps"), h("pre", { class: "joblog" }, lines.join("\n"))) : null));
   }
+  if (DRfail && !DRbusy) out.push(h("div", { class: "card failcard", role: "alert" }, h("h2", {}, "What Happened"),
+    h("p", {}, h("b", {}, DRfail.what + " did not work. "), DRfail.message),
+    h("p", { class: "muted small" }, "Nothing else was changed unless the message above says so. " + DRfail.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })),
+    DRfail.lines.length ? h("details", { class: "joblogbox" }, h("summary", {}, "Show the steps"), h("pre", { class: "joblog" }, DRfail.lines.join("\n"))) : null,
+    h("div", { class: "row tight" }, h("button", { class: "small", onclick: () => { DRfail = null; drawDrives(); } }, "Dismiss"))));
   if (DRerr) out.push(h("div", { class: "card", role: "alert" }, h("h2", {}, "The Drives Could Not Be Read"), h("p", { class: "muted" }, DRerr), h("button", { onclick: loadDrives }, "Try Again")));
   if (!DR) return out;
   const st = DR.status || {}, drives = st.drives || [];
@@ -860,7 +974,9 @@ function drivesBody() {
   const top = tiles.filter(t => !inPool(t));
   out.push(zone("drives", ["main", "backup"], [
     h("div", { class: "ph" }, h("div", { class: "pt" }, h("h2", {}, "Drives"), h("span", { class: "sub" }, "Plugged in but not in a pool. Drag a drive into Main or Backup, or press it for its details and buttons (a phone uses the buttons). Hold Ctrl or Shift while you press, or use Select, to pick several.")),
-      h("span", { class: "pill dim" }, nDrives(top.filter(t => t.kind === "spare").length))),
+      h("span", { class: "pill dim" }, nDrives(top.filter(t => t.kind === "spare").length)),
+      h("button", { class: "small" + (DRcfg ? " on" : ""), "aria-expanded": DRcfg ? "true" : "false", disabled: off, onclick: openConfig, title: "Scans the spare drives and suggests the best setup for them (ZFS, RAID, SnapRAID, a pool)" }, "Configure Drives")),
+    cfgBox(),
     h("div", { class: "tiles" }, top.length ? top.map(tile) : h("p", { class: "dropnote" }, "No spare drives. Plug a drive in and press Refresh. Drop a drive from a pool here to take it out."))], { class: "dzone card pool zone-drives" }));
   out.push(h("div", { class: "pools" }, (st.pools || []).map(p => poolBox(p, tiles.filter(t => inPool(t) && t.d.role === p.role)))));
   if (!drives.length && !(st.pools || []).length) out.push(h("p", { class: "muted" }, "No drives were found."));
