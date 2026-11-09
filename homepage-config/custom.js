@@ -168,6 +168,7 @@
   // ---- every group: a count behind its name and a button that folds it (the choice is remembered by name)
   function folded() { try { return JSON.parse(store("hl-folded") || "[]"); } catch (e) { return []; } }
   function opened() { try { return JSON.parse(store("hl-opened") || "[]"); } catch (e) { return []; } }       // groups that start folded and that you opened
+  var PANEL_GROUPS = ["Customize", "Edit Links", "Terminal"];
   var FOLDED_AT_FIRST = ["Edit Links", "Terminal"];                          // the link editor and the terminal of the Links tab start closed
   function isFolded(name) { return folded().indexOf(name) >= 0 || (FOLDED_AT_FIRST.indexOf(name) >= 0 && opened().indexOf(name) < 0); }
   // The group slides shut or open (the height is animated from the real height to 0 and back). While it moves, the player block is told to
@@ -311,7 +312,8 @@
       var h = g.querySelector(".service-group-name, .bookmark-group-name");
       if (!h) return;
       var name = h.textContent.replace(/\s*·\s*\d+$/, "").trim(), n = g.querySelectorAll("li.service, li.bookmark").length;
-      if (n && h.getAttribute("data-count") !== String(n)) h.setAttribute("data-count", String(n));
+      if (PANEL_GROUPS.indexOf(name) >= 0) h.removeAttribute("data-count");           // the panel's own groups hold one card: no count
+      else if (n && h.getAttribute("data-count") !== String(n)) h.setAttribute("data-count", String(n));
       g.classList.toggle("hl-folded", isFolded(name));
       groupHeight(g, name);
       if (g.querySelector(":scope > .hl-gfold")) return;
@@ -561,9 +563,15 @@
     });
   }
 
+  // ---- words Homepage writes itself, said the way this dashboard says them (a label is changed in place; Homepage writes it again only when it changes it)
+  function wording() {
+    all("#information-widgets .pr-1").forEach(function (e) { if (e.children.length === 0 && e.textContent === "UP") e.textContent = "Uptime"; });
+    all("li.service details > summary div").forEach(function (e) { if (e.lastChild && e.lastChild.nodeType === 3 && /^API Error Information$/.test(e.lastChild.nodeValue.trim())) e.lastChild.nodeValue = "Service Unavailable"; });
+  }
+
   function run() {
     queued = false;
-    health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); linkRows(); searchButton(); tabName(); bars(); sharp();
+    wording(); health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); linkRows(); searchButton(); tabName(); bars(); sharp();
   }
   function soon() { if (!queued) { queued = true; window.requestAnimationFrame(run); } }
   night(); soon();

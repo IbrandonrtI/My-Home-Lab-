@@ -22,7 +22,7 @@
 - datetime:
     text_size: md
     format:
-      dateStyle: short
+      dateStyle: medium
       timeStyle: short
       hour12: true
 

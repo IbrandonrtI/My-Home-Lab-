@@ -443,7 +443,7 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   padding: 0 !important;
   text-align: center !important;
   color: var(--lk-muted) !important;
-  font-size: 11px !important;
+  font-size: 12px !important;
   letter-spacing: 0.02em;
 }
 #inner_wrapper .information-widget-resource:not(:last-child) { border-right: 1px solid rgba(255, 255, 255, 0.08) !important; padding-right: 10px !important; margin-right: 10px !important; }
@@ -551,7 +551,7 @@ body { --icon-color: #c9d6f2; }
 #inner_wrapper [id$="-card"]::after, #inner_wrapper li[id^="stat-"]::after, #inner_wrapper li[id^="cal-"]::after { display: none !important; }
 #inner_wrapper [id$="-card"] { position: relative !important; background-color: transparent !important; }
 #inner_wrapper .service-name { color: var(--lk-text) !important; font-size: 0.93rem !important; font-weight: 600 !important; letter-spacing: -0.01em; }
-#inner_wrapper .service-description { color: var(--lk-muted) !important; font-size: 0.74rem !important; }
+#inner_wrapper .service-description { color: color-mix(in srgb, var(--lk-muted) 82%, white) !important; font-size: 0.8125rem !important; }      /* 13 px, a little brighter: easy to read */
 #inner_wrapper .service-block { background: rgba(255, 255, 255, 0.045) !important; border-radius: 10px !important; }
 #inner_wrapper .service-block-value { font-weight: 600; }
 #inner_wrapper .service-block-label { color: var(--lk-muted); letter-spacing: 0.04em; }
@@ -624,6 +624,10 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
 
 /* ---- A card whose service does not answer gets a red edge (custom.js marks it) */
 #inner_wrapper .service.hl-down .service-card { border-color: rgba(248, 113, 113, 0.55) !important; }
+/* the "Service Unavailable" button Homepage shows under such a card: light text on a dark red, so it can be read */
+#inner_wrapper .service details > summary { color: #fff !important; background: rgba(127, 29, 29, 0.85) !important; border: 1px solid rgba(248, 113, 113, 0.45); }
+#inner_wrapper .service details > summary:hover { background: rgba(153, 27, 27, 0.95) !important; }
+#inner_wrapper .service details > summary * { color: #fff !important; }
 
 /* ---- Shrink button on the music player (made by custom.js) and the folded state */
 #inner_wrapper .hl-shrink {
@@ -966,6 +970,7 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) li#cal-month { grid-column: 1; grid-row: 1 / span 3; align-self: end; height: var(--hl-cal-h); margin: 0 !important; }
   #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) li#cal-agenda { grid-column: 1 / -1; grid-row: 4; margin: 0 !important; }
   #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) li[id^="cal-"] { min-height: 0; overflow: hidden; }
+  #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) li#cal-agenda { align-self: start; }      /* Coming Up is as high as its events, not as high as the month */
   #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) li#cal-agenda .service-container { overflow-y: auto; max-height: calc(var(--hl-cal-h) - 52px); }
   #inner_wrapper #layout-groups:is(.hl-cal-a, .hl-cal-b) li#cal-month button[style*="14%"] { height: var(--hl-cal-cell, 36px) !important; }
 }
@@ -977,4 +982,10 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
    height" sizes above come out right). Under it the page lays out as wide as at that browser zoom, so the top row of tiles gets the size that width would get. */
 html[data-hl-fit="1080"] #information-widgets { zoom: 0.70; }   /* the page then lays out about 1707 wide */
 html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wide */
+/* Stats on a phone: the folder sizes (four values) go two to a row instead of running off the card; temperatures list one under the other */
+@media (max-width: 520px) {
+  #inner_wrapper li#stat-folders .service-container { flex-wrap: wrap !important; }
+  #inner_wrapper li#stat-folders .service-container > .service-block { flex: 1 1 calc(50% - 8px) !important; min-width: 0 !important; }
+  #inner_wrapper li[id^="stat-"] .service-block-value { overflow-wrap: anywhere; }
+}
 /* <<< homelab tabs <<< */

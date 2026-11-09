@@ -104,7 +104,7 @@
         href: https://pc.your-tailnet.ts.net:1006
         siteMonitor: http://192.168.X.X:8081
         icon: filebrowser.svg
-        description: View and edit the backups
+        description: Browse and Edit Files
         widget:
           type: filebrowser
           url: http://192.168.X.X:8081
@@ -309,32 +309,26 @@
     - Last Backup:
         id: stat-backup
         icon: mdi-backup-restore
-        description: When it ran and how it went
+        description: How the last backup went
         widget:
           type: customapi
           url: http://192.168.X.X:3001/images/stats.json
           refreshInterval: 60000
           mappings:
-            - field: last_backup.when
-              label: Ran
             - field: last_backup.result
               label: Result
-            - field: last_backup.size
-              label: Size
-            - field: last_backup.saved_to
-              label: Saved To
+            - field: last_backup.took
+              label: Took
 
     - Containers & Updates:
         id: stat-updates
         icon: mdi-docker
-        description: Checked by homelab-update
+        description: Checked Automatically
         widget:
           type: customapi
           url: http://192.168.X.X:3001/images/stats.json
           refreshInterval: 60000
           mappings:
-            - field: containers.running
-              label: Running
             - field: containers.problems
               label: Problems
             - field: updates.images
