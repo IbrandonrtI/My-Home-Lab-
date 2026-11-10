@@ -1763,8 +1763,11 @@ def drive_message(out, err, limit=600, problem=False):
             if x.startswith("Done"):
                 return x[:limit]
     else:
+        errors = [x[len("ERROR:"):].strip() for x in lines if x.startswith("ERROR:")]      # (the reason the tool gave up: it stands alone, not after the drive's table)
         warned = [x[len("WARNING:"):].strip() for x in lines if x.startswith("WARNING:") and "lazy unmount" not in x]
-        if warned:
+        if errors:
+            lines = errors
+        elif warned:
             lines = warned
     while len(lines) > 1 and len(" ".join(lines)) > limit:
         lines.pop(0)
