@@ -1471,7 +1471,8 @@ h("div", { class: "card" }, h("h2", {}, "Colors and Glass"),
       h("p", { class: "muted small" }, "Further down you can give single cards, tiles, bookmarks and labels their own colors."));
   const strengthCard =
 h("div", { class: "card" }, h("h2", {}, "Color Strength"),
-  lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "How strong the colors of your cards, tiles and bookmarks are. Higher makes the color, the edge and the glow stronger, so the color is not washed out."));
+  lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "How strong the colors of your cards, tiles and bookmarks are. Higher makes the color, the edge and the glow stronger, so the color is not washed out."),
+  lookSlider("Card Depth", "cardDepth", 0, 100, 1, "%", "A deep, rich shade of each card's own color under the bright color. Higher makes the words stand out more and the colors look fuller, not washed out. 0% turns it off."));
   return h("div", {},
     themesCard(),
     previewCard,
