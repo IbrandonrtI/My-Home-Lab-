@@ -72,7 +72,13 @@ panel_setups_json() {
     [ "$i" = 0 ] || printf ','
     printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s,"keep_ok":%s,"skipped":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${alls[$i]}")" "$blank" "$keep" "$skipped"
   done
-  printf '],"total_bytes":%s,"main_used_bytes":%s,"main_has_drives":%s,"options":[' "$(json_num "$total")" "$(json_num "$main_used")" "$([ -n "$(branches_of main)" ] && echo true || echo false)"
+  local svc="" sn sfirst=1      # (the containers that use the Main pool: a setup that copies Main stops them while it copies)
+  if [ -n "$(branches_of main)" ]; then
+    for sn in $(containers_using "$MAIN_POOL"); do
+      [ "$sfirst" = 1 ] || svc="$svc,"; sfirst=0; svc="$svc$(json_str "$sn")"
+    done
+  fi
+  printf '],"total_bytes":%s,"main_used_bytes":%s,"main_has_drives":%s,"main_services":[%s],"options":[' "$(json_num "$total")" "$(json_num "$main_used")" "$([ -n "$(branches_of main)" ] && echo true || echo false)" "$svc"
   for id in $PRESET_IDS; do
     local fits=false k=0 cap=0 used=0 why="" tol=0 score
     migrate=false; preset_is_array "$id" && [ -n "$(branches_of main)" ] && [ -z "$(parity_mounts)" ] && migrate=true
