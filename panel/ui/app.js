@@ -22,6 +22,7 @@ let lookW = null, bgW = null, layW = null;     // the changes in progress (not s
 const root = document.getElementById("app");
 const LOOKVIEWS = ["look"];                           // (the screens that work on the look and the background: the changes are kept while you are on them)
 const BLURS = ["none", "sm", "md", "lg", "xl", "2xl", "3xl"];
+const BLUR_NAMES = { none: "None", sm: "Small", md: "Medium", lg: "Large", xl: "Extra Large", "2xl": "Huge", "3xl": "Very Huge" };
 const ONLY = new URLSearchParams(location.search).get("only");       // "links": only the link editor, shown inside the Links tab of the dashboard
 const VIEWS = ONLY === "links" ? [["links", "Links"]]
   : [["look", "Look"], ["layout", "Layout"], ["cards", "Cards"], ["drives", "Drives"]];
@@ -251,7 +252,13 @@ function render() {
 function applyAccent() {
   const v = lookW || S.look.values;
   const [r, g, b] = rgb(v.accent);
-  document.documentElement.style.setProperty("--accent", r + ", " + g + ", " + b);
+  const st = document.documentElement.style;
+  st.setProperty("--accent", r + ", " + g + ", " + b);
+  const t = (S.look.themes || []).find(x => x.id === v.theme), ui = (t && t.ui) || {};      // the panel itself wears the theme too
+  for (const [k, name] of [["bg", "--bg"], ["panel", "--panel"], ["panel2", "--panel2"], ["line", "--line"], ["field", "--field"], ["dialog", "--dialog"], ["blur", "--pblur"]]) {
+    if (ui[k]) st.setProperty(name, ui[k]); else st.removeProperty(name);
+  }
+  document.documentElement.classList.toggle("glassy", !!ui.blur);
 }
 async function doUndo() {
   try { const r = await api("POST", "/api/undo", {}); send({ type: "clear" }); toast("Undone: " + r.undone); await afterChange(true); } catch (e) { fail(e); }
@@ -1125,6 +1132,7 @@ function lookPreview(quiet) {
     p.style.setProperty("--pa", glassAlpha(lookW));
     p.style.setProperty("--pr", Math.min(lookW.radius, 30) + "px");
     p.style.setProperty("--pe", lookW.edge / 100);
+    p.style.setProperty("--pbl", Math.round(lookW.glassBlur * 0.6) + "px");
   }
   applyAccent();
   if (quiet) return;
@@ -1325,13 +1333,55 @@ function namesCard() {
       ] : h("p", { class: "muted small" }, "There is no logo yet. Open “Choose a Logo” below to pick one."));
   }
   refresh();
-  return h("div", { class: "card" }, h("h2", {}, "Names and Logo"),
+  return h("details", { class: "card" }, h("summary", {}, h("b", {}, "Names and Logo"), h("span", { class: "muted small" }, "Name the server and drives, add a logo")),
     h("p", { class: "muted" }, "Give the server and the two drives your own names, and show your own logo at the top left of the dashboard. Nothing is saved until you press “Save”."),
     h("div", { class: "grid cols2" },
       h("div", {}, inputs.map(x => x[2]),
         h("div", { class: "row" }, h("button", { class: "small", onclick: () => { L.names = {}; inputs.forEach(x => { x[1].value = ""; }); lookChanged(); } }, "Restore Original Names"))),
       status),
     menu);
+}
+
+// ---- Themes (the first card of the Look screen)
+function themeColors(t) {            // the colors a theme gives to the cards, tiles and bookmarks: one color for each group, round and round
+  const P = S.paint, out = { cards: {}, links: {}, paintAll: t.paintAll || "" };
+  if (!t.palette || !t.palette.length) return out;
+  const groups = [];
+  const pick = g => { let i = groups.indexOf(g); if (i < 0) { groups.push(g); i = groups.length - 1; } return t.palette[i % t.palette.length]; };
+  for (const list of [P.cards, P.stats, P.calendar]) for (const it of list) out.cards[it.id] = pick(it.group);
+  for (const it of P.links) out.links[it.name] = pick(it.group);
+  return out;
+}
+function chooseTheme(t) {            // like every change here it is only a draft until Save; the names, the logo and the label colors you made stay
+  const def = S.look.defaults;
+  const base = clone(def); base.tabs = Object.assign({}, def.tabs);
+  for (const k of ["labels", "labelIcon", "names", "logo"]) base[k] = clone(lookW[k]);
+  const pl = clone(t.look); const tabs = Object.assign({}, base.tabs, pl.tabs || {}); delete pl.tabs;
+  const col = themeColors(t);
+  lookW = Object.assign(base, pl, { tabs, theme: t.id, cards: col.cards, links: col.links, paintAll: col.paintAll });
+  render(); lookChanged();
+  toast(t.name + " is a draft. Press Save to keep it, or Discard Changes to go back.");
+}
+function themeTile(t, now) {
+  const lk = Object.assign({}, S.look.defaults, t.look);
+  const alpha = lk.glassClear ? 0.4 * (1 - lk.glassLevel / 100) : lk.glassOpacity / 100;
+  const cols = (t.palette && t.palette.length) ? t.palette : t.paintAll ? [t.paintAll] : S.paint.cards.slice(0, 3).map(c => c.color);
+  const shot = h("div", { class: "shot" },
+    h("div", { class: "tabs" }, h("span", { class: "on" }), h("span", {}), h("span", {})),
+    h("div", { class: "cards" }, [0, 1, 2].map(i => { const c = h("i", {}); c.style.setProperty("--c", rgb(cols[i % cols.length] || lk.accent).join(", ")); return c; })));
+  shot.style.setProperty("--pc", rgb(lk.accent).join(", "));
+  shot.style.setProperty("--pg", rgb(lk.glass).join(", "));
+  shot.style.setProperty("--pa", alpha);
+  shot.style.setProperty("--pr", Math.round(Math.min(lk.radius, 30) * 0.5) + "px");
+  shot.style.setProperty("--pe", lk.edge / 100);
+  shot.style.setProperty("--bl", Math.round(lk.glassBlur * 0.5) + "px");
+  return h("button", { class: "theme", "aria-pressed": String(now === t.id), onclick: () => chooseTheme(t) }, shot, h("b", {}, t.name), h("span", { class: "small muted" }, t.blurb));
+}
+function themesCard() {
+  return h("div", { class: "card" }, h("h2", {}, "Themes"),
+    h("p", { class: "muted" }, "A theme changes the colors, glass and shapes of the dashboard and of this panel together, and gives every card, tile and bookmark a matching color. Pick one to try it. Nothing is saved until you press “Save”."),
+    h("div", { class: "themes" }, S.look.themes.map(t => themeTile(t, lookW.theme))),
+    h("p", { class: "muted small" }, "Your background picture, names and logo stay as they are. Colors you gave single cards are replaced by the theme’s colors. You can still change anything below after picking a theme."));
 }
 
 function viewLook() {
@@ -1365,7 +1415,7 @@ function viewLook() {
     h("div", { class: "mini-cards" }, ["Navidrome", "Immich", "Beszel"].map(n => h("div", { class: "mini-card" }, h("b", {}, n), h("span", { class: "small muted" }, "Sample Card"), h("i", {})))));
   setTimeout(() => { lookPreview(!lookDirty()); refreshLookBar(); }, 0);       // nothing is sent to the dashboard until something is changed
   const previewCard =
-h("div", { class: "card" }, h("h2", {}, "Preview, Shapes and Space"),
+h("div", { class: "card" }, h("h2", {}, "Preview and Shape"),
   h("div", { class: "grid cols2" },
         h("div", {}, h("p", { class: "muted" }, framed ? "The dashboard around this panel changes while you move the sliders, so you can see the real result." : "A small sample of how cards and tabs look."), mock),
         h("div", {},
@@ -1374,15 +1424,7 @@ h("div", { class: "card" }, h("h2", {}, "Preview, Shapes and Space"),
           lookSlider("Space at the Left and Right", "side", 0, 120, 2, " px"),
           h("p", { class: "muted small" }, "The height of the music player is changed on the dashboard itself, with the small arrows button next to the shrink button on the player."))));
   const colorsCard =
-h("div", { class: "card" }, h("h2", {}, "Colors and Built-In Looks"),
-      h("div", { class: "field" }, h("div", { class: "lab" }, "Built-In Looks"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Pick one to try it. Nothing is saved until you press “Save”."),
-        h("div", { class: "chips" }, S.look.presets.map(p => h("button", { class: "chip", onclick: () => {
-          const base = clone(def); base.tabs = Object.assign({}, def.tabs);
-          for (const k of PAINT_KEYS) base[k] = clone(lookW[k]);              // the colors you gave single cards and labels stay
-          const pl = clone(p.look); const tabs = Object.assign({}, base.tabs, pl.tabs || {}); delete pl.tabs;
-          lookW = Object.assign(base, pl, { tabs });
-          render(); lookChanged();
-        } }, h("span", { class: "dot", style: { background: p.look.accent || def.accent } }), p.name)))),
+h("div", { class: "card" }, h("h2", {}, "Colors and Glass"),
       h("div", { class: "grid cols2" },
         h("div", {},
           colorField("Main Color", "accent", "The color of the active tab, bars, icons and the edge of a card you point at.", ["#8ab4ff", "#5ec8ff", "#7ee0a0", "#ffa66b", "#ff8fb5", "#c9a0ff", "#ffd36b", "#c3cad6"]),
@@ -1392,10 +1434,11 @@ h("div", { class: "card" }, h("h2", {}, "Colors and Built-In Looks"),
         h("div", { class: "grid cols2 tabcolors" }, tabRows)),
       h("p", { class: "muted small" }, "Further down you can give single cards, tiles, bookmarks and labels their own colors."));
   return h("div", {},
+    themesCard(),
     previewCard,
-    namesCard(),
-    backgroundCards(),
     colorsCard,
+    backgroundCards(),
+    namesCard(),
     colorOptions(),
     lookBarEl);
 }
@@ -1497,14 +1540,14 @@ function colorOptions() {                    // the colors of single cards, tile
   drawPaintStyle();
 
   return h("div", {},
-    h("div", { class: "card" }, h("h2", {}, "Colors of Cards, Tiles and Bookmarks"),
-      h("p", { class: "muted" }, "Give single service cards, the calendar, the tiles of the Stats tab and the bookmarks of the Links tab their own color: a tint, a colored edge and a soft glow. It looks best with Transparent glass (set under Colors and Built-In Looks)."),
+    h("details", { class: "card" }, h("summary", {}, h("b", {}, "Colors of Cards, Tiles and Bookmarks"), h("span", { class: "muted small" }, "Advanced: a theme already sets these")),
+      h("p", { class: "muted" }, "Give single service cards, the calendar, the tiles of the Stats tab and the bookmarks of the Links tab their own color: a tint, a colored edge and a soft glow. It looks best with Transparent glass (set under Colors and Glass)."),
       h("p", { class: "muted small" }, "To see a color on the dashboard, open the tab that has it (Home, Stats or Links). The preview stays there. Come back here to keep it with Save."),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Color Style"), styleChips,
         h("div", { class: "hint" }, "Gradient: the color is strong on one side and fades out across the card. Solid: the same color across the whole card.")),
       lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "Higher makes the color, the edge and the glow stronger, so the color is not washed out."),
       h("div", { class: "field" }, h("div", { class: "lab" }, "One Color for Everything"), paintAll)),
-    section("Service Cards", "The cards of the Home tab, such as Portainer or Downtify.", P.cards, L.cards, it => it.id, it => it.group, true),
+    section("Service Cards", "The cards of the Home tab, such as Portainer or Downtify.", P.cards, L.cards, it => it.id, it => it.group, false),
     section("Stats Tiles", "The tiles of the Stats tab.", P.stats, L.cards, it => it.id, it => it.group, false),
     section("Calendar", "The calendar and the list of coming events.", P.calendar, L.cards, it => it.id, it => it.group, false),
     section("Bookmarks", "The bookmarks of the Links tab.", P.links, L.links, it => it.name, it => it.group, false),
@@ -1542,7 +1585,7 @@ function backgroundCards() {
       h("input", { type: "range", min: 0, max: 100, step: 1, value: B[key], "aria-label": label, oninput: ev => { B[key] = Number(ev.target.value); val.textContent = B[key] + "%"; preview(); } })),
       h("div", { class: "hint" }, hint));
   }
-  const blurVal = h("span", { class: "val" }, B.blur);
+  const blurVal = h("span", { class: "val" }, BLUR_NAMES[B.blur] || B.blur);
   const url = h("input", { type: "url", placeholder: "https://…", "aria-label": "Picture address" });
   const file = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp,image/gif,image/avif", hidden: true, onchange: upload });
   async function upload() {
@@ -1565,12 +1608,12 @@ function backgroundCards() {
       h("div", { class: "field", style: { marginTop: "12px" } }, h("label", {}, "Or Use a Picture from the Web"), h("div", { class: "row" }, h("div", { class: "grow" }, url),
         h("button", { onclick: () => { const v = url.value.trim(); if (!/^https?:\/\/\S+$/.test(v)) return toast("Type a web address that starts with http:// or https:// first.", true); B.url = v; preview(); toast("Press Save to keep it."); } }, "Use This Address")))),
     h("div", { class: "card" }, h("h2", {}, "How the Background Looks Behind the Cards"),
-      h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Blur"), blurVal,
-        h("input", { type: "range", min: 0, max: 6, step: 1, value: BLURS.indexOf(B.blur) < 0 ? 2 : BLURS.indexOf(B.blur), "aria-label": "Blur",
-          oninput: ev => { B.blur = BLURS[Number(ev.target.value)]; blurVal.textContent = B.blur; preview(); } })), h("div", { class: "hint" }, "“none” is sharp. “3xl” is very soft.")),
-      slider("Brightness", "brightness", "Low makes the picture darker, so the text is easy to read."),
-      slider("Color", "saturate", "Low turns the picture toward gray."),
-      slider("Strength", "opacity", "How much of the picture shows through the dark cover."),
+      h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Picture Blur"), blurVal,
+        h("input", { type: "range", min: 0, max: 6, step: 1, value: BLURS.indexOf(B.blur) < 0 ? 2 : BLURS.indexOf(B.blur), "aria-label": "Picture Blur",
+          oninput: ev => { B.blur = BLURS[Number(ev.target.value)]; blurVal.textContent = BLUR_NAMES[B.blur] || B.blur; preview(); } })), h("div", { class: "hint" }, "None keeps the picture sharp. Very Huge makes it very soft.")),
+      slider("Picture Brightness", "brightness", "Low makes the picture darker, so the text is easy to read."),
+      slider("Picture Color", "saturate", "Low turns the picture toward gray."),
+      slider("How Much Picture Shows", "opacity", "Higher shows more of the picture. Lower covers it with the dark layer."),
       h("div", { class: "row" }, h("button", { class: "small", onclick: reset }, "Restore Default Sliders"))));
 }
 
@@ -1754,7 +1797,7 @@ function viewItems(kind) {
       h("button", { class: "small", onclick: () => groupMenu(g) }, "Rename"), h("button", { class: "small danger", onclick: () => groupRemove(g) }, "Remove Group")),
     items(g).map((it, i) => h("div", { class: "item" }, iconEl(it.icon),
       h("div", { class: "txt" }, h("b", {}, it.name), h("span", {}, [it.description, it.href].filter(Boolean).join("  ·  ") || "No address")),
-      isCards && it.managed ? h("span", { class: "badge", title: "Made by HomeLab; it keeps the address right" }, "HomeLab card") : null,
+      isCards && it.managed ? h("span", { class: "badge", title: "Made by HomeLab; it keeps the address right" }, "Built-In") : null,
       h("button", { class: "small icon", "aria-label": "Move " + it.name + " up", disabled: i === 0, onclick: () => reorder(g, i, -1) }, "↑"),
       h("button", { class: "small icon", "aria-label": "Move " + it.name + " down", disabled: i === items(g).length - 1, onclick: () => reorder(g, i, 1) }, "↓"),
       isCards && !it.locked ? h("button", { class: "small", onclick: () => quickIcon(g, it) }, "Icon…") : null,
