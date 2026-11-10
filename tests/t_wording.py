@@ -15,9 +15,9 @@ except Exception:
 PAGE = """<html><body><div id="inner_wrapper">
 <div id="information-widgets">
   <div class="widget-container"><div class="information-widget-resource"><svg></svg><div>Main Pool</div><div>12%</div></div></div>
-  <div class="widget-container"><div class="information-widget-resource" id="empty"><svg></svg><div>Connect Backup Drive</div><div id="err">API Error</div></div></div>
-  <div class="widget-container"><div class="information-widget-resource" id="named"><svg></svg><div>Connect Photos Drive</div><div id="err2">API Error</div></div></div>
-  <div class="widget-container"><div class="information-widget-resource" id="other"><svg></svg><div>Network</div><div id="err3">API Error</div></div></div>
+  <div class="widget-container"><div class="flex flex-col justify-center" id="empty"><div class="flex flex-row self-center"><div class="flex flex-col justify-center"><div class="flex flex-row items-center"><svg></svg><div class="flex flex-col ml-3"><span class="primary-text" id="err">API Error</span></div></div></div></div><div class="ml-6 pt-1 text-center">Connect Backup Drive</div></div></div>
+  <div class="widget-container"><div class="flex flex-col justify-center" id="named"><div class="flex flex-row items-center"><svg></svg><div class="flex flex-col ml-3"><span class="primary-text" id="err2">API Error</span></div></div><div class="ml-6 pt-1 text-center">Connect Photos Drive</div></div></div>
+  <div class="widget-container"><div class="flex flex-col justify-center" id="other"><div class="flex flex-row items-center"><svg></svg><div class="flex flex-col ml-3"><span class="primary-text" id="err3">API Error</span></div></div><div class="ml-6 pt-1 text-center">Network</div></div></div>
 </div>
 <ul>
   <li class="service" id="nc"><details><summary><div><svg></svg>API Error Information</div></summary><p>x</p></details></li>
