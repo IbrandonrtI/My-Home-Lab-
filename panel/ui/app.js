@@ -770,10 +770,10 @@ function healthBlock(d) {
     r.note ? h("p", { class: bad ? "badtext" : "muted small" }, cap(r.note)) : null,
     bad ? h("p", { class: "badtext" }, "Copy its files to another drive soon.") : null);
 }
-function checkBlock(d) {
+function checkBlock(d, spare) {
   const r = rowFor(d, DRcheck && DRcheck.drives);
   if (!DRcheck) return null;
-  if (!r) return h("p", { class: "muted small" }, "Quick Check: this drive has no result.");
+  if (!r) return h("p", { class: "muted small" }, spare ? "Quick Check: nothing to check yet. It looks at the drives in the Main and Backup pools, and this drive is not in a pool. Add it to a pool and check again." : "Quick Check: this drive has no result.");
   return h("div", { class: "result" },
     h("div", { class: "row tight" }, h("b", {}, "Quick Check"), h("span", { class: "pill " + (r.result === "ok" ? "ok" : r.result === "warn" ? "warn" : "bad") }, r.result === "ok" ? "OK" : r.result === "warn" ? "Warning" : "Problem")),
     (r.findings || []).length ? r.findings.map(f => h("p", { class: f.level === "problem" ? "badtext" : "muted small" }, cap(f.text))) : h("p", { class: "muted small" }, "The file system is clean, no errors are recorded and the drive reports no problem."));
@@ -1006,7 +1006,7 @@ function cardBody(t) {
       btn(DRhealth ? "Check Health Again" : "Check Health", runLook("health")),
       btn(DRcheck ? "Run Quick Check Again" : "Run Quick Check", runLook("check"))) : h("p", { class: "muted small" }, "This drive is not connected. Connect it and press Mount the Drives Again."),
     wait ? h("p", { class: "muted small", role: "status" }, DRwait) : null,
-    healthBlock(d), checkBlock(d),
+    healthBlock(d), checkBlock(d, !!sp),
     actions.length ? h("div", { class: "row tight cardactions" }, actions) : null,
     h("p", { class: "muted small" }, "Health reads what the drive says about itself (SMART); a sleeping drive is not woken up. The quick check looks for file system errors and changes nothing." + (dev !== "/dev/" ? "" : ""))];
 }
@@ -1056,7 +1056,7 @@ function drivesBody() {
       canStop ? h("div", { class: "row tight" }, h("button", { class: "danger small", disabled: stopping, onclick: abortJob, title: "Stops what is not finished yet, and puts the drives that are done back" }, stopping ? "Stopping..." : "Abort"),
         stopping ? h("span", { class: "muted small" }, DRbusy === "setup" ? "The copy has been told to stop. The drives still have to finish writing what they already received, and then the new setup is taken apart and the services start again. This can take a few minutes (longer the more was already copied). Your Main pool is not touched." : "A copy stops at once; a step that has started finishes first. Drives that are already done are put back. This can take a few minutes.") : null) : null,
       DRbusy && /^(add|wipe|disconnect|move)$/.test(DRbusy) ? h("p", { class: "muted small" }, "Please keep this page open or come back later. Copying files can take a long time. You can leave the page: the work goes on.") : null,
-      DRbusy === "setup" ? h("p", { class: "muted small" }, copying ? "You can stop while the files are copied: your Main pool then stays as it is. You can leave this page: the work goes on." : "A new setup can be stopped only while its files are copied (the Abort button shows up then). You can leave this page: the work goes on.") : null,
+      DRbusy === "setup" && !stopping ? h("p", { class: "muted small" }, copying ? "You can stop while the files are copied: your Main pool then stays as it is. You can leave this page: the work goes on." : "A new setup can be stopped only while its files are copied (the Abort button shows up then). You can leave this page: the work goes on.") : null,
       lines.length ? h("details", { class: "joblogbox" }, h("summary", {}, "Show the steps"), h("pre", { class: "joblog" }, lines.join("\n"))) : null));
   }
   if (DRfail && !DRbusy) out.push(h("div", { class: "card failcard", role: "alert" }, h("h2", {}, "What Happened"),
