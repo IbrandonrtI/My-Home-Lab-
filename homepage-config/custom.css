@@ -527,6 +527,7 @@ body { --icon-color: #c9d6f2; }
 .service-icon > div[style*="mask"], .bookmark-icon > div[style*="mask"] { background: var(--icon-color) !important; }
 
 /* ---- Cards: calm glass, a thin edge, the accent colour only when you point at one */
+#inner_wrapper .service-card, #inner_wrapper .bookmark > a { text-shadow: var(--lk-tshadow, none); }      /* (only a look with no tint sets this) */
 /* the glass colour is set with a LOW weight on purpose: the colour command of the dashboard theme writes its own rule after this block and must win */
 .service-card, .bookmark > a { background: rgba(var(--lk-glass), var(--lk-glass-a)) !important; }
 #inner_wrapper .service-card,
