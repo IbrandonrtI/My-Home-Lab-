@@ -1358,6 +1358,7 @@ function namesCard() {
 // ---- Themes (the first card of the Look screen)
 function themeColors(t) {            // the colors a theme gives to the cards, tiles and bookmarks: one color for each group, round and round
   const P = S.paint, out = { cards: {}, links: {}, paintAll: t.paintAll || "" };
+  if (t.paintLinks) for (const it of P.links) out.links[it.name] = t.paintLinks;       // (a theme with one color for the cards and tiles may give the bookmarks a second one that goes with it)
   if (!t.palette || !t.palette.length) return out;
   const groups = [];
   const pick = g => { let i = groups.indexOf(g); if (i < 0) { groups.push(g); i = groups.length - 1; } return t.palette[i % t.palette.length]; };
@@ -1387,7 +1388,7 @@ function chooseTheme(t) {            // like every change here it is only a draf
 function themeTile(t, now) {
   const lk = Object.assign({}, S.look.defaults, t.look);
   const alpha = glassAlpha(lk);
-  const cols = (t.palette && t.palette.length) ? t.palette : t.paintAll ? [t.paintAll] : S.paint.cards.slice(0, 3).map(c => c.color);
+  const cols = (t.palette && t.palette.length) ? t.palette : t.paintAll ? [t.paintAll].concat(t.paintLinks ? [t.paintLinks] : []) : S.paint.cards.slice(0, 3).map(c => c.color);
   const shot = h("div", { class: "shot" },
     h("div", { class: "tabs" }, h("span", { class: "on" }), h("span", {}), h("span", {})),
     h("div", { class: "cards" }, [0, 1, 2].map(i => { const c = h("i", {}); c.style.setProperty("--c", rgb(cols[i % cols.length] || lk.accent).join(", ")); return c; })));
