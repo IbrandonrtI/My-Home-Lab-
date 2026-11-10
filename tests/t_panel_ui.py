@@ -135,7 +135,7 @@ def main():
             check("themes: a theme changes the panel too (its background and its glass blur)", ps[0].startswith("linear-gradient") and ps[1] is True, ps)
             check("themes: the dashboard around the panel gets the theme's blur and radius at once", pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-blur').trim()") == "30px" and pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-radius').trim()") == "24px")
             live = pg.evaluate("document.getElementById('hl-live-look').textContent")
-            check("themes: a theme gives the cards its colors (the first group gets the first color of the palette)", "--accent:79, 179, 234" in live, live[-300:])
+            check("themes: a theme gives its cards and tiles one color and its bookmarks a second one", "--accent:90, 200, 250" in live and "--accent:143, 182, 245" in live, live[-300:])
             check("themes: picking one is only a draft (the files do not change)", "homelab look" not in p.read("custom.css"))
             names = fr.locator("button.theme b").all_inner_texts()
             check("themes: Liquid Glass is a tile, Forest is not", "Liquid Glass" in names and "Forest" not in names, names)

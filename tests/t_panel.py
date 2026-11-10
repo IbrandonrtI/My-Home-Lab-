@@ -241,7 +241,7 @@ def main():
                 bad.append((t["id"], js))
         check("themes: the look of every theme is accepted by the server", not bad, bad)
         check("themes: a palette or one color for everything, except Calm Night", all((t.get("palette") or t.get("paintAll")) for t in themes[1:]) and not themes[0].get("palette"))
-        check("themes: every color of a theme is a plain hex color", all(re.fullmatch(r"#[0-9a-f]{6}", c) for t in themes for c in (t.get("palette") or []) + [t.get("paintAll") or "#000000"] + [t["look"].get("accent", "#000000"), t["look"].get("glass", "#000000")] + list((t["look"].get("tabs") or {}).values())))
+        check("themes: every color of a theme is a plain hex color", all(re.fullmatch(r"#[0-9a-f]{6}", c) for t in themes for c in (t.get("palette") or []) + [t.get("paintAll") or "#000000", t.get("paintLinks") or "#000000"] + [t["look"].get("accent", "#000000"), t["look"].get("glass", "#000000")] + list((t["look"].get("tabs") or {}).values())))
         fr = themes[1]
         st, js, _, _ = p.req("POST", "/api/look", {"look": dict(fr["look"], theme="frost")})
         css = p.read("custom.css")
