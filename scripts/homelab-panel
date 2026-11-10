@@ -287,7 +287,7 @@ def number(v, what, lo, hi):
 # ================================================================ the look (colors, glass, shapes) -> a block in custom.css
 SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}       # the shipped color of two tabs (see the tabs block of custom.css)
 LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "glassClear": False, "glassLevel": 70, "radius": 16, "edge": 7.5,
-                "side": 70, "glassBlur": 14, "glassSat": 125, "theme": "calm", "playerHeight": 600, "paintStrength": 40, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}, "names": {}, "logo": {}}
+                "side": 70, "glassBlur": 14, "glassSat": 125, "glassRim": 0, "theme": "calm", "playerHeight": 600, "paintStrength": 10, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}, "names": {}, "logo": {}}
 LABEL_ICONS = ("plain", "circle", "square", "ring")
 PAINT_STYLES = ("gradient", "solid")
 NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card", "terminal-card")        # the panel's own cards and the music player are never painted
@@ -295,37 +295,47 @@ NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card", "terminal-card"
 # cards, tiles and bookmarks (one color per group, round and round); "paintAll" is one color for all of them; "ui" is how the control panel itself looks.
 # The Calm Night theme is the default look: choosing it puts everything back.
 LOOK_THEMES = [
-    {"id": "calm", "name": "Calm Night", "blurb": "The look the dashboard came with: deep blue glass.", "look": {}, "palette": []},
+    {"id": "calm", "name": "Calm Night", "blurb": "The look the dashboard came with: deep blue glass.", "look": {}, "palette": [],
+     "background": {"url": "https://images.unsplash.com/photo-1778049005316-10cd95096f69?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 60, "brightness": 42, "opacity": 80}},
     {"id": "frost", "name": "Frosted Glass", "blurb": "Clear, bright glass with soft edges and system colors.",
      "look": {"accent": "#64a8ff", "glass": "#d6e2f7", "glassClear": True, "glassLevel": 62, "radius": 24, "edge": 22, "glassBlur": 30, "glassSat": 190,
               "tabs": {"Stats": "#5be0b0", "Links": "#c9a8ff"}},
      "palette": ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#64d2ff", "#ff375f", "#ffd60a", "#5e5ce6"],
+     "background": {"url": "https://images.unsplash.com/photo-1756909688538-2fc0fe8e757f?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 100, "brightness": 75, "opacity": 88},
      "ui": {"bg": "linear-gradient(135deg,#1b2a4a,#2f2150 55%,#173a46)", "panel": "rgba(255,255,255,0.08)", "panel2": "rgba(255,255,255,0.14)",
             "line": "rgba(255,255,255,0.22)", "field": "rgba(255,255,255,0.09)", "dialog": "#1d2a47", "blur": "24px"}},
+    {"id": "liquid", "name": "Liquid Glass", "blurb": "Almost clear glass with a bright, shining edge, like the glass on Apple devices.",
+     "look": {"accent": "#7cc4ff", "glass": "#e8f0ff", "glassClear": True, "glassLevel": 88, "radius": 28, "edge": 14, "glassBlur": 22, "glassSat": 220, "glassRim": 70,
+              "paintStrength": 18, "tabs": {"Stats": "#7ff0cc", "Links": "#d3b6ff"}},
+     "palette": ["#7cc4ff", "#8be8c4", "#ffc78a", "#d3b6ff", "#9ad9ff", "#ff9ec4"],
+     "background": {"url": "https://images.unsplash.com/photo-1603847734015-17ac936a0036?q=80&w=1740&auto=format&fit=crop", "blur": "sm", "saturate": 100, "brightness": 80, "opacity": 92},
+     "ui": {"bg": "linear-gradient(135deg,#243a66,#4a2f6a 50%,#1f4a5c)", "panel": "rgba(255,255,255,0.07)", "panel2": "rgba(255,255,255,0.13)",
+            "line": "rgba(255,255,255,0.16)", "field": "rgba(255,255,255,0.08)", "dialog": "#26365e", "blur": "28px", "rim": 70}},
     {"id": "ocean", "name": "Ocean", "blurb": "Cool blues and sea greens.",
      "look": {"accent": "#5ec8ff", "glass": "#06141f", "glassOpacity": 58, "tabs": {"Stats": "#5ee0c8", "Links": "#9db4ff"}},
      "palette": ["#5ec8ff", "#3ad0c0", "#4f8cff", "#7fe3f0", "#6aa8ff", "#35b8a8"],
+     "background": {"url": "https://images.unsplash.com/photo-1565733293285-77aa342b22dd?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 50, "opacity": 85},
      "ui": {"bg": "#071420", "panel": "#0d1f2e", "panel2": "#122a3d", "field": "#08121c"}},
-    {"id": "forest", "name": "Forest", "blurb": "Calm greens and lime.",
-     "look": {"accent": "#7ee0a0", "glass": "#07150d", "glassOpacity": 58, "tabs": {"Stats": "#c8e07e", "Links": "#7ee0d0"}},
-     "palette": ["#7ee0a0", "#a8e063", "#4fc38a", "#c8e07e", "#5fd0b0", "#8fd16a"],
-     "ui": {"bg": "#08130d", "panel": "#0e1d14", "panel2": "#14281c", "field": "#09140e"}},
     {"id": "sunset", "name": "Sunset", "blurb": "Warm orange, gold and pink.",
      "look": {"accent": "#ffa66b", "glass": "#1c0f12", "glassOpacity": 58, "tabs": {"Stats": "#ffd36b", "Links": "#ff7fa8"}},
      "palette": ["#ffa66b", "#ff7fa8", "#ffd36b", "#ff8a5c", "#f59e5b", "#ff6f91"],
+     "background": {"url": "https://images.unsplash.com/photo-1750560813794-6c33decf299c?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 90, "brightness": 55, "opacity": 85},
      "ui": {"bg": "#160c0f", "panel": "#21141a", "panel2": "#2c1b22", "field": "#150b0e"}},
     {"id": "rose", "name": "Rose", "blurb": "Soft pink and lilac with rounder corners.",
      "look": {"accent": "#ff8fb5", "glass": "#1a0c16", "glassOpacity": 60, "radius": 22, "tabs": {"Stats": "#ffb38f", "Links": "#c9a0ff"}},
      "palette": ["#ff8fb5", "#c9a0ff", "#ffb38f", "#f48fd0", "#ff9fb0", "#b79cff"],
+     "background": {"url": "https://images.unsplash.com/photo-1764513168327-309c566fbc36?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 45, "opacity": 85},
      "ui": {"bg": "#150b13", "panel": "#1f1220", "panel2": "#2a1829", "field": "#140a12"}},
     {"id": "graphite", "name": "Graphite", "blurb": "One quiet gray. Nothing competes for your attention.",
      "look": {"accent": "#c3cad6", "glass": "#111214", "glassOpacity": 64, "radius": 10, "tabs": {"Stats": "#c3cad6", "Links": "#c3cad6"}},
      "paintAll": "#c3cad6",
+     "background": {"url": "https://images.unsplash.com/photo-1768684160371-566aadb7785e?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 15, "brightness": 42, "opacity": 85},
      "ui": {"bg": "#0e0f11", "panel": "#17181b", "panel2": "#202226", "field": "#0c0d0f"}},
     {"id": "neon", "name": "Neon Night", "blurb": "Dark solid glass, sharp corners and bright cyan and magenta.",
-     "look": {"accent": "#00e5ff", "glass": "#05060d", "glassOpacity": 80, "radius": 6, "edge": 16, "glassBlur": 8, "paintStrength": 55,
+     "look": {"accent": "#00e5ff", "glass": "#05060d", "glassOpacity": 80, "radius": 6, "edge": 16, "glassBlur": 8, "paintStrength": 35,
               "tabs": {"Stats": "#ff3df2", "Links": "#b6ff3d"}},
      "palette": ["#00e5ff", "#ff3df2", "#b6ff3d", "#ffb800", "#7c4dff", "#ff4d6d"],
+     "background": {"url": "https://images.unsplash.com/photo-1695249747530-57460a88ad80?q=80&w=1740&auto=format&fit=crop", "blur": "lg", "saturate": 100, "brightness": 50, "opacity": 88},
      "ui": {"bg": "#05060d", "panel": "#0b0d1a", "panel2": "#131627", "line": "rgba(0,229,255,0.22)", "field": "#04050b"}},
 ]
 THEME_IDS = [t["id"] for t in LOOK_THEMES]
@@ -443,6 +453,8 @@ def look_clean(raw):
         out["glassBlur"] = number(raw["glassBlur"], "How much the glass blurs", 0, 60)
     if "glassSat" in raw:
         out["glassSat"] = number(raw["glassSat"], "How vivid the picture behind the glass is", 50, 300)
+    if "glassRim" in raw:
+        out["glassRim"] = number(raw["glassRim"], "How bright the shine on the glass edge is", 0, 100)
     if "theme" in raw:
         if raw["theme"] not in THEME_IDS:
             raise Fail("The theme is not understood.")
@@ -512,6 +524,19 @@ def num(x, places=3):
     return ("%.*f" % (places, x)).rstrip("0").rstrip(".") or "0"
 
 
+NO_RIM = "0 0 0 0 transparent"
+
+
+def rim_shadow(level):
+    """The shine on the edge of the glass (the box-shadow list behind --lk-rim): a bright thin line at the top left, a softer one at the bottom right
+    and a faint glow just inside the edge. 0 is none."""
+    r = max(0.0, min(100.0, float(level))) / 100.0
+    if r <= 0:
+        return NO_RIM
+    return ("inset 1px 1px 0 rgba(255, 255, 255, %s), inset -1px -1px 0 rgba(255, 255, 255, %s), inset 0 0 %dpx rgba(255, 255, 255, %s), inset 0 12px 18px -14px rgba(255, 255, 255, %s)"
+            % (num(0.7 * r), num(0.32 * r), round(10 + 14 * r), num(0.12 * r), num(0.30 * r)))
+
+
 def glass_alpha(v):
     """How solid the glass is: the slider, or, when the glass is set to transparent, a level (100 = clear)."""
     if v["glassClear"]:
@@ -563,11 +588,11 @@ RESET_VARS = "--hl-a1:initial;--hl-a2:initial;"
 def paint_decl(rgbs, t):
     """The edge of one painted card: a colored border and a soft glow around it."""
     return ("border-color:rgba(%s,%s)!important;"
-            "box-shadow:0 0 0 1px rgba(%s,%s),0 0 24px -6px rgba(%s,%s),0 14px 30px -20px rgba(0,0,0,.75)!important;" % (
+            "box-shadow:0 0 0 1px rgba(%s,%s),0 0 24px -6px rgba(%s,%s),0 14px 30px -20px rgba(0,0,0,.75),var(--lk-rim,0 0 0 0 transparent)!important;" % (
                 rgbs, num(0.30 + 0.5 * t), rgbs, num(0.10 + 0.25 * t), rgbs, num(0.15 + 0.6 * t)))
 
 
-PLAIN_DECL = "border-color:var(--lk-line)!important;box-shadow:0 14px 30px -20px rgba(0,0,0,.75)!important;"
+PLAIN_DECL = "border-color:var(--lk-line)!important;box-shadow:0 14px 30px -20px rgba(0,0,0,.75),var(--lk-rim,0 0 0 0 transparent)!important;"
 
 
 def paint_rules(v, saved, css):
@@ -676,6 +701,8 @@ def look_css(custom, full=False, saved=None, css=""):
         tok.append("--lk-blur: %spx;" % num(v["glassBlur"]))
     if full or "glassSat" in custom:
         tok.append("--lk-sat: %s%%;" % num(v["glassSat"]))
+    if full or "glassRim" in custom:
+        tok.append("--lk-rim: %s;" % rim_shadow(v["glassRim"]))
     if full or "playerHeight" in custom:
         tok.append("--lk-player-h: %dpx;" % v["playerHeight"])
     if not full:                       # (a preview of names and logo is sent to the dashboard as its own message: the page cannot take them as CSS)
@@ -913,7 +940,8 @@ def restart_homepage():
     return True
 
 
-def api_bg_upload(data):
+def bg_store(data, body=None):
+    """Keeps a picture in the images folder and makes it the background (with the sliders in `body`, if any). Returns what the panel needs to know."""
     ext = sniff_image(data)
     if not ext:
         raise Fail("That file is not a picture I can use. Choose a .jpg, .png, .webp, .gif or .avif file.")
@@ -923,7 +951,8 @@ def api_bg_upload(data):
         f.write(data)
     os.chmod(os.path.join(IMAGES, name), 0o644)
     tx = Tx("Background picture changed")
-    tx.put(SETTINGS, bg_set(tx.get(SETTINGS), "image", "/images/" + name))
+    text = bg_set(tx.get(SETTINGS), "image", "/images/" + name)
+    tx.put(SETTINGS, bg_numbers(body or {}, text))
     tx.commit()
     for old in os.listdir(IMAGES):                      # earlier uploads are not needed any more (Undo only brings back the setting)
         if re.fullmatch(r"background-\d{14}\.\w+", old) and old != name:
@@ -933,6 +962,36 @@ def api_bg_upload(data):
             except OSError:
                 pass
     return {"restarting": restart_homepage(), "image": "/images/" + name}
+
+
+def api_bg_upload(data):
+    return bg_store(data)
+
+
+def theme_picture(body):
+    """The picture of a theme: the panel only names the theme, and the address comes from the list above (so it cannot be made to fetch any other address).
+    The picture is copied to the images folder, so the dashboard keeps working without the internet. If that fails the address is used as it is."""
+    t = next((x for x in LOOK_THEMES if x["id"] == body.get("theme")), None)
+    if not t or not t.get("background"):
+        raise Fail("That theme has no picture.")
+    url = t["background"]["url"]
+    base = os.environ.get("HLP_THEME_PICTURE_BASE")             # (for the tests: a small web server of their own)
+    data = None
+    try:
+        req = urllib.request.Request(base.rstrip("/") + "/" + t["id"] + ".png" if base else url, headers={"User-Agent": "homelab-panel"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read(MAX_UPLOAD + 1)
+        if len(data) > MAX_UPLOAD or not sniff_image(data):
+            data = None
+    except (OSError, ValueError, urllib.error.URLError):
+        data = None
+    with LOCK:
+        if data:
+            return dict(bg_store(data, body), stored=True)
+        tx = Tx("Background picture changed")
+        tx.put(SETTINGS, bg_numbers(body, bg_set(tx.get(SETTINGS), "image", url)))
+        tx.commit()
+        return {"restarting": False, "image": url, "stored": False}
 
 
 # ================================================================ layout: tabs, groups, their order (settings.yaml: layout:)
@@ -2240,6 +2299,11 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/logout":
                 SESSIONS.pop(self.cookie_token(), None)
                 return self.send(200, {"ok": True}, extra={"Set-Cookie": "%s=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0%s" % (COOKIE, "" if os.environ.get("HLP_COOKIE_PLAIN") else "; Secure")})
+            if path == "/api/background/theme":
+                tb = json.loads(self.read_body(1 << 20) or b"{}")
+                if not isinstance(tb, dict):
+                    raise Fail("The request is not understood.")
+                return self.send(200, theme_picture(tb))
             if path == "/api/background/upload":
                 data = self.read_body(MAX_UPLOAD)
                 with LOCK:
