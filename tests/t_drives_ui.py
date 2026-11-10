@@ -168,6 +168,9 @@ def main():
                 pg.wait_for_selector("dialog.dcard")
                 cbtns = pg.eval_on_selector_all("dialog.dcard button", "els => els.map(e => e.textContent.trim())")
                 check("%s: the spare drive's card offers Add to Main, Add to Backup and Erase" % label, all(b in cbtns for b in ("Add to Main", "Add to Backup", "Erase")), cbtns)
+                pg.get_by_role("button", name="Run Quick Check").click()
+                pg.wait_for_selector("dialog.dcard p:has-text('Quick Check:')", timeout=8000)
+                check("%s: a spare drive's Quick Check says there is nothing to check yet, in plain words" % label, "nothing to check yet" in pg.inner_text("dialog.dcard") and "this drive has no result" not in pg.inner_text("dialog.dcard"), pg.inner_text("dialog.dcard"))
                 pg.keyboard.press("Escape")
                 pg.wait_for_selector("dialog.dcard", state="detached")
 
@@ -443,7 +446,7 @@ def main():
             pg.locator("dialog .actions button").last.click()
             check("setup abort: Abort sends Stop to the tool", wait_calls(pg, ["panel", "abort"]), calls()[m:])
             pg.wait_for_selector(".card.working:has-text('Stopping')", timeout=8000)
-            check("setup abort: while it stops, the card explains that it can take a few minutes and that Main is not touched", "a few minutes" in pg.inner_text(".card.working") and "Main pool is not touched" in pg.inner_text(".card.working"), pg.inner_text(".card.working"))
+            check("setup abort: while it stops, the card explains that it can take a few minutes and that Main is not touched", "a few minutes" in pg.inner_text(".card.working") and "Main pool is not touched" in pg.inner_text(".card.working") and "You can stop while" not in pg.inner_text(".card.working"), pg.inner_text(".card.working"))
             pg.wait_for_selector(".card.working", state="detached", timeout=20000)
             t = pg.inner_text("#toast")
             check("setup abort: the answer is calm (Stopped, not an error) and there is no What Happened box", "Stopped as you asked" in t and "bad" not in (pg.get_attribute("#toast", "class") or "") and pg.locator("text=What Happened").count() == 0, t)
