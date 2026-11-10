@@ -988,7 +988,7 @@ stop_containers() {   # stop_containers PATH...
     for n in $list; do case " $held " in *" $n "*) ;; *) new="$new $n" ;; esac; done
     STOPPED=""
     [ -n "${new// /}" ] || return 0
-    note "Stopping containers that use this storage (they stay stopped until every drive is done):$new"
+    note "Stopping containers that use this pool (they stay stopped until every drive is done):$new"
     # shellcheck disable=SC2086
     bad=$(docker_each stop $new)
     [ -z "${bad// /}" ] || warn "Some containers did not stop cleanly"
@@ -996,7 +996,7 @@ stop_containers() {   # stop_containers PATH...
     return 0
   fi
   [ -n "${list// /}" ] || { STOPPED=""; return 0; }
-  note "Stopping containers that use this storage: $list"
+  note "Stopping containers that use this pool: $list"
   # shellcheck disable=SC2086
   bad=$(docker_each stop $list)
   [ -z "${bad// /}" ] || warn "Some containers did not stop cleanly"
@@ -1358,6 +1358,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
     if abort_requested; then ABORTED=1; note "Stopped before $dev was erased. Nothing was changed."; return 1; fi
     progress 10 "Erasing and formatting (cannot be stopped)"
     part=$(format_disk "$dev" "$label") || return 1
+    chosen_name_del "$label"      # a freshly formatted drive is a new drive: a name left on this label by an earlier drive is not its name
   else
     $gate "Keep the files on $dev and add the drive as it is ($base)." \
                "Stop the containers that use the $role pool for a minute." \
@@ -1369,6 +1370,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
     local oldlabel; oldlabel=$(fs_label "$part")
     if [ "$oldlabel" != "$label" ]; then
       e2label "$part" "$label" || die "Could not set the label on $part"
+      chosen_name_del "$label"      # a name an earlier drive left on this label is not this drive's name
       carry_name "$oldlabel" "$label"      # a name you chose follows the drive to its new place
     fi
   fi
@@ -1713,7 +1715,7 @@ adopt_flow() {
   fstab_snapshot
   sync_fs "$pool"
   umount "$pool" 2>/dev/null || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
-  if [ "$cur" != "$label" ]; then e2label "$part" "$label" || { fstab_rollback; mount_fstab "$pool"; start_containers; die "Could not set the label."; }; carry_name "$cur" "$label"; fi
+  if [ "$cur" != "$label" ]; then e2label "$part" "$label" || { fstab_rollback; mount_fstab "$pool"; start_containers; die "Could not set the label."; }; chosen_name_del "$label"; carry_name "$cur" "$label"; fi
   ensure_mp "$mp"
   fstab_remove_mp "$pool"
   fstab_add "UUID=$uuid  $mp  ext4  $BRANCH_OPTS  0  2"
@@ -2560,7 +2562,7 @@ bootsection_attach() {   # bootsection_attach ROLE REUSE: the section file of th
   name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
   timeshift_protect
   say ""
-  say "Done. $(branch_name "$mp") is part of the $role pool ($(role_pool "$role")). It is the last place that storage uses."
+  say "Done. $(branch_name "$mp") is part of the $role pool ($(role_pool "$role")). It is the last place that pool uses."
   log "connected $label ($img) to $role"
   crit_release
   return 0
@@ -3448,7 +3450,7 @@ settings_menu() {
            "No files are moved." &&
          limit_flow ;;
       6) intro "Make a boot drive section bigger or smaller" \
-           "Next you pick a section and its new size. The containers of that storage stop for a while." \
+           "Next you pick a section and its new size. The containers of that pool stop for a while." \
            "You are asked again before anything changes." &&
          { resize_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;
@@ -5111,7 +5113,7 @@ EOF
     connect) cat <<'EOF'
 sudo drives connect [--dry-run] [--yes] [--confirm-erase] [--now]
   Lists the drives that are plugged in and not used, asks which one and for which storage (Main or Backup). A drive that
-  already has files can be kept as it is. Erasing needs the drive name and ERASE typed. The containers of that storage
+  already has files can be kept as it is. Erasing needs the drive name and ERASE typed. The containers of that pool
   stop for about a minute while the pool mounts again.
 EOF
     ;;
@@ -5197,7 +5199,7 @@ EOF
     ;;
     resize) cat <<'EOF'
 sudo drives resize [--dry-run] [--yes] [--confirm-erase] [--now]
-  Makes a boot drive section bigger or smaller. The containers of that storage stop, the file system is checked, resized
+  Makes a boot drive section bigger or smaller. The containers of that pool stop, the file system is checked, resized
   and checked again, and the files are counted before and after. Shrinking is refused when the files would fill more than 90%
   of the new size, and you must type CONTINUE. Growing needs free space on the boot drive (it always keeps its reserve).
 EOF

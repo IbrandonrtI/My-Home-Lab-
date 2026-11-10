@@ -1746,14 +1746,28 @@ def api_drives_state():
     return {"status": st, "actions": ac}
 
 
-def drive_message(out, err, limit=600):
-    """What the drives tool said, for a toast: its own sentences, without the progress lines."""
+def drive_message(out, err, limit=600, problem=False):
+    """What the drives tool said, for a toast: its own sentences, without the progress lines.
+    A finished change is told by its "Done." line alone; a change that did not work by the warnings it ended with.
+    The text is cut between lines, never in the middle of a sentence."""
     lines = []
     for x in (out + "\n" + err).splitlines():
         x = x.strip()
         if not x or x.startswith(("Starting containers", "Stopping", "WARNING: Not a good moment")):
             continue
+        if re.fullmatch(r"[-\u2014\u2500=_ ]+", x) or x.startswith(("\u2014", "\u2500")) or "\u2014\u2014" in x:
+            continue      # (a rule or a heading line of another tool)
         lines.append(x)
+    if not problem:
+        for x in lines:
+            if x.startswith("Done"):
+                return x[:limit]
+    else:
+        warned = [x[len("WARNING:"):].strip() for x in lines if x.startswith("WARNING:") and "lazy unmount" not in x]
+        if warned:
+            lines = warned
+    while len(lines) > 1 and len(" ".join(lines)) > limit:
+        lines.pop(0)
     return " ".join(lines)[-limit:]
 
 
@@ -1898,7 +1912,7 @@ def job_thread(words):
             if rc == 0:
                 for it in JOB["items"]:
                     JOB["progress"][it] = {"pct": 100, "text": "Done"}
-            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else (tail[-1] if rc == 4 and tail else drive_message(text, "", 1500))      # (4 = the person pressed Stop: the tool's last line says what happened)
+            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else (tail[-1] if rc == 4 and tail else drive_message(text, "", 1500, problem=(rc != 0)))      # (4 = the person pressed Stop: the tool's last line says what happened)
             JOB["running"] = False
             JOB["stopping"] = False
             drives_change_end()      # (inside the same lock: whoever sees "not running" can look at the drives at once)

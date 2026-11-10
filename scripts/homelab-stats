@@ -367,7 +367,7 @@ def temp_rows():
 
 def array_health():
     """(health text, 'RAID' or 'ZFS') of a RAID or ZFS setup that `drives` built, or None when Main is not one."""
-    preset = read(os.path.join(STATE_DIR, "preset")).split("|")[0].strip()
+    preset = read(os.path.join(os.environ.get("HOMELAB_DRIVES_STATE_DIR", "/var/lib/homelab-drives"), "preset")).split("|")[0].strip()      # (the file `drives` keeps: what it built)
     if preset.startswith("zfs-"):
         rc, out = run(["zpool", "list", "-H", "-o", "health", os.environ.get("ZFS_POOL_NAME", "tank")], timeout=20)
         st = out.strip().upper()
