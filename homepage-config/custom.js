@@ -566,8 +566,9 @@
   // ---- words Homepage writes itself, said the way this dashboard says them (a label is changed in place; Homepage writes it again only when it changes it)
   function wording() {
     all("#information-widgets .pr-1").forEach(function (e) { if (e.children.length === 0 && e.textContent === "UP") e.textContent = "Uptime"; });
-    all("li.service details > summary div").forEach(function (e) {      // Homepage writes it as three pieces of text ("API Error", a space, "Information") next to the icon
-      if (e.textContent.replace(/\s+/g, " ").trim() !== "API Error Information") return;
+    all("li.service details > summary div").forEach(function (e) {      // Homepage writes it as three pieces of text ("API Error", a space, "Information") next to the icon, or as just "API Error"
+      var said = e.textContent.replace(/\s+/g, " ").trim();
+      if (said !== "API Error Information" && said !== "API Error") return;
       var kids = Array.prototype.slice.call(e.childNodes).filter(function (n) { return n.nodeType === 3; });
       kids.forEach(function (n, i) { n.nodeValue = i === 0 ? "Service Unavailable" : ""; });
     });
