@@ -21,6 +21,7 @@ PAGE = """<html><body><div id="inner_wrapper">
 </div>
 <ul>
   <li class="service" id="nc"><details><summary><div><svg></svg>API Error Information</div></summary><p>x</p></details></li>
+  <li class="service" id="im"><details><summary><div>API Error</div></summary><p>x</p></details></li>
   <li class="service" id="ok"><details><summary><div>Fine</div></summary></details></li>
 </ul></div></body></html>"""
 
@@ -43,6 +44,7 @@ with sync_playwright() as p:
     pg.add_script_tag(path=JS)
     pg.wait_for_timeout(400)
     check("a card's 'API Error Information' says Service Unavailable", pg.inner_text("#nc summary div").strip() == "Service Unavailable", pg.inner_text("#nc summary div"))
+    check("a card that says just 'API Error' (Immich) says Service Unavailable too", pg.inner_text("#im summary div").strip() == "Service Unavailable", pg.inner_text("#im summary div"))
     check("an empty pool's pill says No Drive, not API Error", pg.inner_text("#err") == "No Drive", pg.inner_text("#err"))
     check("... also with a name you chose", pg.inner_text("#err2") == "No Drive", pg.inner_text("#err2"))
     check("another pill's error is left alone", pg.inner_text("#err3") == "API Error", pg.inner_text("#err3"))

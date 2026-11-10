@@ -47,7 +47,7 @@ if act == "status":
 elif act == "actions":
     ACTIONS = ({"rename": [{"id": "MAIN1", "name": "1 TB Toshiba HDD", "role": "main", "custom": False, "connected": True, "others": 0 if mode == "single" else 1, "has_data": True, "boot_section": False, "used_bytes": 250000000000},
                                  {"id": "BACKUP1", "name": "Old Backup", "role": "backup", "custom": True, "connected": False, "others": 0, "has_data": False, "boot_section": False, "used_bytes": 0},
-                                 {"id": "MAIN2", "name": "2 TB Seagate HDD 2", "role": "main", "custom": False, "connected": True, "others": 0 if mode == "single" else 1, "has_data": False, "boot_section": False, "used_bytes": 0}],
+                                 {"id": "MAIN2", "name": "2 TB Seagate HDD 2", "role": "main", "custom": False, "connected": True, "others": 0 if mode == "single" else 1, "has_data": False, "boot_section": False, "used_bytes": 1900000}],
                       "spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "keep_ok": True, "partitions": 1}],
                       "power": [{"id": "sdb", "name": "1 TB Toshiba HDD", "role": "main", "state": "awake"}], "can_sleep": True})
     if "twospares" in mode:
@@ -119,7 +119,7 @@ elif act == "setups":
     print(json.dumps({"spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "blank": False, "keep_ok": True, "skipped": "sdc" in skip},
                                 {"id": "sde", "device": "/dev/sde", "name": "32 GB Kingston HDD", "size_bytes": 32000000000, "blank": True, "skipped": "sde" in skip},
                                 {"id": "sdf", "device": "/dev/sdf", "name": "32 GB Kingston HDD 2", "size_bytes": 32000000000, "blank": True, "skipped": "sdf" in skip}],
-                      "total_bytes": total, "current": "", "main_used_bytes": 20000000000, "main_has_drives": "migrate" in mode,
+                      "total_bytes": total, "current": "", "main_used_bytes": 20000000000, "main_has_drives": "migrate" in mode, "main_services": (["immich_server", "immich_redis", "nextcloud", "nextcloud_cron"] if "migrate" in mode else []),
                       "recommended": rec, "options": options}))
 elif act == "bootadd":
     print("PROGRESS bootadd 50 Making the section")

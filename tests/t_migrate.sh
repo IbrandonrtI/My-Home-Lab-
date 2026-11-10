@@ -86,6 +86,7 @@ two_pool
 BEFORE=$(sums)
 J=$(HOMELAB_EXTRA_PATH="$FAKEBIN" $D panel setups 2>/dev/null)
 check "scan: Main has drives" "$(echo "$J" | jq_ "d['main_has_drives']")" "True"
+check "scan: it lists the services that use Main (an empty list here: there is no Docker on the fake machine)" "$(echo "$J" | jq_ "type(d['main_services']).__name__")" "list"
 check "scan: RAID 1 can be built now (it moves Main)" "$(echo "$J" | jq_ "[o['can_build'] for o in d['options'] if o['id'] == 'md-raid1'][0]")" "True"
 check "scan: and it says it moves Main" "$(echo "$J" | jq_ "[o['migrate'] for o in d['options'] if o['id'] == 'md-raid1'][0]")" "True"
 check "scan: a SnapRAID setup still has to wait" "$(echo "$J" | jq_ "[o['migrate'] for o in d['options'] if o['id'] == 'snapraid1'][0]")" "False"

@@ -39,6 +39,13 @@ failed = ("!! ERASE WARNING !!\nEverything on these 2 drives will be permanently
 check("a change that did not work is told by its warnings", m.drive_message(failed, "", 1500, problem=True),
       "The copy stopped with an error (code 20). The move to the new setup did not finish. Your Main pool is as it was and its files are untouched.")
 
+refused = ("Drive: 8 GB USB DISK 2.0 Flash (/dev/sdd, 7.2G, USB DISK 2.0, usb)  Serial: 070A54E574469F32  SMART health: unknown\n"
+           "NAME SIZE FSTYPE LABEL MOUNTPOINTS\nsdd 7.2G\n"
+           "This drive: 8 GB USB DISK 2.0 Flash (/dev/sdd)\nIt will be added to the Backup storage.\n"
+           "ERROR: /dev/sdd does not have one ext4 partition, so its files cannot be kept.")
+check("a change the tool refused is told by the reason alone, without the drive's table before it", m.drive_message(refused, "", 1500, problem=True),
+      "/dev/sdd does not have one ext4 partition, so its files cannot be kept.")
+
 long_out = "\n".join("Line number %d says something quite long to fill the space." % i for i in range(60))
 msg = m.drive_message(long_out, "", 300)
 check("a long text is cut between lines, not in the middle of one", msg.startswith("Line number "), True)
