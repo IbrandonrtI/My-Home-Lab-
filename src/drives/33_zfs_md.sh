@@ -590,9 +590,9 @@ preset_flow() {   # preset_flow ID
     progress 8 "Building the new setup"
     [ "$migrate" != 1 ] || ARRAY_MOUNT=$MIGRATE_DIR      # (built beside the old Main pool; it takes the Main path after the copy)
     if [ "$(preset_kind "$id")" = zfs ]; then
-      zfs_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The ZFS pool could not be created. Look at the messages above. See: sudo drives status"; return 1; }
+      zfs_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The ZFS pool could not be created. Look at the messages above.$(hint " See: sudo drives status" "")"; return 1; }
     else
-      md_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The RAID array could not be built. Look at the messages above. See: sudo drives status"; return 1; }
+      md_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The RAID array could not be built. Look at the messages above.$(hint " See: sudo drives status" "")"; return 1; }
     fi
     ARRAY_MOUNT=""
     progress 18 "New setup is ready"

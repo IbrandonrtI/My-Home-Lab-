@@ -232,7 +232,7 @@ move_flow() {
   if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole pool with its files as they are." || { PROG_HI=100; return 1; }
   else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole pool." || { PROG_HI=100; return 1; }; fi
   [ "$DRY_RUN" = 1 ] && { PROG_HI=100; return 0; }
-  PENDING_NOTE="$(branch_name "$mp") already left the $role pool and was not added to the $newrole pool. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
+  PENDING_NOTE="$(branch_name "$mp") already left the $role pool and was not added to the $newrole pool. $(hint "Add it with:  sudo drives > Add or remove drives > Connect a new drive" "Add it from this screen.")"
   PROG_LO=55; PROG_HI=100
   if ! connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1; then
     if [ "$ABORTED" = 1 ]; then      # Stop was pressed before the drive was erased: it goes back where it came from, with all its files

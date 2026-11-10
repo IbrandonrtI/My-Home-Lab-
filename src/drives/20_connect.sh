@@ -162,7 +162,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   if ! apply_pool "$role"; then
     fstab_rollback
     pool_umount "$mp"
-    die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
+    die "The $role pool did not mount. fstab was restored.$(hint " Check: sudo drives status" " Press Mount the Drives Again, or look at the Drives screen.")"
   fi
   progress 90 "Starting the containers"
   start_containers

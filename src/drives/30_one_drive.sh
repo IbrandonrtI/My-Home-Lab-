@@ -279,10 +279,10 @@ wipe_flow() {   # erase a spare drive (never a pool drive, the boot drive or a d
            "$([ "$idx" = 1 ] && echo "Format it as a new empty ext4 drive (label SPARE)." || echo "Leave it empty, without a file system.")" && return 0
   if [ "$idx" = 1 ]; then
     part=$(format_disk "$dev" SPARE) || return 1
-    say ""; say "Done. $name was erased and formatted as an empty ext4 drive ($part). Add it to a pool with:  sudo drives connect"
+    say ""; say "Done. $name was erased and formatted as an empty ext4 drive ($part). $(hint "Add it to a pool with:  sudo drives connect" "Add it to a pool from this screen.")"
   else
     wipe_disk "$dev"
-    say ""; say "Done. $name was erased and is empty. Format it or add it to a pool with:  sudo drives connect"
+    say ""; say "Done. $name was erased and is empty. $(hint "Format it or add it to a pool with:  sudo drives connect" "Erase it again to format it, or add it to a pool from this screen.")"
   fi
   log "erased $dev ($name)"
   return 0

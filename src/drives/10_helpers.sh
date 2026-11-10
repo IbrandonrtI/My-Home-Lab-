@@ -6,6 +6,7 @@ why() { [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -d "$PANEL_RESERVE_DIR" ] && printf
 warn() { printf 'WARNING: %s\n' "$*" >&2; log "WARN $*"; why warn "$*"; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; why err "$*"; restore_services; exit 1; }
 
+hint() { if [ "$PANEL_MODE" = 1 ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }      # hint "terminal wording" "panel wording": the control panel has no terminal, so it points to its own buttons
 ask()  { local v=""; printf '%s' "$1" >&2; IFS= read -r v || true; printf '%s' "$v"; }
 yn()   {
   if [ "$ASSUME_YES" = 1 ]; then note "$1 [y/N]: y   (--yes)"; return 0; fi
