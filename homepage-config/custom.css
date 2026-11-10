@@ -622,7 +622,7 @@ li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-colo
 #cal-month { --accent: 36, 140, 255; }                          /* calendar: blue */
 #cal-agenda { --accent: 147, 51, 234; }                         /* coming up: purple */
 .services-group:has(li[id^="stat-"]), .services-group:has(li[id^="cal-"]) { padding-bottom: 1.1rem !important; }      /* air between the rows */
-li[id^="stat-"] .service-block-value { font-size: 1rem !important; font-weight: 600 !important; color: #f4f6fa; }
+li[id^="stat-"] .service-block-value { font-size: 1rem !important; font-weight: 600 !important; color: var(--lk-text); }
 li[id^="stat-"] .service-block-label { opacity: 0.7; }
 
 /* ---- A card whose service does not answer gets a red edge (custom.js marks it) */
