@@ -92,7 +92,8 @@ div[id$="-card"] > div {
   z-index: 0;
   border-radius: 14px !important;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.143)), rgba(var(--accent), var(--hl-a2, 0.035)) 55%) !important;
+  --lk-deepc: color-mix(in srgb, color-mix(in srgb, rgb(var(--accent, var(--lk-accent))) 24%, #070a12) var(--lk-deep, 0%), transparent);
+  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.143)), rgba(var(--accent), var(--hl-a2, 0.035)) 55%), linear-gradient(var(--lk-deepc), var(--lk-deepc)) !important;
 }
 
 /* Thin accent rail on the left edge */
@@ -549,7 +550,8 @@ body { --icon-color: #c9d6f2; }
   z-index: 0;
   border-radius: 14px !important;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent, var(--lk-accent)), var(--hl-a1, 0.143)), rgba(var(--accent, var(--lk-accent)), var(--hl-a2, 0.035)) 55%) !important;
+  --lk-deepc: color-mix(in srgb, color-mix(in srgb, rgb(var(--accent, var(--lk-accent))) 24%, #070a12) var(--lk-deep, 0%), transparent);
+  background: linear-gradient(135deg, rgba(var(--accent, var(--lk-accent)), var(--hl-a1, 0.143)), rgba(var(--accent, var(--lk-accent)), var(--hl-a2, 0.035)) 55%), linear-gradient(var(--lk-deepc), var(--lk-deepc)) !important;
 }
 #inner_wrapper [id$="-card"]::after, #inner_wrapper li[id^="stat-"]::after, #inner_wrapper li[id^="cal-"]::after { display: none !important; }
 #inner_wrapper [id$="-card"] { position: relative !important; background-color: transparent !important; }
@@ -592,7 +594,8 @@ body { --icon-color: #c9d6f2; }
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.143)), rgba(var(--accent), var(--hl-a2, 0.035)) 55%);
+  --lk-deepc: color-mix(in srgb, color-mix(in srgb, rgb(var(--accent, var(--lk-accent))) 24%, #070a12) var(--lk-deep, 0%), transparent);
+  background: linear-gradient(135deg, rgba(var(--accent, var(--lk-accent)), var(--hl-a1, 0.143)), rgba(var(--accent, var(--lk-accent)), var(--hl-a2, 0.035)) 55%), linear-gradient(var(--lk-deepc), var(--lk-deepc));
 }
 .bookmark > a::after {
   content: "";
