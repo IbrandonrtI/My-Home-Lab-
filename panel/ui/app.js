@@ -1425,7 +1425,7 @@ function viewLook() {
     put(glass,
       h("div", { class: "field" }, h("div", { class: "lab" }, "Card Tint"),
         h("div", { class: "chips" }, chip(tint, "Tint On", () => { L.glassTint = true; }), chip(!tint, "No Tint", () => { L.glassTint = false; })),
-        h("div", { class: "hint" }, "No Tint takes the colored layer off the cards, so only the blur is left, and the card colors become a thin colored edge. Text stays sharper, especially over a bright picture.")),
+        h("div", { class: "hint" }, "No Tint takes the colored glass layer off the cards, so only the blur is left. The colors you gave your cards stay (see Color Strength below). The text gets a thin shadow so it stays sharp over a bright picture.")),
       tint ? [h("div", { class: "field" }, h("div", { class: "lab" }, "Glass Style"),
         h("div", { class: "chips" }, chip(!L.glassClear, "Tinted", () => { L.glassClear = false; }), chip(L.glassClear, "Transparent", () => { L.glassClear = true; })),
         h("div", { class: "hint" }, "Transparent glass lets the picture and the colors of your cards show through, so they look more vibrant.")),
@@ -1462,14 +1462,16 @@ h("div", { class: "card" }, h("h2", {}, "Colors and Glass"),
       h("div", { class: "grid cols2" },
         h("div", {},
           colorField("Main Color", "accent", "The color of the active tab, bars, icons and the edge of a card you point at.", ["#8ab4ff", "#5ec8ff", "#7ee0a0", "#ffa66b", "#ff8fb5", "#c9a0ff", "#ffd36b", "#c3cad6"]),
-          colorField("Glass Color", "glass", "The tint of every card and tile.", ["#0d121e", "#06141f", "#07150d", "#1c0f12", "#1a0c16", "#111214"])),
+          colorField("Glass Color", "glass", "The tint of every card and tile (only when Card Tint is on).", ["#0d121e", "#06141f", "#07150d", "#1c0f12", "#1a0c16", "#111214"]),
+          colorField("Text Color", "text", "The names and numbers on cards, tiles and bookmarks. Choose a light color on a dark picture and a dark color on a bright one.", ["#eef2f9", "#ffffff", "#fff6ee", "#f2fcff", "#fff2f7", "#1a2233"]),
+          colorField("Smaller Text Color", "muted", "The descriptions and labels under the names.", ["#a9b4c7", "#dde8f8", "#ecd0bf", "#bcdbe8", "#efcadb", "#4a5568"])),
         glass),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Color of Each Tab"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Each tab can have its own accent color."),
         h("div", { class: "grid cols2 tabcolors" }, tabRows)),
       h("p", { class: "muted small" }, "Further down you can give single cards, tiles, bookmarks and labels their own colors."));
   const strengthCard =
 h("div", { class: "card" }, h("h2", {}, "Color Strength"),
-  lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "How strong the colors of your cards, tiles and bookmarks are. Higher makes the color, the edge and the glow stronger, so the color is not washed out. With No Tint (under Colors and Glass) it only changes the colored edge and glow."));
+  lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "How strong the colors of your cards, tiles and bookmarks are. Higher makes the color, the edge and the glow stronger, so the color is not washed out."));
   return h("div", {},
     themesCard(),
     previewCard,
