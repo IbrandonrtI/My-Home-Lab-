@@ -528,7 +528,7 @@ async function buildSetup(o) {
     lead: [o.blurb, "Drives used (" + drives.length + " of " + c.spare.length + "): " + drives.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", "),
       (humanBytes(o.usable_bytes) === humanBytes(o.used_bytes) ? "You get all of the " + humanBytes(o.used_bytes) + " on these drives. " : "You get about " + humanBytes(o.usable_bytes) + " of the " + humanBytes(o.used_bytes) + " on these drives. ") + (o.tolerates > 0 ? cap(protectText(o)) + " without losing files." : "No drive may fail: one dead drive loses the files."),
       keepable.length ? (o.id === "mirror" ? "One drive can keep its files (it becomes the Main drive); the other drive holds the copy and is erased." : "Drives that hold files can keep them as data drives. The biggest drive" + (par > 1 ? "s" : "") + " that " + (par > 1 ? "are" : "is") + " not kept hold" + (par > 1 ? "" : "s") + " the protection data and " + (par > 1 ? "are" : "is") + " erased.") : null,
-      o.migrate ? "Your Main pool has " + humanBytes(c.main_used_bytes || 0) + " of files and this setup holds " + humanBytes(o.usable_bytes) + ", so everything fits. The files are copied into the new setup first and checked; only then does it become your Main pool. The old Main drives are released afterwards: their files are not erased, and they show up as spare drives. The services that use Main are stopped while the files are copied, which can take hours for a lot of data." : null,
+      o.migrate ? "Your Main pool has " + humanBytes(c.main_used_bytes || 0) + " of files and this setup holds " + humanBytes(o.usable_bytes) + ", so everything fits. The files are copied into the new setup first and checked; only then does it become your Main pool. The old Main drives are released afterwards: their files are not erased, and they show up as spare drives. " + serviceText(c.main_services) + " The copy can take hours for a lot of data. If you press Abort while it copies, the services start again and nothing changes." : null,
       left.length ? "Not used: " + left.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", ") + ". They stay as spare drives." : "Every spare drive is used."].filter(Boolean),
     questions: keepable.map(sp => ({ id: "m-" + sp.id, label: sp.name + "  ·  " + sp.device + "  ·  already formatted", value: defKeep.has(sp.id) ? "keep" : "erase", options: [KEEP_OPT("Main"), ERASE_OPT] })),
     invalid: st => o.id === "mirror" && kept(st).length > 1 ? "A mirror can keep the files of one drive only: the other drive becomes the copy." : par && drives.length - kept(st).length < par ? "SnapRAID needs " + par + " drive" + (par > 1 ? "s" : "") + " for the protection data, and " + (par > 1 ? "they are" : "it is") + " erased. Let at least " + par + " of the drives be erased." : null,
@@ -661,6 +661,13 @@ function poolFacts(tiles) {      // what is left in the pool when these drives g
   const roomText = "There is not enough free room on the " + role + " drives that stay (" + humanBytes(need) + " to copy, " + humanBytes(free) + " free, and " + humanBytes(DRAIN_SPARE) + " is kept free). A drive whose files do not fit is not taken out. Pick fewer drives, or choose not to copy.";
   return { remaining, only: remaining <= 0, copyable, noRoom, roomText };
 }
+function friendlyService(n) { const w = String(n).split(/[_-]/)[0] || String(n); return w.charAt(0).toUpperCase() + w.slice(1); }
+function serviceText(list) {      // the containers that use the Main pool, in plain words (immich_server and immich_redis both count as Immich)
+  const names = [...new Set((list || []).map(friendlyService))];
+  if (!names.length) return "No services use the Main pool right now.";
+  return "These services use the Main pool and are stopped while the files are copied, then started again: " + names.join(", ") + ". Until the copy is done, they cannot reach your files.";
+}
+function emptyDriveText(t) { return t.ren.used_bytes > 0 ? "  ·  no files on it (the " + humanBytes(t.ren.used_bytes) + " used is the drive's own format)" : "  ·  holds no files"; }
 async function takeOutDrives(tiles) {
   const f = poolFacts(tiles), role = tiles[0].ren.role, R = cap(role), one = tiles.length === 1;
   const names = tiles.map(t => t.d.name).join(", ");
@@ -668,7 +675,7 @@ async function takeOutDrives(tiles) {
   const bootData = tiles.some(t => t.kind === "boot" && t.ren.has_data);      // a Boot Drive Space is deleted when it leaves, so its files must be copied first
   const r = await driveDialog({
     title: one ? "Take Drive Out of the " + R + " Pool" : "Take " + tiles.length + " Drives Out of the " + R + " Pool",
-    lead: [one ? tiles[0].d.name + (tiles[0].ren.has_data ? "  ·  holds " + humanBytes(held) : "  ·  holds no files") : names],
+    lead: [one ? tiles[0].d.name + (tiles[0].ren.has_data ? "  ·  holds " + humanBytes(held) : emptyDriveText(tiles[0])) : names],
     questions: f.copyable && !bootData ? [{ id: "copy", label: (one ? "Its files are" : "Their files are") + " in the " + role + " pool. What should happen to them?", value: "yes", options: [
       { value: "yes", label: "Copy them to another " + role + " drive first (recommended)", hint: "Every file is copied and checked before the drive is taken out. Nothing is lost." },
       { value: "no", label: "Do not copy them", hint: "The files stay on the drive only. They disappear from the " + role + " pool." }] }] : [],
@@ -695,7 +702,7 @@ async function moveDrives(tiles) {
   const erasing = s => tiles.filter(t => keepOf(s, t) === "erase");
   const r = await driveDialog({
     title: one ? "Move Drive to the " + T + " Pool" : "Move " + tiles.length + " Drives to the " + T + " Pool",
-    lead: [one ? tiles[0].d.name + " moves from the " + R + " pool to the " + T + " pool." + (tiles[0].ren.has_data ? "  It holds " + humanBytes(tiles[0].ren.used_bytes) + "." : "  It holds no files.")
+    lead: [one ? tiles[0].d.name + " moves from the " + R + " pool to the " + T + " pool." + (tiles[0].ren.has_data ? "  It holds " + humanBytes(tiles[0].ren.used_bytes) + "." : tiles[0].ren.used_bytes > 0 ? "  It has no files on it (the " + humanBytes(tiles[0].ren.used_bytes) + " used is the drive's own format)." : "  It holds no files.")
       : tiles.map(t => t.d.name).join(", ") + " move from the " + R + " pool to the " + T + " pool."],
     questions,
     refuse: () => clash ? "The " + T + " pool already has a Boot Drive Space. A pool can have only one." : f.only && role === "main" ? (one ? "This is the only Main drive. Moving it would take away the pool your services use. Add another Main drive first." : "These are all the Main drives. Moving them would take away the pool your services use. Leave at least one Main drive.") : null,
@@ -1047,7 +1054,7 @@ function drivesBody() {
     const stopping = !!(DRjob && DRjob.stopping), canStop = !!DRbusy && (/^(add|disconnect|move)$/.test(DRbusy) || (DRbusy === "setup" && copying));
     out.push(h("div", { class: "card working", role: "status" }, DRbusy ? (stopping ? "Stopping at the next safe moment..." : (JOB_TEXT[DRbusy] || "Working...")) : DRwait,
       canStop ? h("div", { class: "row tight" }, h("button", { class: "danger small", disabled: stopping, onclick: abortJob, title: "Stops what is not finished yet, and puts the drives that are done back" }, stopping ? "Stopping..." : "Abort"),
-        stopping ? h("span", { class: "muted small" }, "A copy stops at once; a step that has started finishes first. Drives that are already done are put back.") : null) : null,
+        stopping ? h("span", { class: "muted small" }, DRbusy === "setup" ? "The copy has been told to stop. The drives still have to finish writing what they already received, and then the new setup is taken apart and the services start again. This can take a few minutes (longer the more was already copied). Your Main pool is not touched." : "A copy stops at once; a step that has started finishes first. Drives that are already done are put back. This can take a few minutes.") : null) : null,
       DRbusy && /^(add|wipe|disconnect|move)$/.test(DRbusy) ? h("p", { class: "muted small" }, "Please keep this page open or come back later. Copying files can take a long time. You can leave the page: the work goes on.") : null,
       DRbusy === "setup" ? h("p", { class: "muted small" }, copying ? "You can stop while the files are copied: your Main pool then stays as it is. You can leave this page: the work goes on." : "A new setup can be stopped only while its files are copied (the Abort button shows up then). You can leave this page: the work goes on.") : null,
       lines.length ? h("details", { class: "joblogbox" }, h("summary", {}, "Show the steps"), h("pre", { class: "joblog" }, lines.join("\n"))) : null));
