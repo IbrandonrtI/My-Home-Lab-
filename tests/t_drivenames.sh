@@ -93,5 +93,16 @@ check "pool options: fill in order" "$(grep -c 'category.create=ff' <<<"$POOL_OP
 check "pool options: keep space free" "$(grep -c 'minfreespace=' <<<"$POOL_OPTS_BASE")" "1"
 check "pool options: no spreading policy left" "$(grep -c 'mfs' <<<"$POOL_OPTS_BASE")" "0"
 
+# a name you chose follows the drive to a new label; a name an earlier drive left on a label is dropped first (the new drive does not inherit it)
+: >"$DRIVE_NAMES_FILE"
+chosen_name_put OLD1 "Photos Drive"
+carry_name OLD1 NEW1
+check "a chosen name follows the drive to its new label" "$(chosen_name NEW1)" "Photos Drive"
+check "and it is gone from the old label" "$(chosen_name OLD1)" ""
+chosen_name_put BACKUP1 "Test Eight"
+chosen_name_del BACKUP1
+carry_name MAIN1 BACKUP1
+check "a stale name on a label is not given to the next drive" "$(chosen_name BACKUP1)" ""
+
 [ "$bad" -eq 0 ] && echo OK || echo FAIL
 [ "$bad" -eq 0 ]

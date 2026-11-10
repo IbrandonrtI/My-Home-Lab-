@@ -30,6 +30,7 @@ run home-volumes bash -c "python3 '$HERE/t_homevol.py' | tail -1 | grep -q '^OK'
 run homepage-tabs bash -c "python3 '$HERE/t_tabs.py' | tail -1 | grep -q '^OK'"
 run music-player bash -c "python3 '$HERE/t_player.py' | tail -1 | grep -q '^OK'"
 run dashboard-extras bash -c "python3 '$HERE/t_extras.py' | tail -1 | grep -q '^OK'"
+run drive-messages bash -c "python3 '$HERE/t_drivemsg.py' | tail -1 | grep -q '^OK'"
 run stats-tab bash -c "python3 '$HERE/t_stats.py' | tail -1 | grep -q '^OK'"
 run panel-server bash -c "python3 '$HERE/t_panel.py' | tail -1 | grep -q '^OK'"
 run panel-ui bash -c "python3 '$HERE/t_panel_ui.py' | tail -1 | grep -q '^OK'"

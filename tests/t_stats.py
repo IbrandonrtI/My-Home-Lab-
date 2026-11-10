@@ -385,8 +385,11 @@ esac
     # --- a RAID or ZFS Main pool: its health is the array's, not "No drives found"
     os.remove(os.path.join(state, "display-timezone"))
     script(os.path.join(bindir, "zpool"), "#!/bin/sh\necho ONLINE\n")
-    with open(os.path.join(state, "preset"), "w") as f:
-        f.write("zfs-mirror|2026-11-09|sdc,sdd\n")
+    dstate = os.path.join(os.path.dirname(state), "drives-state")      # (where `drives` keeps its notes: not the folder of the readings)
+    os.makedirs(dstate, exist_ok=True)
+    env["HOMELAB_DRIVES_STATE_DIR"] = dstate
+    with open(os.path.join(dstate, "preset"), "w") as f:
+        f.write("zfs-stripe|2026-11-09|sdc,sdd\n")
     script(os.path.join(bindir, "lsblk"), "#!/bin/sh\ncase \"$*\" in\n  *-dno*) printf 'sda disk\\n' ;;\n  *sda) echo 'LABEL=\"\" MOUNTPOINT=\"/\"' ;;\nesac\n")
     run()
     d = load()
