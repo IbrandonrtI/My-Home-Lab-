@@ -292,7 +292,8 @@ LABEL_ICONS = ("plain", "circle", "square", "ring")
 PAINT_STYLES = ("gradient", "solid")
 NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card", "terminal-card")        # the panel's own cards and the music player are never painted
 # The themes of the Look screen. "look" is what the theme sets (only what differs from the default); "palette" is a list of colors spread over the groups of
-# cards, tiles and bookmarks (one color per group, round and round); "paintAll" is one color for all of them; "ui" is how the control panel itself looks.
+# cards, tiles and bookmarks (one color per group, round and round); "paintAll" is the one color of the cards and tiles (and of the bookmarks, unless "paintLinks" gives them a
+# second color that goes with it); "ui" is how the control panel itself looks.
 # The Calm Night theme is the default look: choosing it puts everything back.
 LOOK_THEMES = [
     {"id": "calm", "name": "Calm Night", "blurb": "The look the dashboard came with: deep blue glass.", "look": {}, "palette": [],
@@ -300,30 +301,30 @@ LOOK_THEMES = [
     {"id": "frost", "name": "Frosted Glass", "blurb": "Clear, bright glass with soft edges and system colors.",
      "look": {"glassTint": False, "accent": "#5ac8fa", "glass": "#d6e2f7", "glassClear": True, "glassLevel": 62, "radius": 24, "edge": 14, "glassBlur": 30, "glassSat": 190, "cardDepth": 50, "paintStrength": 26, "text": "#ffffff", "muted": "#dde8f8",
               "tabs": {"Stats": "#7fe0e8", "Links": "#a9b8ff"}},
-     "palette": ["#4fb3ea", "#5ac8fa", "#6fa8ff", "#43c3c9", "#7ad6e6", "#5e9de6", "#4ec0b0", "#8fb6f5"],
+     "paintAll": "#5ac8fa", "paintLinks": "#8fb6f5",
      "background": {"url": "https://images.unsplash.com/photo-1756909688538-2fc0fe8e757f?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 100, "brightness": 62, "opacity": 88},
      "ui": {"bg": "linear-gradient(135deg,#1b2a4a,#2f2150 55%,#173a46)", "panel": "rgba(255,255,255,0.08)", "panel2": "rgba(255,255,255,0.14)",
             "line": "rgba(255,255,255,0.22)", "field": "rgba(255,255,255,0.09)", "dialog": "#1d2a47", "blur": "24px"}},
     {"id": "liquid", "name": "Liquid Glass", "blurb": "Almost clear glass with a bright, shining edge, like the glass on Apple devices.",
      "look": {"glassTint": False, "accent": "#8ea2ff", "glass": "#e8f0ff", "glassClear": True, "glassLevel": 88, "radius": 28, "edge": 14, "glassBlur": 22, "glassSat": 220, "glassRim": 35, "cardDepth": 40,
               "paintStrength": 28, "text": "#ffffff", "muted": "#e0ebff", "tabs": {"Stats": "#8fb8ff", "Links": "#d3b0ff"}},
-     "palette": ["#8ea2ff", "#7cc4ff", "#b39bff", "#9fb4ff", "#d1a8f0", "#6fb8ff"],
+     "paintAll": "#8ea2ff", "paintLinks": "#b39bff",
      "background": {"url": "https://images.unsplash.com/photo-1603847734015-17ac936a0036?q=80&w=1740&auto=format&fit=crop", "blur": "sm", "saturate": 100, "brightness": 52, "opacity": 92},
      "ui": {"bg": "linear-gradient(135deg,#243a66,#4a2f6a 50%,#1f4a5c)", "panel": "rgba(255,255,255,0.07)", "panel2": "rgba(255,255,255,0.13)",
             "line": "rgba(255,255,255,0.16)", "field": "rgba(255,255,255,0.08)", "dialog": "#26365e", "blur": "28px", "rim": 70}},
     {"id": "ocean", "name": "Ocean", "blurb": "Cool blues and sea greens.",
      "look": {"glassTint": False, "accent": "#5ec8ff", "glass": "#06141f", "glassOpacity": 58, "cardDepth": 60, "paintStrength": 26, "text": "#f2fcff", "muted": "#bcdbe8", "tabs": {"Stats": "#4fd6c4", "Links": "#7fb0ff"}},
-     "palette": ["#3fb7c9", "#4f9fd0", "#2fb0a4", "#5ec8ff", "#4a8fb8", "#3dc2b0"],
+     "paintAll": "#3fb7c9", "paintLinks": "#4f9fd0",
      "background": {"url": "https://images.unsplash.com/photo-1565733293285-77aa342b22dd?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 68, "opacity": 85},
      "ui": {"bg": "#071420", "panel": "#0d1f2e", "panel2": "#122a3d", "field": "#08121c"}},
     {"id": "sunset", "name": "Sunset", "blurb": "Warm orange, gold and pink.",
      "look": {"glassTint": False, "accent": "#ff9a7a", "glass": "#1c0f12", "glassOpacity": 58, "cardDepth": 50, "paintStrength": 34, "text": "#fff6ee", "muted": "#ecd0bf", "tabs": {"Stats": "#ffc27a", "Links": "#d9a0ff"}},
-     "palette": ["#ff9a6b", "#ff7a8a", "#e07bd0", "#b78cff", "#ffb86b", "#ff6f91"],
+     "paintAll": "#ff9a6b", "paintLinks": "#e07bd0",
      "background": {"url": "https://images.unsplash.com/photo-1750560813794-6c33decf299c?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 90, "brightness": 68, "opacity": 85},
      "ui": {"bg": "#160c0f", "panel": "#21141a", "panel2": "#2c1b22", "field": "#150b0e"}},
     {"id": "rose", "name": "Rose", "blurb": "Soft pink and lilac with rounder corners.",
      "look": {"glassTint": False, "accent": "#ff8fb5", "glass": "#1a0c16", "glassOpacity": 60, "radius": 22, "cardDepth": 50, "paintStrength": 32, "text": "#fff2f7", "muted": "#efcadb", "tabs": {"Stats": "#ffa8c0", "Links": "#c9a0ff"}},
-     "palette": ["#f08fb4", "#d89ad8", "#f4a3b8", "#c79cf0", "#ff9fb0", "#e58ec0"],
+     "paintAll": "#f08fb4", "paintLinks": "#c79cf0",
      "background": {"url": "https://images.unsplash.com/photo-1764513168327-309c566fbc36?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 58, "opacity": 85},
      "ui": {"bg": "#150b13", "panel": "#1f1220", "panel2": "#2a1829", "field": "#140a12"}},
     {"id": "graphite", "name": "Graphite", "blurb": "One quiet gray. Nothing competes for your attention.",
@@ -334,7 +335,7 @@ LOOK_THEMES = [
     {"id": "neon", "name": "Neon Night", "blurb": "Sharp corners and bright cyan and magenta over a night street.",
      "look": {"glassTint": False, "accent": "#00e5ff", "glass": "#05060d", "glassOpacity": 80, "radius": 6, "edge": 12, "glassBlur": 8, "cardDepth": 65, "paintStrength": 30, "text": "#f2feff", "muted": "#a8dbe4",
               "tabs": {"Stats": "#ff3df2", "Links": "#3d8bff"}},
-     "palette": ["#ff3df2", "#00e5ff", "#8a5cff", "#ff4d8d", "#3d8bff", "#c13dff"],
+     "paintAll": "#8a5cff", "paintLinks": "#00cfe8",
      "background": {"url": "https://images.unsplash.com/photo-1695249747530-57460a88ad80?q=80&w=1740&auto=format&fit=crop", "blur": "lg", "saturate": 100, "brightness": 68, "opacity": 88},
      "ui": {"bg": "#05060d", "panel": "#0b0d1a", "panel2": "#131627", "line": "rgba(0,229,255,0.22)", "field": "#04050b"}},
 ]
