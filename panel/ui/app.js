@@ -1130,7 +1130,7 @@ function rimShadow(level) {                // the same shine as the server write
   const n = x => String(Math.round(x * 1000) / 1000);
   return "inset 1px 1px 0 rgba(255,255,255," + n(0.7 * r) + "), inset -1px -1px 0 rgba(255,255,255," + n(0.32 * r) + "), inset 0 0 " + Math.round(10 + 14 * r) + "px rgba(255,255,255," + n(0.12 * r) + "), inset 0 12px 18px -14px rgba(255,255,255," + n(0.3 * r) + ")";
 }
-function glassAlpha(v) { return v.glassClear ? 0.4 * (1 - v.glassLevel / 100) : v.glassOpacity / 100; }
+function glassAlpha(v) { if (v.glassTint === false) return 0; return v.glassClear ? 0.4 * (1 - v.glassLevel / 100) : v.glassOpacity / 100; }
 function lookPreview(quiet) {
   const p = document.getElementById("mock");
   if (p) {
@@ -1386,7 +1386,7 @@ function chooseTheme(t) {            // like every change here it is only a draf
 }
 function themeTile(t, now) {
   const lk = Object.assign({}, S.look.defaults, t.look);
-  const alpha = lk.glassClear ? 0.4 * (1 - lk.glassLevel / 100) : lk.glassOpacity / 100;
+  const alpha = glassAlpha(lk);
   const cols = (t.palette && t.palette.length) ? t.palette : t.paintAll ? [t.paintAll] : S.paint.cards.slice(0, 3).map(c => c.color);
   const shot = h("div", { class: "shot" },
     h("div", { class: "tabs" }, h("span", { class: "on" }), h("span", {}), h("span", {})),
@@ -1421,15 +1421,19 @@ function viewLook() {
   const glass = h("div", {});
   function drawGlass() {
     const chip = (on, text, set) => h("button", { class: "chip", "aria-pressed": String(on), onclick: () => { set(); lookChanged(); drawGlass(); } }, text);
+    const tint = L.glassTint !== false;
     put(glass,
-      h("div", { class: "field" }, h("div", { class: "lab" }, "Glass Style"),
+      h("div", { class: "field" }, h("div", { class: "lab" }, "Card Tint"),
+        h("div", { class: "chips" }, chip(tint, "Tint On", () => { L.glassTint = true; }), chip(!tint, "No Tint", () => { L.glassTint = false; })),
+        h("div", { class: "hint" }, "No Tint takes the colored layer off the cards, so only the blur is left, and the card colors become a thin colored edge. Text stays sharper, especially over a bright picture.")),
+      tint ? [h("div", { class: "field" }, h("div", { class: "lab" }, "Glass Style"),
         h("div", { class: "chips" }, chip(!L.glassClear, "Tinted", () => { L.glassClear = false; }), chip(L.glassClear, "Transparent", () => { L.glassClear = true; })),
         h("div", { class: "hint" }, "Transparent glass lets the picture and the colors of your cards show through, so they look more vibrant.")),
       L.glassClear
         ? [lookSlider("How Transparent", "glassLevel", 0, 100, 1, "%", "Higher is clearer. 100% is plain frosted glass with no tint."),
            h("div", { class: "chips", style: { marginBottom: "12px" } }, [["A Little", 30], ["Medium", 55], ["Very", 80], ["Clear", 100]].map(([t, n]) =>
              h("button", { class: "chip", onclick: () => { L.glassLevel = n; lookChanged(); render(); } }, t)))]
-        : lookSlider("How Solid the Glass Is", "glassOpacity", 0, 100, 1, "%", "Low shows the picture through the cards. High makes them solid."),
+        : lookSlider("How Solid the Glass Is", "glassOpacity", 0, 100, 1, "%", "Low shows the picture through the cards. High makes them solid.")] : null,
       lookSlider("Shine on the Glass Edge", "glassRim", 0, 100, 1, "%", "A bright thin line around the glass and a soft glow just inside it, like the glass on Apple devices. 0% turns it off."));
   }
   drawGlass();
@@ -1465,7 +1469,7 @@ h("div", { class: "card" }, h("h2", {}, "Colors and Glass"),
       h("p", { class: "muted small" }, "Further down you can give single cards, tiles, bookmarks and labels their own colors."));
   const strengthCard =
 h("div", { class: "card" }, h("h2", {}, "Color Strength"),
-  lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "How strong the colors of your cards, tiles and bookmarks are. Higher makes the color, the edge and the glow stronger, so the color is not washed out."));
+  lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "How strong the colors of your cards, tiles and bookmarks are. Higher makes the color, the edge and the glow stronger, so the color is not washed out. With No Tint (under Colors and Glass) it only changes the colored edge and glow."));
   return h("div", {},
     themesCard(),
     previewCard,
