@@ -304,3 +304,9 @@ details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-siz
 .card.failcard { border-color: rgba(255, 107, 107, 0.7); }
 .card.failcard .joblog { max-height: 50vh; overflow: auto; }
 .card.warncard { border-color: rgba(255, 193, 7, 0.75); }
+
+/* Configure Drives: tick the spare drives to use, take the tick off to leave one out */
+.cfgpick { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; padding: 8px 12px; display: grid; gap: 6px; }
+.cfgpick legend { font-weight: 600; padding: 0 6px; }
+.cfgpick label { display: flex; align-items: center; gap: 8px; min-height: 32px; overflow-wrap: anywhere; }
+.cfgpick:disabled { opacity: .6; }

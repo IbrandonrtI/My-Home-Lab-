@@ -447,12 +447,24 @@ function driveDialog(cfg) {
 }
 // ---- Configure Drives: scan the spare drives, recommend a setup, list the others from best to worst
 let DRcfg = null;      // null = hidden, { loading } or { err } or the answer of /api/drives/setups
+let DRskip = new Set();      // spare drives the person left out of Configure Drives (no setup uses them)
+let DRcfgBusy = false;      // the list is being looked at again after a drive was left out or put back
+const setupsUrl = () => "/api/drives/setups" + (DRskip.size ? "?skip=" + encodeURIComponent([...DRskip].join(",")) : "");
+async function skipDrive(id, leave) {      // leave a spare drive out of the setups (or put it back): the setups are worked out again for the drives that are left
+  if (leave) DRskip.add(id); else DRskip.delete(id);
+  DRcfgBusy = true;
+  drawDrives();
+  await rescanConfig();
+  DRcfgBusy = false;
+  drawDrives();
+}
 async function openConfig() {
   if (DRcfg && !DRcfg.loading) { DRcfg = null; drawDrives(); return; }
   DRcfg = { loading: true };
+  DRskip = new Set();
   drawDrives();
   try {
-    DRcfg = await api("GET", "/api/drives/setups");
+    DRcfg = await api("GET", setupsUrl());
     (DRcfg.options || []).forEach(o => { if (o.id === "pool" && o.fits) { o.can_build = true; o.why = ""; } });      // (a plain pool only adds drives to Main: it works with drives already in Main too)
   } catch (e) { DRcfg = { err: String((e && e.message) || e || "The drives could not be scanned.") }; }
   drawDrives();
@@ -460,7 +472,8 @@ async function openConfig() {
 async function rescanConfig() {      // the list in Configure Drives must match the drives as they are now (a change may have used or freed some)
   if (!DRcfg || DRcfg.loading || DRcfg.err) return;
   try {
-    const c = await api("GET", "/api/drives/setups");
+    const c = await api("GET", setupsUrl());
+    DRskip = new Set([...DRskip].filter(id => (c.spare || []).some(sp => sp.id === id)));      // (a drive that is gone from the list cannot be left out any more)
     (c.options || []).forEach(o => { if (o.id === "pool" && o.fits) { o.can_build = true; o.why = ""; } });
     if (DRcfg && !DRcfg.loading) { DRcfg = c; drawDrives(); }
   } catch (e) { /* the old list stays until the next refresh */ }
@@ -534,16 +547,22 @@ function cfgBox() {
   if (DRcfg.loading) return h("div", { class: "cfg", role: "status" }, h("p", { class: "muted" }, "Scanning the drives..."));
   if (DRcfg.err) return h("div", { class: "cfg", role: "alert" }, h("p", { class: "dwarn" }, DRcfg.err), h("button", { class: "small", onclick: () => { DRcfg = null; openConfig(); } }, "Try Again"));
   const c = DRcfg, rec = (c.options || []).find(o => o.id === c.recommended);
-  const sizes = (c.spare || []).map(sp => humanBytes(sp.size_bytes)).join(", ");
-  if (!(c.spare || []).length || !rec) return h("div", { class: "cfg" }, h("p", { class: "muted" }, "No spare drives to build a setup on. Connect drives (or take them out of Main and Backup), then press Configure Drives again."));
+  const spare = c.spare || [], usable = spare.filter(sp => !sp.skipped);
+  const sizes = usable.map(sp => humanBytes(sp.size_bytes)).join(", ");
+  if (!spare.length) return h("div", { class: "cfg" }, h("p", { class: "muted" }, "No spare drives to build a setup on. Connect drives (or take them out of Main and Backup), then press Configure Drives again."));
+  const pick = spare.length >= 2 ? h("fieldset", { class: "cfgpick", disabled: off || DRcfgBusy }, h("legend", {}, "Drives to Use"),
+    spare.map(sp => h("label", {}, h("input", Object.assign({ type: "checkbox", onchange: ev => skipDrive(sp.id, !ev.target.checked) }, sp.skipped ? {} : { checked: true })),
+      h("span", {}, sp.name + "  ·  " + sp.device + "  ·  " + humanBytes(sp.size_bytes)))),
+    h("small", { class: "muted" }, "Take the tick off a drive to leave it out. It stays a spare drive and is not touched.")) : null;
+  if (!rec) return h("div", { class: "cfg" }, pick, h("p", { class: "muted" }, usable.length ? "No setup can be built on the drives you chose." : "Every spare drive is left out. Tick at least one drive to see the setups."));
   const others = c.options.filter(o => o.id !== rec.id);
-  return h("div", { class: "cfg" },
-    h("p", { class: "muted small" }, "Scanned " + nDrives(c.spare.length).toLowerCase() + (c.spare.length === 1 ? " that is" : " that are") + " not in a pool: " + sizes + ". Setups are ranked by a balance of protection and usable space. Every setup erases the drives it uses, except a plain pool, a mirror and SnapRAID: they can keep the files that are on a drive. A RAID or ZFS setup can also be built while Main has drives: your files are copied into it first, and the old Main drives are released afterwards (their files are not erased)."),
+  return h("div", { class: "cfg" }, pick,
+    h("p", { class: "muted small" }, "Scanned " + nDrives(spare.length).toLowerCase() + (spare.length === 1 ? " that is" : " that are") + " not in a pool" + (usable.length < spare.length ? " (using " + usable.length + ": " + sizes + ")" : ": " + sizes) + ". Setups are ranked by a balance of protection and usable space. Every setup erases the drives it uses, except a plain pool, a mirror and SnapRAID: they can keep the files that are on a drive. A RAID or ZFS setup can also be built while Main has drives: your files are copied into it first, and the old Main drives are released afterwards (their files are not erased)."),
     h("div", { class: "cfgrec" }, h("b", {}, "Recommended: " + rec.title), h("span", { class: "muted small" }, humanBytes(rec.usable_bytes) + " usable, " + protectText(rec) + ", uses " + nDrives(rec.drives.length).toLowerCase()),
       !rec.can_build ? h("span", { class: "dwarn small" }, rec.why) : null),
     h("div", { class: "row tight" },
       h("button", { class: "primary", disabled: off, onclick: () => buildSetup(rec) }, "Build Recommended Setup"),
-      h("select", { class: "cfgsel", disabled: off, "aria-label": "Other setups, best to worst", onchange: ev => { const o = others.find(x => x.id === ev.target.value); ev.target.value = ""; if (o && o.fits) buildSetup(o); else if (o) toast(o.title + " needs " + o.min + " drives, and only " + (c.spare || []).length + " can be used now.", true); } },
+      h("select", { class: "cfgsel", disabled: off, "aria-label": "Other setups, best to worst", onchange: ev => { const o = others.find(x => x.id === ev.target.value); ev.target.value = ""; if (o && o.fits) buildSetup(o); else if (o) toast(o.title + " needs " + o.min + " drives, and only " + usable.length + " can be used now.", true); } },
         h("option", { value: "" }, "Other setups, best to worst..."),
         others.map(o => h("option", Object.assign({ value: o.id }, o.fits ? {} : { disabled: true }), setupLine(o) + (o.fits && !o.can_build ? "  (not possible yet)" : ""))))));
 }
@@ -1006,9 +1025,11 @@ function refreshCard() {
 function closeCard() { if (DRcard) { const d = DRcard.dlg; DRcard = null; try { d.close(); } catch (e) { /* closed */ } d.remove(); } }
 async function abortJob() {      // the Abort button of a running add, move or take out
   const act = DRbusy;
-  if (!/^(add|disconnect|move)$/.test(act) || (DRjob && DRjob.stopping)) return;
+  if (!/^(add|disconnect|move|setup)$/.test(act) || (DRjob && DRjob.stopping)) return;
   const text = act === "add"
     ? "Drives that are not added yet are not added. A drive that is already added stays added. A drive that is being erased finishes that step first."
+    : act === "setup"
+    ? "The copy stops right away. Your Main pool stays exactly as it is, with all of its files. The new setup is taken apart again and its drives are left empty."
     : "A drive that is still copying stops right away and stays where it is, with its files. A drive that is already done is put back into the pool it came from. A drive that is being erased finishes that step first. Files that were already copied to other drives stay there as extra copies.";
   if (!await confirmBox("Abort This Change?", text, "Abort", true)) return;
   try {
@@ -1022,12 +1043,13 @@ function drivesBody() {
   const out = [];
   if (DRwait || DRbusy) {
     const lines = DRjob && DRjob.lines ? DRjob.lines.filter(l => !/\(typed in the panel\)|^Type /.test(l)).slice(-8) : [];
-    const stopping = !!(DRjob && DRjob.stopping), canStop = !!DRbusy && /^(add|disconnect|move)$/.test(DRbusy);
+    const copying = !!DRjob && Object.values(DRjob.progress || {}).some(p => /^Copying files/.test(p.text || ""));      // (a new setup can be stopped only while the files are copied: before that it is erasing, after that it is checking and switching over)
+    const stopping = !!(DRjob && DRjob.stopping), canStop = !!DRbusy && (/^(add|disconnect|move)$/.test(DRbusy) || (DRbusy === "setup" && copying));
     out.push(h("div", { class: "card working", role: "status" }, DRbusy ? (stopping ? "Stopping at the next safe moment..." : (JOB_TEXT[DRbusy] || "Working...")) : DRwait,
       canStop ? h("div", { class: "row tight" }, h("button", { class: "danger small", disabled: stopping, onclick: abortJob, title: "Stops what is not finished yet, and puts the drives that are done back" }, stopping ? "Stopping..." : "Abort"),
         stopping ? h("span", { class: "muted small" }, "A copy stops at once; a step that has started finishes first. Drives that are already done are put back.") : null) : null,
       DRbusy && /^(add|wipe|disconnect|move)$/.test(DRbusy) ? h("p", { class: "muted small" }, "Please keep this page open or come back later. Copying files can take a long time. You can leave the page: the work goes on.") : null,
-      DRbusy === "setup" ? h("p", { class: "muted small" }, "A new setup cannot be stopped once it has started. You can leave this page: the work goes on.") : null,
+      DRbusy === "setup" ? h("p", { class: "muted small" }, copying ? "You can stop while the files are copied: your Main pool then stays as it is. You can leave this page: the work goes on." : "A new setup can be stopped only while its files are copied (the Abort button shows up then). You can leave this page: the work goes on.") : null,
       lines.length ? h("details", { class: "joblogbox" }, h("summary", {}, "Show the steps"), h("pre", { class: "joblog" }, lines.join("\n"))) : null));
   }
   if (DRfail && !DRbusy) out.push(h("div", { class: "card failcard", role: "alert" }, h("h2", {}, "What Happened"),
