@@ -513,7 +513,7 @@ async function buildSetup(o) {
   const r = await driveDialog({
     title: "Build: " + o.title,
     lead: [o.blurb, "Drives used (" + drives.length + " of " + c.spare.length + "): " + drives.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", "),
-      "You get about " + humanBytes(o.usable_bytes) + " of the " + humanBytes(o.used_bytes) + " on these drives. " + (o.tolerates > 0 ? cap(protectText(o)) + " without losing files." : "No drive may fail: one dead drive loses the files."),
+      (humanBytes(o.usable_bytes) === humanBytes(o.used_bytes) ? "You get all of the " + humanBytes(o.used_bytes) + " on these drives. " : "You get about " + humanBytes(o.usable_bytes) + " of the " + humanBytes(o.used_bytes) + " on these drives. ") + (o.tolerates > 0 ? cap(protectText(o)) + " without losing files." : "No drive may fail: one dead drive loses the files."),
       keepable.length ? (o.id === "mirror" ? "One drive can keep its files (it becomes the Main drive); the other drive holds the copy and is erased." : "Drives that hold files can keep them as data drives. The biggest drive" + (par > 1 ? "s" : "") + " that " + (par > 1 ? "are" : "is") + " not kept hold" + (par > 1 ? "" : "s") + " the protection data and " + (par > 1 ? "are" : "is") + " erased.") : null,
       o.migrate ? "Your Main pool has " + humanBytes(c.main_used_bytes || 0) + " of files and this setup holds " + humanBytes(o.usable_bytes) + ", so everything fits. The files are copied into the new setup first and checked; only then does it become your Main pool. The old Main drives are released afterwards: their files are not erased, and they show up as spare drives. The services that use Main are stopped while the files are copied, which can take hours for a lot of data." : null,
       left.length ? "Not used: " + left.map(sp => sp.name + " (" + humanBytes(sp.size_bytes) + ")").join(", ") + ". They stay as spare drives." : "Every spare drive is used."].filter(Boolean),
@@ -940,7 +940,7 @@ function arrayCardBody(t) {
       cardStat("Used", typeof d.used_bytes === "number" ? humanBytes(d.used_bytes) + " (" + humanBytes(d.free_bytes) + " free)" : "-"),
       cardStat("Pool", "Main Pool")),
     typeof d.used_bytes === "number" ? usageBar(d.used_bytes, d.size_bytes) : null,
-    h("div", { class: "stats" }, t.members.map(m => cardStat(m.d.name, humanBytes(m.d.size_bytes), h("small", { class: "muted" }, "  " + (m.d.device || ""))))),
+    h("div", { class: "stats" }, t.members.map(m => cardStat(m.d.name, humanBytes(m.d.size_bytes), h("span", { class: "devpath" }, m.d.device || "")))),
     h("p", { class: "muted small" }, "To take this setup apart, run \"sudo drives release\" on the server. It asks you to confirm, because it erases the drives of the setup.")];
 }
 function cardBody(t) {
