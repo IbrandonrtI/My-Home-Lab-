@@ -175,6 +175,7 @@ why() { [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -d "$PANEL_RESERVE_DIR" ] && printf
 warn() { printf 'WARNING: %s\n' "$*" >&2; log "WARN $*"; why warn "$*"; }
 die()  { printf 'ERROR: %s\n' "$*" >&2; log "ERROR $*"; why err "$*"; restore_services; exit 1; }
 
+hint() { if [ "$PANEL_MODE" = 1 ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }      # hint "terminal wording" "panel wording": the control panel has no terminal, so it points to its own buttons
 ask()  { local v=""; printf '%s' "$1" >&2; IFS= read -r v || true; printf '%s' "$v"; }
 yn()   {
   if [ "$ASSUME_YES" = 1 ]; then note "$1 [y/N]: y   (--yes)"; return 0; fi
@@ -1230,10 +1231,10 @@ on_exit() {
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
-    note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
+    note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Mount the Drives Again.")}"
   fi
   if [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -s "$PANEL_RESERVE_DIR/held" ]; then
-    note ""; note "The containers ($(tr '\n' ' ' <"$PANEL_RESERVE_DIR/held")) are still STOPPED because something went wrong."; note "${HOLD_HINT:-Fix the problem, then run:  sudo drives remount}"
+    note ""; note "The containers ($(tr '\n' ' ' <"$PANEL_RESERVE_DIR/held")) are still STOPPED because something went wrong."; note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Mount the Drives Again.")}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
   if [ -n "${PANEL_RESERVE_DIR:-}" ]; then rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; fi      # (a drive change of the panel that ended some other way)
@@ -1468,7 +1469,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   if ! apply_pool "$role"; then
     fstab_rollback
     pool_umount "$mp"
-    die "The $role pool did not mount. fstab was restored. Check: sudo drives status"
+    die "The $role pool did not mount. fstab was restored.$(hint " Check: sudo drives status" " Press Mount the Drives Again, or look at the Drives screen.")"
   fi
   progress 90 "Starting the containers"
   start_containers
@@ -1714,7 +1715,7 @@ move_flow() {
   if [ "$keep" = yes ]; then detach_branch "$mp" "Then add $dev to the $newrole pool with its files as they are." || { PROG_HI=100; return 1; }
   else detach_branch "$mp" "Then erase $dev, format it and add it to the $newrole pool." || { PROG_HI=100; return 1; }; fi
   [ "$DRY_RUN" = 1 ] && { PROG_HI=100; return 0; }
-  PENDING_NOTE="$(branch_name "$mp") already left the $role pool and was not added to the $newrole pool. Add it with:  sudo drives > Add or remove drives > Connect a new drive"
+  PENDING_NOTE="$(branch_name "$mp") already left the $role pool and was not added to the $newrole pool. $(hint "Add it with:  sudo drives > Add or remove drives > Connect a new drive" "Add it from this screen.")"
   PROG_LO=55; PROG_HI=100
   if ! connect_flow "$dev" "$newrole" "$([ "$keep" = yes ] && echo 2 || echo 1)" 1; then
     if [ "$ABORTED" = 1 ]; then      # Stop was pressed before the drive was erased: it goes back where it came from, with all its files
@@ -3316,10 +3317,10 @@ wipe_flow() {   # erase a spare drive (never a pool drive, the boot drive or a d
            "$([ "$idx" = 1 ] && echo "Format it as a new empty ext4 drive (label SPARE)." || echo "Leave it empty, without a file system.")" && return 0
   if [ "$idx" = 1 ]; then
     part=$(format_disk "$dev" SPARE) || return 1
-    say ""; say "Done. $name was erased and formatted as an empty ext4 drive ($part). Add it to a pool with:  sudo drives connect"
+    say ""; say "Done. $name was erased and formatted as an empty ext4 drive ($part). $(hint "Add it to a pool with:  sudo drives connect" "Add it to a pool from this screen.")"
   else
     wipe_disk "$dev"
-    say ""; say "Done. $name was erased and is empty. Format it or add it to a pool with:  sudo drives connect"
+    say ""; say "Done. $name was erased and is empty. $(hint "Format it or add it to a pool with:  sudo drives connect" "Erase it again to format it, or add it to a pool from this screen.")"
   fi
   log "erased $dev ($name)"
   return 0
@@ -3791,7 +3792,7 @@ migrate_switch() {   # migrate_switch ID: the new setup (mounted at MIGRATE_DIR,
   if [ "$ok" != 1 ]; then
     if [ "$kind" = zfs ]; then zfs set mountpoint="$MIGRATE_DIR" "$ZFS_POOL_NAME" >/dev/null 2>&1 || true; fi
     fstab_rollback
-    apply_pool main || warn "The old Main pool could not be mounted again. Run  sudo drives remount"
+    apply_pool main || warn "The old Main pool could not be mounted again. $(hint "Run  sudo drives remount" "Press Mount the Drives Again.")"
     return 1
   fi
   migrate_retire_main "${old_mps[@]}"
@@ -4391,9 +4392,9 @@ preset_flow() {   # preset_flow ID
     progress 8 "Building the new setup"
     [ "$migrate" != 1 ] || ARRAY_MOUNT=$MIGRATE_DIR      # (built beside the old Main pool; it takes the Main path after the copy)
     if [ "$(preset_kind "$id")" = zfs ]; then
-      zfs_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The ZFS pool could not be created. Look at the messages above. See: sudo drives status"; return 1; }
+      zfs_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The ZFS pool could not be created. Look at the messages above.$(hint " See: sudo drives status" "")"; return 1; }
     else
-      md_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The RAID array could not be built. Look at the messages above. See: sudo drives status"; return 1; }
+      md_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The RAID array could not be built. Look at the messages above.$(hint " See: sudo drives status" "")"; return 1; }
     fi
     ARRAY_MOUNT=""
     progress 18 "New setup is ready"
