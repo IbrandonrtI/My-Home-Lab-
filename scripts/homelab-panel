@@ -1727,9 +1727,9 @@ def drives_run(words, timeout, look=False):
             drives_change_end()
 
 
-def drives_json(action):
+def drives_json(action, extra=()):
     """The JSON a look-only command prints (health and check also exit 1 when they find a problem, and still print it)."""
-    rc, out, err = drives_run([action], DRIVE_TIMEOUT[action], look=True)
+    rc, out, err = drives_run([action] + list(extra), DRIVE_TIMEOUT[action], look=True)
     try:
         data = json.loads(out)
     except ValueError:
@@ -1938,9 +1938,12 @@ def api_drives_abort():
     """The Stop button: asks the drives tool to stop the running change at the next safe moment (it does not wait for the change, and it is not held back by the drive gate)."""
     with JOB_LOCK:
         running, action = JOB["running"], JOB["action"]
+        copying = any(str(v.get("text", "")).startswith("Copying files") for v in JOB["progress"].values())
     if not running:
         raise Fail("No drive change is running right now.", 409)
-    if action not in ("add", "move", "disconnect"):
+    if action == "setup" and not copying:
+        raise Fail("A new setup can be stopped only while the files of the Main pool are being copied. Erasing and building the drives is not something to cut off halfway.", 409)
+    if action not in ("add", "move", "disconnect", "setup"):
         raise Fail("That cannot be stopped: erasing a drive is not something to cut off halfway.", 409)
     try:
         p = subprocess.run(DRIVES_CMD + ["panel", "abort"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
@@ -2068,7 +2071,15 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/api/drives", "/api/drives/health", "/api/drives/check", "/api/drives/setups"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
-                return self.send(200, api_drives_state() if path == "/api/drives" else drives_json(path.rsplit("/", 1)[1]))
+                if path == "/api/drives":
+                    return self.send(200, api_drives_state())
+                action, extra = path.rsplit("/", 1)[1], ()
+                if action == "setups":      # ?skip=sdc,sdd: spare drives the person left out of the scan
+                    skip = [x for x in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("skip", [""])[0].split(",") if x]
+                    if len(skip) > 24 or not all(DRIVE_ID.match(x) for x in skip):
+                        raise Fail("Those are not drive names.", 400)
+                    extra = (",".join(skip),) if skip else ()
+                return self.send(200, drives_json(action, extra))
             if path.startswith("/api/"):
                 raise Fail("Unknown address.", 404)
             if path == "/terminal":

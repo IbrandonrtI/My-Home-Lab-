@@ -2,7 +2,7 @@
 # homelab-sample - save a few readings that need root, so the login screen can show them.
 #
 # Runs from root's crontab every 15 minutes. It writes small files into /var/lib/homelab/:
-#   temps      one line per drive:  LABEL|DEVICE|TEMP_C|EPOCH     (TEMP_C is "standby" for a sleeping drive)
+#   temps      one line per drive:  LABEL|DEVICE|TEMP_C|EPOCH     (TEMP_C is "standby" for a sleeping drive, "none" for a pool or array drive that gives no reading, like most flash drives)
 #   apt        UPGRADABLE_PACKAGES|EPOCH
 #   schedule   MINUTE|HOUR|DAY|MONTH|WEEKDAY|EPOCH               (the cron line of homelab-backup)
 # It also keeps the drive pills of the Homepage dashboard right: "Main Pool" and "Backup Pool" while the pool is
@@ -87,6 +87,13 @@ disk_label() {   # disk_label NAME -> MAIN1, BACKUP1 ... or "boot", or the model
   echo "${model:-$d}"
 }
 
+pool_member() {   # pool_member NAME: 0 when the drive belongs to a pool or to a RAID / ZFS setup (so it is listed even when it gives no temperature)
+  local d=$1 lab
+  lab=$(disk_label "$d")
+  case "$lab" in MAIN*|BACKUP*) return 0 ;; esac
+  lsblk -nro FSTYPE "/dev/$d" 2>/dev/null | grep -qE '^(zfs_member|linux_raid_member)$'
+}
+
 sample_temps() {
   local d dev label t lines=""
   while read -r d typ; do
@@ -94,7 +101,7 @@ sample_temps() {
     case "$d" in loop*|ram*|zram*|sr*) continue ;; esac
     dev="/dev/$d"
     t=$(read_temp "$dev") || t=""
-    [ -n "$t" ] || continue
+    if [ -z "$t" ]; then pool_member "$d" && t=none || continue; fi
     label=$(disk_label "$d")
     lines="${lines}${label}|${dev}|${t}|${NOW}"$'\n'
   done < <(lsblk -dno NAME,TYPE 2>/dev/null)

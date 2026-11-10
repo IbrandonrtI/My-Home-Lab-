@@ -1430,6 +1430,7 @@ temps_line() {
     [ -n "$label" ] || continue
     label=$(drive_shown_name "$label" "$f")
     if [ "$t" = "standby" ]; then parts="$parts$label asleep, "
+    elif [ "$t" = "none" ]; then parts="$parts$label no reading, "
     elif [[ "$t" =~ ^[0-9]+$ ]]; then
       parts="$parts$label ${t}°C, "
       [ "$t" -gt "$max" ] && max=$t

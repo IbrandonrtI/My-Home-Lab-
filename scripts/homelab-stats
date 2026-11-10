@@ -343,6 +343,8 @@ def temp_text(t, warn, bad):
     """What the temperature card says for one reading: 'Resting', '34 °C', '52 °C, Warm', '62 °C, Hot'."""
     if t == "standby":
         return "Resting"
+    if t == "none":
+        return "No Reading"
     n = int(t)
     return "%d °C" % n + (", Hot" if n >= bad else ", Warm" if n >= warn else "")
 
@@ -357,7 +359,7 @@ def temp_rows():
     rows = []
     for line in read(os.path.join(STATE_DIR, "temps")).splitlines():
         f = line.split("|")
-        if len(f) < 3 or not (f[2] == "standby" or f[2].isdigit()):
+        if len(f) < 3 or not (f[2] in ("standby", "none") or f[2].isdigit()):
             continue
         rank = 0 if f[0].lower() == "boot" else 1 if f[0].upper().startswith("MAIN") else 2 if f[0].upper().startswith("BACKUP") else 3
         rows.append((rank, f[0], {"name": drive_name(f[0]), "label": temp_text(f[2], warn, bad)}))

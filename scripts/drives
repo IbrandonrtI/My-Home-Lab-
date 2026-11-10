@@ -101,6 +101,9 @@ POOL_OPTS_BASE="allow_other,cache.files=off,category.create=ff,moveonenospc=true
 DRIVE_NAMES_FILE="${DRIVE_NAMES_FILE:-/etc/homelab-drive-names}"
 [ "$TEST_MODE" = 1 ] && DRIVE_NAMES_FILE="${DRIVE_NAMES_FILE_TEST:-$STATE_DIR/drive-names-chosen}"
 NAME_STORE="${NAME_STORE:-$STATE_DIR/drive-names}"
+# A name you chose also goes with the drive itself (its serial number), so it is still its name after the drive left its pool, was erased or is
+# added again under another label (MAIN2, BACKUP1...). One line per drive:  SERIAL|Name
+DRIVE_MEMORY="${DRIVE_MEMORY:-$STATE_DIR/drive-memory}"
 # What you changed with `drives fillorder` and `drives limit`: how a pool picks a drive for a new file (policy), which drive goes
 # first (order) and how much free space a drive keeps (limit). One line per setting: KIND|KEY|VALUE.
 SETTINGS_FILE="${SETTINGS_FILE:-$STATE_DIR/pool-settings}"
@@ -125,6 +128,7 @@ PANEL_UNITS=""       # bootadd: the size of the boot drive section, in GB
 PANEL_ALL=""         # add and move: the one choice (keep or erase) for every drive
 PANEL_NOW=0          # the panel's "Go Ahead Anyway": do not wait for a running backup or upload (it sends the word NOW)
 PROG_ITEM=""         # the drive the progress lines are about (panel only)
+PROG_ALL=()          # when a setup builds on several drives at once, every one of them shows the same bar (panel only)
 PROG_LO=0; PROG_HI=100   # the part of the bar a step may use (a move is two steps: leaving a pool, then joining the other)
 PANEL_LEAVING=()     # the pool folders of the drives that leave their pools in this batch (a copy never goes to one of them)
 PANEL_RESERVE_DIR="" # the folder of a batch with several drives: reserved drive names and reserved space
@@ -215,7 +219,9 @@ sd_reload() { [ "$TEST_MODE" = 1 ] || systemctl daemon-reload; }
 
 progress() {   # progress PERCENT "Text": the control panel shows a bar on the drive that is being changed (only inside `drives panel`; PERCENT is the drive's own 0-100)
   [ "$PANEL_MODE" = 1 ] || return 0
-  printf 'PROGRESS %s %s %s\n' "${PROG_ITEM:--}" "$(( PROG_LO + $1 * (PROG_HI - PROG_LO) / 100 ))" "$2"
+  local it pct=$(( PROG_LO + $1 * (PROG_HI - PROG_LO) / 100 ))
+  if [ "${#PROG_ALL[@]}" -gt 0 ]; then for it in "${PROG_ALL[@]}"; do printf 'PROGRESS %s %s %s\n' "$it" "$pct" "$2"; done; return 0; fi
+  printf 'PROGRESS %s %s %s\n' "${PROG_ITEM:--}" "$pct" "$2"
 }
 
 rsync_run() {   # rsync_run FROM TO "Text" RSYNC-ARGS...: like rsync; in the panel its percent moves the bar from FROM to TO
@@ -687,8 +693,47 @@ drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, Flash (a USB stick),
   return 0
 }
 
-disk_base_name() {   # disk_base_name /dev/sdX -> "1 TB Samsung HDD"
+drive_key() {   # drive_key /dev/sdX -> what stays with the physical drive (its serial number); nothing when the drive has none that can be trusted
+  local ser
+  ser=$(lsblk -dno SERIAL "$1" 2>/dev/null | head -n 1 | tr -d ' |')
+  if [ "${#ser}" -ge 4 ] && [[ "$ser" != *[!0]* ]] ; then ser=""; fi      # (a serial of only zeros is the same on many cheap sticks)
+  if [ -n "$ser" ]; then printf '%s' "$ser"; elif [ "$TEST_MODE" = 1 ]; then printf '%s' "$(basename "$1")"; fi
+  return 0
+}
+
+remembered_name() {   # remembered_name /dev/sdX -> the name you chose for this physical drive (nothing when there is none)
+  [ -s "$DRIVE_MEMORY" ] || return 0      # (nobody chose a name: no extra program is started)
+  local k; k=$(drive_key "$1")
+  [ -n "$k" ] || return 0
+  awk -F'|' -v k="$k" '$1 == k {print $2; exit}' "$DRIVE_MEMORY" 2>/dev/null
+  return 0
+}
+
+remember_name() {   # remember_name /dev/sdX "name": 0 when it was kept
+  local k tmp; k=$(drive_key "$1")
+  [ -n "$k" ] && [ -n "$2" ] || return 1
+  mkdir -p "$(dirname "$DRIVE_MEMORY")" 2>/dev/null || return 1
+  tmp=$(mktemp) || return 1
+  { [ -r "$DRIVE_MEMORY" ] && awk -F'|' -v k="$k" '$1 != k' "$DRIVE_MEMORY"; printf '%s|%s\n' "$k" "$2"; } >"$tmp" 2>/dev/null
+  cat "$tmp" >"$DRIVE_MEMORY" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  return 0
+}
+
+forget_name() {   # forget_name /dev/sdX: the drive goes back to its automatic name
+  [ -s "$DRIVE_MEMORY" ] || return 0
+  local k tmp; k=$(drive_key "$1")
+  [ -n "$k" ] || return 0
+  tmp=$(mktemp) || return 0
+  awk -F'|' -v k="$k" '$1 != k' "$DRIVE_MEMORY" >"$tmp" 2>/dev/null; cat "$tmp" >"$DRIVE_MEMORY" 2>/dev/null || true
+  rm -f "$tmp"
+  return 0
+}
+
+disk_base_name() {   # disk_base_name /dev/sdX -> "1 TB Samsung HDD" (or the name you chose for this drive)
   local d=$1 model size brand kind name
+  name=$(remembered_name "$d")
+  if [ -n "$name" ]; then printf '%s' "$(clean_name "$name")"; return 0; fi
   model=$(lsblk -dno MODEL "$d" 2>/dev/null | sed 's/ *$//')
   size=$(lsblk -dnbo SIZE "$d" 2>/dev/null | head -1 | tr -d ' ')
   brand=$(drive_brand "$model")
@@ -1381,6 +1426,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   [ -n "$uuid" ] || die "Could not read the UUID of $part"
   mp="$DISKS_DIR/$label"
   name_store_put "$label" "$base"
+  apply_remembered_name "$dev" "$label"      # a drive you named before is called that again
   mark_added "$label"
   progress 60 "Mounting the drive"
 
@@ -1606,6 +1652,7 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
     rmdir "$mp" 2>/dev/null || true
     if [ "$KEEP_IMG" = 1 ]; then say "$label is out of the $role pool."; else say "$label is removed. Its space went back to the boot drive."; fi
   else
+    if [ -n "$dev" ] && remember_chosen "$mp" "$dev"; then chosen_name_del "$(basename "$mp")"; fi      # the name you chose stays with the drive (its label may go to another drive)
     say "$label is disconnected from the $role pool. The data on the drive was not touched."
   fi
   DETACHED_DEV=$dev
@@ -1739,6 +1786,7 @@ adopt_flow() {
   start_containers
   power_apply "$mp" main
   name_store_put "$label" "$(disk_base_name "$(disk_of_part "$part")")"
+  apply_remembered_name "$(disk_of_part "$part")" "$label"
   log "adopted $part as $label; pool at $pool"
   say ""
   say "Done. $pool is now a pool containing $(branch_name "$mp"). Check: sudo drives status"
@@ -3022,6 +3070,19 @@ chosen_name_del() {   # chosen_name_del LABEL
   rm -f "$tmp"
 }
 
+remember_chosen() {   # remember_chosen MOUNTPOINT DEV: the name you chose for this pool drive goes with the drive; 0 when it is kept (the label's own line can go)
+  local n; n=$(chosen_name "$(basename "$1")")
+  [ -n "$n" ] && [ -n "$2" ] || return 1
+  remember_name "$2" "$n"
+}
+
+apply_remembered_name() {   # apply_remembered_name DEV LABEL: a drive that joins a pool is called what you called it before (unless this label already has a name)
+  local n; n=$(remembered_name "$1")
+  [ -n "$n" ] || return 0
+  [ -z "$(chosen_name "$2")" ] || return 0
+  chosen_name_put "$2" "$n"
+}
+
 carry_name() {   # carry_name OLDLABEL NEWLABEL: a drive that gets a new label keeps the name you chose for it (names are kept by label)
   local nm
   [ -n "$1" ] && [ "$1" != "$2" ] || return 0
@@ -3051,6 +3112,7 @@ rename_flow() {   # give a pool drive a name of your own (kept by the drive's la
     if [ -z "$(chosen_name "$label")" ]; then say "$cur already has its automatic name. Nothing was changed."; return 0; fi
     dry_gate "Remove your name for $cur from $DRIVE_NAMES_FILE." "Update the FileBrowser folders and the dashboard." && return 0
     chosen_name_del "$label"
+    [ -z "$(branch_part "$mp")" ] || forget_name "$(disk_of_part "$(branch_part "$mp")")"
     say ""; say "Done. The drive is called $(branch_name "$mp") again."
     log "rename $label -> automatic"
     return 0
@@ -3069,6 +3131,7 @@ rename_flow() {   # give a pool drive a name of your own (kept by the drive's la
   dry_gate "Save the name '$new' for $cur in $DRIVE_NAMES_FILE." \
            "Update the FileBrowser folders and the dashboard so they show the new name." && return 0
   chosen_name_put "$label" "$new"
+  [ -z "$(branch_part "$mp")" ] || remember_name "$(disk_of_part "$(branch_part "$mp")")" "$new" || true      # (the name goes with the drive, not only with its label)
   say ""
   say "Done. $cur is now called $(branch_name "$mp")."
   log "rename $label ($cur) -> $new"
@@ -3641,6 +3704,7 @@ snapraid_flow() {   # snapraid status|diff|sync|scrub: SnapRAID by hand, with th
 # ---------- moving the Main pool into a new ZFS / RAID setup ----------
 # The new setup is built on spare drives and filled from the old Main pool while that is still in use (the containers are stopped).
 # Only when the copy is checked does the new setup take the Main path; then the old Main drives are released (their files are not touched).
+MIGRATE_STOPPED=0   # 1 when the person pressed Stop while the files were copied
 ARRAY_MOUNT=""      # where zfs_build / md_build mount the new setup (empty = the Main path)
 
 main_is_pool() { [ -n "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$(findmnt -no FSTYPE "$MAIN_POOL" 2>/dev/null)" = fuse.mergerfs ]; }
@@ -3654,14 +3718,18 @@ fstab_move_mp() {   # fstab_move_mp OLD NEW: the line that mounts at OLD mounts 
   log "fstab move mount point: $1 -> $2"
 }
 
-migrate_copy() {   # copy everything from the Main pool into the new setup, then compare
+migrate_copy() {   # copy everything from the Main pool into the new setup, then compare (MIGRATE_STOPPED=1 when the person pressed Stop)
   local rc=0 changed
   local -a skip=(--exclude=/.mergerfs --exclude=/lost+found)
+  MIGRATE_STOPPED=0
   say "Copying the files of the Main pool into the new setup. This can take a long time on big drives..."
-  rsync -aHAX --numeric-ids "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- >&2 || rc=$?
+  rsync_run 20 90 "Copying files" -aHAX --numeric-ids "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- >&2 || rc=$?
+  if abort_requested; then MIGRATE_STOPPED=1; return 1; fi
   case $rc in 0|24) ;; *) warn "The copy stopped with an error (code $rc)."; return 1 ;; esac
   say "Checking the copy..."
+  progress 91 "Checking the copy"
   changed=$(rsync -aHAXni --numeric-ids --delete "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- 2>/dev/null | grep -cE '^(>f|\*deleting|cL|hf)') || true
+  if abort_requested; then MIGRATE_STOPPED=1; return 1; fi
   if [ "${changed:-0}" -gt 0 ]; then warn "$changed file(s) are not the same in the copy."; return 1; fi
   say "The copy is complete and matches."
 }
@@ -4311,8 +4379,11 @@ preset_flow() {   # preset_flow ID
                "$([ -n "$spare_dev$cache_dev" ] && echo "Add the $([ -n "$spare_dev" ] && echo "hot spare")$([ -n "$spare_dev" ] && [ -n "$cache_dev" ] && echo " and the ")$([ -n "$cache_dev" ] && echo "read cache").")" \
                "Start the containers again." && return 0
     PRESET_TOUCHED=1
+    PROG_ALL=(); for d in "${devs[@]}"; do PROG_ALL+=("$(basename "$d")"); done      # (the panel shows the same bar on every drive of the setup)
+    progress 3 "Getting ready"
     for d in "${devs[@]}"; do refuse_unsafe_disk "$d"; ids+=("$(disk_stable_name "$d")"); done
     stop_containers "$MAIN_POOL"
+    progress 8 "Building the new setup"
     [ "$migrate" != 1 ] || ARRAY_MOUNT=$MIGRATE_DIR      # (built beside the old Main pool; it takes the Main path after the copy)
     if [ "$(preset_kind "$id")" = zfs ]; then
       zfs_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The ZFS pool could not be created. Look at the messages above. See: sudo drives status"; return 1; }
@@ -4320,14 +4391,27 @@ preset_flow() {   # preset_flow ID
       md_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The RAID array could not be built. Look at the messages above. See: sudo drives status"; return 1; }
     fi
     ARRAY_MOUNT=""
+    progress 18 "New setup is ready"
     if [ "$migrate" = 1 ]; then
-      if ! migrate_copy || ! migrate_switch "$id"; then
+      local mig_ok=0
+      MIGRATE_STOPPED=0
+      if abort_requested; then MIGRATE_STOPPED=1
+      elif migrate_copy; then progress 95 "Switching over"; migrate_switch "$id" && mig_ok=1
+      fi
+      if [ "$mig_ok" != 1 ]; then
         migrate_discard "$id" "${ids[@]}"
+        PROG_ALL=()
         start_containers
+        if [ "$MIGRATE_STOPPED" = 1 ]; then
+          ABORTED=1
+          say "Stopped as you asked. Nothing was changed: your Main pool is as it was and its files are untouched. The new setup was taken apart again and its drives are empty."
+          return 4
+        fi
         warn "The move to the new setup did not finish. Your Main pool is as it was and its files are untouched; the new setup was taken apart again and its drives are empty."
         return 1
       fi
     fi
+    PROG_ALL=()
     preset_record "$id" "${ids[*]}$([ "$enc" = 1 ] && echo " encrypted")"
     if [ -n "$spare_dev" ]; then
       d=$(disk_stable_name "$spare_dev")
@@ -5605,7 +5689,8 @@ panel_refuse() { note "$1 Nothing was changed."; return 1; }
 panel_main() {
   local act=${1:-} n=$# i w
   case "$act" in
-    status|health|check|actions|remount|abort|setups) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
+    setups)       [ "$n" -le 2 ] && { [ "$n" -eq 1 ] || [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._,-]{0,200}$ ]]; } || { panel_refuse "panel setups takes no words, or the drives to leave out."; return 1; } ;;
+    status|health|check|actions|remount|abort) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
     rename)       [ "$n" -eq 3 ] || { panel_refuse "panel rename takes a drive and a name."; return 1; } ;;
     sleep|wake)   [ "$n" -eq 2 ] || { panel_refuse "panel $act takes one drive."; return 1; } ;;
     add)          [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel add takes a drive, main or backup, keep or erase, and the typed words."; return 1; } ;;
@@ -5677,7 +5762,7 @@ panel_main() {
     check)   JSON=1; check_flow ;;
     actions) with_name_cache panel_actions_json ;;
     abort)   panel_abort ;;
-    setups)  panel_setups_json ;;
+    setups)  PANEL_SKIP=${2:-}; panel_setups_json ;;
     bootadd) PANEL_ROLE=$2; PANEL_UNITS=$3; PROG_ITEM=bootadd; run_changing panel_bootadd_flow ;;
     setup)   PANEL_ID=$2; run_changing panel_setup_run "$2" "$3" ;;
     rename)  PANEL_ID=$2; PANEL_NAME=$3; run_changing rename_flow ;;
@@ -5698,7 +5783,7 @@ panel_main() {
   esac
 }
 # ---------- Configure Drives (the control panel): what the spare drives could become, ranked, and building the one that was picked ----------
-#   panel setups                                  look only (JSON): the spare drives, and every ready-made setup ranked from best to worst for them
+#   panel setups [DISK,DISK,...]                  look only (JSON): the spare drives, and every ready-made setup ranked from best to worst for them (the drives named are left out)
 #   panel setup ID DISK,DISK,... [WORD...]        build that setup on those spare drives (needs the setup's name and ERASE typed)
 # The setups themselves are the ready-made setups of `sudo drives preset` (32_preset.sh, 33_zfs_md.sh): the panel only chooses the drives and asks.
 
@@ -5753,18 +5838,23 @@ setup_blocker() {   # setup_blocker ID -> why this setup cannot be built right n
 }
 
 panel_setups_json() {
-  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep main_used=0 main_need=0 migrate
+  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep skipped main_used=0 main_need=0 migrate
   [ -n "$(branches_of main)" ] && main_is_pool && { main_used=$(pool_used_bytes); main_used=${main_used:-0}; main_need=$(migrate_need_bytes "$main_used"); }
-  local -a devs=() sizes=() rows=() chosen=()
-  local line
-  while read -r s d; do devs+=("$d"); sizes+=("$s"); total=$((total + s)); done < <(for d in $(candidate_disks); do s=$(disk_size_bytes "$d"); [[ "$s" =~ ^[0-9]+$ ]] && echo "$s $d"; done | sort -rn -k1,1)
+  local -a devs=() sizes=() rows=() chosen=() alld=() alls=()
+  local line skipcsv=",${PANEL_SKIP:-},"      # (PANEL_SKIP: spare drives the person left out: they are listed, but no setup uses them)
+  while read -r s d; do
+    alld+=("$d"); alls+=("$s")
+    case "$skipcsv" in *",$(basename "$d"),"*) continue ;; esac
+    devs+=("$d"); sizes+=("$s"); total=$((total + s))
+  done < <(for d in $(candidate_disks); do s=$(disk_size_bytes "$d"); [[ "$s" =~ ^[0-9]+$ ]] && echo "$s $d"; done | sort -rn -k1,1)
   n=${#devs[@]}
   printf '{"spare":['
-  for i in "${!devs[@]}"; do
-    d=${devs[$i]}; blank=false; disk_is_blank "$d" && blank=true
+  for i in "${!alld[@]}"; do
+    d=${alld[$i]}; blank=false; disk_is_blank "$d" && blank=true
     keep=false; [ "$blank" = false ] && keepable_disk "$d" && keep=true      # (its files can stay: one partition with an ext4 file system)
+    skipped=false; case "$skipcsv" in *",$(basename "$d"),"*) skipped=true ;; esac
     [ "$i" = 0 ] || printf ','
-    printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s,"keep_ok":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${sizes[$i]}")" "$blank" "$keep"
+    printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s,"keep_ok":%s,"skipped":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${alls[$i]}")" "$blank" "$keep" "$skipped"
   done
   printf '],"total_bytes":%s,"main_used_bytes":%s,"main_has_drives":%s,"options":[' "$(json_num "$total")" "$(json_num "$main_used")" "$([ -n "$(branches_of main)" ] && echo true || echo false)"
   for id in $PRESET_IDS; do
@@ -5825,7 +5915,11 @@ panel_setup_run() {   # panel_setup_run ID DISK,DISK,...: build a ready-made set
       disk_is_blank "$d" || WIZARD_ERASE="${WIZARD_ERASE:+$WIZARD_ERASE$'\n'}$d"      # a drive with files that was not marked "keep" is erased: the person typed ERASE for the setup
     fi
   done
-  preset_flow "$id"
+  local rc=0
+  rm -f "$ABORT_FILE"; echo $$ >"$BATCH_PID_FILE"      # (this is what lets the Abort button reach a setup that copies the files of the Main pool)
+  preset_flow "$id" || rc=$?
+  rm -f "$BATCH_PID_FILE" "$ABORT_FILE"
+  return "$rc"
 }
 run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser; the exit code is the flow's (1 also when containers did not start)
   local rc=0
