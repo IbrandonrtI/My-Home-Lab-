@@ -42,7 +42,7 @@ remount_flow() {
   fi
   power_all >/dev/null 2>&1
   start_containers
-  echo "Recovered."
+  echo "The drives are mounted again and your services are running."
 }
 
 # ---------- replace a dead drive ----------
