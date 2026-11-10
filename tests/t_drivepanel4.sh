@@ -193,7 +193,10 @@ reset_env; $D test-setup 3 300M >/dev/null 2>&1
 L1=$(loop_of 1); id1=${L1#/dev/}; L2=$(loop_of 2); id2=${L2#/dev/}; make_part_disk 1; make_part_disk 2
 has "wipe: without the typed words nothing is erased" "$(P wipe "$id1" empty)" "Cancelled. Nothing was changed."
 check "wipe: the drive still has its partition" "$(lsblk -lnpo TYPE "$L1" | grep -c part)" "1"
-has "wipe: empty" "$(P wipe "$id1" empty "$L1" ERASE)" "was erased and is empty"
+W1=$(P wipe "$id1" empty "$L1" ERASE)
+has "wipe: empty" "$W1" "was erased and is empty"
+has "wipe: the panel points to its own screen, not to a terminal command" "$W1" "from this screen"
+hasnt "wipe: no sudo command in the panel's answer" "$W1" "sudo drives"
 check "wipe: no partition is left" "$(lsblk -lnpo TYPE "$L1" | grep -c part)" "0"
 has "wipe: format" "$(P wipe "$id2" format "$L2" ERASE)" "formatted as an empty ext4 drive"
 check "wipe: the old file is gone" "$(mkdir -p "$S/m"; mount "${L2}p1" "$S/m" 2>/dev/null; find "$S/m" -name old.txt | wc -l; umount "$S/m" 2>/dev/null)" "0"
