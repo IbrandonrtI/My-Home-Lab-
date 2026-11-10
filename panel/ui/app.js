@@ -259,6 +259,7 @@ function applyAccent() {
     if (ui[k]) st.setProperty(name, ui[k]); else st.removeProperty(name);
   }
   document.documentElement.classList.toggle("glassy", !!ui.blur);
+  if (ui.rim) st.setProperty("--prim", rimShadow(ui.rim)); else st.removeProperty("--prim");
 }
 async function doUndo() {
   try { const r = await api("POST", "/api/undo", {}); send({ type: "clear" }); toast("Undone: " + r.undone); await afterChange(true); } catch (e) { fail(e); }
@@ -1123,6 +1124,12 @@ function lookOut() {                       // what is sent to the server: the lo
   for (const [n, c] of Object.entries(lookW.tabs)) if (c !== S.look.defaults.tabs[n]) out.tabs[n] = c;
   return out;
 }
+function rimShadow(level) {                // the same shine as the server writes (--lk-rim)
+  const r = Math.max(0, Math.min(100, Number(level) || 0)) / 100;
+  if (r <= 0) return "0 0 0 0 transparent";
+  const n = x => String(Math.round(x * 1000) / 1000);
+  return "inset 1px 1px 0 rgba(255,255,255," + n(0.7 * r) + "), inset -1px -1px 0 rgba(255,255,255," + n(0.32 * r) + "), inset 0 0 " + Math.round(10 + 14 * r) + "px rgba(255,255,255," + n(0.12 * r) + "), inset 0 12px 18px -14px rgba(255,255,255," + n(0.3 * r) + ")";
+}
 function glassAlpha(v) { return v.glassClear ? 0.4 * (1 - v.glassLevel / 100) : v.glassOpacity / 100; }
 function lookPreview(quiet) {
   const p = document.getElementById("mock");
@@ -1133,6 +1140,7 @@ function lookPreview(quiet) {
     p.style.setProperty("--pr", Math.min(lookW.radius, 30) + "px");
     p.style.setProperty("--pe", lookW.edge / 100);
     p.style.setProperty("--pbl", Math.round(lookW.glassBlur * 0.6) + "px");
+    p.style.setProperty("--prm", rimShadow(lookW.glassRim));
   }
   applyAccent();
   if (quiet) return;
@@ -1167,17 +1175,22 @@ function startLook() {
 async function saveLook() {                // saves what was changed on the Look screen: the look and the background together
   try {
     const both = lookDirty() && bgDirty();
+    let restarting = false;
     if (bgDirty()) {
       const B = bgW;
-      await api("POST", "/api/background", { url: B.url || undefined, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity });
+      const nums = { blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity };
+      if (B.theme && B.url) { toast("Getting the picture of the theme…"); const r = await api("POST", "/api/background/theme", Object.assign({ theme: B.theme }, nums)); restarting = !!r.restarting; }
+      else await api("POST", "/api/background", Object.assign({ url: B.url || undefined }, nums));
     }
     if (lookDirty()) {
       clearTimeout(pvTimer); pvSeq++;
       await api("POST", "/api/look", { look: lookOut() });
       clearTimeout(pvTimer); pvSeq++; send({ type: "saved" });
     }
-    toast(both ? "Look and background saved." : (bgDirty() ? "Background saved." : "Look saved."));
+    const what = both ? "Look and background saved." : (bgDirty() ? "Background saved." : "Look saved.");
+    toast(restarting ? what + " The dashboard restarts for about 10 seconds…" : what);
     await afterChange(false);
+    if (restarting) setTimeout(() => send({ type: "reload" }), 12000);
   } catch (e) { fail(e); }
 }
 async function resetLook() {
@@ -1352,6 +1365,14 @@ function themeColors(t) {            // the colors a theme gives to the cards, t
   for (const it of P.links) out.links[it.name] = pick(it.group);
   return out;
 }
+let themePic = true;                         // "Also change the background picture" in the Themes card
+function themeBg(t) {                       // the background of a theme as a draft: its picture and its four sliders (the picture is copied to the dashboard on Save)
+  const g = t && t.background;
+  if (!g || !themePic) return null;
+  return { url: g.url, blur: g.blur, saturate: g.saturate, brightness: g.brightness, opacity: g.opacity, theme: t.id };
+}
+function savedBg() { const b = S.background; return { url: "", blur: b.blur || "none", saturate: b.saturate, brightness: b.brightness, opacity: b.opacity }; }
+function previewBg() { const B = bgW || savedBg(), b = S.background; send({ type: "bg", image: B.url || b.image, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); }
 function chooseTheme(t) {            // like every change here it is only a draft until Save; the names, the logo and the label colors you made stay
   const def = S.look.defaults;
   const base = clone(def); base.tabs = Object.assign({}, def.tabs);
@@ -1359,7 +1380,8 @@ function chooseTheme(t) {            // like every change here it is only a draf
   const pl = clone(t.look); const tabs = Object.assign({}, base.tabs, pl.tabs || {}); delete pl.tabs;
   const col = themeColors(t);
   lookW = Object.assign(base, pl, { tabs, theme: t.id, cards: col.cards, links: col.links, paintAll: col.paintAll });
-  render(); lookChanged();
+  bgW = (t.id !== S.look.values.theme && themeBg(t)) || null;       // (the theme that is saved already keeps the picture it has)
+  render(); lookChanged(); previewBg();
   toast(t.name + " is a draft. Press Save to keep it, or Discard Changes to go back.");
 }
 function themeTile(t, now) {
@@ -1375,13 +1397,20 @@ function themeTile(t, now) {
   shot.style.setProperty("--pr", Math.round(Math.min(lk.radius, 30) * 0.5) + "px");
   shot.style.setProperty("--pe", lk.edge / 100);
   shot.style.setProperty("--bl", Math.round(lk.glassBlur * 0.5) + "px");
+  shot.style.setProperty("--prm", rimShadow(lk.glassRim));
   return h("button", { class: "theme", "aria-pressed": String(now === t.id), onclick: () => chooseTheme(t) }, shot, h("b", {}, t.name), h("span", { class: "small muted" }, t.blurb));
 }
 function themesCard() {
   return h("div", { class: "card" }, h("h2", {}, "Themes"),
     h("p", { class: "muted" }, "A theme changes the colors, glass and shapes of the dashboard and of this panel together, and gives every card, tile and bookmark a matching color. Pick one to try it. Nothing is saved until you press “Save”."),
     h("div", { class: "themes" }, S.look.themes.map(t => themeTile(t, lookW.theme))),
-    h("p", { class: "muted small" }, "Your background picture, names and logo stay as they are. Colors you gave single cards are replaced by the theme’s colors. You can still change anything below after picking a theme."));
+    h("label", { class: "row check" }, h("input", { type: "checkbox", checked: themePic, "aria-label": "Also change the background picture", onchange: ev => {
+      themePic = ev.target.checked;
+      const t = S.look.themes.find(x => x.id === lookW.theme);
+      bgW = (themePic && t) ? themeBg(t) : null;       // (off: the picture you have stays)
+      render(); previewBg(); refreshLookBar();
+    } }), h("span", {}, "Also Change the Background Picture")),
+    h("p", { class: "muted small" }, "Each theme has a background picture that goes with it. With the box ticked, the picture and its sliders change when you pick a theme. Untick it to keep your own picture. Your names and logo always stay as they are. Colors you gave single cards are replaced by the theme’s colors. You can still change anything below after picking a theme."));
 }
 
 function viewLook() {
@@ -1400,7 +1429,8 @@ function viewLook() {
         ? [lookSlider("How Transparent", "glassLevel", 0, 100, 1, "%", "Higher is clearer. 100% is plain frosted glass with no tint."),
            h("div", { class: "chips", style: { marginBottom: "12px" } }, [["A Little", 30], ["Medium", 55], ["Very", 80], ["Clear", 100]].map(([t, n]) =>
              h("button", { class: "chip", onclick: () => { L.glassLevel = n; lookChanged(); render(); } }, t)))]
-        : lookSlider("How Solid the Glass Is", "glassOpacity", 0, 100, 1, "%", "Low shows the picture through the cards. High makes them solid."));
+        : lookSlider("How Solid the Glass Is", "glassOpacity", 0, 100, 1, "%", "Low shows the picture through the cards. High makes them solid."),
+      lookSlider("Shine on the Glass Edge", "glassRim", 0, 100, 1, "%", "A bright thin line around the glass and a soft glow just inside it, like the glass on Apple devices. 0% turns it off."));
   }
   drawGlass();
   const tabRows = S.look.tabNames.map(name => {
@@ -1433,10 +1463,14 @@ h("div", { class: "card" }, h("h2", {}, "Colors and Glass"),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Color of Each Tab"), h("div", { class: "hint", style: { marginBottom: "8px" } }, "Each tab can have its own accent color."),
         h("div", { class: "grid cols2 tabcolors" }, tabRows)),
       h("p", { class: "muted small" }, "Further down you can give single cards, tiles, bookmarks and labels their own colors."));
+  const strengthCard =
+h("div", { class: "card" }, h("h2", {}, "Color Strength"),
+  lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "How strong the colors of your cards, tiles and bookmarks are. Higher makes the color, the edge and the glow stronger, so the color is not washed out."));
   return h("div", {},
     themesCard(),
     previewCard,
     colorsCard,
+    strengthCard,
     backgroundCards(),
     namesCard(),
     colorOptions(),
@@ -1545,7 +1579,6 @@ function colorOptions() {                    // the colors of single cards, tile
       h("p", { class: "muted small" }, "To see a color on the dashboard, open the tab that has it (Home, Stats or Links). The preview stays there. Come back here to keep it with Save."),
       h("div", { class: "field" }, h("div", { class: "lab" }, "Color Style"), styleChips,
         h("div", { class: "hint" }, "Gradient: the color is strong on one side and fades out across the card. Solid: the same color across the whole card.")),
-      lookSlider("How Strong the Colors Are", "paintStrength", 0, 100, 1, "%", "Higher makes the color, the edge and the glow stronger, so the color is not washed out."),
       h("div", { class: "field" }, h("div", { class: "lab" }, "One Color for Everything"), paintAll)),
     section("Service Cards", "The cards of the Home tab, such as Portainer or Downtify.", P.cards, L.cards, it => it.id, it => it.group, false),
     section("Stats Tiles", "The tiles of the Stats tab.", P.stats, L.cards, it => it.id, it => it.group, false),
@@ -1566,10 +1599,10 @@ function colorOptions() {                    // the colors of single cards, tile
 function bgUrl(img) { return !img ? "" : (img.startsWith("/") && S.background.homepageUrl ? S.background.homepageUrl + img : (img.startsWith("/") ? "" : img)); }
 function backgroundCards() {
   const b = S.background;
-  if (!bgW) bgW = { url: "", blur: b.blur || "none", saturate: b.saturate, brightness: b.brightness, opacity: b.opacity };
+  if (!bgW) bgW = savedBg();
   const B = bgW;
   const pic = h("div", { class: "pic" });
-  const drawPic = () => { const u = bgUrl(b.image); pic.style.backgroundImage = u ? 'url("' + u.replace(/"/g, "%22") + '")' : "none"; };
+  const drawPic = () => { const u = B.url || bgUrl(b.image); pic.style.backgroundImage = u ? 'url("' + u.replace(/"/g, "%22") + '")' : "none"; };
   drawPic();
   const preview = () => { send({ type: "bg", image: B.url || b.image, blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity }); refreshLookBar(); };
   function reset() {      // like every other change on this screen: it is only a draft until Save
@@ -1606,7 +1639,7 @@ function backgroundCards() {
       h("p", { class: "hint muted small" }, "JPG, PNG, WebP, GIF or AVIF, up to 14 MB. After a new picture the dashboard restarts for about 10 seconds."),
       b.mounted === false ? h("p", { class: "small", style: { color: "var(--bad)" } }, "The dashboard cannot see its pictures folder yet, so an uploaded picture will not show. Run: sudo homelab-setup upgrade") : null,
       h("div", { class: "field", style: { marginTop: "12px" } }, h("label", {}, "Or Use a Picture from the Web"), h("div", { class: "row" }, h("div", { class: "grow" }, url),
-        h("button", { onclick: () => { const v = url.value.trim(); if (!/^https?:\/\/\S+$/.test(v)) return toast("Type a web address that starts with http:// or https:// first.", true); B.url = v; preview(); toast("Press Save to keep it."); } }, "Use This Address")))),
+        h("button", { onclick: () => { const v = url.value.trim(); if (!/^https?:\/\/\S+$/.test(v)) return toast("Type a web address that starts with http:// or https:// first.", true); B.url = v; B.theme = ""; drawPic(); preview(); toast("Press Save to keep it."); } }, "Use This Address")))),
     h("div", { class: "card" }, h("h2", {}, "How the Background Looks Behind the Cards"),
       h("div", { class: "field" }, h("div", { class: "slider" }, h("span", { class: "lab" }, "Picture Blur"), blurVal,
         h("input", { type: "range", min: 0, max: 6, step: 1, value: BLURS.indexOf(B.blur) < 0 ? 2 : BLURS.indexOf(B.blur), "aria-label": "Picture Blur",
