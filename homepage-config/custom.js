@@ -566,7 +566,17 @@
   // ---- words Homepage writes itself, said the way this dashboard says them (a label is changed in place; Homepage writes it again only when it changes it)
   function wording() {
     all("#information-widgets .pr-1").forEach(function (e) { if (e.children.length === 0 && e.textContent === "UP") e.textContent = "Uptime"; });
-    all("li.service details > summary div").forEach(function (e) { if (e.lastChild && e.lastChild.nodeType === 3 && /^API Error Information$/.test(e.lastChild.nodeValue.trim())) e.lastChild.nodeValue = "Service Unavailable"; });
+    all("li.service details > summary div").forEach(function (e) {      // Homepage writes it as three pieces of text ("API Error", a space, "Information") next to the icon
+      if (e.textContent.replace(/\s+/g, " ").trim() !== "API Error Information") return;
+      var kids = Array.prototype.slice.call(e.childNodes).filter(function (n) { return n.nodeType === 3; });
+      kids.forEach(function (n, i) { n.nodeValue = i === 0 ? "Service Unavailable" : ""; });
+    });
+    all("#information-widgets .information-widget-resource").forEach(function (e) {      // a pool pill with no drive in it ("Connect Backup Drive"): Homepage has no disk to read there and says "API Error"
+      var texts = [], w = document.createTreeWalker(e, NodeFilter.SHOW_TEXT, null), n;
+      while ((n = w.nextNode())) texts.push(n);
+      var asks = texts.some(function (t) { return /^\s*connect .+ drive\s*$/i.test(t.nodeValue); });
+      if (asks) texts.forEach(function (t) { if (/^\s*API Error\s*$/.test(t.nodeValue)) t.nodeValue = "No Drive"; });
+    });
   }
 
   function run() {
