@@ -287,7 +287,7 @@ def number(v, what, lo, hi):
 # ================================================================ the look (colors, glass, shapes) -> a block in custom.css
 SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}       # the shipped color of two tabs (see the tabs block of custom.css)
 LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "glassClear": False, "glassLevel": 70, "radius": 16, "edge": 7.5,
-                "side": 70, "glassBlur": 14, "glassSat": 125, "glassRim": 0, "glassTint": True, "text": "#eef2f9", "muted": "#a9b4c7", "theme": "calm", "playerHeight": 600, "paintStrength": 10, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}, "names": {}, "logo": {}}
+                "side": 70, "glassBlur": 14, "glassSat": 125, "glassRim": 0, "glassTint": True, "cardDepth": 0, "text": "#eef2f9", "muted": "#a9b4c7", "theme": "calm", "playerHeight": 600, "paintStrength": 10, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}, "names": {}, "logo": {}}
 LABEL_ICONS = ("plain", "circle", "square", "ring")
 PAINT_STYLES = ("gradient", "solid")
 NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card", "terminal-card")        # the panel's own cards and the music player are never painted
@@ -298,41 +298,41 @@ LOOK_THEMES = [
     {"id": "calm", "name": "Calm Night", "blurb": "The look the dashboard came with: deep blue glass.", "look": {}, "palette": [],
      "background": {"url": "https://images.unsplash.com/photo-1778049005316-10cd95096f69?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 60, "brightness": 42, "opacity": 80}},
     {"id": "frost", "name": "Frosted Glass", "blurb": "Clear, bright glass with soft edges and system colors.",
-     "look": {"glassTint": False, "accent": "#64a8ff", "glass": "#d6e2f7", "glassClear": True, "glassLevel": 62, "radius": 24, "edge": 14, "glassBlur": 30, "glassSat": 190, "paintStrength": 22, "text": "#ffffff", "muted": "#dde8f8",
+     "look": {"glassTint": False, "accent": "#64a8ff", "glass": "#d6e2f7", "glassClear": True, "glassLevel": 62, "radius": 24, "edge": 14, "glassBlur": 30, "glassSat": 190, "cardDepth": 50, "paintStrength": 26, "text": "#ffffff", "muted": "#dde8f8",
               "tabs": {"Stats": "#5be0b0", "Links": "#c9a8ff"}},
      "palette": ["#0a84ff", "#30d158", "#ff9f0a", "#bf5af2", "#64d2ff", "#ff375f", "#ffd60a", "#5e5ce6"],
-     "background": {"url": "https://images.unsplash.com/photo-1756909688538-2fc0fe8e757f?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 100, "brightness": 66, "opacity": 88},
+     "background": {"url": "https://images.unsplash.com/photo-1756909688538-2fc0fe8e757f?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 100, "brightness": 62, "opacity": 88},
      "ui": {"bg": "linear-gradient(135deg,#1b2a4a,#2f2150 55%,#173a46)", "panel": "rgba(255,255,255,0.08)", "panel2": "rgba(255,255,255,0.14)",
             "line": "rgba(255,255,255,0.22)", "field": "rgba(255,255,255,0.09)", "dialog": "#1d2a47", "blur": "24px"}},
     {"id": "liquid", "name": "Liquid Glass", "blurb": "Almost clear glass with a bright, shining edge, like the glass on Apple devices.",
-     "look": {"glassTint": False, "accent": "#7cc4ff", "glass": "#e8f0ff", "glassClear": True, "glassLevel": 88, "radius": 28, "edge": 14, "glassBlur": 22, "glassSat": 220, "glassRim": 35,
-              "paintStrength": 25, "text": "#ffffff", "muted": "#e0ebff", "tabs": {"Stats": "#7ff0cc", "Links": "#d3b6ff"}},
+     "look": {"glassTint": False, "accent": "#7cc4ff", "glass": "#e8f0ff", "glassClear": True, "glassLevel": 88, "radius": 28, "edge": 14, "glassBlur": 22, "glassSat": 220, "glassRim": 35, "cardDepth": 40,
+              "paintStrength": 28, "text": "#ffffff", "muted": "#e0ebff", "tabs": {"Stats": "#7ff0cc", "Links": "#d3b6ff"}},
      "palette": ["#7cc4ff", "#8be8c4", "#ffc78a", "#d3b6ff", "#9ad9ff", "#ff9ec4"],
      "background": {"url": "https://images.unsplash.com/photo-1603847734015-17ac936a0036?q=80&w=1740&auto=format&fit=crop", "blur": "sm", "saturate": 100, "brightness": 52, "opacity": 92},
      "ui": {"bg": "linear-gradient(135deg,#243a66,#4a2f6a 50%,#1f4a5c)", "panel": "rgba(255,255,255,0.07)", "panel2": "rgba(255,255,255,0.13)",
             "line": "rgba(255,255,255,0.16)", "field": "rgba(255,255,255,0.08)", "dialog": "#26365e", "blur": "28px", "rim": 70}},
     {"id": "ocean", "name": "Ocean", "blurb": "Cool blues and sea greens.",
-     "look": {"glassTint": False, "accent": "#5ec8ff", "glass": "#06141f", "glassOpacity": 58, "paintStrength": 22, "text": "#f2fcff", "muted": "#bcdbe8", "tabs": {"Stats": "#5ee0c8", "Links": "#9db4ff"}},
+     "look": {"glassTint": False, "accent": "#5ec8ff", "glass": "#06141f", "glassOpacity": 58, "cardDepth": 60, "paintStrength": 26, "text": "#f2fcff", "muted": "#bcdbe8", "tabs": {"Stats": "#5ee0c8", "Links": "#9db4ff"}},
      "palette": ["#5ec8ff", "#3ad0c0", "#4f8cff", "#7fe3f0", "#6aa8ff", "#35b8a8"],
      "background": {"url": "https://images.unsplash.com/photo-1565733293285-77aa342b22dd?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 68, "opacity": 85},
      "ui": {"bg": "#071420", "panel": "#0d1f2e", "panel2": "#122a3d", "field": "#08121c"}},
     {"id": "sunset", "name": "Sunset", "blurb": "Warm orange, gold and pink.",
-     "look": {"glassTint": False, "accent": "#ffa66b", "glass": "#1c0f12", "glassOpacity": 58, "paintStrength": 22, "text": "#fff6ee", "muted": "#ecd0bf", "tabs": {"Stats": "#ffd36b", "Links": "#ff7fa8"}},
+     "look": {"glassTint": False, "accent": "#ffa66b", "glass": "#1c0f12", "glassOpacity": 58, "cardDepth": 50, "paintStrength": 34, "text": "#fff6ee", "muted": "#ecd0bf", "tabs": {"Stats": "#ffd36b", "Links": "#ff7fa8"}},
      "palette": ["#ffa66b", "#ff7fa8", "#ffd36b", "#ff8a5c", "#f59e5b", "#ff6f91"],
      "background": {"url": "https://images.unsplash.com/photo-1750560813794-6c33decf299c?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 90, "brightness": 68, "opacity": 85},
      "ui": {"bg": "#160c0f", "panel": "#21141a", "panel2": "#2c1b22", "field": "#150b0e"}},
     {"id": "rose", "name": "Rose", "blurb": "Soft pink and lilac with rounder corners.",
-     "look": {"glassTint": False, "accent": "#ff8fb5", "glass": "#1a0c16", "glassOpacity": 60, "radius": 22, "paintStrength": 22, "text": "#fff2f7", "muted": "#efcadb", "tabs": {"Stats": "#ffb38f", "Links": "#c9a0ff"}},
+     "look": {"glassTint": False, "accent": "#ff8fb5", "glass": "#1a0c16", "glassOpacity": 60, "radius": 22, "cardDepth": 50, "paintStrength": 32, "text": "#fff2f7", "muted": "#efcadb", "tabs": {"Stats": "#ffb38f", "Links": "#c9a0ff"}},
      "palette": ["#ff8fb5", "#c9a0ff", "#ffb38f", "#f48fd0", "#ff9fb0", "#b79cff"],
-     "background": {"url": "https://images.unsplash.com/photo-1764513168327-309c566fbc36?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 72, "opacity": 85},
+     "background": {"url": "https://images.unsplash.com/photo-1764513168327-309c566fbc36?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 58, "opacity": 85},
      "ui": {"bg": "#150b13", "panel": "#1f1220", "panel2": "#2a1829", "field": "#140a12"}},
     {"id": "graphite", "name": "Graphite", "blurb": "One quiet gray. Nothing competes for your attention.",
-     "look": {"glassTint": False, "accent": "#c3cad6", "glass": "#111214", "glassOpacity": 64, "radius": 10, "paintStrength": 16, "text": "#f4f5f7", "muted": "#bdc2cb", "tabs": {"Stats": "#c3cad6", "Links": "#c3cad6"}},
+     "look": {"glassTint": False, "accent": "#c3cad6", "glass": "#111214", "glassOpacity": 64, "radius": 10, "cardDepth": 55, "paintStrength": 20, "text": "#f4f5f7", "muted": "#bdc2cb", "tabs": {"Stats": "#c3cad6", "Links": "#c3cad6"}},
      "paintAll": "#c3cad6",
      "background": {"url": "https://images.unsplash.com/photo-1768684160371-566aadb7785e?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 15, "brightness": 60, "opacity": 85},
      "ui": {"bg": "#0e0f11", "panel": "#17181b", "panel2": "#202226", "field": "#0c0d0f"}},
     {"id": "neon", "name": "Neon Night", "blurb": "Sharp corners and bright cyan and magenta over a night street.",
-     "look": {"glassTint": False, "accent": "#00e5ff", "glass": "#05060d", "glassOpacity": 80, "radius": 6, "edge": 12, "glassBlur": 8, "paintStrength": 30, "text": "#f2feff", "muted": "#a8dbe4",
+     "look": {"glassTint": False, "accent": "#00e5ff", "glass": "#05060d", "glassOpacity": 80, "radius": 6, "edge": 12, "glassBlur": 8, "cardDepth": 65, "paintStrength": 30, "text": "#f2feff", "muted": "#a8dbe4",
               "tabs": {"Stats": "#ff3df2", "Links": "#b6ff3d"}},
      "palette": ["#00e5ff", "#ff3df2", "#b6ff3d", "#ffb800", "#7c4dff", "#ff4d6d"],
      "background": {"url": "https://images.unsplash.com/photo-1695249747530-57460a88ad80?q=80&w=1740&auto=format&fit=crop", "blur": "lg", "saturate": 100, "brightness": 68, "opacity": 88},
@@ -459,6 +459,8 @@ def look_clean(raw):
         out["muted"] = rgb_hex(hex_rgb(raw["muted"], "color of the smaller text"))
     if "glassTint" in raw:
         out["glassTint"] = bool(raw["glassTint"])
+    if "cardDepth" in raw:
+        out["cardDepth"] = number(raw["cardDepth"], "How deep the color behind the words is", 0, 100)
     if "glassRim" in raw:
         out["glassRim"] = number(raw["glassRim"], "How bright the shine on the glass edge is", 0, 100)
     if "theme" in raw:
@@ -711,6 +713,8 @@ def look_css(custom, full=False, saved=None, css=""):
         tok.append("--lk-blur: %spx;" % num(v["glassBlur"]))
     if full or "glassSat" in custom:
         tok.append("--lk-sat: %s%%;" % num(v["glassSat"]))
+    if full or "cardDepth" in custom:       # (a dark, rich shade of each card's own color under the bright color: the words stand out and the color is not washed out)
+        tok.append("--lk-deep: %s%%;" % num(round(v["cardDepth"] * 0.85, 1)))
     if full or "glassRim" in custom:
         tok.append("--lk-rim: %s;" % rim_shadow(v["glassRim"]))
     if full or "text" in custom:
