@@ -185,6 +185,7 @@ printf 'MAIN1|/dev/sda|34|%s\nMAIN2|/dev/sdb|36|%s\nBACKUP1|/dev/sdc|standby|%s\
 printf 'MAIN1|1 TB Samsung HDD\nMAIN2|1 TB Samsung HDD\nBACKUP1|4 TB Seagate HDD\n' >"$T/st/drive-names"
 out=$(HOMELAB_STATE_DIR=$T/st HOMELAB_NAMES_FILE=$T/none hl status); check "Drive temps shows drive names, not MAIN1" 'echo "$out" | grep -q "4 TB Seagate HDD asleep" && ! echo "$out" | grep -q "BACKUP1 asleep"'
 check "two drives with the same name keep their label too" 'echo "$out" | grep -q "1 TB Samsung HDD (MAIN1) 34" && echo "$out" | grep -q "1 TB Samsung HDD (MAIN2) 36"'
+printf 'MAIN1|/dev/sda|34|%s\nCruzer_Flash|/dev/sdy|none|%s\n' "$NOW" "$NOW" >"$T/st/temps2"; out2=$(HOMELAB_STATE_DIR=$T/st HOMELAB_NAMES_FILE=$T/none STATE_FILE_TEMPS=1 bash -c 'cp "$HOMELAB_STATE_DIR/temps2" "$HOMELAB_STATE_DIR/temps"; '"$REPO"'/scripts/homelab status' 2>&1); check "status: a drive with no reading says so, and the line is still shown" 'echo "$out2" | grep -q "Cruzer_Flash no reading\|Cruzer Flash no reading"'
 printf 'MAIN1=Photos drive\n' >"$T/st/names"; out=$(HOMELAB_STATE_DIR=$T/st HOMELAB_NAMES_FILE=$T/st/names hl status); check "a name you chose wins" 'echo "$out" | grep -q "Photos drive 34"'
 
 # ---- the command list: every section prints as a table (command, then its description beside it) in a 100-column window
@@ -226,6 +227,28 @@ if [ "$(id -u)" -eq 0 ]; then
   sample env HOMELAB_UPTIME=100000 >"$T/s3.out"; check "sample: after 6 hours it looks again" '[ "$(wc -l <$T/apt.log)" = 2 ]'
   printf '2|0\n' >"$T/ss/apt"
   sample env HOMELAB_UPTIME=100 >"$T/s4.out"; check "sample: in the first 10 minutes after a boot it leaves updates alone but still reads temperatures" '[ "$(wc -l <$T/apt.log)" = 2 ] && [ -e $T/ss/temps ]'
+  # a drive of a RAID / ZFS setup that gives no temperature (most flash drives) is still listed, as "none"; a loose drive that gives none is not
+  mkdir -p "$T/fb2"
+  cat >"$T/fb2/lsblk" <<'EOS'
+#!/bin/sh
+case "$*" in
+  *"-dno NAME,TYPE"*) printf 'sdx disk\nsdy disk\nsdz disk\n' ;;
+  *"-nro FSTYPE /dev/sdy"*) echo zfs_member ;;
+  *"-nro FSTYPE"*) ;;
+  *"-P -o LABEL,MOUNTPOINT /dev/sdx"*) echo 'LABEL="" MOUNTPOINT="/"' ;;
+  *"-P -o LABEL,MOUNTPOINT"*) ;;
+  *"-dno MODEL /dev/sdy"*) echo "Cruzer Flash" ;;
+  *"-dno MODEL /dev/sdz"*) echo "Loose Stick" ;;
+esac
+EOS
+  cat >"$T/fb2/smartctl" <<'EOS'
+#!/bin/sh
+for a in "$@"; do case "$a" in /dev/sdx) printf '194 Temperature_Celsius 0x0022 100 100 000 Old_age Always - 31 (0 20 0 0 0)\n' ;; esac; done
+EOS
+  chmod +x "$T/fb2/lsblk" "$T/fb2/smartctl"
+  rm -rf "$T/ss2"; APT_LOG="$T/apt.log" HOMELAB_EXTRA_PATH="$T/fb2:$T/fb" HOMELAB_STATE_DIR="$T/ss2" HOMELAB_UPTIME=100 bash "$SAMPLE" </dev/null >/dev/null 2>&1
+  check "sample: a ZFS / RAID drive without a reading is listed as none" 'grep -q "^Cruzer_Flash|/dev/sdy|none|" $T/ss2/temps'
+  check "sample: a loose drive without a reading is left out" '! grep -q "Loose_Stick" $T/ss2/temps && grep -q "^boot|/dev/sdx|31|" $T/ss2/temps'
 fi
 
 out=$(HOMELAB_HOMEPAGE_DIR=$T/nowhere hl theme); check "a missing Homepage folder gives a plain message" 'echo "$out" | grep -q "does not exist" && ! echo "$out" | grep -qi traceback'

@@ -74,6 +74,18 @@ check "scan: RAIDZ2 needs four drives, so it does not fit" "$(echo "$J" | jq_ "[
 check "scan: the plain pool can be built now" "$(echo "$J" | jq_ "[o for o in d['options'] if o['id'] == 'pool'][0]['can_build']")" "True"
 check "scan: a plain pool lists all three drives" "$(echo "$J" | jq_ "len([o for o in d['options'] if o['id'] == 'pool'][0]['drives'])")" "3"
 
+# ---------------- leaving a spare drive out of the scan
+J=$($D panel setups "$(basename "$(losetup -ln -O NAME,BACK-FILE | awk -v f="$S/disk3.img" '$2 == f {print $1}')")" 2>/dev/null)
+check "skip: the left-out drive is still listed (so it can be put back)" "$(echo "$J" | jq_ "len(d['spare'])")" "3"
+check "skip: and it is marked as left out" "$(echo "$J" | jq_ "len([x for x in d['spare'] if x['skipped']])")" "1"
+check "skip: a plain pool lists only the other two" "$(echo "$J" | jq_ "len([o for o in d['options'] if o['id'] == 'pool'][0]['drives'])")" "2"
+check "skip: RAIDZ1 (3 drives) does not fit any more" "$(echo "$J" | jq_ "[o for o in d['options'] if o['id'] == 'zfs-raidz1'][0]['fits']")" "False"
+check "skip: the total counts only the drives that are used" "$(echo "$J" | jq_ "'ok' if d['total_bytes'] < 700000000 else d['total_bytes']")" "ok"
+OUT=$($D panel setups 'a b' 2>&1); has "skip: odd words are refused" "$OUT" "takes no words"
+OUT=$($D panel setups 'sda;rm' 2>&1); has "skip: a word with a semicolon is refused" "$OUT" "takes no words"
+J=$($D panel setups 2>/dev/null)
+check "skip: without it all three are used again" "$(echo "$J" | jq_ "len([x for x in d['spare'] if x['skipped']])")" "0"
+
 # ---------------- a wrong word, or a drive that is not a spare, changes nothing
 L1=$(loop_of 1); L2=$(loop_of 2); L3=$(loop_of 3)
 OUT=$(P setup pool "${L1#/dev/},${L2#/dev/}" pool)

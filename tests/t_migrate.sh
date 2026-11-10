@@ -92,6 +92,9 @@ check "scan: a SnapRAID setup still has to wait" "$(echo "$J" | jq_ "[o['migrate
 OUT=$(P setup md-raid1 "${L3#/dev/},${L4#/dev/}" md-raid1 ERASE)
 has "raid1: the size check is shown" "$OUT" "Everything fits"
 has "raid1: it says it is ready" "$OUT" "is ready"
+has "raid1: the copy reports a percent for the panel's bars (on both new drives)" "$OUT" "PROGRESS ${L3#/dev/} "
+has "raid1: ... with the words Copying files" "$OUT" "Copying files"
+has "raid1: ... for the second new drive too" "$OUT" "PROGRESS ${L4#/dev/} "
 check "raid1: Main is the new file system now (not a pool)" "$(main_fs)" "ext4"
 check "raid1: every file is there and the same" "$(sums)" "$BEFORE"
 check "raid1: the link is kept" "$(readlink /mnt/test-main/link)" "photos/big.bin"
@@ -129,6 +132,22 @@ check "failed copy: the files are the same" "$(sums)" "$BEFORE"
 check "failed copy: no build path in fstab" "$(grep -v '^#' "$S/fstab" | grep -c test-newmain)" "0"
 check "failed copy: the build folder is gone" "$([ -e /mnt/test-newmain ] && echo there || echo gone)" "gone"
 check "failed copy: the record still says pool" "$(cut -d'|' -f1 "$S/preset")" "pool"
+
+# ---------------- Stop is pressed while the files are copied: calm "Stopped", Main as it was, the new setup taken apart
+two_pool
+BEFORE=$(sums)
+mkdir -p "$S/stopbin"; printf '#!/bin/sh\n: >"%s/panel-abort"\nexit 20\n' "$S" >"$S/stopbin/rsync"; chmod +x "$S/stopbin/rsync"
+OUT=$(FAKE_EXTRA="$S/stopbin" P setup md-raid1 "${L3#/dev/},${L4#/dev/}" md-raid1 ERASE; echo "rc=$?")
+has "stop: it ends with the exit code for a stop (4)" "$OUT" "rc=4"
+has "stop: it says it was stopped as asked" "$OUT" "Stopped as you asked"
+has "stop: the last sentence says Main was not changed" "$(echo "$OUT" | grep -v '^rc=' | tail -1)" "untouched"
+case "$OUT" in *"did not finish"*|*"WARNING:"*) echo "FAIL stop: it must not look like an error (got: $(echo "$OUT" | tail -3 | tr '\n' '|'))"; bad=$((bad + 1)) ;; esac
+check "stop: Main is still the pool" "$(main_fs)" "fuse.mergerfs"
+check "stop: both drives are still in Main" "$(pool_drives main)" "2"
+check "stop: the files are the same" "$(sums)" "$BEFORE"
+check "stop: no build path in fstab" "$(grep -v '^#' "$S/fstab" | grep -c test-newmain)" "0"
+check "stop: the stop mark is cleaned up" "$([ -e "$S/panel-abort" ] && echo there || echo gone)" "gone"
+check "stop: the record still says pool" "$(cut -d'|' -f1 "$S/preset")" "pool"
 
 # ---------------- ZFS (stand-in programs)
 two_pool

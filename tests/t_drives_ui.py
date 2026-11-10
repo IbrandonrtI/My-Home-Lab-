@@ -420,6 +420,32 @@ def main():
             check("abort: the tiles are back to normal", pg.locator(".tile.working, .tprog").count() == 0 and tile(pg, "MAIN1").get_attribute("draggable") == "true", "")
             ctx.close()
 
+            # ---- a new setup that copies the files of Main: no Abort button while it builds, one while the files are copied, then a calm "Stopped"
+            p.stop()
+            p.env["FAKE_DRIVES_MODE"] = "jobslow-migrate"
+            p.start(); p.login()
+            ctx, pg, errors = open_drives(br)
+            m = len(calls())
+            pg.click("button:has-text('Configure Drives')")
+            pg.wait_for_selector(".cfg .cfgrec")
+            pg.click("button:has-text('Build Recommended Setup')")
+            pg.wait_for_selector("dialog")
+            sure_box(pg).check()
+            ok_button(pg).click()
+            pg.wait_for_selector(".card.working", timeout=8000)
+            check("setup abort: while the drives are built there is no Abort button and the page says when it comes", pg.get_by_role("button", name="Abort", exact=True).count() == 0 and "only while its files are copied" in pg.inner_text(".card.working"), pg.inner_text(".card.working"))
+            pg.wait_for_selector(".card.working button:has-text('Abort')", timeout=10000)
+            check("setup abort: while the files are copied the Abort button shows and the drive tiles show a percent", pg.locator(".tprog").count() >= 1 and "Copying files" in (pg.locator(".tprog").first.get_attribute("aria-label") or ""), pg.inner_text(".card.working"))
+            pg.get_by_role("button", name="Abort", exact=True).click()
+            pg.wait_for_selector("dialog:has-text('Abort This Change?')")
+            check("setup abort: the dialog says Main stays as it is", "Main pool stays exactly as it is" in dialog_text(pg), dialog_text(pg))
+            pg.locator("dialog .actions button").last.click()
+            check("setup abort: Abort sends Stop to the tool", wait_calls(pg, ["panel", "abort"]), calls()[m:])
+            pg.wait_for_selector(".card.working", state="detached", timeout=20000)
+            t = pg.inner_text("#toast")
+            check("setup abort: the answer is calm (Stopped, not an error) and there is no What Happened box", "Stopped as you asked" in t and "bad" not in (pg.get_attribute("#toast", "class") or "") and pg.locator("text=What Happened").count() == 0, t)
+            ctx.close()
+
             # ---- the files of the drives that leave do not fit on the drives that stay
             p.stop()
             p.env["FAKE_DRIVES_MODE"] = "tight"
@@ -615,6 +641,27 @@ def main():
                 check("configure (%s): the dropdown lists the others from best to worst, the ones that do not fit are greyed out" % cfg_mode,
                       len(opts) == 5 and "SnapRAID" in opts[1][0] and "Plain pool" in opts[2][0] and "Mirror" in opts[3][0] and "RAIDZ2" in opts[4][0] and opts[4][1] and "needs 4 drives" in opts[4][0] and not opts[1][1], opts)
                 check("configure (%s): nothing is sent by only looking" % cfg_mode, not any(c[1] in ("setup", "add", "wipe") for c in calls()[m:]), calls()[m:])
+                if cfg_mode == "ok":
+                    # leave one spare drive out: the setups are worked out again for the others, and the drive stays untouched
+                    boxes = pg.locator(".cfgpick input[type=checkbox]")
+                    check("configure: every spare drive has a tick to use it or leave it out (all ticked at first)", boxes.count() == 3 and all(boxes.nth(i).is_checked() for i in range(3)) and "Drives to Use" in pg.inner_text(".cfgpick"), pg.inner_text(".cfgpick"))
+                    m2 = len(calls())
+                    boxes.nth(2).uncheck()
+                    check("configure: leaving a drive out looks at the setups again without it", wait_calls(pg, ["panel", "setups", "sdf"]), calls()[m2:])
+                    pg.wait_for_function("document.querySelector('.cfg') && /using 2/.test(document.querySelector('.cfg').innerText)")
+                    check("configure: the scan says it uses 2 of the 3 drives and the left-out drive is unticked", "using 2" in pg.inner_text(".cfg") and not pg.locator(".cfgpick input[type=checkbox]").nth(2).is_checked(), pg.inner_text(".cfg")[:400])
+                    check("configure: with two drives RAIDZ1 (3 needed) is no longer recommended", "Recommended: ZFS, RAIDZ1" not in pg.inner_text(".cfg"), pg.inner_text(".cfg")[:300])
+                    check("configure: the recommendation is now the plain pool (the only setup that fits all the ranks)", "Recommended: Plain pool" in pg.inner_text(".cfg") or "Recommended: Mirror" in pg.inner_text(".cfg"), pg.inner_text(".cfg")[:300])
+                    other_id = "mirror" if "Recommended: Plain pool" in pg.inner_text(".cfg") else "pool"
+                    pg.select_option(".cfgsel", other_id)
+                    pg.wait_for_selector("dialog")
+                    dt = dialog_text(pg)
+                    check("configure: a setup built now uses only the two drives and says the third stays a spare", "Drives used (2 of 3)" in dt and "Not used: 32 GB Kingston HDD 2" in dt and "stay as spare drives" in dt, dt[:500])
+                    pg.click("dialog button:has-text('Cancel')")
+                    pg.wait_for_selector("dialog", state="detached")
+                    pg.locator(".cfgpick input[type=checkbox]").nth(2).check()
+                    pg.wait_for_function("document.querySelector('.cfg') && !/using 2/.test(document.querySelector('.cfg').innerText) && /Recommended: ZFS, RAIDZ1/.test(document.querySelector('.cfg').innerText)")
+                    check("configure: putting the drive back brings the first recommendation back", "Recommended: ZFS, RAIDZ1" in pg.inner_text(".cfg"), pg.inner_text(".cfg")[:300])
                 check("configure (%s): no side scroll" % cfg_mode, no_side_scroll(pg), "")
                 pg.click("button:has-text('Build Recommended Setup')")
                 pg.wait_for_selector("dialog")

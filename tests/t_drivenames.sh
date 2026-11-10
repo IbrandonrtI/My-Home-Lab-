@@ -104,5 +104,24 @@ chosen_name_del BACKUP1
 carry_name MAIN1 BACKUP1
 check "a stale name on a label is not given to the next drive" "$(chosen_name BACKUP1)" ""
 
+# a name you chose goes with the drive (by its serial number): it stays when the drive is taken out and comes back when it joins a pool again
+rm -f "$DRIVE_MEMORY"; : >"$DRIVE_NAMES_FILE"
+check "memory: nothing is remembered at first" "$(disk_base_name /dev/sdb)" "1 TB Toshiba HDD"
+chosen_name_put MAIN7 "Photos Drive"
+remember_chosen "$TMP/disks/MAIN7" /dev/sdb && chosen_name_del MAIN7
+check "memory: a drive taken out keeps the name you chose (shown as a spare drive)" "$(disk_base_name /dev/sdb)" "Photos Drive"
+check "memory: the label's own line is gone, so the label can go to another drive" "$(chosen_name MAIN7)" ""
+check "memory: another drive is not touched" "$(disk_base_name /dev/sdc)" "250 GB Samsung SSD"
+apply_remembered_name /dev/sdb BACKUP3
+check "memory: the drive joins a pool under a new label and is called the same" "$(chosen_name BACKUP3)" "Photos Drive"
+chosen_name_put MAIN9 "Other Name"
+apply_remembered_name /dev/sdb MAIN9
+check "memory: a label that already has a name keeps it" "$(chosen_name MAIN9)" "Other Name"
+apply_remembered_name /dev/sdc MAIN8
+check "memory: a drive nobody named gets nothing" "$(chosen_name MAIN8)" ""
+check "memory: no name is kept for a drive that is not in a pool and was never named" "$(remember_chosen "$TMP/disks/NOPE" /dev/sdc; echo $?)" "1"
+forget_name /dev/sdb
+check "memory: going back to the automatic name forgets it" "$(disk_base_name /dev/sdb)" "1 TB Toshiba HDD"
+
 [ "$bad" -eq 0 ] && echo OK || echo FAIL
 [ "$bad" -eq 0 ]

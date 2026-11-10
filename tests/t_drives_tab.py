@@ -186,6 +186,21 @@ def main():
         st, js, _, _ = p.req("POST", "/api/drives/abort", {})
         check("abort: an erase cannot be stopped", st == 409 and "cannot be stopped" in js["error"], (st, js))
         wait_job()
+        # a new setup that copies the files of Main: it cannot be stopped while it builds, it can while the files are copied
+        p.stop()
+        p.env["FAKE_DRIVES_MODE"] = "jobslow-migrate"
+        p.start(); p.login()
+        p.req("POST", "/api/drives/setup", {"setup": "zfs-mirror", "ids": ["sdc", "sde"], "typed": ["zfs-mirror", "ERASE"]})
+        time.sleep(0.8)
+        st, js, _, _ = p.req("POST", "/api/drives/abort", {})
+        check("abort: a new setup cannot be stopped while its drives are built", st == 409 and "only while the files of the Main pool are being copied" in js["error"] and ["panel", "abort"] not in calls()[-2:], (st, js))
+        time.sleep(2.3)
+        st, j, _, _ = p.req("GET", "/api/drives/job")
+        check("abort: the setup's drives show the copy percent", all(j["progress"].get(i, {}).get("text", "").startswith("Copying files") for i in ("sdc", "sde")), j["progress"])
+        st, js, _, _ = p.req("POST", "/api/drives/abort", {})
+        check("abort: while the files are copied Stop is passed on", st == 200 and calls()[-1] == ["panel", "abort"], (st, js, calls()[-1:]))
+        j = wait_job()
+        check("abort: the setup ends with code 4 and the calm sentence (no error)", j["rc"] == 4 and "Stopped as you asked" in j["message"] and "untouched" in j["message"], j)
         p.stop()
         p.env["FAKE_DRIVES_MODE"] = "ok"
         p.start(); p.login()

@@ -305,6 +305,12 @@ esac
     d = load()
     check("temperatures: Resting, Warm, Hot, a model name", [(x["name"], x["label"]) for x in d["temps"]]
           == [("Boot Drive", "63 °C, Hot"), ("Main 1", "Resting"), ("Backup 1", "52 °C, Warm"), ("WDC Blue", "40 °C")], d["temps"])
+    with open(os.path.join(state, "temps"), "w") as f:
+        f.write("boot|/dev/sda|30|1\nMAIN1|/dev/sdb|36|1\nCruzer_Flash|/dev/sdc|none|1\n")
+    run()
+    d = load()
+    check("temperatures: an array drive without a reading is listed as No Reading", [(x["name"], x["label"]) for x in d["temps"]]
+          == [("Boot Drive", "30 °C"), ("Main 1", "36 °C"), ("Cruzer Flash", "No Reading")], d["temps"])
     os.remove(os.path.join(state, "temps"))
     run()
     check("no readings yet is said in words", load()["temps"] == [{"name": "No readings yet", "label": ""}])

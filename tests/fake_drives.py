@@ -102,22 +102,48 @@ elif act == "setups":
         return {"id": i, "title": title, "blurb": "About " + title + ".", "kind": kind, "fits": fits, "min": mn, "drives": drives, "usable_bytes": usable, "used_bytes": usable * 2,
                 "tolerates": tol, "nightly": nightly, "score": 600, "can_build": fits and not why, "why": why if fits else "Needs %d empty drives; 3 found." % mn, "needs_tool": False,
                 "can_keep": i in ("pool", "mirror", "snapraid1", "snapraid2"), "migrate": "migrate" in mode and kind != "pool"}
+    skip = set((args[2] if len(args) > 2 else "").split(",")) - {""}      # `panel setups sdc,sde`: drives the person left out
     block = "The Main pool still has drives in it. A new setup builds a new Main pool, so take the drives out of Main first." if "blocked" in mode else ""
-    print(json.dumps({"spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "blank": False, "keep_ok": True},
-                                {"id": "sde", "device": "/dev/sde", "name": "32 GB Kingston HDD", "size_bytes": 32000000000, "blank": True},
-                                {"id": "sdf", "device": "/dev/sdf", "name": "32 GB Kingston HDD 2", "size_bytes": 32000000000, "blank": True}],
-                      "total_bytes": 127100000000, "current": "", "main_used_bytes": 20000000000, "main_has_drives": "migrate" in mode,
-                      "recommended": "zfs-raidz1",
-                      "options": [opt("zfs-raidz1", "ZFS, RAIDZ1 (1 drive can die)", True, 64000000000, 1, ["sdc", "sde", "sdf"], block, "zfs", mn=3),
-                                  opt("snapraid1", "SnapRAID, 1 protection drive", True, 64000000000, 1, ["sdc", "sde", "sdf"], block, "pool", True, 3),
-                                  opt("pool", "Plain pool", True, 127100000000, 0, ["sdc", "sde", "sdf"], block, "pool", False, 1),
-                                  opt("mirror", "Mirror (nightly copy)", True, 32000000000, 1, ["sdc", "sde"], block, "pool", True, 2),
-                                  opt("zfs-raidz2", "ZFS, RAIDZ2 (2 drives can die)", False, 0, 0, [], "", "zfs", False, 4)],
-                      }))
+    sz = {"sdc": 63100000000, "sde": 32000000000, "sdf": 32000000000}
+    keepd = lambda ids: [d for d in ids if d not in skip]
+    total = sum(v for k, v in sz.items() if k not in skip)
+    def opt2(i, title, usable, tol, drives, why="", kind="pool", nightly=False, mn=2):
+        ds = keepd(drives)
+        return opt(i, title, len(ds) >= mn, usable if not skip else total if i == "pool" else usable // 2, tol if len(ds) >= mn else 0, ds, why, kind, nightly, mn)
+    options = [opt2("zfs-raidz1", "ZFS, RAIDZ1 (1 drive can die)", 64000000000, 1, ["sdc", "sde", "sdf"], block, "zfs", mn=3),
+               opt2("snapraid1", "SnapRAID, 1 protection drive", 64000000000, 1, ["sdc", "sde", "sdf"], block, "pool", True, 3),
+               opt2("pool", "Plain pool", 127100000000, 0, ["sdc", "sde", "sdf"], block, "pool", False, 1),
+               opt2("mirror", "Mirror (nightly copy)", 32000000000, 1, ["sdc", "sde"], block, "pool", True, 2),
+               opt2("zfs-raidz2", "ZFS, RAIDZ2 (2 drives can die)", 0, 0, [], "", "zfs", False, 4)]
+    rec = ([o["id"] for o in options if o["fits"]] or [""])[0]
+    print(json.dumps({"spare": [{"id": "sdc", "device": "/dev/sdc", "name": "63 GB Cruzer HDD", "size_bytes": 63100000000, "blank": False, "keep_ok": True, "skipped": "sdc" in skip},
+                                {"id": "sde", "device": "/dev/sde", "name": "32 GB Kingston HDD", "size_bytes": 32000000000, "blank": True, "skipped": "sde" in skip},
+                                {"id": "sdf", "device": "/dev/sdf", "name": "32 GB Kingston HDD 2", "size_bytes": 32000000000, "blank": True, "skipped": "sdf" in skip}],
+                      "total_bytes": total, "current": "", "main_used_bytes": 20000000000, "main_has_drives": "migrate" in mode,
+                      "recommended": rec, "options": options}))
 elif act == "bootadd":
     print("PROGRESS bootadd 50 Making the section")
     print("Done. The boot drive section was added.")
 elif act == "setup":
+    if "jobslow" in mode and "migrate" in mode:      # a setup that first builds the drives (cannot be stopped), then copies the files of Main (can be stopped)
+        flag = os.environ["FAKE_DRIVES_LOG"]
+        ids = args[3].split(",")
+        open(flag + ".running", "w").close()
+        if os.path.exists(flag + ".abort"):
+            os.remove(flag + ".abort")
+        for it in ids:
+            print("PROGRESS %s 8 Building the new setup" % it, flush=True)
+        time.sleep(2)
+        for i in range(1, 8):
+            for it in ids:
+                print("PROGRESS %s %d Copying files %d%%" % (it, 20 + i * 10, i * 14), flush=True)
+            time.sleep(0.7)
+            if os.path.exists(flag + ".abort"):
+                os.remove(flag + ".abort")
+                os.remove(flag + ".running")
+                print("Stopped as you asked. Nothing was changed: your Main pool is as it was and its files are untouched. The new setup was taken apart again and its drives are empty.", flush=True)
+                sys.exit(4)
+        os.remove(flag + ".running")
     if "NOW" not in args and mode == "jobbusy":
         sys.stderr.write("Not a good moment: a backup is running right now. Nothing was changed. Try again when it has finished.\n")
         sys.exit(1)

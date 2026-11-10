@@ -203,5 +203,18 @@ has "wipe: a pool drive is refused (no spare drive is left to erase)" "$(P wipe 
 has "wipe: the boot drive is refused" "$(P wipe sda empty /dev/sda ERASE)" "No spare drive found"
 check "the pool is untouched" "$(fstab_lines)" "3"
 
+# ---------------- a name you chose stays with the drive when it is taken out, and comes back when it is added again (even under another label)
+setup3
+A=$(label_of main 0)
+has "name: the drive is renamed" "$(P rename "$A" "Photos Drive")" "is now called"
+has "name: it is taken out of Main (another Main drive stays)" "$(P disconnect "$A" yes)" "is disconnected from the main pool"
+check "name: as a spare drive it still has the name you chose" "$(actions | jq_ "d['spare'][0]['name']")" "Photos Drive"
+SP=$(actions | jq_ "d['spare'][0]['id']")
+has "name: it is added to Backup (a different label) with its files kept" "$(P add "$SP" backup keep)" "connected to the backup pool"
+check "name: the Backup drive carries the name" "$(actions | jq_ "len([r for r in d['rename'] if r['role']=='backup' and r['name']=='Photos Drive'])")" "1"
+BK=$(actions | jq_ "[r['id'] for r in d['rename'] if r['name']=='Photos Drive'][0]")
+has "name: going back to the automatic name works" "$(P rename "$BK" auto)" "called"
+check "name: and it is forgotten for good (taken out again, it is a plain spare)" "$(P disconnect "$BK" yes >/dev/null; actions | jq_ "[x['name'] for x in d['spare'] if x['name'] == 'Photos Drive'].__len__()")" "0"
+
 echo "$([ "$bad" -eq 0 ] && echo OK || echo FAIL)"
 exit "$bad"
