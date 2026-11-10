@@ -162,6 +162,7 @@ def main():
             fr.get_by_role("button", name="No Tint").click()
             pg.wait_for_timeout(500)
             check("tint: No Tint again, and the glass sliders are hidden", ga() == "0" and fr.locator('input[aria-label="How Transparent"]').count() == 0, ga())
+            check("look: the Card Depth slider is there and follows the theme", fr.locator('input[aria-label="Card Depth"]').input_value() == "40")
             check("look: the Shine on the Glass Edge slider is there and follows the theme", fr.locator('input[aria-label="Shine on the Glass Edge"]').input_value() == "35")
             fr.get_by_role("button", name="Calm Night").click()
             pg.wait_for_timeout(400)
