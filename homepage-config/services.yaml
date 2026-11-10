@@ -169,7 +169,7 @@
     - Containers:
         id: stat-containers
         icon: mdi-docker
-        description: Running now and updates waiting
+        description: Running now, and updates waiting
         widget:
           type: customapi
           url: http://192.168.X.X:3001/images/stats.json
@@ -178,7 +178,7 @@
             - field: glance.containers
               label: Running
             - field: glance.updates
-              label: Updates
+              label: Waiting
             - field: updated_text
               label: Refreshed
 
@@ -332,9 +332,9 @@
             - field: containers.problems
               label: Problems
             - field: updates.images
-              label: Images
+              label: Container Updates
             - field: updates.system
-              label: System
+              label: System Updates
 
 - Folder Sizes:
 
