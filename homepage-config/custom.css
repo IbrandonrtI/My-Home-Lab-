@@ -92,7 +92,7 @@ div[id$="-card"] > div {
   z-index: 0;
   border-radius: 14px !important;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.432)), rgba(var(--accent), var(--hl-a2, 0.106)) 55%) !important;
+  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.143)), rgba(var(--accent), var(--hl-a2, 0.035)) 55%) !important;
 }
 
 /* Thin accent rail on the left edge */
@@ -425,7 +425,7 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   border-radius: 14px !important;
   background: rgba(var(--lk-glass), var(--lk-glass-a)) !important;
   border: 1px solid var(--lk-line) !important;
-  box-shadow: 0 12px 28px -18px rgba(0, 0, 0, 0.7) !important;
+  box-shadow: 0 12px 28px -18px rgba(0, 0, 0, 0.7), var(--lk-rim, 0 0 0 0 transparent) !important;
   -webkit-backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
   backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
 }
@@ -485,6 +485,7 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   border-radius: 14px !important;
   background: rgba(var(--lk-glass), var(--lk-glass-a)) !important;
   border: 1px solid var(--lk-line) !important;
+  box-shadow: var(--lk-rim, 0 0 0 0 transparent);
   -webkit-backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
   backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
 }
@@ -532,7 +533,7 @@ body { --icon-color: #c9d6f2; }
 #inner_wrapper .bookmark > a {
   border-radius: var(--lk-radius) !important;
   border: 1px solid var(--lk-line) !important;
-  box-shadow: 0 14px 30px -20px rgba(0, 0, 0, 0.75) !important;
+  box-shadow: 0 14px 30px -20px rgba(0, 0, 0, 0.75), var(--lk-rim, 0 0 0 0 transparent) !important;
   -webkit-backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
   backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
   transition: border-color 0.2s ease;
@@ -547,7 +548,7 @@ body { --icon-color: #c9d6f2; }
   z-index: 0;
   border-radius: 14px !important;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent, var(--lk-accent)), var(--hl-a1, 0.432)), rgba(var(--accent, var(--lk-accent)), var(--hl-a2, 0.106)) 55%) !important;
+  background: linear-gradient(135deg, rgba(var(--accent, var(--lk-accent)), var(--hl-a1, 0.143)), rgba(var(--accent, var(--lk-accent)), var(--hl-a2, 0.035)) 55%) !important;
 }
 #inner_wrapper [id$="-card"]::after, #inner_wrapper li[id^="stat-"]::after, #inner_wrapper li[id^="cal-"]::after { display: none !important; }
 #inner_wrapper [id$="-card"] { position: relative !important; background-color: transparent !important; }
@@ -590,7 +591,7 @@ body { --icon-color: #c9d6f2; }
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.432)), rgba(var(--accent), var(--hl-a2, 0.106)) 55%);
+  background: linear-gradient(135deg, rgba(var(--accent), var(--hl-a1, 0.143)), rgba(var(--accent), var(--hl-a2, 0.035)) 55%);
 }
 .bookmark > a::after {
   content: "";
