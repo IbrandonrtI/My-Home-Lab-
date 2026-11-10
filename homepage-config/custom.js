@@ -571,11 +571,11 @@
       var kids = Array.prototype.slice.call(e.childNodes).filter(function (n) { return n.nodeType === 3; });
       kids.forEach(function (n, i) { n.nodeValue = i === 0 ? "Service Unavailable" : ""; });
     });
-    all("#information-widgets .information-widget-resource").forEach(function (e) {      // a pool pill with no drive in it ("Connect Backup Drive"): Homepage has no disk to read there and says "API Error"
-      var texts = [], w = document.createTreeWalker(e, NodeFilter.SHOW_TEXT, null), n;
-      while ((n = w.nextNode())) texts.push(n);
-      var asks = texts.some(function (t) { return /^\s*connect .+ drive\s*$/i.test(t.nodeValue); });
-      if (asks) texts.forEach(function (t) { if (/^\s*API Error\s*$/.test(t.nodeValue)) t.nodeValue = "No Drive"; });
+    all("#information-widgets span.primary-text").forEach(function (e) {      // a pool pill with no drive in it ("Connect Backup Drive"): Homepage has no disk to read there and says "API Error"
+      if (e.childNodes.length !== 1 || e.firstChild.nodeType !== 3 || e.firstChild.nodeValue.trim() !== "API Error") return;
+      var up = e.parentElement, hops = 0;      // (the pill's name sits a few levels up, next to the value: go up until it is found, but never as far as the whole bar)
+      while (up && hops < 5 && !/connect .+ drive/i.test(up.textContent)) { up = up.parentElement; hops++; }
+      if (up && hops < 5 && /connect .+ drive/i.test(up.textContent) && up.querySelectorAll("span.primary-text").length === 1) e.firstChild.nodeValue = "No Drive";
     });
   }
 
