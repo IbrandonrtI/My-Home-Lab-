@@ -70,7 +70,7 @@ elif act == "remount":
         sys.exit(1)
     if mode == "slow":
         time.sleep(2)
-    print("Recovered.")
+    print("The drives are mounted again and your services are running.")
 elif act in ("add", "wipe", "disconnect", "move"):
     ids = [t.split(":")[0] for t in args[2].split(",")] if act != "wipe" else [args[2]]
     if mode == "jobbusy" and "NOW" not in args:

@@ -210,7 +210,7 @@ def main():
         p.start(); p.login()
         # ---- remount, and what goes wrong
         st, js, _, _ = p.req("POST", "/api/drives/remount", {})
-        check("drives: remount asks for exactly that", st == 200 and "Recovered." in js["message"] and calls()[-1] == ["panel", "remount"], (st, js))
+        check("drives: remount asks for exactly that", st == 200 and "mounted again" in js["message"] and calls()[-1] == ["panel", "remount"], (st, js))
         p.stop()
         p.env["FAKE_DRIVES_MODE"] = "busy"
         p.start(); p.login()

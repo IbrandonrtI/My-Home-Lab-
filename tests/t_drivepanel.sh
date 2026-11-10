@@ -38,7 +38,7 @@ hdparm() {
 export -f hdparm 2>/dev/null
 sync_filebrowser() { echo "synced" >>"$TMP/sync.log"; }
 busy_reason() { [ -f "$TMP/busy" ] && cat "$TMP/busy"; return 0; }
-remount_flow() { echo "remount-ran" >>"$TMP/remount.log"; echo Recovered.; }
+remount_flow() { echo "remount-ran" >>"$TMP/remount.log"; echo "The drives are mounted again and your services are running."; }
 last_backup_line() { echo "never"; }
 boot_free_bytes() { echo 12345; }
 json_drives() { printf '{"pools":[],"drives":[]'; }
@@ -98,7 +98,7 @@ echo "a backup is running right now" >"$TMP/busy"
 has "remount is refused while a backup runs" "$(P remount)" "Not a good moment: a backup is running right now"
 check "remount did not run" "$(cat "$TMP/remount.log" 2>/dev/null | wc -l | tr -d ' ')" "0"
 rm -f "$TMP/busy"
-has "remount runs when nothing is busy" "$(P remount)" "Recovered."
+has "remount runs when nothing is busy" "$(P remount)" "mounted again"
 check "remount ran once, without a question" "$(cat "$TMP/remount.log" | wc -l | tr -d ' ')" "1"
 
 # --- a flash stick (removable, but it says it spins) is never offered for sleep or wake; a USB hard drive that is not removable still is

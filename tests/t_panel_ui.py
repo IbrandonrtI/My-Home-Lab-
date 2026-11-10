@@ -109,7 +109,7 @@ def main():
             tabs_now = fr.locator("nav.tabs button").all_inner_texts()
             check("screens: Look, Layout, Cards and Drives only (Colors and Background are part of Look)", tabs_now == ["Look", "Layout", "Cards", "Drives"], tabs_now)
             heads = fr.locator(".card h2, details.card > summary b").all_inner_texts()
-            want = ["Themes", "Preview and Shape", "Colors and Glass", "Background Picture", "How the Background Looks Behind the Cards", "Names and Logo", "Colors of Cards, Tiles and Bookmarks", "Service Cards"]
+            want = ["Themes", "Preview and Shape", "Colors and Glass", "Color Strength", "Background Picture", "How the Background Looks Behind the Cards", "Names and Logo", "Colors of Cards, Tiles and Bookmarks", "Service Cards"]
             pos = [heads.index(x) if x in heads else -1 for x in want]
             check("look: Themes first, then Preview and Shape, Colors and Glass, the background, Names and Logo, and the colors of cards below", -1 not in pos and pos == sorted(pos), heads)
 
@@ -137,6 +137,24 @@ def main():
             live = pg.evaluate("document.getElementById('hl-live-look').textContent")
             check("themes: a theme gives the cards its colors (the first group gets the first color of the palette)", "--accent:10, 132, 255" in live, live[-300:])
             check("themes: picking one is only a draft (the files do not change)", "homelab look" not in p.read("custom.css"))
+            names = fr.locator("button.theme b").all_inner_texts()
+            check("themes: Liquid Glass is a tile, Forest is not", "Liquid Glass" in names and "Forest" not in names, names)
+            box = fr.get_by_label("Also change the background picture")
+            picbg = lambda: fr.locator(".pic").first.evaluate("e => e.style.backgroundImage")
+            check("themes: the picture of the theme is shown as a draft (the box is ticked)", box.is_checked() and "photo-1756909688538" in picbg(), picbg())
+            check("themes: the draft with a picture counts as unsaved changes", "Unsaved" in fr.locator(".state").inner_text())
+            box.uncheck()
+            pg.wait_for_timeout(200)
+            check("themes: with the box unticked the picture stays as it was", "photo-1756909688538" not in picbg())
+            box.check()
+            pg.wait_for_timeout(200)
+            check("themes: ticking it again brings the theme's picture back", "photo-1756909688538" in picbg(), picbg())
+            fr.get_by_role("button", name="Liquid Glass").click()
+            pg.wait_for_timeout(500)
+            rim = pg.evaluate("getComputedStyle(document.getElementById('inner_wrapper')).getPropertyValue('--lk-rim').trim()")
+            check("themes: Liquid Glass puts a shining edge on the dashboard and the panel", rim.startswith("inset 1px 1px 0") and fr.locator("body").evaluate("() => getComputedStyle(document.documentElement).getPropertyValue('--prim').trim()").startswith("inset 1px 1px 0"), rim)
+            check("themes: the sliders of the picture follow the theme", fr.locator('input[aria-label="Picture Brightness"]').input_value() == "80" and "photo-1603847734015" in picbg())
+            check("look: the Shine on the Glass Edge slider is there and follows the theme", fr.locator('input[aria-label="Shine on the Glass Edge"]').input_value() == "70")
             fr.get_by_role("button", name="Calm Night").click()
             pg.wait_for_timeout(400)
             ps = fr.locator("body").evaluate("() => [getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(), document.documentElement.classList.contains('glassy')]")

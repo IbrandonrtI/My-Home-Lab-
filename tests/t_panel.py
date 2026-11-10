@@ -4,6 +4,8 @@
 The panel runs for real (on a free port, as a child process) with a copy of the shipped Homepage files in a temporary folder.
 Run: python3 tests/t_panel.py   (last line is OK or FAIL)"""
 import http.client
+import http.server
+import threading
 import json
 import os
 import re
@@ -109,9 +111,32 @@ class Panel:
             f.write(text)
 
 
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 300
+
+
+class PictureHandler(http.server.BaseHTTPRequestHandler):
+    """A small web server standing in for the picture host: every theme picture is a tiny PNG, except Ocean (not found) and Sunset (not a picture)."""
+    def do_GET(self):
+        name = self.path.strip("/")
+        if name == "ocean.png":
+            self.send_response(404)
+            self.end_headers()
+            return
+        body = b"<html>no</html>" if name == "sunset.png" else PNG
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *a):
+        pass
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="hlpanel-")
-    p = Panel(tmp)
+    pics = http.server.ThreadingHTTPServer(("127.0.0.1", 0), PictureHandler)
+    threading.Thread(target=pics.serve_forever, daemon=True).start()
+    p = Panel(tmp, {"HLP_THEME_PICTURE_BASE": "http://127.0.0.1:%d" % pics.server_address[1]})
     tsock = os.path.join(tmp, "t.sock")
     p.env["HLP_TERM_SOCK"] = tsock
     fake = subprocess.Popen([sys.executable, os.path.join(HERE, "fake_ttyd.py"), tsock])
@@ -230,7 +255,39 @@ def main():
         check("themes: a blur out of range is refused", st == 400, js)
         shipped_css = p.read("custom.css")
         check("themes: the page's own CSS reads the blur and the boost with the old values as the fallback", "blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%))" in shipped_css and "--lk-blur:" not in shipped_css.split("/* >>> homelab")[0].replace("(--lk-blur and --lk-sat", ""))
+        ids = [t["id"] for t in themes]
+        check("themes: Forest is gone, Liquid Glass is there (third), and the others are in place", "forest" not in ids and ids == ["calm", "frost", "liquid", "ocean", "sunset", "rose", "graphite", "neon"], ids)
+        lq = themes[2]
+        check("themes: Liquid Glass has a shining edge and big round corners", lq["look"].get("glassRim", 0) >= 50 and lq["look"]["radius"] >= 24 and lq["look"]["glassClear"] is True and lq["ui"].get("rim"), lq)
+        st, js, _, _ = p.req("POST", "/api/look", {"look": dict(lq["look"], theme="liquid", paintAll="#ff8800")})
+        css = p.read("custom.css")
+        check("themes: Liquid Glass writes the shine on the edge", st == 200 and re.search(r"--lk-rim: inset 1px 1px 0 rgba\(255, 255, 255, 0\.49\), inset -1px -1px 0 rgba\(255, 255, 255, 0\.224\)", css) is not None, css[-900:])
+        check("themes: the shine also goes on painted cards", "var(--lk-rim,0 0 0 0 transparent)!important" in css, css[-1500:])
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"glassRim": 140}})
+        check("themes: a shine out of range is refused", st == 400, js)
         p.req("POST", "/api/look/reset", {})
+        check("themes: with no shine the look block writes no rim", "--lk-rim:" not in p.read("custom.css"))
+        check("themes: the page's own CSS puts the shine on cards, pills and the tab bar (none when the token is missing)", shipped_css.count("var(--lk-rim, 0 0 0 0 transparent)") >= 3, shipped_css.count("--lk-rim"))
+        check("themes: every theme has a picture and four sliders for it", all(re.match(r"https://images\.unsplash\.com/photo-[\w-]+\?", t["background"]["url"]) and t["background"]["blur"] in ("sm", "md", "lg", "xl", "2xl", "3xl")
+              and all(0 <= t["background"][k] <= 100 for k in ("saturate", "brightness", "opacity")) for t in themes), [t["id"] for t in themes if not t.get("background")])
+        check("themes: Calm Night's picture is the one the dashboard came with", themes[0]["background"]["url"].split("?")[0] in p.read("settings.yaml") and themes[0]["background"]["brightness"] == 42)
+        # the picture of a theme is copied to the images folder (the test server stands in for the picture host)
+        st, js, _, _ = p.req("POST", "/api/background/theme", {"theme": "neon", "blur": "lg", "brightness": 50, "saturate": 100, "opacity": 88})
+        bg = p.state_now()["background"]
+        check("theme picture: it is stored in the images folder and used", st == 200 and js.get("stored") is True and re.fullmatch(r"/images/background-\d{14}\.png", bg["image"])
+              and os.path.exists(os.path.join(p.hp, bg["image"].lstrip("/"))), (st, js, bg))
+        check("theme picture: its sliders are saved with it", bg["blur"] == "lg" and bg["brightness"] == 50 and bg["saturate"] == 100 and bg["opacity"] == 88, bg)
+        st, js, _, _ = p.req("POST", "/api/background/theme", {"theme": "ocean"})
+        check("theme picture: when the picture cannot be fetched the address is used as it is", st == 200 and js.get("stored") is False and p.state_now()["background"]["image"] == themes[3]["background"]["url"], (st, js))
+        st, js, _, _ = p.req("POST", "/api/background/theme", {"theme": "sunset"})
+        check("theme picture: something that is not a picture is not stored (the address is used)", st == 200 and js.get("stored") is False and p.state_now()["background"]["image"].startswith("https://"), (st, js))
+        st, js, _, _ = p.req("POST", "/api/background/theme", {"theme": "forest"})
+        check("theme picture: an unknown theme is refused", st == 400, (st, js))
+        st, js, _, _ = p.req("POST", "/api/background/theme", {"theme": "rose", "blur": "huge"})
+        check("theme picture: a bad blur is refused", st == 400, (st, js))
+        st, js, _, _ = p.req("POST", "/api/background/theme", {"url": "http://evil.example/x.png"})
+        check("theme picture: only a theme can be named (no address of its own)", st == 400, (st, js))
+        p.req("POST", "/api/background/reset", {})
 
         paint = p.state_now()["paint"]
         check("paint: lists cards, stats, calendar, links and labels", all(paint.get(k) for k in ("cards", "stats", "links", "labels")), {k: len(v) for k, v in paint.items()})
@@ -263,7 +320,7 @@ def main():
         css = p.read("custom.css")
         check("colors: the strength also reaches cards, tiles and bookmarks that keep their default color", st == 200 and "--hl-a1:0.753;--hl-a2:0.184;" in css and ".bookmark>a{--hl-a1:0.753" in css and "--accent" not in css.split("--hl-a1:0.756")[0].split("\n")[-1], css[-500:])
         st, js, _, _ = p.req("POST", "/api/look", {"look": {"paintStyle": "solid"}})
-        check("colors: the solid style also reaches them (same strength on both ends)", st == 200 and "--hl-a1:0.346;--hl-a2:0.346;" in p.read("custom.css"), p.read("custom.css")[-400:])
+        check("colors: the solid style also reaches them (same strength on both ends)", st == 200 and "--hl-a1:0.114;--hl-a2:0.114;" in p.read("custom.css"), p.read("custom.css")[-400:])
         st, js, _, _ = p.req("POST", "/api/look/css", {"look": {}})
         check("colors: a preview back at the default clears the saved strength", st == 200 and "--hl-a1:initial" in js["css"], js)
         st, js, _, _ = p.req("POST", "/api/look", {"look": {}})
@@ -272,10 +329,10 @@ def main():
         css = p.read("custom.css")
         check("colors: 0% strength is no color at all (not the same as the default)", st == 200 and "--hl-a1:0;--hl-a2:0;" in css, css[-400:])
         shipped = p.read("custom.css")
-        check("colors: the page's own CSS has exactly the 40% strength when nothing is set", "var(--hl-a1, 0.432)" in shipped and "var(--hl-a2, 0.106)" in shipped and "var(--hl-a1, 0.30)" not in shipped and "var(--hl-a1, 0.10)" not in shipped)
-        st, js, _, _ = p.req("POST", "/api/look", {"look": {"paintStrength": 40, "cards": {cid: "#ff0000"}}})
+        check("colors: the page's own CSS has exactly the 10% strength when nothing is set", "var(--hl-a1, 0.143)" in shipped and "var(--hl-a2, 0.035)" in shipped and "var(--hl-a1, 0.30)" not in shipped and "var(--hl-a1, 0.10)" not in shipped)
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"paintStrength": 10, "cards": {cid: "#ff0000"}}})
         css = p.read("custom.css")
-        check("colors: a card painted at the default strength gets the same alphas as the page's own CSS (0.432 and 0.106)", st == 200 and "#%s{--accent:255, 0, 0;--hl-a1:0.432;--hl-a2:0.106;}" % cid in css, css[-500:])
+        check("colors: a card painted at the default strength gets the same alphas as the page's own CSS (0.143 and 0.035)", st == 200 and "#%s{--accent:255, 0, 0;--hl-a1:0.143;--hl-a2:0.035;}" % cid in css, css[-500:])
         st, js, _, _ = p.req("POST", "/api/look", {"look": {"paintStyle": "stripes"}})
         check("colors: an unknown color style is refused", st == 400, js)
         st, js, _, _ = p.req("POST", "/api/look", {"look": full})
