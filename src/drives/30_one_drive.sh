@@ -33,6 +33,19 @@ chosen_name_del() {   # chosen_name_del LABEL
   rm -f "$tmp"
 }
 
+remember_chosen() {   # remember_chosen MOUNTPOINT DEV: the name you chose for this pool drive goes with the drive; 0 when it is kept (the label's own line can go)
+  local n; n=$(chosen_name "$(basename "$1")")
+  [ -n "$n" ] && [ -n "$2" ] || return 1
+  remember_name "$2" "$n"
+}
+
+apply_remembered_name() {   # apply_remembered_name DEV LABEL: a drive that joins a pool is called what you called it before (unless this label already has a name)
+  local n; n=$(remembered_name "$1")
+  [ -n "$n" ] || return 0
+  [ -z "$(chosen_name "$2")" ] || return 0
+  chosen_name_put "$2" "$n"
+}
+
 carry_name() {   # carry_name OLDLABEL NEWLABEL: a drive that gets a new label keeps the name you chose for it (names are kept by label)
   local nm
   [ -n "$1" ] && [ "$1" != "$2" ] || return 0
@@ -62,6 +75,7 @@ rename_flow() {   # give a pool drive a name of your own (kept by the drive's la
     if [ -z "$(chosen_name "$label")" ]; then say "$cur already has its automatic name. Nothing was changed."; return 0; fi
     dry_gate "Remove your name for $cur from $DRIVE_NAMES_FILE." "Update the FileBrowser folders and the dashboard." && return 0
     chosen_name_del "$label"
+    [ -z "$(branch_part "$mp")" ] || forget_name "$(disk_of_part "$(branch_part "$mp")")"
     say ""; say "Done. The drive is called $(branch_name "$mp") again."
     log "rename $label -> automatic"
     return 0
@@ -80,6 +94,7 @@ rename_flow() {   # give a pool drive a name of your own (kept by the drive's la
   dry_gate "Save the name '$new' for $cur in $DRIVE_NAMES_FILE." \
            "Update the FileBrowser folders and the dashboard so they show the new name." && return 0
   chosen_name_put "$label" "$new"
+  [ -z "$(branch_part "$mp")" ] || remember_name "$(disk_of_part "$(branch_part "$mp")")" "$new" || true      # (the name goes with the drive, not only with its label)
   say ""
   say "Done. $cur is now called $(branch_name "$mp")."
   log "rename $label ($cur) -> $new"

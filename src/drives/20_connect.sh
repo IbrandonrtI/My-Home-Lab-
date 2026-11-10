@@ -120,6 +120,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   [ -n "$uuid" ] || die "Could not read the UUID of $part"
   mp="$DISKS_DIR/$label"
   name_store_put "$label" "$base"
+  apply_remembered_name "$dev" "$label"      # a drive you named before is called that again
   mark_added "$label"
   progress 60 "Mounting the drive"
 

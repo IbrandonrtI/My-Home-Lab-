@@ -170,6 +170,7 @@ detach_branch_run() {   # detach_branch mountpoint [STEP...]  (leaves the data o
     rmdir "$mp" 2>/dev/null || true
     if [ "$KEEP_IMG" = 1 ]; then say "$label is out of the $role pool."; else say "$label is removed. Its space went back to the boot drive."; fi
   else
+    if [ -n "$dev" ] && remember_chosen "$mp" "$dev"; then chosen_name_del "$(basename "$mp")"; fi      # the name you chose stays with the drive (its label may go to another drive)
     say "$label is disconnected from the $role pool. The data on the drive was not touched."
   fi
   DETACHED_DEV=$dev

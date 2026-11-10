@@ -50,7 +50,9 @@ sd_reload() { [ "$TEST_MODE" = 1 ] || systemctl daemon-reload; }
 
 progress() {   # progress PERCENT "Text": the control panel shows a bar on the drive that is being changed (only inside `drives panel`; PERCENT is the drive's own 0-100)
   [ "$PANEL_MODE" = 1 ] || return 0
-  printf 'PROGRESS %s %s %s\n' "${PROG_ITEM:--}" "$(( PROG_LO + $1 * (PROG_HI - PROG_LO) / 100 ))" "$2"
+  local it pct=$(( PROG_LO + $1 * (PROG_HI - PROG_LO) / 100 ))
+  if [ "${#PROG_ALL[@]}" -gt 0 ]; then for it in "${PROG_ALL[@]}"; do printf 'PROGRESS %s %s %s\n' "$it" "$pct" "$2"; done; return 0; fi
+  printf 'PROGRESS %s %s %s\n' "${PROG_ITEM:--}" "$pct" "$2"
 }
 
 rsync_run() {   # rsync_run FROM TO "Text" RSYNC-ARGS...: like rsync; in the panel its percent moves the bar from FROM to TO

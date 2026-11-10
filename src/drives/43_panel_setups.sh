@@ -1,5 +1,5 @@
 # ---------- Configure Drives (the control panel): what the spare drives could become, ranked, and building the one that was picked ----------
-#   panel setups                                  look only (JSON): the spare drives, and every ready-made setup ranked from best to worst for them
+#   panel setups [DISK,DISK,...]                  look only (JSON): the spare drives, and every ready-made setup ranked from best to worst for them (the drives named are left out)
 #   panel setup ID DISK,DISK,... [WORD...]        build that setup on those spare drives (needs the setup's name and ERASE typed)
 # The setups themselves are the ready-made setups of `sudo drives preset` (32_preset.sh, 33_zfs_md.sh): the panel only chooses the drives and asks.
 
@@ -54,18 +54,23 @@ setup_blocker() {   # setup_blocker ID -> why this setup cannot be built right n
 }
 
 panel_setups_json() {
-  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep main_used=0 main_need=0 migrate
+  local d s id first=1 i k cap total=0 n tol score why ids_json used hint blank keep skipped main_used=0 main_need=0 migrate
   [ -n "$(branches_of main)" ] && main_is_pool && { main_used=$(pool_used_bytes); main_used=${main_used:-0}; main_need=$(migrate_need_bytes "$main_used"); }
-  local -a devs=() sizes=() rows=() chosen=()
-  local line
-  while read -r s d; do devs+=("$d"); sizes+=("$s"); total=$((total + s)); done < <(for d in $(candidate_disks); do s=$(disk_size_bytes "$d"); [[ "$s" =~ ^[0-9]+$ ]] && echo "$s $d"; done | sort -rn -k1,1)
+  local -a devs=() sizes=() rows=() chosen=() alld=() alls=()
+  local line skipcsv=",${PANEL_SKIP:-},"      # (PANEL_SKIP: spare drives the person left out: they are listed, but no setup uses them)
+  while read -r s d; do
+    alld+=("$d"); alls+=("$s")
+    case "$skipcsv" in *",$(basename "$d"),"*) continue ;; esac
+    devs+=("$d"); sizes+=("$s"); total=$((total + s))
+  done < <(for d in $(candidate_disks); do s=$(disk_size_bytes "$d"); [[ "$s" =~ ^[0-9]+$ ]] && echo "$s $d"; done | sort -rn -k1,1)
   n=${#devs[@]}
   printf '{"spare":['
-  for i in "${!devs[@]}"; do
-    d=${devs[$i]}; blank=false; disk_is_blank "$d" && blank=true
+  for i in "${!alld[@]}"; do
+    d=${alld[$i]}; blank=false; disk_is_blank "$d" && blank=true
     keep=false; [ "$blank" = false ] && keepable_disk "$d" && keep=true      # (its files can stay: one partition with an ext4 file system)
+    skipped=false; case "$skipcsv" in *",$(basename "$d"),"*) skipped=true ;; esac
     [ "$i" = 0 ] || printf ','
-    printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s,"keep_ok":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${sizes[$i]}")" "$blank" "$keep"
+    printf '{"id":%s,"device":%s,"name":%s,"size_bytes":%s,"blank":%s,"keep_ok":%s,"skipped":%s}' "$(json_str "$(basename "$d")")" "$(json_str "$d")" "$(json_str "$(disk_base_name "$d")")" "$(json_num "${alls[$i]}")" "$blank" "$keep" "$skipped"
   done
   printf '],"total_bytes":%s,"main_used_bytes":%s,"main_has_drives":%s,"options":[' "$(json_num "$total")" "$(json_num "$main_used")" "$([ -n "$(branches_of main)" ] && echo true || echo false)"
   for id in $PRESET_IDS; do
@@ -126,5 +131,9 @@ panel_setup_run() {   # panel_setup_run ID DISK,DISK,...: build a ready-made set
       disk_is_blank "$d" || WIZARD_ERASE="${WIZARD_ERASE:+$WIZARD_ERASE$'\n'}$d"      # a drive with files that was not marked "keep" is erased: the person typed ERASE for the setup
     fi
   done
-  preset_flow "$id"
+  local rc=0
+  rm -f "$ABORT_FILE"; echo $$ >"$BATCH_PID_FILE"      # (this is what lets the Abort button reach a setup that copies the files of the Main pool)
+  preset_flow "$id" || rc=$?
+  rm -f "$BATCH_PID_FILE" "$ABORT_FILE"
+  return "$rc"
 }

@@ -289,7 +289,8 @@ panel_refuse() { note "$1 Nothing was changed."; return 1; }
 panel_main() {
   local act=${1:-} n=$# i w
   case "$act" in
-    status|health|check|actions|remount|abort|setups) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
+    setups)       [ "$n" -le 2 ] && { [ "$n" -eq 1 ] || [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._,-]{0,200}$ ]]; } || { panel_refuse "panel setups takes no words, or the drives to leave out."; return 1; } ;;
+    status|health|check|actions|remount|abort) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
     rename)       [ "$n" -eq 3 ] || { panel_refuse "panel rename takes a drive and a name."; return 1; } ;;
     sleep|wake)   [ "$n" -eq 2 ] || { panel_refuse "panel $act takes one drive."; return 1; } ;;
     add)          [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel add takes a drive, main or backup, keep or erase, and the typed words."; return 1; } ;;
@@ -361,7 +362,7 @@ panel_main() {
     check)   JSON=1; check_flow ;;
     actions) with_name_cache panel_actions_json ;;
     abort)   panel_abort ;;
-    setups)  panel_setups_json ;;
+    setups)  PANEL_SKIP=${2:-}; panel_setups_json ;;
     bootadd) PANEL_ROLE=$2; PANEL_UNITS=$3; PROG_ITEM=bootadd; run_changing panel_bootadd_flow ;;
     setup)   PANEL_ID=$2; run_changing panel_setup_run "$2" "$3" ;;
     rename)  PANEL_ID=$2; PANEL_NAME=$3; run_changing rename_flow ;;

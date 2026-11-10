@@ -583,8 +583,11 @@ preset_flow() {   # preset_flow ID
                "$([ -n "$spare_dev$cache_dev" ] && echo "Add the $([ -n "$spare_dev" ] && echo "hot spare")$([ -n "$spare_dev" ] && [ -n "$cache_dev" ] && echo " and the ")$([ -n "$cache_dev" ] && echo "read cache").")" \
                "Start the containers again." && return 0
     PRESET_TOUCHED=1
+    PROG_ALL=(); for d in "${devs[@]}"; do PROG_ALL+=("$(basename "$d")"); done      # (the panel shows the same bar on every drive of the setup)
+    progress 3 "Getting ready"
     for d in "${devs[@]}"; do refuse_unsafe_disk "$d"; ids+=("$(disk_stable_name "$d")"); done
     stop_containers "$MAIN_POOL"
+    progress 8 "Building the new setup"
     [ "$migrate" != 1 ] || ARRAY_MOUNT=$MIGRATE_DIR      # (built beside the old Main pool; it takes the Main path after the copy)
     if [ "$(preset_kind "$id")" = zfs ]; then
       zfs_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The ZFS pool could not be created. Look at the messages above. See: sudo drives status"; return 1; }
@@ -592,14 +595,27 @@ preset_flow() {   # preset_flow ID
       md_build "$id" "$enc" "${ids[@]}" || { ARRAY_MOUNT=""; start_containers; warn "The RAID array could not be built. Look at the messages above. See: sudo drives status"; return 1; }
     fi
     ARRAY_MOUNT=""
+    progress 18 "New setup is ready"
     if [ "$migrate" = 1 ]; then
-      if ! migrate_copy || ! migrate_switch "$id"; then
+      local mig_ok=0
+      MIGRATE_STOPPED=0
+      if abort_requested; then MIGRATE_STOPPED=1
+      elif migrate_copy; then progress 95 "Switching over"; migrate_switch "$id" && mig_ok=1
+      fi
+      if [ "$mig_ok" != 1 ]; then
         migrate_discard "$id" "${ids[@]}"
+        PROG_ALL=()
         start_containers
+        if [ "$MIGRATE_STOPPED" = 1 ]; then
+          ABORTED=1
+          say "Stopped as you asked. Nothing was changed: your Main pool is as it was and its files are untouched. The new setup was taken apart again and its drives are empty."
+          return 4
+        fi
         warn "The move to the new setup did not finish. Your Main pool is as it was and its files are untouched; the new setup was taken apart again and its drives are empty."
         return 1
       fi
     fi
+    PROG_ALL=()
     preset_record "$id" "${ids[*]}$([ "$enc" = 1 ] && echo " encrypted")"
     if [ -n "$spare_dev" ]; then
       d=$(disk_stable_name "$spare_dev")

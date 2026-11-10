@@ -51,6 +51,7 @@ adopt_flow() {
   start_containers
   power_apply "$mp" main
   name_store_put "$label" "$(disk_base_name "$(disk_of_part "$part")")"
+  apply_remembered_name "$(disk_of_part "$part")" "$label"
   log "adopted $part as $label; pool at $pool"
   say ""
   say "Done. $pool is now a pool containing $(branch_name "$mp"). Check: sudo drives status"

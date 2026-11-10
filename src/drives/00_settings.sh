@@ -101,6 +101,9 @@ POOL_OPTS_BASE="allow_other,cache.files=off,category.create=ff,moveonenospc=true
 DRIVE_NAMES_FILE="${DRIVE_NAMES_FILE:-/etc/homelab-drive-names}"
 [ "$TEST_MODE" = 1 ] && DRIVE_NAMES_FILE="${DRIVE_NAMES_FILE_TEST:-$STATE_DIR/drive-names-chosen}"
 NAME_STORE="${NAME_STORE:-$STATE_DIR/drive-names}"
+# A name you chose also goes with the drive itself (its serial number), so it is still its name after the drive left its pool, was erased or is
+# added again under another label (MAIN2, BACKUP1...). One line per drive:  SERIAL|Name
+DRIVE_MEMORY="${DRIVE_MEMORY:-$STATE_DIR/drive-memory}"
 # What you changed with `drives fillorder` and `drives limit`: how a pool picks a drive for a new file (policy), which drive goes
 # first (order) and how much free space a drive keeps (limit). One line per setting: KIND|KEY|VALUE.
 SETTINGS_FILE="${SETTINGS_FILE:-$STATE_DIR/pool-settings}"
@@ -125,6 +128,7 @@ PANEL_UNITS=""       # bootadd: the size of the boot drive section, in GB
 PANEL_ALL=""         # add and move: the one choice (keep or erase) for every drive
 PANEL_NOW=0          # the panel's "Go Ahead Anyway": do not wait for a running backup or upload (it sends the word NOW)
 PROG_ITEM=""         # the drive the progress lines are about (panel only)
+PROG_ALL=()          # when a setup builds on several drives at once, every one of them shows the same bar (panel only)
 PROG_LO=0; PROG_HI=100   # the part of the bar a step may use (a move is two steps: leaving a pool, then joining the other)
 PANEL_LEAVING=()     # the pool folders of the drives that leave their pools in this batch (a copy never goes to one of them)
 PANEL_RESERVE_DIR="" # the folder of a batch with several drives: reserved drive names and reserved space

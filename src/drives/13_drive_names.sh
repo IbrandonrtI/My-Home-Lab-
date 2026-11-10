@@ -73,8 +73,47 @@ drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, Flash (a USB stick),
   return 0
 }
 
-disk_base_name() {   # disk_base_name /dev/sdX -> "1 TB Samsung HDD"
+drive_key() {   # drive_key /dev/sdX -> what stays with the physical drive (its serial number); nothing when the drive has none that can be trusted
+  local ser
+  ser=$(lsblk -dno SERIAL "$1" 2>/dev/null | head -n 1 | tr -d ' |')
+  if [ "${#ser}" -ge 4 ] && [[ "$ser" != *[!0]* ]] ; then ser=""; fi      # (a serial of only zeros is the same on many cheap sticks)
+  if [ -n "$ser" ]; then printf '%s' "$ser"; elif [ "$TEST_MODE" = 1 ]; then printf '%s' "$(basename "$1")"; fi
+  return 0
+}
+
+remembered_name() {   # remembered_name /dev/sdX -> the name you chose for this physical drive (nothing when there is none)
+  [ -s "$DRIVE_MEMORY" ] || return 0      # (nobody chose a name: no extra program is started)
+  local k; k=$(drive_key "$1")
+  [ -n "$k" ] || return 0
+  awk -F'|' -v k="$k" '$1 == k {print $2; exit}' "$DRIVE_MEMORY" 2>/dev/null
+  return 0
+}
+
+remember_name() {   # remember_name /dev/sdX "name": 0 when it was kept
+  local k tmp; k=$(drive_key "$1")
+  [ -n "$k" ] && [ -n "$2" ] || return 1
+  mkdir -p "$(dirname "$DRIVE_MEMORY")" 2>/dev/null || return 1
+  tmp=$(mktemp) || return 1
+  { [ -r "$DRIVE_MEMORY" ] && awk -F'|' -v k="$k" '$1 != k' "$DRIVE_MEMORY"; printf '%s|%s\n' "$k" "$2"; } >"$tmp" 2>/dev/null
+  cat "$tmp" >"$DRIVE_MEMORY" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+  return 0
+}
+
+forget_name() {   # forget_name /dev/sdX: the drive goes back to its automatic name
+  [ -s "$DRIVE_MEMORY" ] || return 0
+  local k tmp; k=$(drive_key "$1")
+  [ -n "$k" ] || return 0
+  tmp=$(mktemp) || return 0
+  awk -F'|' -v k="$k" '$1 != k' "$DRIVE_MEMORY" >"$tmp" 2>/dev/null; cat "$tmp" >"$DRIVE_MEMORY" 2>/dev/null || true
+  rm -f "$tmp"
+  return 0
+}
+
+disk_base_name() {   # disk_base_name /dev/sdX -> "1 TB Samsung HDD" (or the name you chose for this drive)
   local d=$1 model size brand kind name
+  name=$(remembered_name "$d")
+  if [ -n "$name" ]; then printf '%s' "$(clean_name "$name")"; return 0; fi
   model=$(lsblk -dno MODEL "$d" 2>/dev/null | sed 's/ *$//')
   size=$(lsblk -dnbo SIZE "$d" 2>/dev/null | head -1 | tr -d ' ')
   brand=$(drive_brand "$model")

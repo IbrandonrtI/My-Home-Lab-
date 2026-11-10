@@ -2,6 +2,7 @@
 # ---------- moving the Main pool into a new ZFS / RAID setup ----------
 # The new setup is built on spare drives and filled from the old Main pool while that is still in use (the containers are stopped).
 # Only when the copy is checked does the new setup take the Main path; then the old Main drives are released (their files are not touched).
+MIGRATE_STOPPED=0   # 1 when the person pressed Stop while the files were copied
 ARRAY_MOUNT=""      # where zfs_build / md_build mount the new setup (empty = the Main path)
 
 main_is_pool() { [ -n "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$(findmnt -no FSTYPE "$MAIN_POOL" 2>/dev/null)" = fuse.mergerfs ]; }
@@ -15,14 +16,18 @@ fstab_move_mp() {   # fstab_move_mp OLD NEW: the line that mounts at OLD mounts 
   log "fstab move mount point: $1 -> $2"
 }
 
-migrate_copy() {   # copy everything from the Main pool into the new setup, then compare
+migrate_copy() {   # copy everything from the Main pool into the new setup, then compare (MIGRATE_STOPPED=1 when the person pressed Stop)
   local rc=0 changed
   local -a skip=(--exclude=/.mergerfs --exclude=/lost+found)
+  MIGRATE_STOPPED=0
   say "Copying the files of the Main pool into the new setup. This can take a long time on big drives..."
-  rsync -aHAX --numeric-ids "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- >&2 || rc=$?
+  rsync_run 20 90 "Copying files" -aHAX --numeric-ids "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- >&2 || rc=$?
+  if abort_requested; then MIGRATE_STOPPED=1; return 1; fi
   case $rc in 0|24) ;; *) warn "The copy stopped with an error (code $rc)."; return 1 ;; esac
   say "Checking the copy..."
+  progress 91 "Checking the copy"
   changed=$(rsync -aHAXni --numeric-ids --delete "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- 2>/dev/null | grep -cE '^(>f|\*deleting|cL|hf)') || true
+  if abort_requested; then MIGRATE_STOPPED=1; return 1; fi
   if [ "${changed:-0}" -gt 0 ]; then warn "$changed file(s) are not the same in the copy."; return 1; fi
   say "The copy is complete and matches."
 }
