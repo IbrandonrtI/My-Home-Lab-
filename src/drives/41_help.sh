@@ -100,7 +100,7 @@ EOF
     connect) cat <<'EOF'
 sudo drives connect [--dry-run] [--yes] [--confirm-erase] [--now]
   Lists the drives that are plugged in and not used, asks which one and for which storage (Main or Backup). A drive that
-  already has files can be kept as it is. Erasing needs the drive name and ERASE typed. The containers of that storage
+  already has files can be kept as it is. Erasing needs the drive name and ERASE typed. The containers of that pool
   stop for about a minute while the pool mounts again.
 EOF
     ;;
@@ -186,7 +186,7 @@ EOF
     ;;
     resize) cat <<'EOF'
 sudo drives resize [--dry-run] [--yes] [--confirm-erase] [--now]
-  Makes a boot drive section bigger or smaller. The containers of that storage stop, the file system is checked, resized
+  Makes a boot drive section bigger or smaller. The containers of that pool stop, the file system is checked, resized
   and checked again, and the files are counted before and after. Shrinking is refused when the files would fill more than 90%
   of the new size, and you must type CONTINUE. Growing needs free space on the boot drive (it always keeps its reserve).
 EOF

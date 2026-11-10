@@ -147,7 +147,7 @@ settings_menu() {
            "No files are moved." &&
          limit_flow ;;
       6) intro "Make a boot drive section bigger or smaller" \
-           "Next you pick a section and its new size. The containers of that storage stop for a while." \
+           "Next you pick a section and its new size. The containers of that pool stop for a while." \
            "You are asked again before anything changes." &&
          { resize_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;

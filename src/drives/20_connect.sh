@@ -97,6 +97,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
     if abort_requested; then ABORTED=1; note "Stopped before $dev was erased. Nothing was changed."; return 1; fi
     progress 10 "Erasing and formatting (cannot be stopped)"
     part=$(format_disk "$dev" "$label") || return 1
+    chosen_name_del "$label"      # a freshly formatted drive is a new drive: a name left on this label by an earlier drive is not its name
   else
     $gate "Keep the files on $dev and add the drive as it is ($base)." \
                "Stop the containers that use the $role pool for a minute." \
@@ -108,6 +109,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
     local oldlabel; oldlabel=$(fs_label "$part")
     if [ "$oldlabel" != "$label" ]; then
       e2label "$part" "$label" || die "Could not set the label on $part"
+      chosen_name_del "$label"      # a name an earlier drive left on this label is not this drive's name
       carry_name "$oldlabel" "$label"      # a name you chose follows the drive to its new place
     fi
   fi

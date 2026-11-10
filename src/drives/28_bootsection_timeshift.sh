@@ -131,7 +131,7 @@ bootsection_attach() {   # bootsection_attach ROLE REUSE: the section file of th
   name_store_put "$label" "$(pretty_size "$(stat -c %s "$img")") boot drive section"
   timeshift_protect
   say ""
-  say "Done. $(branch_name "$mp") is part of the $role pool ($(role_pool "$role")). It is the last place that storage uses."
+  say "Done. $(branch_name "$mp") is part of the $role pool ($(role_pool "$role")). It is the last place that pool uses."
   log "connected $label ($img) to $role"
   crit_release
   return 0

@@ -36,7 +36,7 @@ stop_containers() {   # stop_containers PATH...
     for n in $list; do case " $held " in *" $n "*) ;; *) new="$new $n" ;; esac; done
     STOPPED=""
     [ -n "${new// /}" ] || return 0
-    note "Stopping containers that use this storage (they stay stopped until every drive is done):$new"
+    note "Stopping containers that use this pool (they stay stopped until every drive is done):$new"
     # shellcheck disable=SC2086
     bad=$(docker_each stop $new)
     [ -z "${bad// /}" ] || warn "Some containers did not stop cleanly"
@@ -44,7 +44,7 @@ stop_containers() {   # stop_containers PATH...
     return 0
   fi
   [ -n "${list// /}" ] || { STOPPED=""; return 0; }
-  note "Stopping containers that use this storage: $list"
+  note "Stopping containers that use this pool: $list"
   # shellcheck disable=SC2086
   bad=$(docker_each stop $list)
   [ -z "${bad// /}" ] || warn "Some containers did not stop cleanly"
