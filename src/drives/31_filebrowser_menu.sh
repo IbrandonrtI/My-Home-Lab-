@@ -6,6 +6,11 @@ sync_filebrowser() {
   [ "$DRY_RUN" = 1 ] && return 0
   # the Homepage drive pills ("Main Pool" / "Connect Backup Drive" ...) follow the pools
   command -v homelab-sample >/dev/null 2>&1 && { homelab-sample widgets 9>&- >/dev/null 2>&1 || true; }
+  # the Stats tab and the drive temperatures are only redone every 15 minutes: after a change of the drives they are redone now (in the background, it takes a little while)
+  if command -v homelab-stats >/dev/null 2>&1; then
+    { homelab-sample 9>&-; homelab-stats 9>&-; } >/dev/null 2>&1 </dev/null &
+    disown 2>/dev/null || true
+  fi
   command -v homelab-setup >/dev/null 2>&1 || return 0
   # Homepage can only measure a pool that is mounted inside its own container: after a pool was mounted or changed it must see it
   # (the helper changes nothing when Homepage already sees the pools; otherwise it fixes the stack or restarts Homepage)
