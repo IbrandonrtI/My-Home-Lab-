@@ -205,6 +205,33 @@ def main():
         check("transparent: level 0 is the least clear (0.4)", "--lk-glass-a: 0.4;" in p.read("custom.css"))
         st, js, _, _ = p.req("POST", "/api/look", {"look": {"glassLevel": 120}})
         check("transparent: a level out of range is refused", st == 400, js)
+        # ---- themes
+        themes = p.state_now()["look"]["themes"]
+        check("themes: eight, with Calm Night (the default look) first and Frosted Glass second", len(themes) == 8 and themes[0]["id"] == "calm" and themes[0]["look"] == {} and themes[1]["id"] == "frost", [t["id"] for t in themes])
+        check("themes: every one has a name, a blurb and a unique id", all(t["name"] and t["blurb"] for t in themes) and len({t["id"] for t in themes}) == 8)
+        bad = []
+        for t in themes:
+            st, js, _, _ = p.req("POST", "/api/look/css", {"look": dict(t["look"], theme=t["id"])})
+            if st != 200:
+                bad.append((t["id"], js))
+        check("themes: the look of every theme is accepted by the server", not bad, bad)
+        check("themes: a palette or one color for everything, except Calm Night", all((t.get("palette") or t.get("paintAll")) for t in themes[1:]) and not themes[0].get("palette"))
+        check("themes: every color of a theme is a plain hex color", all(re.fullmatch(r"#[0-9a-f]{6}", c) for t in themes for c in (t.get("palette") or []) + [t.get("paintAll") or "#000000"] + [t["look"].get("accent", "#000000"), t["look"].get("glass", "#000000")] + list((t["look"].get("tabs") or {}).values())))
+        fr = themes[1]
+        st, js, _, _ = p.req("POST", "/api/look", {"look": dict(fr["look"], theme="frost")})
+        css = p.read("custom.css")
+        check("themes: Frosted Glass saves, with the blur and the picture boost for the glass", st == 200 and "--lk-blur: 30px;" in css and "--lk-sat: 190%;" in css and "--lk-radius: 24px;" in css, css[-600:])
+        check("themes: the chosen theme is read back", p.state_now()["look"]["custom"].get("theme") == "frost", p.state_now()["look"]["custom"])
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"theme": "calm"}})
+        check("themes: Calm Night is the default, so it writes nothing", st == 200 and "homelab look >>>" not in p.read("custom.css"))
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"theme": "pink-camo"}})
+        check("themes: an unknown theme is refused", st == 400, js)
+        st, js, _, _ = p.req("POST", "/api/look", {"look": {"glassBlur": 90}})
+        check("themes: a blur out of range is refused", st == 400, js)
+        shipped_css = p.read("custom.css")
+        check("themes: the page's own CSS reads the blur and the boost with the old values as the fallback", "blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%))" in shipped_css and "--lk-blur:" not in shipped_css.split("/* >>> homelab")[0].replace("(--lk-blur and --lk-sat", ""))
+        p.req("POST", "/api/look/reset", {})
+
         paint = p.state_now()["paint"]
         check("paint: lists cards, stats, calendar, links and labels", all(paint.get(k) for k in ("cards", "stats", "links", "labels")), {k: len(v) for k, v in paint.items()})
         check("paint: every item lists its default color", all(re.fullmatch(r"#[0-9a-f]{6}", x.get("color", "")) for k in ("cards", "stats", "calendar", "links") for x in paint[k]), paint["cards"][:2])
