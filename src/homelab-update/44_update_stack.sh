@@ -64,13 +64,13 @@ update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop he
   for i in "${!CN[@]}"; do
     [ "${CS[$i]}" = "$s" ] || continue
     v=$(anon_volumes_of "${CX[$i]}")
-    if [ -n "$v" ]; then manual_steps "$s" "${CN[$i]} keeps data in an anonymous volume, so it is not updated here (B6 in docs/troubleshooting.md). Copy that data out first."; return 2; fi
+    if [ -n "$v" ]; then manual_steps "$s" "${CN[$i]} keeps data in an anonymous volume, so it is not updated here (an update can leave it empty). Copy that data out first."; return 2; fi
   done
   case "${s,,}" in
     nextcloud*)
       if read -r old new < <(nc_versions "$s") && [ -n "${new:-}" ]; then
         case "$(nc_jump "$old" "$new")" in
-          skip) line_bad "Nextcloud would skip a major version ($old $S_ARR $new). Not updated. Read docs/updating.md."; return 2 ;;
+          skip) line_bad "Nextcloud would skip a major version ($old $S_ARR $new). Not updated. Read the Nextcloud release notes."; return 2 ;;
           major)
             if [ "$yes" -eq 1 ]; then line_warn "Nextcloud $old $S_ARR $new is a MAJOR upgrade. It is left for you: run  sudo homelab-update  without --yes."; return 2; fi
             confirm "This is a MAJOR Nextcloud upgrade ($old $S_ARR $new). Did you read the release notes and check your apps? Continue?" 0 || { line_note "Nextcloud left as it is."; return 2; } ;;
@@ -99,7 +99,7 @@ update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop he
   echo "      Waiting for the containers to come back (up to 5 minutes)..."
   if ! wait_stack "$s"; then
     line_bad "$s is not healthy yet: ${WAIT_BAD:-unknown}. Look:  docker ps -a   and   docker logs --tail 50 NAME"
-    echo "      Going back: the old version of each image is saved as homelab-rollback:<name>-<date> (docs/updating.md)."
+    echo "      Going back: the old version of each image is saved as homelab-rollback:<name>-<date>."
     return 1
   fi
   # did the containers really change? Portainer can answer before Docker has recreated them, so give it a little time.

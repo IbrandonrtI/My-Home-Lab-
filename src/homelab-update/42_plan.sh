@@ -68,7 +68,7 @@ print_stack() {   # print_stack N STACK: what is waiting in one stack, with the 
     m=$(anon_volumes_of "${CX[$i]}")
     if [ -n "$m" ]; then
       warn_block "WARNING: ${CN[$i]} keeps data in an anonymous volume ($(echo "$m" | paste -sd, -))." \
-        "Updating can leave it EMPTY (see B6 in docs/troubleshooting.md), so it is NOT updated here. Copy that data out first."
+        "Updating can leave it EMPTY, so it is NOT updated here. Copy that data out first."
     fi
   done
   case "${s,,}" in
@@ -133,8 +133,8 @@ nextcloud_notes() {   # nextcloud_notes STACK   (uses SST from build_plan)
   if read -r old new < <(nc_versions "$s") && [ -n "${new:-}" ]; then
     case "$(nc_jump "$old" "$new")" in
       skip) warn_block "STOP: Nextcloud would jump from $old to $new and skip a major version. It is NOT updated here." \
-              "Nextcloud can only go up one major version at a time. Read the Nextcloud section of docs/updating.md first." ;;
-      major) warn_block "MAJOR upgrade: $old $S_ARR $new. Read the release notes and the Nextcloud section of docs/updating.md first;" \
+              "Nextcloud can only go up one major version at a time. Read the Nextcloud release notes first." ;;
+      major) warn_block "MAJOR upgrade: $old $S_ARR $new. Read the Nextcloud release notes first;" \
               "check that your apps support it. It is only done when you type yes yourself (not with --yes)." ;;
       same) kv version "$old (same number, rebuilt image)" ;;
       *) kv version "$old $S_ARR $new" ;;
