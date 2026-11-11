@@ -1,5 +1,5 @@
 # ================================================================ your scripts, schedule and login screen
-SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
+SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-backup-tasks", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
            ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"),
            ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"), ("homelab-selftest", "/usr/local/sbin"),
            ("homelab", "/usr/local/bin"), ("homelab-repocheck", "/usr/local/bin"), ("homelab-panel", "/usr/local/sbin")]
@@ -88,7 +88,9 @@ CRON_LINES = [
     ("hdparm -B 254", '@reboot sleep 60 && /usr/sbin/hdparm -B 254 "/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")" >/dev/null 2>&1'),
 ]
 CRON_PROGRESS = ("homelab-setup progress", "*/10 * * * * /usr/local/sbin/homelab-setup progress >/dev/null 2>&1")
-CRON_BACKUP = ("homelab-backup", "0 6 * * * /usr/local/sbin/homelab-backup")
+CRON_BACKUP_OLD = ("homelab-backup", "0 6 * * * /usr/local/sbin/homelab-backup")      # the nightly job on its own (a server built by hand keeps it)
+CRON_BACKUP = ("homelab-backup-tasks due", "*/5 * * * * /usr/local/sbin/homelab-backup-tasks due >/dev/null 2>&1")      # the scheduler of the backup tasks; the nightly backup is the first task
+OLD_BACKUP_LINE = re.compile(r"^\s*\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+/usr/local/sbin/homelab-backup(\s|$)")
 
 
 def crontab_text():
@@ -120,6 +122,24 @@ def crontab_add(lines):
     rc, txt = run(["crontab", "-"], input_text=new)
     if rc != 0:
         raise Abort("Could not save root's crontab: %s" % txt.strip()[-200:])
+
+
+def crontab_remove(match):
+    """Take the lines `match` says yes to out of root's crontab (the old crontab is saved first). Returns how many went."""
+    cur = crontab_text()
+    keep = [l for l in cur.splitlines() if not match(l)]
+    gone = len(cur.splitlines()) - len(keep)
+    if not gone:
+        return 0
+    if Opt.dry:
+        out("      would remove %d old line(s) from root's crontab" % gone)
+        return gone
+    os.makedirs(SECRET_DIR, exist_ok=True)
+    write_file("%s/crontab.before-%s" % (SECRET_DIR, time.strftime("%Y%m%d-%H%M%S")), cur, 0o600)
+    rc, txt = run(["crontab", "-"], input_text="\n".join(keep) + "\n")
+    if rc != 0:
+        raise Abort("Could not save root's crontab: %s" % txt.strip()[-200:])
+    return gone
 
 
 @step
@@ -154,17 +174,28 @@ class DataDrive(Step):
 
 @step
 class CronBackup(Step):
-    id, group, title = "cron-backup", "Scripts and schedule", "Daily backup scheduled at 6:00"
+    id, group, title = "cron-backup", "Scripts and schedule", "Backup tasks run on schedule (the nightly backup at 6:00, the others as set in the Backups section)"
     needs = ("scripts", "data-drive")
 
     def applies(self):
-        # homelab-backup refuses to run unless /mnt/storage is a real drive, so a skipped drive means no backup job
+        # the nightly backup refuses to run unless /mnt/storage is a real drive, so a skipped drive means no backup job
         return not State.data["skip"].get("data-drive")
 
     def probe(self):
-        return "done" if CRON_BACKUP[0] in crontab_active(crontab_text()) else "todo"
+        act = crontab_active(crontab_text())
+        if Mode.existing:      # a server built by hand has no panel: it keeps the nightly job as it was
+            return "done" if CRON_BACKUP_OLD[0] in act else "todo"
+        return "done" if CRON_BACKUP[0] in act and not any(OLD_BACKUP_LINE.match(l) for l in act.splitlines()) else "todo"
 
     def run(self):
+        if Mode.existing:
+            crontab_add([CRON_BACKUP_OLD])
+            return
+        if not Opt.dry:      # the task list is made first, from the old line (so the nightly time you had carries over)
+            env = dict(os.environ, HLB_CONF=P("/etc/homelab-backup-tasks.json"), HLB_STATE=P("/var/lib/homelab-backup/tasks"),
+                       HLB_LEGACY_CONF=P("/etc/homelab-backup.conf"))
+            run([P("/usr/local/sbin/homelab-backup-tasks"), "list"], env=env)
+        crontab_remove(lambda l: bool(OLD_BACKUP_LINE.match(l)) and not l.lstrip().startswith("#"))
         crontab_add([CRON_BACKUP])
 
 
