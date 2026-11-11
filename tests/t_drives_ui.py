@@ -118,7 +118,7 @@ def main():
             for label, (w, hgt) in (("desktop", (1280, 900)), ("phone", (390, 800))):
                 ctx, pg, errors = open_drives(br, w, hgt)
                 tabs = pg.eval_on_selector_all("nav.tabs button", "els => els.map(e => e.textContent)")
-                check("%s: the tabs are Look, Layout, Cards, Drives" % label, tabs == ["Look", "Layout", "Cards", "Drives"], tabs)
+                check("%s: the tabs are Look, Layout, Cards, Drives, Updates" % label, tabs == ["Look", "Layout", "Cards", "Drives", "Updates"], tabs)
                 try:
                     pg.wait_for_selector(".tile .warnmark", timeout=15000)      # the health of each drive comes a moment after the list
                 except Exception:

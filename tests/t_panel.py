@@ -323,7 +323,7 @@ def main():
         check("paint: lists cards, stats, calendar, links and labels", all(paint.get(k) for k in ("cards", "stats", "links", "labels")), {k: len(v) for k, v in paint.items()})
         check("paint: every item lists its default color", all(re.fullmatch(r"#[0-9a-f]{6}", x.get("color", "")) for k in ("cards", "stats", "calendar", "links") for x in paint[k]), paint["cards"][:2])
         check("paint: a card shows the color the shipped CSS gives it", any(x["id"] == "portainer-card" and x["color"] == "#171514" for x in paint["cards"]))
-        check("paint: the panel's own cards are never listed", not any(c["id"] in ("customize-card", "navidrome-card", "linkedit-card", "terminal-card") for c in paint["cards"] + paint["stats"] + paint["calendar"]), paint["cards"])
+        check("paint: the panel's own cards are never listed", not any(c["id"] in ("customize-card", "linkedit-card", "terminal-card") for c in paint["cards"] + paint["stats"] + paint["calendar"]), paint["cards"])
         cid, stat = paint["cards"][0]["id"], paint["stats"][0]["id"]
         bm, label = paint["links"][0]["name"], paint["labels"][0]
         slug = re.sub(r"^-+|-+$", "", re.sub(r"[^a-z0-9]+", "-", label.lower()))
@@ -334,7 +334,7 @@ def main():
         check("colors: saved (all, cards, stats, bookmark, label)", st == 200 and "homelab look >>>" in css, js)
         check("colors: a card gets a color (strong to faint gradient), a border and a glow", "#%s{--accent:255, 0, 0;--hl-a1:0.558;--hl-a2:0.136;}" % cid in css, css[-1500:])
         check("colors: the border and glow are on the card", "box-shadow:0 0 0 1px rgba(255, 0, 0," in css and "#%s .service-card{border-color:rgba(255, 0, 0," % cid in css, css[-1500:])
-        check("colors: one color for everything leaves out the panel's cards", ':not([id="customize-card"]):not([id="navidrome-card"]):not([id="linkedit-card"]):not([id="terminal-card"])' in css and "17, 34, 51" in css, css[-1500:])
+        check("colors: one color for everything leaves out the panel's cards", ':not([id="customize-card"]):not([id="linkedit-card"]):not([id="terminal-card"])' in css and "17, 34, 51" in css, css[-1500:])
         check("colors: a bookmark is found by its name tag", 'a[data-bm="' in css and "0, 0, 255" in css, css[-1500:])
         check("colors: a label has its own text and icon colors", 'data-group="%s"' % slug in css and "color:#ffffff!important" in css and "--icon-color:#ffcc00" in css, css[-1500:])
         check("colors: the circle label icon style is written", "border-radius:50%;background:rgba(var(--hl-label,var(--lk-accent)),.20)" in css, css[-1500:])

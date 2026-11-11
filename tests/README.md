@@ -22,6 +22,9 @@ Needs `python3` and `bash`.
 | `t_power.sh` | `homelab-backup` keeps the backup drive awake while it runs and lets it sleep again afterwards (fake `hdparm`). |
 | `t_widgets.sh` | The Homepage drive pills ("Main pool", "Backup pool", "Connect ... Drive") kept by `homelab-sample`. |
 | `t_update.sh` | `homelab-update` against a fake Docker, registry and Portainer (`fakeupd.py`): new version numbers, upload check, database dump, updating through Portainer, the guards. |
+| `t_alerts.py` | `homelab-alerts`, the file behind the notification bell: fake Docker and Tailscale, containers down, updates, drives, backups, temperatures. |
+| `t_updates_tab.py`, `t_updates_ui.py` | The panel's Updates screen: the server side (the update job, the sudo commands) and the page in a browser. |
+| `t_bell.py` | The notification bell on the dashboard, in a browser with a fake `alerts.json`. |
 | `start.sh` | Builds the fake machine and defines the `hls`, `fresh`, `wj` and `setw` helpers. |
 | `simlib.py`, `server.py`, `fakecmd.py` | The fake machine, its web services and its commands. |
 | `mkbackup.sh`, `mkexisting.py` | Make a fake backup and a fake server someone already set up by hand. |

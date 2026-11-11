@@ -107,7 +107,7 @@ def main():
 
             # ---- one Look screen: the order of its parts, and no separate Colors and Background screens
             tabs_now = fr.locator("nav.tabs button").all_inner_texts()
-            check("screens: Look, Layout, Cards and Drives only (Colors and Background are part of Look)", tabs_now == ["Look", "Layout", "Cards", "Drives"], tabs_now)
+            check("screens: Look, Layout, Cards, Drives and Updates only (Colors and Background are part of Look)", tabs_now == ["Look", "Layout", "Cards", "Drives", "Updates"], tabs_now)
             heads = fr.locator(".card h2, details.card > summary b").all_inner_texts()
             want = ["Themes", "Preview and Shape", "Colors and Glass", "Color Strength", "Background Picture", "How the Background Looks Behind the Cards", "Names and Logo", "Colors of Cards, Tiles and Bookmarks", "Service Cards"]
             pos = [heads.index(x) if x in heads else -1 for x in want]

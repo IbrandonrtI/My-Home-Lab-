@@ -258,6 +258,14 @@ class H(BaseHTTPRequestHandler):
                 I["token"] = "imtok-" + secrets.token_hex(6)
                 return self.send(201, {"accessToken": I["token"], "isAdmin": True})
             return self.send(401, {"message": "Incorrect email or password"})
+        if path == "/api/system-config":
+            if self.headers.get("Authorization") != "Bearer " + str(I.get("token")):
+                return self.send(401, {"message": "Unauthorized"})
+            cfg = I.setdefault("config", {"machineLearning": {"enabled": True, "ocr": {"enabled": True, "modelName": "PP-OCRv5_mobile"}}, "trash": {"enabled": True}})
+            if m == "PUT":
+                I["config"] = b
+                return self.send(200, b)
+            return self.send(200, cfg)
         if path == "/api/api-keys" and m == "POST":
             if self.headers.get("Authorization") != "Bearer " + str(I.get("token")):
                 return self.send(401, {"message": "Unauthorized"})
