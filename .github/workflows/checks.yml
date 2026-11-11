@@ -48,4 +48,3 @@ jobs:
 
       - name: Markdown lint
         run: npx --yes markdownlint-cli2@0.23.2 "**/*.md" "#node_modules"
-
