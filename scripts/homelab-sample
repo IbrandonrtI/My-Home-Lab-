@@ -4,7 +4,7 @@
 # Runs from root's crontab every 15 minutes. It writes small files into /var/lib/homelab/:
 #   temps      one line per drive:  LABEL|DEVICE|TEMP_C|EPOCH     (TEMP_C is "standby" for a sleeping drive, "none" for a pool or array drive that gives no reading, like most flash drives)
 #   apt        UPGRADABLE_PACKAGES|EPOCH
-#   schedule   MINUTE|HOUR|DAY|MONTH|WEEKDAY|EPOCH               (the cron line of homelab-backup)
+#   schedule   MINUTE|HOUR|DAY|MONTH|WEEKDAY|EPOCH               (when the nightly backup runs)
 # It also keeps the drive pills of the Homepage dashboard right: "Main Pool" and "Backup Pool" while the pool is
 # connected, "Connect Main Drive" / "Connect Backup Drive" while it is not.
 # The homelab command only reads these files.
@@ -122,11 +122,28 @@ sample_apt() {
   fi
 }
 
-# ---------- the backup's cron line ----------
+# ---------- when the nightly backup runs ----------
+# The nightly task is the first of the backup tasks (the Backups section can change its time); an older server still has its own cron line.
 sample_schedule() {
-  local line m h dom mon dow
-  line=$(crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep 'homelab-backup' | head -1)
-  [ -n "$line" ] || { : | put schedule; return 0; }
+  local line m h dom mon dow tasks="${HOMELAB_TASKS_FILE:-/etc/homelab-backup-tasks.json}"
+  if [ -r "$tasks" ] && command -v python3 >/dev/null 2>&1; then
+    line=$(python3 - "$tasks" 2>/dev/null <<'PY'
+import json, sys
+try:
+    t = [x for x in json.load(open(sys.argv[1]))["tasks"] if x.get("id") == "nightly"][0]
+    s = t["schedule"]
+    if t.get("enabled", True) and s["kind"] in ("daily", "weekly"):
+        h, m = s["time"].split(":")
+        print("%d %d * * %s" % (int(m), int(h), "*" if s["kind"] == "daily" else (int(s["dow"]) + 1) % 7))
+except Exception:
+    pass
+PY
+)
+    [ -n "$line" ] || { : | put schedule; return 0; }
+  else
+    line=$(crontab -l 2>/dev/null | grep -v '^[[:space:]]*#' | grep 'homelab-backup' | grep -v 'homelab-backup-tasks' | head -1)
+    [ -n "$line" ] || { : | put schedule; return 0; }
+  fi
   read -r m h dom mon dow _ <<<"$line"
   printf '%s|%s|%s|%s|%s|%s\n' "$m" "$h" "$dom" "$mon" "$dow" "$NOW" | put schedule
 }

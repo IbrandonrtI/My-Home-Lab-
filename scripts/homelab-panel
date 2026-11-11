@@ -65,6 +65,7 @@ TERM_SOCK = os.environ.get("HLP_TERM_SOCK") or "/run/homelab-terminal/ttyd.sock"
 COOKIE = "hlpanel" if os.environ.get("HLP_COOKIE_PLAIN") else "__Host-hlpanel"
 NO_DOCKER = bool(os.environ.get("HLP_NO_DOCKER"))
 DRIVES_CMD = shlex.split(os.environ.get("HLP_DRIVES") or "sudo -n /usr/local/sbin/drives")      # the one door to the drives (see "the Drives tab")
+BACKUP_CMD = shlex.split(os.environ.get("HLP_BACKUP") or "sudo -n /usr/local/sbin/homelab-backup-tasks panel")      # the one door to the backup tasks (see "the Backups section")
 
 SETTINGS = os.path.join(HP, "settings.yaml")
 SERVICES = os.path.join(HP, "services.yaml")
@@ -2126,6 +2127,175 @@ def api_drives_abort():
     return {"message": msg or "Stopping."}
 
 
+# ================================================================ the Backups section (Drives tab)
+# The panel never copies anything itself: it asks `homelab-backup-tasks panel WORD ...` (through the narrow sudo rule) and shows what comes back.
+# Looking and editing answer at once; a run, a preview and a restore take a while, so they run in the background (BJOB) and the page follows them.
+BACKUP_ID = re.compile(r"[a-z][a-z0-9-]{0,23}\Z")
+BACKUP_VERSION = re.compile(r"(current|\d{4}-\d\d-\d\d(_\d{6})?)\Z")
+BACKUP_HOST = re.compile(r"[a-z_][a-z0-9_-]{0,31}@[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?\Z")
+BJOB = {"id": 0, "running": False, "action": "", "task": "", "lines": [], "rc": None, "message": "", "started": 0, "pct": None}      # the run, preview or restore in the background (or the last one)
+BJOB_LOCK = threading.Lock()
+BACKUP_SAVE_KEYS = ("id", "name", "enabled", "source", "exclude", "dest", "schedule", "keep")
+
+
+def backup_problem(rc, text):
+    low = text.lower()
+    if rc == 127 or "command not found" in low or "no such file" in low:
+        return "The backup tool is not installed on this machine yet. Run the installer's update (homelab-update) to add it."
+    if rc == 124:
+        return "The backup tool took too long to answer. Try again in a moment."
+    if "password is required" in low or "not allowed" in low or "may not run sudo" in low or "no tty present" in low:
+        return "The panel is not allowed to run the backup tool yet. Run the installer's update (homelab-update) to add the permission."
+    return ""
+
+
+def backup_run(words, stdin=None, timeout=60):
+    try:
+        p = subprocess.run(BACKUP_CMD + words, capture_output=True, text=True, timeout=timeout, input=stdin if stdin is not None else None,
+                           stdin=None if stdin is not None else subprocess.DEVNULL)
+        return p.returncode, p.stdout or "", p.stderr or ""
+    except FileNotFoundError:
+        return 127, "", "command not found"
+    except subprocess.TimeoutExpired:
+        return 124, "", "timed out"
+
+
+def backup_json(words, stdin=None, timeout=60):
+    """The JSON the backup tool prints. Its own {"error": ...} becomes a message for the person."""
+    rc, out, err = backup_run(words, stdin, timeout)
+    try:
+        data = json.loads(out.strip().split("\n")[-1]) if out.strip() else None
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and "error" in data:
+        raise Fail(str(data["error"])[:600], 409)
+    if rc != 0 or not isinstance(data, dict):
+        raise Fail(backup_problem(rc, err + out) or "The backup tool answered in a way the panel does not understand.", 502 if rc != 124 else 504)
+    return data
+
+
+def backup_id(v):
+    if not isinstance(v, str) or not BACKUP_ID.match(v):
+        raise Fail("Choose a backup task first.")
+    return v
+
+
+def backup_version(v):
+    if not isinstance(v, str) or not BACKUP_VERSION.match(v):
+        raise Fail("Choose a version first.")
+    return v
+
+
+def backup_rel(v):
+    v = "." if v in (None, "", "/") else v
+    if not isinstance(v, str) or len(v) > 600 or re.search(r"[\x00-\x1f]", v) or ".." in v.split("/") or v.startswith("-"):
+        raise Fail("That path is not allowed.")
+    return v
+
+
+def api_backup_state():
+    return backup_json(["state"])
+
+
+def api_backup_save(body):
+    task = {k: body[k] for k in BACKUP_SAVE_KEYS if k in body}
+    if "id" in task:
+        backup_id(task["id"])
+    return backup_json(["save"], json.dumps(task))
+
+
+def api_backup_task(action, body):
+    """delete / toggle / sshkey / sshtest / cloud-add: quick things that answer at once."""
+    if action == "delete":
+        if body.get("data") not in ("keep", "erase"):
+            raise Fail("Choose whether to keep or erase the copies already made.")
+        return backup_json(["delete", backup_id(body.get("id")), body["data"]], timeout=3700)
+    if action == "toggle":
+        return backup_json(["toggle", backup_id(body.get("id")), "on" if body.get("enabled") else "off"])
+    if action == "sshkey":
+        return backup_json(["sshkey"], timeout=90)
+    if action == "sshtest":
+        host = body.get("host")
+        if not isinstance(host, str) or not BACKUP_HOST.match(host):
+            raise Fail("The other computer must look like user@name.")
+        return backup_json(["sshtest", host], timeout=90)
+    if action == "cloud-add":
+        keep = {k: body.get(k) for k in ("type", "name", "key_id", "key", "endpoint") if isinstance(body.get(k), str)}
+        return backup_json(["cloud-add"], json.dumps(keep))
+    raise Fail("Unknown address.", 404)
+
+
+def api_backup_look(path, query):
+    """versions / browse: what a task's destination holds (the person picks what to bring back)."""
+    q = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
+    if path == "versions":
+        return backup_json(["versions", backup_id(q.get("id"))], timeout=120)
+    return backup_json(["browse", backup_id(q.get("id")), backup_version(q.get("v")), backup_rel(q.get("rel"))], timeout=180)
+
+
+def backup_job_thread(words):
+    rc = 1
+    try:
+        try:
+            p = subprocess.Popen(BACKUP_CMD + words, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1)
+        except FileNotFoundError:
+            with BJOB_LOCK:
+                BJOB["lines"] = ["command not found"]
+            rc = 127
+        else:
+            timer = threading.Timer(JOB_MAX_SECONDS, p.kill)
+            timer.start()
+            try:
+                for line in p.stdout:
+                    line = line.rstrip()
+                    if not line:
+                        continue
+                    m = re.match(r"PROGRESS (\d{1,3})\Z", line)
+                    with BJOB_LOCK:
+                        if m:
+                            BJOB["pct"] = min(100, int(m.group(1)))
+                        else:
+                            BJOB["lines"] = (BJOB["lines"] + [line[:400]])[-200:]
+                rc = p.wait()
+            finally:
+                timer.cancel()
+    finally:
+        with BJOB_LOCK:
+            text = "\n".join(BJOB["lines"])
+            tail = [x for x in BJOB["lines"] if x.strip()]
+            BJOB["rc"] = rc
+            if rc == 0:
+                BJOB["pct"] = 100
+            BJOB["message"] = backup_problem(rc, text) or (tail[-1] if tail else ("Done." if rc == 0 else "The backup tool stopped without saying why."))
+            BJOB["running"] = False
+
+
+def api_backup_job_start(action, body):
+    """run / dry / restore in the background; one at a time."""
+    tid = backup_id(body.get("id"))
+    if action == "restore":
+        target = body.get("target")
+        if target not in ("folder", "original"):
+            raise Fail("Choose where to put the files back.")
+        words = ["restore", tid, backup_version(body.get("version")), backup_rel(body.get("rel")), target]
+    elif action in ("run", "dry"):
+        words = [action, tid]
+    else:
+        raise Fail("Unknown address.", 404)
+    with BJOB_LOCK:
+        if BJOB["running"]:
+            raise Fail("A backup, preview or restore is running already. Wait until it has finished.", 409)
+        BJOB.update(id=BJOB["id"] + 1, running=True, action=action, task=tid, lines=[], rc=None, message="", started=int(time.time()), pct=None)
+        jid = BJOB["id"]
+    threading.Thread(target=backup_job_thread, args=(words,), daemon=True).start()
+    return {"ok": True, "job": jid}
+
+
+def api_backup_job():
+    with BJOB_LOCK:
+        return dict(BJOB, lines=BJOB["lines"][-(8 if BJOB["running"] else 40):])
+
+
 # ================================================================ the web server
 TERM_MAX = 6_000_000             # the biggest page the terminal may send (its own page is under 1 MB)
 TERM_IDLE = 600                  # a terminal connection with no traffic at all for this many seconds is closed (ttyd pings every few seconds)
@@ -2235,6 +2405,14 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, api_drives_job())
+            if path in ("/api/backup", "/api/backup/job", "/api/backup/versions", "/api/backup/browse"):
+                if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
+                    raise Fail("Please log in again.", 401)
+                if path == "/api/backup/job":
+                    return self.send(200, api_backup_job())
+                if path == "/api/backup":
+                    return self.send(200, api_backup_state())
+                return self.send(200, api_backup_look(path.rsplit("/", 1)[1], urllib.parse.urlparse(self.path).query))
             if path in ("/api/drives", "/api/drives/health", "/api/drives/check", "/api/drives/setups"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
@@ -2377,6 +2555,12 @@ class Handler(BaseHTTPRequestHandler):
             body = json.loads(self.read_body(1 << 20) or b"{}")
             if not isinstance(body, dict):
                 raise Fail("The request is not understood.")
+            if path == "/api/backup/save":
+                return self.send(200, api_backup_save(body))
+            if path in ("/api/backup/run", "/api/backup/dry", "/api/backup/restore"):
+                return self.send(200, api_backup_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/backup/job
+            if path in ("/api/backup/delete", "/api/backup/toggle", "/api/backup/sshkey", "/api/backup/sshtest", "/api/backup/cloud-add"):
+                return self.send(200, dict(api_backup_task(path.rsplit("/", 1)[1], body), ok=True))
             if path == "/api/drives/abort":
                 return self.send(200, dict(api_drives_abort(), ok=True))
             if path in ("/api/drives/add", "/api/drives/wipe", "/api/drives/disconnect", "/api/drives/move", "/api/drives/setup", "/api/drives/bootadd"):

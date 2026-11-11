@@ -1,0 +1,1252 @@
+#!/usr/bin/env python3
+# homelab-backup-tasks - backup tasks with a schedule, versions to go back to, and restore (the engine behind the Backups section of the panel).
+#
+# A task copies one folder to one destination on a schedule. Destinations: a folder on a connected drive, another computer over SSH, or the
+# cloud (rclone). Drive and SSH tasks keep dated versions: every run makes a folder that looks like a full copy, but files that did not change
+# are hard links, so they take no extra space. Old versions are thinned out by "keep" rules (hourly, daily, weekly, monthly, yearly).
+# Cloud tasks keep the latest copy plus older copies of the files that changed. The nightly backup (homelab-backup) is the first task.
+#
+# Usage (as root):
+#   homelab-backup-tasks list                 the tasks and how the last run went
+#   homelab-backup-tasks due                  run what is due now (cron runs this every 5 minutes)
+#   homelab-backup-tasks run ID [--dry-run]   run one task now (--dry-run only shows what would be copied)
+#   homelab-backup-tasks help | version
+# The panel uses `panel WORD ...` (see run_panel). Tasks are kept in /etc/homelab-backup-tasks.json.
+# It never deletes anything in the source, and it only deletes old versions inside a task's own backup folder.
+
+import datetime
+import fcntl
+import json
+import os
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+VERSION = "1.0"
+CONF = os.environ.get("HLB_CONF", "/etc/homelab-backup-tasks.json")
+STATE = os.environ.get("HLB_STATE", "/var/lib/homelab-backup/tasks")
+LOCK = os.environ.get("HLB_LOCK", "/var/lock/homelab-backup.lock")
+LOGFILE = os.environ.get("HLB_LOGFILE", "/var/log/homelab-backup-tasks.log")
+LEGACY = os.environ.get("HLB_LEGACY", "/usr/local/sbin/homelab-backup")
+LEGACY_CONF = os.environ.get("HLB_LEGACY_CONF", "/etc/homelab-backup.conf")
+CRONTAB = os.environ.get("HLB_CRONTAB", "crontab -l")             # how root's crontab is read (the older nightly job had its own line there)
+SSH_KEY = os.environ.get("HLB_KEY", "/root/.ssh/homelab-backup")
+RCLONE_CONF = os.environ.get("HLB_RCLONE_CONF", "/root/.config/rclone/rclone.conf")
+ROOTS = [r for r in os.environ.get("HLB_ROOTS", "/mnt:/media").split(":") if r]
+MOUNTS_FILE = os.environ.get("HLB_MOUNTS_FILE", "/proc/mounts")
+ALLOW_ROOTFS = os.environ.get("HLB_ALLOW_ROOTFS") == "1"          # tests: a temporary folder is on the system drive
+RSYNC = os.environ.get("HLB_RSYNC", "rsync")
+SSH = os.environ.get("HLB_SSH", "ssh")
+RCLONE = os.environ.get("HLB_RCLONE", "rclone")
+MAX_RUNS_KEPT = 200
+NIGHTLY_ID = "nightly"
+KEEP_KEYS = ("hourly", "daily", "weekly", "monthly", "yearly")
+KEEP_MAX = {"hourly": 48, "daily": 90, "weekly": 52, "monthly": 60, "yearly": 20}
+SKIP_SOURCE = ("/proc", "/sys", "/dev", "/run")
+FSTYPES = {"ext4", "ext3", "ext2", "xfs", "btrfs", "zfs", "f2fs", "ntfs", "ntfs3", "exfat", "vfat", "fuse.mergerfs", "fuseblk", "nfs", "nfs4", "cifs"}
+
+
+class Bad(Exception):
+    """A request that cannot be done; the text says why in plain words."""
+
+
+# ---------------------------------------------------------------- time, schedules
+def now():
+    t = os.environ.get("HLB_NOW")
+    return datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S") if t else datetime.datetime.now().replace(microsecond=0)
+
+
+def stamp_of(dt):
+    return dt.strftime("%Y-%m-%d_%H%M%S")
+
+
+def parse_stamp(s):
+    try:
+        return datetime.datetime.strptime(s, "%Y-%m-%d_%H%M%S")
+    except ValueError:
+        return None
+
+
+def hhmm(s):
+    m = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", s or "")
+    if not m:
+        raise Bad("The time must look like 02:30.")
+    return int(m.group(1)), int(m.group(2))
+
+
+def at(ref, sch, day=None):
+    h, m = hhmm(sch.get("time", "00:00")) if sch["kind"] != "hourly" else (ref.hour, int(sch.get("minute", 0)))
+    return (day or ref).replace(hour=h, minute=m, second=0, microsecond=0)
+
+
+def last_scheduled(sch, ref):
+    """The latest scheduled moment at or before ref."""
+    kind = sch["kind"]
+    c = at(ref, sch)
+    if kind == "hourly":
+        return c - datetime.timedelta(hours=1) if c > ref else c
+    if kind == "daily":
+        return c - datetime.timedelta(days=1) if c > ref else c
+    if kind == "weekly":
+        c -= datetime.timedelta(days=(c.weekday() - int(sch["dow"])) % 7)
+        return c - datetime.timedelta(days=7) if c > ref else c
+    c = c.replace(day=int(sch["dom"]))
+    if c > ref:
+        c = (c.replace(day=1) - datetime.timedelta(days=1)).replace(day=int(sch["dom"]))
+        c = at(c, sch)
+    return c
+
+
+def next_scheduled(sch, ref):
+    """The first scheduled moment after ref."""
+    kind = sch["kind"]
+    last = last_scheduled(sch, ref)
+    if kind == "hourly":
+        return last + datetime.timedelta(hours=1)
+    if kind == "daily":
+        return last + datetime.timedelta(days=1)
+    if kind == "weekly":
+        return last + datetime.timedelta(days=7)
+    first = last.replace(day=1) + datetime.timedelta(days=32)
+    return at(first.replace(day=int(sch["dom"])), sch)
+
+
+def describe_schedule(sch):
+    days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    kind = sch["kind"]
+    if kind == "hourly":
+        return "Every hour at :%02d" % int(sch.get("minute", 0))
+    if kind == "daily":
+        return "Every day at " + sch["time"]
+    if kind == "weekly":
+        return "Every %s at %s" % (days[int(sch["dow"])], sch["time"])
+    return "On day %d of every month at %s" % (int(sch["dom"]), sch["time"])
+
+
+# ---------------------------------------------------------------- files: tasks and state
+def read_json(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(path, data, mode=0o644):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=1, sort_keys=True)
+        f.write("\n")
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+
+def legacy_setting(key, default):
+    try:
+        with open(LEGACY_CONF, encoding="utf-8") as f:
+            for line in f:
+                m = re.match(r'\s*%s="?([^"#\n]*)"?' % key, line)
+                if m:
+                    return m.group(1).strip() or default
+    except OSError:
+        pass
+    return default
+
+
+def legacy_cron_time():
+    """The time of day the older nightly job ran at, from root's crontab ('30 5 * * * /usr/local/sbin/homelab-backup'), or None."""
+    rc, out = run_cmd(shlex.split(CRONTAB), timeout=15)
+    for line in out.splitlines() if rc == 0 else []:
+        m = re.match(r"\s*(\d{1,2})\s+(\d{1,2})\s+\*\s+\*\s+\*\s+/usr/local/sbin/homelab-backup(\s|$)", line)
+        if m and int(m.group(1)) < 60 and int(m.group(2)) < 24:
+            return "%02d:%02d" % (int(m.group(2)), int(m.group(1)))
+    return None
+
+
+def nightly_task():
+    return {"id": NIGHTLY_ID, "name": "Nightly: Main to Backup", "enabled": True, "kind": "nightly",
+            "source": legacy_setting("SRC", "/mnt/storage"), "exclude": [],
+            "dest": {"type": "local", "path": legacy_setting("DEST_POOL", "/mnt/backup")},
+            "schedule": {"kind": "daily", "time": legacy_cron_time() or "06:00"}, "keep": {"days": int(legacy_setting("RETENTION_DAYS", "30") or 30)},
+            "created": stamp_of(now())}
+
+
+def load_tasks():
+    data = read_json(CONF, None)
+    if not isinstance(data, dict) or not isinstance(data.get("tasks"), list):
+        data = {"version": 1, "tasks": [nightly_task()]}
+        if os.access(os.path.dirname(CONF) or ".", os.W_OK):
+            write_json(CONF, data)
+    return data["tasks"]
+
+
+def save_tasks(tasks):
+    write_json(CONF, {"version": 1, "tasks": tasks})
+
+
+def find_task(tasks, tid):
+    for t in tasks:
+        if t["id"] == tid:
+            return t
+    raise Bad("There is no backup task with that name.")
+
+
+def state_dir(tid):
+    return os.path.join(STATE, tid)
+
+
+def read_status(tid):
+    return read_json(os.path.join(state_dir(tid), "status.json"), {})
+
+
+def write_status(tid, st):
+    write_json(os.path.join(state_dir(tid), "status.json"), st)
+
+
+def read_runs(tid):
+    out = []
+    try:
+        with open(os.path.join(state_dir(tid), "runs.jsonl"), encoding="utf-8") as f:
+            for line in f:
+                try:
+                    out.append(json.loads(line))
+                except ValueError:
+                    pass
+    except OSError:
+        pass
+    return out
+
+
+def add_run(tid, run):
+    runs = (read_runs(tid) + [run])[-MAX_RUNS_KEPT:]
+    os.makedirs(state_dir(tid), exist_ok=True)
+    with open(os.path.join(state_dir(tid), "runs.jsonl"), "w", encoding="utf-8") as f:
+        for r in runs:
+            f.write(json.dumps(r, sort_keys=True) + "\n")
+
+
+def log(msg):
+    try:
+        os.makedirs(os.path.dirname(LOGFILE), exist_ok=True)
+        with open(LOGFILE, "a", encoding="utf-8") as f:
+            f.write("%s %s\n" % (now().strftime("%F %T"), msg))
+        if os.path.getsize(LOGFILE) > 5 * 1024 * 1024:
+            with open(LOGFILE, encoding="utf-8") as f:
+                tail = f.readlines()[-2000:]
+            with open(LOGFILE, "w", encoding="utf-8") as f:
+                f.writelines(tail)
+    except OSError:
+        pass
+
+
+def say(msg):
+    print(msg, flush=True)
+    log(msg)
+
+
+# ---------------------------------------------------------------- checking what a person sent
+SAFE_PATH = re.compile(r"/[A-Za-z0-9._/@+ =,-]*")
+SSH_HOST = re.compile(r"([a-z_][a-z0-9_-]{0,31})@([A-Za-z0-9][A-Za-z0-9.-]{0,252})(?::([0-9]{1,5}))?")
+REMOTE_NAME = re.compile(r"[A-Za-z0-9_-]{1,32}")
+
+
+def clean_abs(path, what):
+    if not isinstance(path, str) or not SAFE_PATH.fullmatch(path) or "\n" in path:
+        raise Bad("%s must be a full folder path such as /mnt/backup/copies (letters, numbers and . _ - @ + = , space only)." % what)
+    norm = os.path.normpath(path)
+    if norm != path.rstrip("/") and path != "/":
+        raise Bad("%s must not contain ./ or ../ parts." % what)
+    return norm
+
+
+def inside(child, parent):
+    child, parent = child.rstrip("/") + "/", parent.rstrip("/") + "/"
+    return child.startswith(parent)
+
+
+def clean_exclude(items):
+    if items in (None, ""):
+        return []
+    if not isinstance(items, list) or len(items) > 50:
+        raise Bad("The skip list can have at most 50 patterns.")
+    out = []
+    for p in items:
+        if not isinstance(p, str):
+            raise Bad("Every skip pattern must be text.")
+        p = p.strip()
+        if not p:
+            continue
+        if len(p) > 200 or re.search(r"[\x00-\x1f]", p):
+            raise Bad("A skip pattern is too long or has strange characters.")
+        out.append(p)
+    return out
+
+
+def clean_schedule(s):
+    if not isinstance(s, dict):
+        raise Bad("Choose a schedule.")
+    kind = s.get("kind")
+    out = {"kind": kind}
+    try:
+        if kind == "hourly":
+            out["minute"] = int(s.get("minute", 0))
+            if not 0 <= out["minute"] <= 59:
+                raise ValueError
+        elif kind in ("daily", "weekly", "monthly"):
+            hhmm(s.get("time"))
+            out["time"] = s["time"]
+            if kind == "weekly":
+                out["dow"] = int(s.get("dow"))
+                if not 0 <= out["dow"] <= 6:
+                    raise ValueError
+            if kind == "monthly":
+                out["dom"] = int(s.get("dom"))
+                if not 1 <= out["dom"] <= 28:
+                    raise ValueError
+        else:
+            raise Bad("The schedule must be hourly, daily, weekly or monthly.")
+    except (TypeError, ValueError):
+        raise Bad("The schedule has a value that does not fit (minute 0-59, weekday 0-6, day of the month 1-28).") from None
+    return out
+
+
+def clean_keep(k, dest_type):
+    if dest_type == "cloud":
+        try:
+            days = int((k or {}).get("days", 30))
+        except (TypeError, ValueError):
+            days = -1
+        if not 1 <= days <= 3650:
+            raise Bad("Keep older copies for 1 to 3650 days.")
+        return {"days": days}
+    out = {}
+    for key in KEEP_KEYS:
+        try:
+            n = int((k or {}).get(key, 0))
+        except (TypeError, ValueError):
+            n = -1
+        if not 0 <= n <= KEEP_MAX[key]:
+            raise Bad("Keep %s versions: a number from 0 to %d." % (key, KEEP_MAX[key]))
+        out[key] = n
+    if not any(out.values()):
+        raise Bad("Keep at least one version.")
+    return out
+
+
+def clean_dest(d, source):
+    if not isinstance(d, dict):
+        raise Bad("Choose where the backup goes.")
+    kind = d.get("type")
+    if kind == "local":
+        path = clean_abs(d.get("path"), "The backup folder")
+        if not any(inside(path, r) for r in ROOTS):
+            raise Bad("The backup folder must be on a connected drive (under %s)." % " or ".join(ROOTS))
+        if inside(path, source) or inside(source, path):
+            raise Bad("The backup folder and the source folder must not be inside each other.")
+        return {"type": "local", "path": path}
+    if kind == "ssh":
+        m = SSH_HOST.fullmatch(d.get("host") or "")
+        if not m:
+            raise Bad("The other computer must look like user@name (for example backup@pc.example.ts.net, or user@name:2222 for another port).")
+        if m.group(3) and not 1 <= int(m.group(3)) <= 65535:
+            raise Bad("The port must be between 1 and 65535.")
+        path = clean_abs(d.get("path"), "The folder on the other computer")
+        if path == "/":
+            raise Bad("Choose a folder on the other computer, not its top.")
+        return {"type": "ssh", "host": d["host"], "path": path}
+    if kind == "cloud":
+        remote = d.get("remote") or ""
+        path = (d.get("path") or "").strip("/")
+        if not REMOTE_NAME.fullmatch(remote):
+            raise Bad("Choose a cloud account (a remote that rclone knows).")
+        if path and (not re.fullmatch(r"[A-Za-z0-9._@+ =,/-]{1,200}", path) or ".." in path.split("/")):
+            raise Bad("The cloud folder has characters that do not fit.")
+        return {"type": "cloud", "remote": remote, "path": path}
+    raise Bad("Choose where the backup goes: a drive, another computer or the cloud.")
+
+
+def clean_task(d, old=None):
+    """The task as it is stored. For the nightly task only the name, the switch and the schedule can change."""
+    if not isinstance(d, dict):
+        raise Bad("That is not a backup task.")
+    name = (d.get("name") or "").strip()
+    if not 1 <= len(name) <= 40 or re.search(r"[\x00-\x1f]", name):
+        raise Bad("Give the task a name of 1 to 40 characters.")
+    if old and old["kind"] == "nightly":
+        t = dict(old)
+        t.update({"name": name, "enabled": bool(d.get("enabled", True)), "schedule": clean_schedule(d.get("schedule"))})
+        return t
+    source = clean_abs(d.get("source"), "The folder to back up")
+    if source == "/" or any(inside(source, s) for s in SKIP_SOURCE):
+        raise Bad("That folder cannot be backed up. Choose a folder with your own files.")
+    if not os.path.isdir(source):
+        raise Bad("The folder to back up does not exist (is the drive connected?).")
+    dest = clean_dest(d.get("dest"), source)
+    tid = old["id"] if old else "b" + os.urandom(3).hex()
+    return {"id": tid, "name": name, "enabled": bool(d.get("enabled", True)), "kind": "versions", "source": source,
+            "exclude": clean_exclude(d.get("exclude")), "dest": dest, "schedule": clean_schedule(d.get("schedule")),
+            "keep": clean_keep(d.get("keep"), dest["type"]), "created": old["created"] if old else stamp_of(now())}
+
+
+# ---------------------------------------------------------------- places the copies go: a folder, another computer, the cloud
+def run_cmd(args, timeout=None, text=True, stdin=None):
+    try:
+        p = subprocess.run(args, capture_output=True, text=text, timeout=timeout, input=stdin)
+        return p.returncode, (p.stdout or "") + (p.stderr or "")
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return 127, str(e)
+
+
+def ssh_options(host):
+    port = SSH_HOST.fullmatch(host).group(3)
+    opts = ["-i", SSH_KEY, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=15"]
+    return opts + (["-p", port] if port else [])
+
+
+def ssh_target(host):
+    m = SSH_HOST.fullmatch(host)
+    return "%s@%s" % (m.group(1), m.group(2))
+
+
+class Place:
+    """A folder tree somewhere: this machine (Local) or another one over SSH (Remote). Same calls for both."""
+
+    def __init__(self, dest):
+        self.dest = dest
+        self.base = dest["path"]
+
+    def sh(self, args):
+        raise NotImplementedError
+
+
+class Local(Place):
+    def sh(self, args, timeout=None):
+        return run_cmd(args, timeout)
+
+    def names(self, path):
+        try:
+            return sorted(os.listdir(path))
+        except OSError:
+            return []
+
+    def isdir(self, path):
+        return os.path.isdir(path)
+
+    def mkdirs(self, path):
+        os.makedirs(path, exist_ok=True)
+
+    def rename(self, a, b):
+        os.rename(a, b)
+
+    def link(self, target, path):
+        tmp = path + ".new"
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        os.symlink(target, tmp)
+        os.replace(tmp, path)
+
+    def rm_rf(self, path):
+        shutil.rmtree(path, ignore_errors=True)
+
+    def free(self, path):
+        while not os.path.exists(path) and path != "/":
+            path = os.path.dirname(path)
+        st = os.statvfs(path)
+        return st.f_bavail * st.f_frsize
+
+    def du(self, path):
+        rc, out = run_cmd(["du", "-sb", path], timeout=600)
+        return int(out.split()[0]) if rc == 0 and out.split() else None
+
+    def entries(self, path):
+        out = []
+        for n in self.names(path):
+            p = os.path.join(path, n)
+            try:
+                st = os.lstat(p)
+            except OSError:
+                continue
+            kind = "dir" if os.path.isdir(p) and not os.path.islink(p) else "file"
+            out.append({"name": n, "type": kind, "size": st.st_size if kind == "file" else 0, "time": int(st.st_mtime)})
+        return out
+
+    def exists(self, path):
+        return os.path.lexists(path)
+
+    def where(self, path):
+        return path
+
+
+class Remote(Place):
+    def __init__(self, dest):
+        super().__init__(dest)
+        self.host = dest["host"]
+
+    def sh(self, args, timeout=60):
+        return run_cmd([SSH] + ssh_options(self.host) + [ssh_target(self.host), " ".join(shlex.quote(a) for a in args)], timeout)
+
+    def names(self, path):
+        rc, out = self.sh(["ls", "-1", path])
+        return sorted(out.split("\n")[:-1] if rc == 0 else [])
+
+    def isdir(self, path):
+        return self.sh(["test", "-d", path])[0] == 0
+
+    def exists(self, path):
+        return self.sh(["test", "-e", path])[0] == 0
+
+    def mkdirs(self, path):
+        rc, out = self.sh(["mkdir", "-p", path])
+        if rc:
+            raise Bad("Could not make the folder on the other computer: " + out.strip()[-200:])
+
+    def rename(self, a, b):
+        rc, out = self.sh(["mv", a, b])
+        if rc:
+            raise Bad("Could not rename a folder on the other computer: " + out.strip()[-200:])
+
+    def link(self, target, path):
+        self.sh(["ln", "-sfn", target, path])
+
+    def rm_rf(self, path):
+        self.sh(["rm", "-rf", path], timeout=3600)
+
+    def free(self, path):
+        rc, out = self.sh(["df", "-B1", "--output=avail", path])
+        try:
+            return int(out.split()[-1]) if rc == 0 else 0
+        except (ValueError, IndexError):
+            return 0
+
+    def du(self, path):
+        rc, out = self.sh(["du", "-sb", path], timeout=900)
+        return int(out.split()[0]) if rc == 0 and out.split() else None
+
+    def entries(self, path):
+        rc, out = self.sh(["find", path, "-mindepth", "1", "-maxdepth", "1", "-printf", "%y|%s|%T@|%f\\n"])
+        res = []
+        for line in out.split("\n") if rc == 0 else []:
+            parts = line.split("|", 3)
+            if len(parts) == 4:
+                res.append({"name": parts[3], "type": "dir" if parts[0] == "d" else "file", "size": int(parts[1]) if parts[0] != "d" else 0,
+                            "time": int(float(parts[2]))})
+        return sorted(res, key=lambda e: e["name"])
+
+    def where(self, path):
+        return "%s:%s" % (ssh_target(self.host), path)
+
+
+def place_for(task):
+    return Remote(task["dest"]) if task["dest"]["type"] == "ssh" else Local(task["dest"])
+
+
+def task_root(task):
+    return os.path.join(task["dest"]["path"], task["id"])
+
+
+# ---------------------------------------------------------------- versions: which to keep
+def keep_set(stamps, keep, ref=None):
+    """Which version names stay. stamps = names like 2026-11-10_023000; the newest always stays."""
+    parsed = sorted(((parse_stamp(s), s) for s in stamps if parse_stamp(s)), reverse=True)
+    keepers = set()
+    if parsed:
+        keepers.add(parsed[0][1])
+    rules = (("hourly", lambda d: d.strftime("%Y-%m-%d %H")), ("daily", lambda d: d.strftime("%Y-%m-%d")),
+             ("weekly", lambda d: "%d-W%02d" % d.isocalendar()[:2]), ("monthly", lambda d: d.strftime("%Y-%m")), ("yearly", lambda d: d.strftime("%Y")))
+    for key, bucket in rules:
+        n = int(keep.get(key, 0))
+        seen = []
+        for d, s in parsed:                       # newest first: the newest version of each hour/day/week/month/year is the one kept
+            b = bucket(d)
+            if b not in seen:
+                seen.append(b)
+                if len(seen) <= n:
+                    keepers.add(s)
+    return keepers
+
+
+def version_names(place, root):
+    return [n for n in place.names(root) if parse_stamp(n)]
+
+
+def prune(task, place, keep_log=None):
+    names = version_names(place, task_root(task))
+    keepers = keep_set(names, task["keep"])
+    gone = [n for n in names if n not in keepers]
+    for n in gone:
+        place.rm_rf(os.path.join(task_root(task), n))
+    for n in place.names(task_root(task)):
+        if n.endswith(".partial") and parse_stamp(n[:-8]) and n[:-8] not in names and parse_stamp(n[:-8]) < now() - datetime.timedelta(days=2):
+            place.rm_rf(os.path.join(task_root(task), n))
+    return gone
+
+
+# ---------------------------------------------------------------- running a task
+def rsync_stats(text):
+    out = {}
+    for key, rx in (("files", r"Number of files: ([\d,]+)"), ("sent_files", r"Number of regular files transferred: ([\d,]+)"),
+                    ("bytes", r"Total file size: ([\d,]+)"), ("sent_bytes", r"Total transferred file size: ([\d,]+)")):
+        m = re.search(rx, text)
+        if m:
+            out[key] = int(m.group(1).replace(",", ""))
+    return out
+
+
+def stream(args, show=True):
+    """Run a command, pass its lines on (progress lines are shortened), return (code, all text)."""
+    try:
+        p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
+    except OSError as e:
+        return 127, str(e)
+    buf = []
+    last = 0.0
+    for raw in p.stdout:
+        for line in raw.replace("\r", "\n").split("\n"):
+            if not line.strip():
+                continue
+            buf.append(line)
+            m = re.search(r"(\d+)%", line)
+            if show and m and re.match(r"\s*[\d,]+\s+\d+%", line):
+                if time.time() - last >= 2:
+                    last = time.time()
+                    print("PROGRESS %s" % m.group(1), flush=True)
+    p.wait()
+    return p.returncode, "\n".join(buf)
+
+
+def rsync_remote_args(task):
+    """rsync options for talking to another computer (none for a drive)."""
+    if task["dest"]["type"] != "ssh":
+        return []
+    return ["--protect-args", "-e", " ".join([SSH] + [shlex.quote(o) for o in ssh_options(task["dest"]["host"])])]
+
+
+def mount_of(path):
+    while path != "/" and not os.path.ismount(path):
+        path = os.path.dirname(path)
+    return path
+
+
+def source_ok(task):
+    src = task["source"]
+    if not os.path.isdir(src):
+        return "The folder to back up (%s) does not exist." % src
+    if any(inside(src, r) for r in ROOTS) and mount_of(src) == "/" and not ALLOW_ROOTFS:
+        return "%s is not on a connected drive right now, so nothing was copied." % src
+    if not any(n != "lost+found" for n in os.listdir(src)):
+        return "%s looks empty, so nothing was copied (this protects the backup from being emptied)." % src
+    return ""
+
+
+def dest_ok(task, place):
+    if task["dest"]["type"] != "local":
+        return ""
+    base = task["dest"]["path"]
+    probe = base
+    while not os.path.exists(probe) and probe != "/":
+        probe = os.path.dirname(probe)
+    if mount_of(probe) == "/" and not ALLOW_ROOTFS:
+        return "%s is not on a connected drive right now (it would fill the system drive), so nothing was copied." % base
+    return ""
+
+
+def run_versions(task, dry):
+    """One run of a drive or SSH task. Returns (ok, message, details)."""
+    place = place_for(task)
+    root = task_root(task)
+    problem = source_ok(task) or dest_ok(task, place)
+    if problem:
+        return False, problem, {}
+    if task["dest"]["type"] == "ssh" and not os.path.exists(SSH_KEY):
+        return False, "The SSH key for backups does not exist yet. Open the Backups section and press Show the Key.", {}
+    versions = version_names(place, root)
+    latest = versions[-1] if versions else None
+    base = [RSYNC, "-aH", "--numeric-ids", "--stats"] + rsync_remote_args(task)
+    base += ["--exclude=/lost+found"] + ["--exclude=%s" % p for p in task["exclude"]]
+    src = task["source"].rstrip("/") + "/"
+    if dry:
+        if latest is None:
+            with tempfile.TemporaryDirectory() as empty:
+                rc, text = stream(base + ["-n", src, empty + "/"], show=False)
+            st = rsync_stats(text)
+            if rc not in (0, 24):
+                return False, "The preview failed (rsync code %d)." % rc, st
+            return True, "A dry run: the first run would copy %d files (%s). Nothing was changed." % (st.get("sent_files", st.get("files", 0)), human(st.get("bytes", 0))), st
+        target = place.where(os.path.join(root, latest))
+        rc, text = stream(base + ["-n", src, target.rstrip("/") + "/"], show=False)
+        st = rsync_stats(text)
+        if rc not in (0, 24):
+            return False, "The preview failed (rsync code %d)." % rc, st
+        return True, "A dry run: %d files (%s) would be copied since the last version. Nothing was changed." % (st.get("sent_files", 0), human(st.get("sent_bytes", 0))), st
+    need = 0
+    if not versions:
+        try:
+            su = os.statvfs(task["source"])
+            need = (su.f_blocks - su.f_bfree) * su.f_frsize
+        except OSError:
+            need = 0
+    min_free = int(task.get("min_free_gb", 2)) * 1073741824
+    place.mkdirs(root)
+    free = place.free(root)
+    if free < min_free + need:
+        return False, "Only %s free at the backup place (need at least %s%s)." % (human(free), human(min_free), " plus the files themselves" if need else ""), {}
+    stamp = stamp_of(now())
+    part = os.path.join(root, stamp + ".partial")
+    old_part = [n for n in place.names(root) if n.endswith(".partial") and parse_stamp(n[:-8])]
+    if old_part:
+        part = os.path.join(root, old_part[-1])
+        stamp = old_part[-1][:-8]
+    place.mkdirs(part)
+    args = list(base)
+    if latest:
+        args.append("--link-dest=" + os.path.join(root, latest))
+    args += ["--info=progress2", src, place.where(part).rstrip("/") + "/"]
+    say("Copying %s to %s ..." % (task["source"], place.where(os.path.join(root, stamp))))
+    rc, text = stream(args)
+    st = rsync_stats(text)
+    if rc not in (0, 24):
+        tail = [x for x in text.split("\n") if x.strip() and "%" not in x][-3:]
+        return False, "rsync stopped with code %d. %s The partly copied version stays and the next run continues it." % (rc, " ".join(tail)[:300]), st
+    place.rename(part, os.path.join(root, stamp))
+    place.link(stamp, os.path.join(root, "latest"))
+    gone = prune(task, place)
+    if gone:
+        say("Removed %d old version(s) that are no longer in the keep rules." % len(gone))
+    st["version"] = stamp
+    return True, "Copied %d new or changed files (%s). The whole version is %s." % (st.get("sent_files", 0), human(st.get("sent_bytes", 0)), human(st.get("bytes", 0))), st
+
+
+# ---- cloud (rclone)
+def rclone_dest(task, sub=""):
+    d = task["dest"]
+    p = "/".join(x for x in (d["path"], task["id"], sub) if x)
+    return "%s:%s" % (d["remote"], p)
+
+
+def rclone_exclude(task):
+    return ["--exclude=%s" % p for p in task["exclude"]]
+
+
+def run_cloud(task, dry):
+    problem = source_ok(task)
+    if problem:
+        return False, problem, {}
+    rc, out = run_cmd([RCLONE, "listremotes"], timeout=30)
+    if rc or (task["dest"]["remote"] + ":") not in out.split():
+        return False, "The cloud account '%s' is not set up in rclone on this machine." % task["dest"]["remote"], {}
+    stamp = stamp_of(now())
+    args = [RCLONE, "sync", task["source"], rclone_dest(task, "current"), "--backup-dir", rclone_dest(task, "changes/" + stamp), "--stats", "10s", "-v"]
+    args += rclone_exclude(task)
+    if dry:
+        rc, text = stream(args + ["--dry-run"], show=False)
+        n = len(re.findall(r"NOTICE:.*: Skipped (copy|delete|move)", text))
+        return rc == 0, "A dry run: %d changes would be made in the cloud. Nothing was changed." % n if rc == 0 else "The preview failed.", {}
+    say("Copying %s to %s ..." % (task["source"], rclone_dest(task, "current")))
+    rc, text = stream(args, show=False)
+    if rc:
+        tail = [x for x in text.split("\n") if x.strip()][-3:]
+        return False, "rclone stopped with code %d. %s" % (rc, " ".join(tail)[:300]), {}
+    removed = cloud_prune(task)
+    if removed:
+        say("Removed %d old set(s) of changed files." % removed)
+    return True, "The cloud copy is up to date.", {"version": stamp}
+
+
+def cloud_changes(task):
+    rc, out = run_cmd([RCLONE, "lsf", "--dirs-only", rclone_dest(task, "changes")], timeout=120)
+    return sorted(n.strip("/") for n in out.split("\n") if rc == 0 and parse_stamp(n.strip("/")))
+
+
+def cloud_prune(task):
+    cutoff = now() - datetime.timedelta(days=int(task["keep"].get("days", 30)))
+    n = 0
+    for s in cloud_changes(task):
+        if parse_stamp(s) < cutoff:
+            run_cmd([RCLONE, "purge", rclone_dest(task, "changes/" + s)], timeout=3600)
+            n += 1
+    return n
+
+
+# ---- the nightly backup (the older tool does the work)
+def run_nightly(task, dry):
+    if dry:
+        return True, "The nightly backup copies %s to %s every day and keeps files you delete or replace for %d days. A dry run is not available for it." % (
+            task["source"], task["dest"]["path"], task["keep"]["days"]), {}
+    if not os.access(LEGACY, os.X_OK):
+        return False, "The nightly backup program (%s) is not installed." % LEGACY, {}
+    say("Running the nightly backup ...")
+    rc, text = stream([LEGACY], show=False)
+    if rc:
+        tail = [x for x in text.split("\n") if x.strip()][-2:]
+        return False, "The nightly backup reported a problem. %s (More: tail -20 /var/log/homelab-backup.log)" % " ".join(tail)[:200], {}
+    return True, "The nightly backup finished.", {}
+
+
+def human(n):
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1000 or unit == "TB":
+            return ("%d %s" % (n, unit)) if unit == "B" else ("%.1f %s" % (n, unit))
+        n /= 1000.0
+    return "0 B"
+
+
+class Busy(Exception):
+    pass
+
+
+def take_lock(wait=False):
+    os.makedirs(os.path.dirname(LOCK) or ".", exist_ok=True)
+    fd = os.open(LOCK, os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+    except OSError:
+        os.close(fd)
+        raise Busy() from None
+    return fd
+
+
+def is_running():
+    try:
+        fd = take_lock()
+    except Busy:
+        return True
+    os.close(fd)
+    return False
+
+
+def run_task(tid, dry=False):
+    tasks = load_tasks()
+    task = find_task(tasks, tid)
+    fd = None
+    if task["kind"] != "nightly" or dry:
+        try:
+            fd = take_lock()
+        except Busy:
+            raise Bad("Another backup is running right now. Try again when it has finished.") from None
+    start = now()
+    t0 = time.time()
+    kind = task["dest"]["type"]
+    try:
+        if not dry:
+            write_status(tid, dict(read_status(tid), running=True, last_start=stamp_of(start)))
+        try:
+            if task["kind"] == "nightly":
+                ok, msg, det = run_nightly(task, dry)
+            elif kind == "cloud":
+                ok, msg, det = run_cloud(task, dry)
+            else:
+                ok, msg, det = run_versions(task, dry)
+        except Bad as e:
+            ok, msg, det = False, str(e), {}
+        except Exception as e:                      # a broken run must say so and never leave the task looking busy
+            ok, msg, det = False, "Unexpected problem: %s" % e, {}
+        secs = int(time.time() - t0)
+        if not dry:
+            size = None
+            if ok and task["kind"] == "versions" and kind != "cloud":
+                size = place_for(task).du(task_root(task))
+            prev = read_status(tid)
+            st = {"running": False, "last_start": stamp_of(start), "last_end": stamp_of(now()), "result": "OK" if ok else "FAILED", "message": msg,
+                  "secs": secs, "version": det.get("version", prev.get("version", "")), "bytes_sent": det.get("sent_bytes", 0),
+                  "bytes_total": det.get("bytes", prev.get("bytes_total", 0)), "size_bytes": size if size is not None else prev.get("size_bytes")}
+            write_status(tid, st)
+            add_run(tid, {"start": stamp_of(start), "secs": secs, "result": st["result"], "message": msg, "version": st["version"],
+                          "bytes_sent": st["bytes_sent"], "bytes_total": st["bytes_total"]})
+            say("%s: %s - %s" % (task["name"], st["result"], msg))
+        else:
+            say(msg)
+        return ok, msg
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def due_tasks(tasks, ref=None):
+    ref = ref or now()
+    out = []
+    for t in tasks:
+        if not t.get("enabled", True):
+            continue
+        st = read_status(t["id"])
+        if st.get("running") and is_running():          # a "running" mark with no lock held is left over from a crash
+            continue
+        started = parse_stamp(st.get("last_start", "")) or parse_stamp(t.get("created", "")) or ref
+        if started < last_scheduled(t["schedule"], ref):
+            out.append(t)
+    return out
+
+
+def cmd_due():
+    tasks = load_tasks()
+    todo = due_tasks(tasks)
+    code = 0
+    for t in todo:
+        try:
+            ok, _ = run_task(t["id"])
+            code = code or (0 if ok else 1)
+        except Bad as e:
+            log("skipped %s: %s" % (t["id"], e))
+    return code
+
+
+# ---------------------------------------------------------------- looking at versions, restoring
+def versions_of(task):
+    """[{name, label, kind}] newest first. kind 'full' = a whole copy of the folder; 'changes' = only files that were replaced or removed."""
+    kind = task["dest"]["type"]
+    out = []
+    if task["kind"] == "nightly":
+        base = task["dest"]["path"]
+        if os.path.isdir(os.path.join(base, "main")):
+            out.append({"name": "current", "label": "The latest copy", "kind": "full"})
+        d = os.path.join(base, "_deleted")
+        for n in sorted(os.listdir(d), reverse=True) if os.path.isdir(d) else []:
+            if re.fullmatch(r"\d{4}-\d\d-\d\d", n):
+                out.append({"name": n, "label": "Files replaced or deleted on " + n, "kind": "changes"})
+        return out
+    if kind == "cloud":
+        out.append({"name": "current", "label": "The latest copy", "kind": "full"})
+        for s in reversed(cloud_changes(task)):
+            out.append({"name": s, "label": "Files replaced or deleted at " + pretty(s), "kind": "changes"})
+        return out
+    place = place_for(task)
+    for s in reversed(version_names(place, task_root(task))):
+        out.append({"name": s, "label": pretty(s), "kind": "full"})
+    return out
+
+
+def pretty(s):
+    d = parse_stamp(s)
+    return d.strftime("%a %b %d %Y, %H:%M") if d else s
+
+
+def version_path(task, version):
+    """(Place or None, folder) holding what that version shows."""
+    if task["kind"] == "nightly":
+        base = task["dest"]["path"]
+        if version == "current":
+            return Local(task["dest"]), os.path.join(base, "main")
+        if not re.fullmatch(r"\d{4}-\d\d-\d\d", version):
+            raise Bad("That is not a version of this task.")
+        return Local(task["dest"]), os.path.join(base, "_deleted", version, "main")
+    if task["dest"]["type"] == "cloud":
+        if version != "current" and not parse_stamp(version):
+            raise Bad("That is not a version of this task.")
+        return None, rclone_dest(task, "current" if version == "current" else "changes/" + version)
+    if not parse_stamp(version):
+        raise Bad("That is not a version of this task.")
+    return place_for(task), os.path.join(task_root(task), version)
+
+
+def clean_rel(rel):
+    rel = (rel or "").strip("/")
+    if rel == ".":
+        return ""
+    if rel and (re.search(r"[\x00-\x1f]", rel) or ".." in rel.split("/") or "." in rel.split("/") or "//" in rel):
+        raise Bad("That path is not allowed.")
+    return rel
+
+
+def browse(task, version, rel):
+    rel = clean_rel(rel)
+    place, folder = version_path(task, version)
+    path = os.path.join(folder, rel) if place else folder + ("/" + rel if rel else "")
+    if place is None:
+        rc, out = run_cmd([RCLONE, "lsjson", path], timeout=120)
+        if rc:
+            raise Bad("Could not read that cloud folder.")
+        try:
+            items = [{"name": e["Name"], "type": "dir" if e["IsDir"] else "file", "size": e.get("Size", 0) if not e["IsDir"] else 0}
+                     for e in json.loads(out)]
+        except ValueError:
+            raise Bad("Could not read that cloud folder.") from None
+        return sorted(items, key=lambda e: (e["type"] != "dir", e["name"].lower()))
+    if not place.isdir(path):
+        raise Bad("That folder is not in this version.")
+    return sorted(place.entries(path), key=lambda e: (e["type"] != "dir", e["name"].lower()))
+
+
+def restore(task, version, rel, target):
+    """Copy a file or folder of a version back. target 'folder': into <source>/_restored/<time>/ (safe). 'original': over the files in the source;
+    what it replaces is first moved to <source>/_restored/<time>-replaced/."""
+    rel = clean_rel(rel)
+    if target not in ("folder", "original"):
+        raise Bad("Choose where to put the files back.")
+    place, folder = version_path(task, version)
+    src_root = task["source"].rstrip("/")
+    if not os.path.isdir(src_root):
+        raise Bad("The original folder (%s) is not there. Connect its drive first." % src_root)
+    try:
+        fd = take_lock()
+    except Busy:
+        raise Bad("A backup is running right now. Try again when it has finished.") from None
+    try:
+        stamp = stamp_of(now())
+        parent = os.path.join(src_root, "_restored")
+        base = os.path.join(parent, stamp) if target == "folder" else src_root
+        replaced = os.path.join(parent, stamp + "-replaced") if target == "original" else None
+        if place is None:
+            remote = folder + ("/" + rel if rel else "")
+            is_dir = not rel or any(e["name"] == os.path.basename(rel) and e["type"] == "dir" for e in browse(task, version, os.path.dirname(rel)))
+            into = os.path.join(base, rel) if is_dir else os.path.join(base, os.path.dirname(rel))
+            os.makedirs(into, exist_ok=True)
+            args = [RCLONE, "copy", remote, into] + (["--backup-dir", replaced] if replaced else [])
+        else:
+            from_path = os.path.join(folder, rel) if rel else folder
+            is_dir = not rel or place.isdir(from_path)
+            into = os.path.join(base, rel) if is_dir else os.path.join(base, os.path.dirname(rel))
+            os.makedirs(into, exist_ok=True)
+            spec = place.where(from_path).rstrip("/") + ("/" if is_dir else "")
+            args = [RSYNC, "-aH", "--numeric-ids"] + rsync_remote_args(task) + (["--backup", "--backup-dir=" + replaced] if replaced else [])
+            args += [spec, into.rstrip("/") + "/"]
+        say("Restoring %s from %s ..." % (rel or "everything", "the latest copy" if version == "current" else pretty(version)))
+        rc, text = stream(args, show=False)
+        if rc not in (0, 24):
+            raise Bad("The restore stopped with code %d. %s" % (rc, " ".join([x for x in text.split("\n") if x.strip()][-2:])[:200]))
+        msg = "Restored. The files are in %s." % (base if target == "folder" else (src_root + "/" + rel if rel else src_root))
+        if replaced and os.path.isdir(replaced):
+            msg += " What they replaced was kept in %s." % replaced
+        say(msg)
+        return msg
+    finally:
+        os.close(fd)
+
+
+def delete_task(tid, erase):
+    tasks = load_tasks()
+    task = find_task(tasks, tid)
+    if task["kind"] == "nightly":
+        raise Bad("The nightly backup cannot be deleted. Turn it off instead.")
+    if is_running():
+        raise Bad("A backup is running right now. Try again when it has finished.")
+    if erase:
+        if task["dest"]["type"] == "cloud":
+            run_cmd([RCLONE, "purge", rclone_dest(task)], timeout=3600)
+        else:
+            place_for(task).rm_rf(task_root(task))
+    save_tasks([t for t in tasks if t["id"] != tid])
+    shutil.rmtree(state_dir(tid), ignore_errors=True)
+
+
+# ---------------------------------------------------------------- SSH key, cloud accounts, drives the panel offers
+def ensure_key():
+    if not os.path.exists(SSH_KEY):
+        os.makedirs(os.path.dirname(SSH_KEY), mode=0o700, exist_ok=True)
+        rc, out = run_cmd(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "homelab-backup", "-f", SSH_KEY], timeout=60)
+        if rc:
+            raise Bad("Could not make the SSH key: " + out.strip()[-160:])
+    with open(SSH_KEY + ".pub", encoding="utf-8") as f:
+        return f.read().strip()
+
+
+def ssh_test(host):
+    if not SSH_HOST.fullmatch(host or ""):
+        raise Bad("The other computer must look like user@name.")
+    if not os.path.exists(SSH_KEY):
+        raise Bad("Make the key first (Show the Key), and add it on the other computer.")
+    rc, out = run_cmd([SSH] + ssh_options(host) + [ssh_target(host), "rsync --version | head -n 1"], timeout=40)
+    if rc != 0 or "rsync" not in out:
+        hint = "The other computer did not accept the key." if "denied" in out.lower() else "Could not log in, or rsync is not installed there."
+        raise Bad(hint + " " + out.strip()[-160:])
+    return out.strip().split("\n")[0]
+
+
+def cloud_remotes():
+    if not shutil.which(RCLONE) and not os.path.exists(RCLONE):
+        return None
+    rc, out = run_cmd([RCLONE, "listremotes"], timeout=30)
+    return [x.rstrip(":") for x in out.split() if x.endswith(":")] if rc == 0 else []
+
+
+def cloud_add(d):
+    """Write an rclone account for Backblaze B2 or an S3 service. The keys go straight into rclone's own file (root only)."""
+    name = d.get("name") or ""
+    kind = d.get("type")
+    if not REMOTE_NAME.fullmatch(name):
+        raise Bad("Give the account a short name (letters, numbers, - and _).")
+    if name in (cloud_remotes() or []):
+        raise Bad("An account with that name already exists.")
+    for k in ("key_id", "key"):
+        if not isinstance(d.get(k), str) or not re.fullmatch(r"[A-Za-z0-9/+=_.-]{4,200}", d[k]):
+            raise Bad("The key is empty or has characters that do not fit.")
+    if kind == "b2":
+        lines = ["type = b2", "account = " + d["key_id"], "key = " + d["key"]]
+    elif kind == "s3":
+        ep = d.get("endpoint") or ""
+        if ep and not re.fullmatch(r"https?://[A-Za-z0-9.:-]{1,200}", ep):
+            raise Bad("The address of the service must look like https://s3.example.com.")
+        lines = ["type = s3", "provider = Other" if ep else "provider = AWS", "access_key_id = " + d["key_id"], "secret_access_key = " + d["key"]]
+        if ep:
+            lines.append("endpoint = " + ep)
+    else:
+        raise Bad("Only Backblaze B2 and S3 accounts can be added here. For Google Drive and others run `sudo rclone config` in the Terminal.")
+    os.makedirs(os.path.dirname(RCLONE_CONF), mode=0o700, exist_ok=True)
+    fd = os.open(RCLONE_CONF, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    with os.fdopen(fd, "a", encoding="utf-8") as f:
+        f.write("\n[%s]\n%s\n" % (name, "\n".join(lines)))
+
+
+def mount_choices():
+    """Places the backups may go: connected drives with their free space."""
+    out = []
+    try:
+        with open(MOUNTS_FILE, encoding="utf-8") as f:
+            rows = [l.split() for l in f if l.strip()]
+    except OSError:
+        rows = []
+    seen = set()
+    for r in rows:
+        if len(r) < 3:
+            continue
+        mp = r[1].replace("\\040", " ")
+        if mp in seen or r[2] not in FSTYPES or not any(inside(mp, root) for root in ROOTS):
+            continue
+        seen.add(mp)
+        try:
+            st = os.statvfs(mp)
+        except OSError:
+            continue
+        out.append({"path": mp, "fstype": r[2], "free": st.f_bavail * st.f_frsize, "size": st.f_blocks * st.f_frsize})
+    return sorted(out, key=lambda x: x["path"])
+
+
+def task_view(t):
+    st = read_status(t["id"])
+    ref = now()
+    nxt = next_scheduled(t["schedule"], ref) if t.get("enabled", True) else None
+    running = bool(st.get("running")) and is_running()
+    last = parse_stamp(st.get("last_end") or st.get("last_start") or "")
+    return {"id": t["id"], "name": t["name"], "enabled": t.get("enabled", True), "kind": t["kind"], "source": t["source"], "exclude": t["exclude"],
+            "dest": t["dest"], "schedule": t["schedule"], "schedule_text": describe_schedule(t["schedule"]), "keep": t["keep"],
+            "next_run": nxt.strftime("%Y-%m-%d %H:%M") if nxt else None, "running": running,
+            "last": {"result": st.get("result"), "message": st.get("message"), "when": last.strftime("%Y-%m-%d %H:%M") if last else None,
+                     "secs": st.get("secs"), "version": st.get("version"), "bytes_sent": st.get("bytes_sent"), "bytes_total": st.get("bytes_total"),
+                     "size_bytes": st.get("size_bytes")} if st.get("result") else None,
+            "runs": read_runs(t["id"])[-10:][::-1]}
+
+
+def state_view():
+    tasks = load_tasks()
+    key = SSH_KEY + ".pub"
+    remotes = cloud_remotes()
+    return {"tasks": [task_view(t) for t in tasks], "drives": mount_choices(), "running": is_running(),
+            "ssh": {"key": open(key, encoding="utf-8").read().strip() if os.path.exists(key) else ""},
+            "cloud": {"installed": remotes is not None, "remotes": remotes or []}, "roots": ROOTS}
+
+
+# ---------------------------------------------------------------- the panel's words
+def out_json(obj):
+    print(json.dumps(obj, sort_keys=True))
+
+
+def run_panel(argv):
+    w = argv[0] if argv else ""
+    try:
+        if w == "state" and len(argv) == 1:
+            out_json(state_view())
+        elif w == "save" and len(argv) == 1:
+            try:
+                data = json.loads(sys.stdin.read(200000))
+            except ValueError:
+                raise Bad("That request was not understood.") from None
+            tasks = load_tasks()
+            old = find_task(tasks, data["id"]) if data.get("id") else None
+            t = clean_task(data, old)
+            if old:
+                tasks = [t if x["id"] == t["id"] else x for x in tasks]
+            else:
+                tasks.append(t)
+            save_tasks(tasks)
+            out_json({"ok": True, "id": t["id"]})
+        elif w == "delete" and len(argv) == 3 and argv[2] in ("keep", "erase"):
+            delete_task(argv[1], argv[2] == "erase")
+            out_json({"ok": True})
+        elif w == "toggle" and len(argv) == 3 and argv[2] in ("on", "off"):
+            tasks = load_tasks()
+            find_task(tasks, argv[1])["enabled"] = argv[2] == "on"
+            save_tasks(tasks)
+            out_json({"ok": True})
+        elif w in ("run", "dry") and len(argv) == 2:
+            ok, _ = run_task(argv[1], dry=(w == "dry"))
+            return 0 if ok else 1
+        elif w == "versions" and len(argv) == 2:
+            out_json({"versions": versions_of(find_task(load_tasks(), argv[1]))})
+        elif w == "browse" and len(argv) in (3, 4):
+            out_json({"entries": browse(find_task(load_tasks(), argv[1]), argv[2], argv[3] if len(argv) == 4 else "")})
+        elif w == "restore" and len(argv) in (4, 5):
+            restore(find_task(load_tasks(), argv[1]), argv[2], argv[3] if len(argv) == 5 else "", argv[-1])
+        elif w == "sshkey" and len(argv) == 1:
+            out_json({"key": ensure_key()})
+        elif w == "sshtest" and len(argv) == 2:
+            out_json({"ok": True, "message": ssh_test(argv[1])})
+        elif w == "cloud-add" and len(argv) == 1:
+            try:
+                cloud_add(json.loads(sys.stdin.read(10000)))
+            except ValueError:
+                raise Bad("That request was not understood.") from None
+            out_json({"ok": True})
+        else:
+            raise Bad("Unknown request.")
+    except Bad as e:
+        out_json({"error": str(e)})
+        return 1
+    return 0
+
+
+def usage():
+    with open(__file__, encoding="utf-8") as f:
+        for i, line in enumerate(f):
+            if i and line.startswith("#"):
+                print(re.sub(r"^# ?", "", line.rstrip("\n")))
+            elif i:
+                break
+
+
+def main(argv):
+    cmd = argv[1] if len(argv) > 1 else "help"
+    if cmd in ("help", "-h", "--help"):
+        usage()
+        return 0
+    if cmd in ("version", "--version"):
+        print("homelab-backup-tasks " + VERSION)
+        return 0
+    if cmd not in ("list", "due", "run", "panel"):
+        print("homelab-backup-tasks: unknown command '%s'. Nothing was started. For help: homelab-backup-tasks help" % cmd, file=sys.stderr)
+        return 2
+    if os.geteuid() != 0 and not os.environ.get("HLB_CONF"):
+        print("Run as root: sudo homelab-backup-tasks " + cmd, file=sys.stderr)
+        return 1
+    if cmd == "panel":
+        return run_panel(argv[2:])
+    if cmd == "list":
+        for t in load_tasks():
+            v = task_view(t)
+            last = v["last"]
+            print("%-9s %-28s %-3s %-34s %s" % (t["id"], t["name"][:28], "on" if v["enabled"] else "off", v["schedule_text"],
+                                               ("%s %s" % (last["when"], last["result"])) if last else "never run"))
+        return 0
+    if cmd == "due":
+        return cmd_due()
+    rest = argv[2:]
+    dry = "--dry-run" in rest
+    ids = [a for a in rest if not a.startswith("--")]
+    if len(ids) != 1 or [a for a in rest if a.startswith("--") and a != "--dry-run"]:
+        print("Usage: homelab-backup-tasks run ID [--dry-run]", file=sys.stderr)
+        return 2
+    try:
+        ok, _ = run_task(ids[0], dry=dry)
+    except Bad as e:
+        print("homelab-backup-tasks: %s" % e, file=sys.stderr)
+        return 1
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
