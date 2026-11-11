@@ -66,7 +66,7 @@ saved_drive_name() {   # saved_drive_name LABEL -> the name "drives" saved for t
 temps_line() {
   local f="$STATE_DIR/temps" label _d t ep parts="" max=0 oldest="" age
   if [ ! -e "$f" ]; then
-    warn "Drive temps" "no readings yet (run: sudo homelab-sample, and add its cron line, see docs/maintenance.md)"
+    warn "Drive temps" "no readings yet (run: sudo homelab-sample, and the installer adds its cron line)"
     return 0
   fi
   if [ ! -s "$f" ]; then

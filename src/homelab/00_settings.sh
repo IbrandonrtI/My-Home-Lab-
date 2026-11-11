@@ -19,7 +19,7 @@
 #
 # Apart from theme and bookmark (which edit the Homepage files in your own home folder) and the short
 # forms above (which ask sudo for the real command), it only reads information and never needs sudo.
-# ~/.bashrc runs it when a terminal opens (the installer adds that line; see docs/build-guide.md).
+# ~/.bashrc runs it when a terminal opens (the installer adds that line).
 
 VERSION="2.1"
 MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
