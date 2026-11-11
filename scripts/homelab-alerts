@@ -11,7 +11,7 @@ installed, a file that is not there yet) and then it is skipped. It changes noth
 
 The file is images/alerts.json in the Homepage folder (the same place as stats.json). Each item has an id, a level (bad, warn or info), a title,
 a detail and an action the bell can offer ("update", "restart" or ""). Settings by environment (for tests): HOMELAB_STATE_DIR, HOMELAB_ALERTS_OUT,
-HOMELAB_STATS_IN, HOMELAB_DOCKER, HOMELAB_TAILSCALE, HOMELAB_REBOOT_FILE, HOMELAB_ROOT_PATH, HOMELAB_TEMP_WARN, HOMELAB_TEMP_BAD."""
+HOMELAB_STATS_IN, HOMELAB_DOCKER, HOMELAB_TAILSCALE, HOMELAB_APT_GET, HOMELAB_REBOOT_FILE, HOMELAB_ROOT_PATH, HOMELAB_TEMP_WARN, HOMELAB_TEMP_BAD."""
 import json
 import os
 import re
@@ -25,6 +25,7 @@ TAILSCALE = os.environ.get("HOMELAB_TAILSCALE", "tailscale")
 REBOOT_FILE = os.environ.get("HOMELAB_REBOOT_FILE", "/var/run/reboot-required")
 ROOT_PATH = os.environ.get("HOMELAB_ROOT_PATH", "/")
 BACKUP_STATUS = os.environ.get("HOMELAB_BACKUP_STATUS", "/var/lib/homelab-backup/last-run")
+APT_GET = os.environ.get("HOMELAB_APT_GET", "apt-get")
 ORDER = {"bad": 0, "warn": 1, "info": 2}
 
 
@@ -112,6 +113,14 @@ def check_containers():
     return res
 
 
+def apt_waiting():
+    """How many system packages can be updated right now ('apt-get -s' only simulates). None if apt cannot be asked."""
+    rc, out = run([APT_GET, "-s", "upgrade"], 40)
+    if rc != 0:
+        return None
+    return sum(1 for l in out.splitlines() if l.startswith("Inst "))
+
+
 def check_updates():
     lines = [l for l in read(os.path.join(STATE_DIR, "image-updates")).splitlines()[1:] if l.strip()]
     res = []
@@ -120,6 +129,9 @@ def check_updates():
         res.append(item("updates:containers", "info", "%d container update%s waiting" % (len(lines), "" if len(lines) == 1 else "s"), names, "update"))
     apt = read(os.path.join(STATE_DIR, "apt")).strip().split("|")
     n = int(apt[0]) if apt and apt[0].isdigit() else 0
+    live = apt_waiting()        # the saved count is only refreshed every few hours, so ask apt now
+    if live is not None:
+        n = live
     if n:
         res.append(item("updates:system", "info", "%d system update%s waiting" % (n, "" if n == 1 else "s"), "Ubuntu or Mint packages", "update"))
     if os.path.exists(REBOOT_FILE):

@@ -498,7 +498,7 @@ part_builds() {
   local repo bench work log drives_bin before after rc pid n last free_kb bad_lines runs line dev mp
   repo=$(repo_dir); bench="$repo/tools/drive-bench/bench.py"
   if [ -z "$repo" ] || [ ! -f "$bench" ]; then
-    fail "the build test needs the repository folder with tools/drive-bench in $REAL_HOME (cd ~ && git clone https://github.com/IbrandonrtI/My-Home-Lab-.git)"; return
+    info "the build test on fake drives was skipped: it is a developer test and its files are not in this repository"; return
   fi
   drives_bin=$(command -v drives) || { fail "drives is not installed"; return; }
   local tool missing=""

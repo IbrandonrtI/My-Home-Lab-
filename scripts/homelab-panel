@@ -2322,6 +2322,35 @@ def read_text(path):
         return ""
 
 
+APT_GET = os.environ.get("HLP_APT_GET") or "apt-get"
+ALERTS_CMD = os.environ.get("HLP_ALERTS") or "/usr/local/sbin/homelab-alerts"
+APT_CACHE = {"at": 0.0, "n": None}
+
+
+def apt_waiting():
+    """How many system packages can be updated right now. 'apt-get -s' only simulates and needs no sudo. None if it cannot be asked.
+    The saved count in /var/lib/homelab/apt is only refreshed every few hours, which is too slow right after an update."""
+    if APT_CACHE["n"] is not None and time.time() - APT_CACHE["at"] < 60:
+        return APT_CACHE["n"]
+    try:
+        p = subprocess.run([APT_GET, "-s", "upgrade"], capture_output=True, text=True, timeout=40, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if p.returncode != 0:
+        return None
+    n = sum(1 for l in p.stdout.splitlines() if l.startswith("Inst "))
+    APT_CACHE.update(at=time.time(), n=n)
+    return n
+
+
+def refresh_alerts():
+    """Let homelab-alerts write the bell's list again (it needs no sudo). Best effort: the 5 minute schedule does it anyway."""
+    try:
+        subprocess.run([ALERTS_CMD], capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
 def api_updates_state():
     lines = read_text(os.path.join(UPDATE_STATE, "image-updates")).splitlines()
     first = lines[0].strip() if lines else ""
@@ -2332,6 +2361,9 @@ def api_updates_state():
             stacks.append({"name": parts[0], "detail": parts[1] if len(parts) > 1 else ""})
     apt = read_text(os.path.join(UPDATE_STATE, "apt")).strip().split("|")
     system = int(apt[0]) if apt and apt[0].isdigit() else None
+    live = apt_waiting()
+    if live is not None:
+        system = live
     return {"checked": int(first) if first.isdigit() else 0, "containers": stacks, "system": system, "restart": os.path.exists(REBOOT_FILE),
             "now": int(time.time()), "job": api_updates_job()}
 
@@ -2368,6 +2400,9 @@ def updates_job_thread(action):
             if rc != 0:
                 break
     finally:
+        APT_CACHE["n"] = None            # the count of waiting system updates is asked again
+        if action != "restart":
+            refresh_alerts()             # and the bell does not wait for its 5 minute schedule
         with UPJOB_LOCK:
             tail = [x for x in UPJOB["lines"] if x.strip() and not x.startswith("$ ")]
             text = "\n".join(UPJOB["lines"])
