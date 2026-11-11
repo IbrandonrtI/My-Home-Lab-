@@ -5,7 +5,7 @@
 #   homelab commands  every command I use, in groups
 #                     ("Suggested Commands" are up to six that fit the current state)
 #   homelab status    only the status block
-#   homelab login     the short screen shown when a terminal opens (a few lines, read from the bell's file)
+#   homelab login     the screen shown when a terminal opens: the summary, the status and the browser addresses (no suggestions)
 #   homelab docs      list the sections of the README and of the guides in docs/
 #   homelab secrets   rebuild check: what must be in your password manager, and what the
 #                     server can confirm (values are never shown; sudo gives a fuller check)
@@ -20,8 +20,7 @@
 #
 # Apart from theme and bookmark (which edit the Homepage files in your own home folder) and the short
 # forms above (which ask sudo for the real command), it only reads information and never needs sudo.
-# ~/.bashrc runs the short form, "homelab login", when a terminal opens (the installer adds that line): a few lines read from
-# the bell's file, so it appears at once.
+# ~/.bashrc runs the shorter form, "homelab login", when a terminal opens (the installer adds that line).
 
 VERSION="2.1"
 MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
@@ -35,7 +34,7 @@ STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"        # readings saved by ho
 TEMP_WARN="${HOMELAB_TEMP_WARN:-50}"                       # drive temperature (C) that turns yellow
 TEMP_BAD="${HOMELAB_TEMP_BAD:-60}"                         # ... and red
 SAMPLE_STALE_MIN="${HOMELAB_SAMPLE_STALE_MIN:-60}"         # minutes before the readings count as old
-ALERTS_MAX_AGE="${HOMELAB_ALERTS_MAX_AGE:-900}"            # the bell's file (alerts.json) is trusted by the login screen for this many seconds (cron rewrites it every 5 minutes)
+LOGIN_CACHE_SECS="${HOMELAB_LOGIN_CACHE_SECS:-120}"        # a login screen this young is shown again as it was (terminals opened close together)
 URL_CACHE_SECS="${HOMELAB_URL_CACHE_SECS:-3600}"           # the dashboard addresses are looked up at most this often
 BOOT_GRACE_SECS="${HOMELAB_BOOT_GRACE_SECS:-600}"          # after a boot the login screen only does light checks for this long
 JUST_BOOTED=0
@@ -66,15 +65,14 @@ rule() {   # rule "Title": a spaced section heading with a thin line
 
 # status rows. While BUFFERING=1 they are collected (so the top summary can count them), otherwise printed.
 OKN=0; WARNN=0; BADN=0; STATUS_BUF=""; BUFFERING=0
-ISSUES_BUF=""   # the warnings and problems only, one per line as LEVEL|LABEL|TEXT (the short login screen lists them when it has to check live)
 row() {   # row COLOUR SYMBOL LABEL TEXT TEXTCOLOUR
   local out
   printf -v out '   %s%s%s  %-16s %s%s%s\n' "$1" "$2" "$N" "$3" "$5" "$4" "$N"
   if [ "$BUFFERING" -eq 1 ]; then STATUS_BUF+="$out"; else printf '%s' "$out"; fi
 }
 ok()   { OKN=$((OKN + 1));     row "$G" "$S_OK"   "$1" "$2" ""; }
-warn() { WARNN=$((WARNN + 1)); ISSUES_BUF+="warn|$1|$2"$'\n'; row "$Y" "$S_WARN" "$1" "$2" "$Y"; }
-bad()  { BADN=$((BADN + 1));   ISSUES_BUF+="bad|$1|$2"$'\n'; row "$R" "$S_BAD"  "$1" "$2" "$R"; }
+warn() { WARNN=$((WARNN + 1)); row "$Y" "$S_WARN" "$1" "$2" "$Y"; }
+bad()  { BADN=$((BADN + 1));   row "$R" "$S_BAD"  "$1" "$2" "$R"; }
 
 # command lists: collected per section, so the whole section is a table (if it fits the window) or stacked
 CMDS_C=(); CMDS_D=()
@@ -155,9 +153,9 @@ dashboard_urls() {   # sets DASH_HOME (the address at home) and DASH_TS (the Tai
   fi
 }
 
-open_section() {   # where to click: the dashboard on the home network, and from anywhere through Tailscale
+open_section() {   # where to click: the dashboard on the home network, and from anywhere through Tailscale (open_section login: the addresses are kept for an hour)
   [ -d "$HOMEPAGE_DIR" ] || return 0
-  dashboard_urls
+  if [ -n "${1:-}" ]; then cached_dashboard_urls; else dashboard_urls; fi
   [ -n "$DASH_HOME" ] || return 0
   rule "Open in your browser"
   printf '   %-30s %s%s%s\n' "Dashboard, at home" "$B" "$DASH_HOME" "$N"
@@ -1794,49 +1792,23 @@ LIST
   echo
 }
 
-screen() {   # the full login screen, checked live
+screen() {   # the whole screen, checked live. "login" leaves out the suggested commands and puts the hint under the browser addresses
+  local login="${1:-}"
   BUFFERING=1; status; BUFFERING=0
   header; summary_line; setup_line
   rule "Status"; printf '%s\n' "$STATUS_BUF"
-  open_section
-  suggestions
-  hint_line
+  open_section "$login"
+  if [ -n "$login" ]; then login_hint; else suggestions; hint_line; fi
+}
+
+login_hint() {
+  printf '\n  %sType%s %shomelab%s %sfor the full status, or%s %shomelab commands%s%s.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N" "$B" "$N" "$D" "$N"
 }
 
 uptime_secs() {
   local u=${HOMELAB_UPTIME:-$(cut -d. -f1 /proc/uptime 2>/dev/null)}
   [[ "$u" =~ ^[0-9]+$ ]] || u=999999
   echo "$u"
-}
-
-# alerts_read ALERTS-FILE STATS-FILE: reads what the bell keeps (alerts.json) with python3. Prints nothing when the file cannot be read, otherwise
-#   A|AGE-IN-SECONDS|EXTRA-TEXT      one line; the extra text is the last backup and the pool fullness, for the "all good" line
-#   I|LEVEL|TITLE                    one line for every item (worst first)
-alerts_read() {
-  command -v python3 >/dev/null 2>&1 || return 0
-  python3 - "$1" "$2" 2>/dev/null <<'PY'
-import json, sys, time
-try:
-    a = json.load(open(sys.argv[1]))
-    age = int(time.time() - float(a["updated"]))
-    items = [i for i in a.get("items", []) if i.get("level") in ("bad", "warn", "info") and i.get("title")]
-except Exception:
-    sys.exit(0)
-extra = []
-try:
-    s = json.load(open(sys.argv[2]))
-    lb = s.get("last_backup") or {}
-    if str(lb.get("result", "")).upper() == "OK" and lb.get("when") not in (None, "", "-", "Never"):
-        extra.append("last backup " + str(lb["when"]).lower())
-    pct = str((s.get("main") or {}).get("percent", ""))
-    if pct.endswith("%"):
-        extra.append("main pool " + pct + " full")
-except Exception:
-    pass
-print("A|%d|%s" % (age, ", ".join(extra)))
-for i in items:
-    print("I|%s|%s" % (i["level"], str(i["title"]).replace("|", "/").replace("\n", " ")))
-PY
 }
 
 # The two dashboard addresses are looked up through Docker and Tailscale, which takes a moment, so a login keeps them for an hour.
@@ -1854,77 +1826,24 @@ cached_dashboard_urls() {
   fi
 }
 
-# login_screen: what ~/.bashrc runs when a terminal opens. A few lines, shown at once:
-#   - It reads the file the bell keeps (alerts.json, rewritten every 5 minutes), so nothing has to be checked while you wait.
-#   - If that file is missing or old, it falls back to a live check (the same one as "homelab status") and lists what is wrong.
-#   - In the first 10 minutes after a boot the apps are still starting, so it says so and checks nothing.
-#   "homelab" shows the whole screen and "homelab status" the whole status, always live.
+# login_screen: what ~/.bashrc runs when a terminal opens: the summary, the status and the browser addresses, without the suggested commands.
+#  - A screen made less than 2 minutes ago (for the same window width) is shown again as it was, so opening several terminals in a row
+#    does the checks once. "homelab" and "homelab status" are always live.
+#  - In the first 10 minutes after a boot the apps are still starting: only light checks run, so SSH stays quick.
 login_screen() {
-  local hp="${HOMELAB_HOMEPAGE_DIR:-$HOME/homepage-config}" up cols max=3 shown=0 total=0 nbad=0 nwarn=0 age="" extra="" kind lvl title rest line
-  local -a items=()
-  up=$(uptime_secs); cols=$(term_cols)
-  header
-  echo
-  if [ "$up" -lt "$BOOT_GRACE_SECS" ]; then
-    printf '   %s%s%s  Just started and the apps are still starting. Check again in a few minutes.\n' "$Y" "$S_WARN" "$N"
-  else
-    while IFS='|' read -r kind lvl title; do
-      case "$kind" in
-        A) age=$lvl; extra=$title ;;
-        I) items+=("$lvl|$title") ;;
-      esac
-    done < <(alerts_read "$hp/images/alerts.json" "$hp/images/stats.json")
-    if [[ "$age" =~ ^-?[0-9]+$ ]] && [ "$age" -le "$ALERTS_MAX_AGE" ] && [ "$age" -ge -300 ]; then
-      :   # the bell's file is fresh: use it
-    else
-      items=(); extra=""; age=""
-      BUFFERING=1; status; BUFFERING=0
-      while IFS='|' read -r lvl title rest; do
-        [ -n "$lvl" ] && items+=("$lvl|$title: $rest")
-      done <<<"$ISSUES_BUF"
-    fi
-    # while setup still has steps left (it removes this file when all are done), say so first
-    if [ -r "$STATE_DIR/setup-progress" ]; then
-      local sd st _se; IFS='|' read -r sd st _se <"$STATE_DIR/setup-progress"
-      if [[ "$sd" =~ ^[0-9]+$ && "$st" =~ ^[0-9]+$ ]] && [ "$sd" -lt "$st" ]; then
-        printf '   %s%s%s  Setup is not finished (%d of %d steps). Next: %ssudo homelab-setup%s\n' "$Y" "$S_WARN" "$N" "$sd" "$st" "$B" "$N"
-      fi
-    fi
-    total=${#items[@]}
-    for line in "${items[@]}"; do case "${line%%|*}" in bad) nbad=$((nbad + 1)) ;; warn) nwarn=$((nwarn + 1)) ;; esac; done
-    if [ "$nbad" -eq 0 ] && [ "$nwarn" -eq 0 ] && [ "$total" -eq 0 ]; then
-      printf '   %s%s%s  All good%s%s\n' "$G" "$S_OK" "$N" "${extra:+  $S_DOT  }" "$D$extra$N"
-    else
-      for line in "${items[@]}"; do
-        [ "$shown" -ge "$max" ] && break
-        lvl=${line%%|*}; title=${line#*|}
-        [ "${#title}" -gt $(( cols - 8 )) ] && title="${title:0:$(( cols - 11 ))}..."
-        case "$lvl" in
-          bad)  printf '   %s%s%s  %s%s%s\n' "$R" "$S_BAD" "$N" "$R" "$title" "$N" ;;
-          warn) printf '   %s%s%s  %s%s%s\n' "$Y" "$S_WARN" "$N" "$Y" "$title" "$N" ;;
-          *)    printf '   %s%s%s  %s\n' "$D" "$S_DOT" "$N" "$title" ;;
-        esac
-        shown=$((shown + 1))
-      done
-      [ "$total" -gt "$shown" ] && printf '      %s+%d more (homelab status)%s\n' "$D" $(( total - shown )) "$N"
-    fi
+  local dir="${HOMELAB_CACHE_DIR:-${XDG_RUNTIME_DIR:-$HOME/.cache}}/homelab-login" file cols now mt age up text
+  file="$dir/screen"; cols=$(term_cols); now=$(date +%s); up=$(uptime_secs)
+  mt=$(stat -c %Y "$file" 2>/dev/null || echo 0); age=$(( now - mt ))
+  if [ -r "$file" ] && [ "$age" -ge 0 ] && [ "$age" -lt "$LOGIN_CACHE_SECS" ] && [ "$age" -lt "$up" ] \
+     && [ "$(head -n 1 "$file")" = "$cols|$B" ]; then
+    tail -n +2 "$file"
+    return 0
   fi
-  if [ -d "$hp" ]; then
-    cached_dashboard_urls
-    if [ -n "$DASH_HOME" ]; then
-      echo
-      if [ -n "$DASH_TS" ] && [ $(( 13 + ${#DASH_HOME} + 4 + ${#DASH_TS} )) -lt "$cols" ]; then
-        printf '   %sDashboard%s  %s%s%s   %s%s%s\n' "$D" "$N" "$B" "$DASH_HOME" "$N" "$B" "$DASH_TS" "$N"
-      else
-        printf '   %sDashboard%s  %s%s%s\n' "$D" "$N" "$B" "$DASH_HOME" "$N"
-      fi
-    fi
-  fi
-  echo
-  if [ "$cols" -ge 62 ]; then
-    printf '  %sType%s %shomelab%s %sfor the full status, or%s %shomelab commands%s%s.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N" "$B" "$N" "$D" "$N"
-  else
-    printf '  %sType%s %shomelab%s %sfor the full status.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N"
+  [ "$up" -lt "$BOOT_GRACE_SECS" ] && JUST_BOOTED=1
+  text=$(screen login)
+  printf '%s\n' "$text"
+  if mkdir -p "$dir" 2>/dev/null && chmod 700 "$dir" 2>/dev/null; then
+    { printf '%s|%s\n' "$cols" "$B"; printf '%s\n' "$text"; } >"$file.$$" 2>/dev/null && mv -f "$file.$$" "$file" 2>/dev/null || rm -f "$file.$$"
   fi
 }
 
