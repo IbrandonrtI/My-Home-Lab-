@@ -1057,15 +1057,16 @@ html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wi
   overflow: auto;
   padding: 6px;
   border-radius: 14px;
-  background: rgba(var(--lk-glass), 0.95);
+  background: rgb(var(--lk-glass));      /* solid: nothing behind the list may show through it */
   border: 1px solid var(--lk-line);
   box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.8), var(--lk-rim, 0 0 0 0 transparent);
-  -webkit-backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
-  backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
   text-align: left;
   color: var(--lk-text);
 }
 #hl-bell.hl-open .hl-bellpop { display: block; }
+@media (min-width: 701px) {      /* the tab bar and its list lie above the cards (on a phone the bar is sticky with its own layer already) */
+  #inner_wrapper #tabs { position: relative; z-index: 30; }
+}
 #hl-bell .hl-bellhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 10px 6px; }
 #hl-bell .hl-bellsub { font-size: 12px; color: var(--lk-muted); }
 #hl-bell .hl-bellempty { margin: 0; padding: 10px 10px 14px; font-size: 14px; color: var(--lk-muted); }
