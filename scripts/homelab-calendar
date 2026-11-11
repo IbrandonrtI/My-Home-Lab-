@@ -399,20 +399,6 @@ def build(hp):
     return [n for n, text in files if write_if_changed(os.path.join(img, n), text, hp)]
 
 
-def next_day(day, yearly, today):
-    """The next date an event happens on (None for a one-time event in the past)."""
-    if not yearly:
-        return day if day >= today else None
-    for y in range(today.year, today.year + 9):
-        try:
-            c = datetime.date(y, day.month, day.day)
-        except ValueError:
-            continue
-        if c >= today:
-            return c
-    return None
-
-
 def say_events(events):
     today = datetime.date.today()
     if not events:

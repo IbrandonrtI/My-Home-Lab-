@@ -868,7 +868,6 @@ def api_look_reset(body):
 
 
 # ================================================================ the background (settings.yaml: background:)
-BG_KEYS = ("image", "blur", "saturate", "brightness", "opacity")
 BG_DEFAULT = {"blur": "md", "saturate": 60, "brightness": 42, "opacity": 80}
 BLURS = ("sm", "md", "lg", "xl", "2xl", "3xl")
 IMG_TYPES = {b"\xff\xd8\xff": ".jpg", b"\x89PNG\r\n\x1a\n": ".png", b"GIF8": ".gif"}
@@ -1965,7 +1964,6 @@ def api_drives_do(action, body):
         sudo_no = "password is required" in low or "not allowed" in low or "may not run sudo" in low or "no tty present" in low
         raise Fail(drives_problem(rc, err + out) if rc in (124, 127) or sudo_no or not msg else msg, 409 if rc == 1 and not sudo_no else 502)
     return {"message": msg or "Done."}
-
 
 
 DRIVE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}(:(keep|erase))?\Z")

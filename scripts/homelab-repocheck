@@ -29,7 +29,6 @@ import sys
 import tempfile
 
 VERSION = "2.1"
-TEXT_EXT = {".md", ".yaml", ".yml", ".css", ".txt", ".conf", ".example", ".json", ".sh", ".cfg", ".ini"}
 SKIP_DIRS = {".git", "node_modules", "__pycache__"}
 # A matched VALUE (not the whole line) counts as a placeholder when it looks like one.
 PLACEHOLDER = re.compile(r"^(your|yours|changeme|replace|example|xxxx|x{4,}|\$\{|\$\()|your-|-here$|^<", re.I)
