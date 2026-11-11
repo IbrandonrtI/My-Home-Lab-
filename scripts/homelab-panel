@@ -2324,23 +2324,25 @@ def read_text(path):
 
 APT_GET = os.environ.get("HLP_APT_GET") or "apt-get"
 ALERTS_CMD = os.environ.get("HLP_ALERTS") or "/usr/local/sbin/homelab-alerts"
-APT_CACHE = {"at": 0.0, "n": None}
+APT_CACHE = {"at": 0.0, "n": None, "kept": 0}
 
 
 def apt_waiting():
-    """How many system packages can be updated right now. 'apt-get -s' only simulates and needs no sudo. None if it cannot be asked.
-    The saved count in /var/lib/homelab/apt is only refreshed every few hours, which is too slow right after an update."""
+    """(how many system packages 'apt-get upgrade' would install now, how many it keeps back). 'apt-get -s' only simulates and needs no sudo.
+    (None, 0) if it cannot be asked. The saved count in /var/lib/homelab/apt is only refreshed every few hours, which is too slow right after an update.
+    Kept-back packages are the 'N not upgraded' in apt's last line: they need new dependencies or are being rolled out slowly by Ubuntu, and a plain upgrade leaves them."""
     if APT_CACHE["n"] is not None and time.time() - APT_CACHE["at"] < 60:
-        return APT_CACHE["n"]
+        return APT_CACHE["n"], APT_CACHE["kept"]
     try:
         p = subprocess.run([APT_GET, "-s", "upgrade"], capture_output=True, text=True, timeout=40, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
-        return None
+        return None, 0
     if p.returncode != 0:
-        return None
+        return None, 0
     n = sum(1 for l in p.stdout.splitlines() if l.startswith("Inst "))
-    APT_CACHE.update(at=time.time(), n=n)
-    return n
+    m = re.search(r"(\d+) not upgraded", p.stdout)
+    APT_CACHE.update(at=time.time(), n=n, kept=int(m.group(1)) if m else 0)
+    return n, APT_CACHE["kept"]
 
 
 def refresh_alerts():
@@ -2351,7 +2353,9 @@ def refresh_alerts():
         pass
 
 
-def api_updates_state():
+def api_updates_state(fresh=False):
+    if fresh:
+        APT_CACHE["n"] = None            # the Refresh button asks apt again
     lines = read_text(os.path.join(UPDATE_STATE, "image-updates")).splitlines()
     first = lines[0].strip() if lines else ""
     stacks = []
@@ -2361,10 +2365,10 @@ def api_updates_state():
             stacks.append({"name": parts[0], "detail": parts[1] if len(parts) > 1 else ""})
     apt = read_text(os.path.join(UPDATE_STATE, "apt")).strip().split("|")
     system = int(apt[0]) if apt and apt[0].isdigit() else None
-    live = apt_waiting()
+    live, kept = apt_waiting()
     if live is not None:
         system = live
-    return {"checked": int(first) if first.isdigit() else 0, "containers": stacks, "system": system, "restart": os.path.exists(REBOOT_FILE),
+    return {"checked": int(first) if first.isdigit() else 0, "containers": stacks, "system": system, "kept_back": kept, "restart": os.path.exists(REBOOT_FILE),
             "now": int(time.time()), "job": api_updates_job()}
 
 
@@ -2815,7 +2819,7 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/api/updates", "/api/updates/job"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
-                return self.send(200, api_updates_state() if path == "/api/updates" else api_updates_job())
+                return self.send(200, api_updates_state("fresh=1" in self.path) if path == "/api/updates" else api_updates_job())
             if path in ("/api/backup", "/api/backup/job", "/api/backup/versions", "/api/backup/browse"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
