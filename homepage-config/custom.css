@@ -1057,28 +1057,35 @@ html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wi
   overflow: auto;
   padding: 6px;
   border-radius: 14px;
-  background: rgb(var(--lk-glass));      /* solid: nothing behind the list may show through it */
-  border: 1px solid var(--lk-line);
-  box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.8), var(--lk-rim, 0 0 0 0 transparent);
+  /* The list is always a dark, solid panel tinted with the theme's accent, with its own fixed light text. The glass of a theme can be light and its text white
+     (Frosted Glass, Liquid Glass), so the list must not take either from the theme: then it is readable in every theme and with any colors the panel sets. */
+  --hl-pop-bg: color-mix(in srgb, rgb(var(--lk-accent)) 11%, #0b101c);
+  --hl-pop-text: #f3f6fb;
+  --hl-pop-muted: #bcc6d6;
+  --hl-pop-line: rgba(255, 255, 255, 0.14);
+  background: var(--hl-pop-bg);
+  border: 1px solid color-mix(in srgb, rgb(var(--lk-accent)) 38%, transparent);
+  box-shadow: 0 18px 44px -18px rgba(0, 0, 0, 0.85);
   text-align: left;
-  color: var(--lk-text);
+  text-shadow: none;
+  color: var(--hl-pop-text);
 }
 #hl-bell.hl-open .hl-bellpop { display: block; }
 @media (min-width: 701px) {      /* the tab bar and its list lie above the cards (on a phone the bar is sticky with its own layer already) */
   #inner_wrapper #tabs { position: relative; z-index: 30; }
 }
 #hl-bell .hl-bellhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 10px 6px; }
-#hl-bell .hl-bellsub { font-size: 12px; color: var(--lk-muted); }
-#hl-bell .hl-bellempty { margin: 0; padding: 10px 10px 14px; font-size: 14px; color: var(--lk-muted); }
-#hl-bell .hl-bellempty.hl-allgood { color: var(--lk-text); }
-#hl-bell .hl-bellrow { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; border-top: 1px solid var(--lk-line); }
+#hl-bell .hl-bellsub { font-size: 12px; color: var(--hl-pop-muted); }
+#hl-bell .hl-bellempty { margin: 0; padding: 10px 10px 14px; font-size: 14px; color: var(--hl-pop-muted); }
+#hl-bell .hl-bellempty.hl-allgood { color: var(--hl-pop-text); }
+#hl-bell .hl-bellrow { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; border-top: 1px solid var(--hl-pop-line); }
 #hl-bell .hl-bellrow:hover { background: rgba(255, 255, 255, 0.04); }
 #hl-bell .hl-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 50%; background: rgb(var(--lk-accent)); }
 #hl-bell .hl-dot.hl-lv-bad { background: #ff7b7b; box-shadow: 0 0 8px rgba(255, 123, 123, 0.6); }
 #hl-bell .hl-dot.hl-lv-warn { background: #ffbf5e; }
 #hl-bell .hl-belltxt { flex: 1 1 auto; min-width: 0; }
 #hl-bell .hl-belltitle { font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
-#hl-bell .hl-belldetail { margin-top: 2px; font-size: 12.5px; color: var(--lk-muted); overflow-wrap: anywhere; }
+#hl-bell .hl-belldetail { margin-top: 2px; font-size: 12.5px; color: var(--hl-pop-muted); overflow-wrap: anywhere; }
 #hl-bell a.hl-bellbtn {
   flex: 0 0 auto;
   padding: 6px 12px;
@@ -1087,10 +1094,10 @@ html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wi
   font-weight: 600;
   text-decoration: none;
   color: #fff;
-  background: rgba(var(--lk-accent), 0.16);
-  border: 1px solid rgba(var(--lk-accent), 0.35);
+  background: color-mix(in srgb, rgb(var(--lk-accent)) 22%, #0b101c);
+  border: 1px solid color-mix(in srgb, rgb(var(--lk-accent)) 50%, transparent);
 }
-#hl-bell a.hl-bellbtn:hover { background: rgba(var(--lk-accent), 0.28); }
+#hl-bell a.hl-bellbtn:hover { background: color-mix(in srgb, rgb(var(--lk-accent)) 36%, #0b101c); }
 @media (max-width: 700px) {
   #inner_wrapper #myTab { flex: 1 1 auto; min-width: 0; }
   #hl-bell { pointer-events: auto; box-shadow: 0 -8px 28px -10px rgba(0, 0, 0, 0.7); }
