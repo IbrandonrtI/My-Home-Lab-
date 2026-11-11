@@ -14,6 +14,9 @@ PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", 
 PANEL_SUDO_WITH_WORDS = ["setups", "rename", "sleep", "wake", "add", "wipe", "disconnect", "move", "setup", "bootadd"]
 PANEL_SUDO_BACKUP_EXACT = ["state", "save", "sshkey", "cloud-add"]      # `homelab-backup-tasks panel ...` (the Backups section)
 PANEL_SUDO_BACKUP_WORDS = ["versions", "browse", "run", "dry", "restore", "delete", "toggle", "sshtest"]
+# the Updates tab: exactly these commands, with exactly these words (no `*`, so nothing else can be added to them)
+PANEL_SUDO_UPDATE = ["/usr/local/sbin/homelab-update check", "/usr/local/sbin/homelab-update --yes", "/usr/bin/apt-get update", "/usr/bin/apt-get -y upgrade",
+                     "/usr/bin/systemctl reboot"]
 
 
 def panel_applies():
@@ -66,12 +69,14 @@ def panel_sudoers_text():
     backup = "/usr/local/sbin/homelab-backup-tasks panel "
     bcmds = [backup + w for w in PANEL_SUDO_BACKUP_EXACT] + [backup + w + " *" for w in PANEL_SUDO_BACKUP_WORDS]
     return "\n".join([
-        "# Written by homelab-setup. Lets the control panel (the Drives tab) run exactly these drive and backup commands as root, without a password.",
+        "# Written by homelab-setup. Lets the control panel (the Drives and Updates tabs) run exactly these drive, backup and update commands as root, without a password.",
         "# Anything else still asks for your password. Each command checks its own words again. Change nothing here: an upgrade puts it back.",
         "Cmnd_Alias HOMELAB_PANEL_DRIVES = " + ", \\\n    ".join(cmds),
         "Cmnd_Alias HOMELAB_PANEL_BACKUP = " + ", \\\n    ".join(bcmds),
+        "Cmnd_Alias HOMELAB_PANEL_UPDATE = " + ", \\\n    ".join(PANEL_SUDO_UPDATE),
         "%s ALL=(root) NOPASSWD: HOMELAB_PANEL_DRIVES" % user,       # homelab-repocheck: ignore (a sudo rule, not a password)
         "%s ALL=(root) NOPASSWD: HOMELAB_PANEL_BACKUP" % user,       # homelab-repocheck: ignore (a sudo rule, not a password)
+        "%s ALL=(root) NOPASSWD: HOMELAB_PANEL_UPDATE" % user,       # homelab-repocheck: ignore (a sudo rule, not a password)
         ""])
 
 

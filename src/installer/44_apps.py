@@ -470,6 +470,25 @@ class ImmichAdmin(Step):
                          body={"email": Ctx.email, "name": Ctx.admin, "password": pw}, timeout=60)
         if st not in (200, 201):
             raise Abort("Immich refused the admin account (HTTP %s): %s" % (st, str(js)[:200]))
+        immich_ocr_off(pw)
+
+
+def immich_ocr_off(pw):
+    """A new Immich starts with text recognition (OCR) on. It makes the machine-learning container load extra models, which is heavy on a small server
+    with a spinning drive (the first photo can keep the drive busy for many minutes). It is turned off once, right after the admin account is made;
+    it is one switch in Immich (Administration, Settings, Machine Learning) if you want it back. A failure here only gives a warning."""
+    st, js, _ = http("POST", url("immich", "/api/auth/login"), body={"email": Ctx.email, "password": pw}, timeout=30)
+    token = js.get("accessToken") if st in (200, 201) and isinstance(js, dict) else None
+    auth = {"Authorization": "Bearer " + str(token)}
+    st, cfg, _ = http("GET", url("immich", "/api/system-config"), headers=auth, timeout=30) if token else (0, None, None)
+    ml = cfg.get("machineLearning") if st == 200 and isinstance(cfg, dict) else None
+    if not isinstance(ml, dict) or not isinstance(ml.get("ocr"), dict):
+        warn("Immich text recognition (OCR) could not be switched off (Immich did not give its settings). It is on; turn it off in Immich: Administration, Settings, Machine Learning.")
+        return
+    ml["ocr"]["enabled"] = False
+    st, _, _ = http("PUT", url("immich", "/api/system-config"), body=cfg, headers=auth, timeout=30)
+    if st != 200:
+        warn("Immich text recognition (OCR) could not be switched off (HTTP %s). Turn it off in Immich: Administration, Settings, Machine Learning." % st)
 
 
 # ================================================================ Nextcloud

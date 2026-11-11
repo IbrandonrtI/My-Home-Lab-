@@ -1,6 +1,6 @@
 # ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-backup-tasks", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
-           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"),
+           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"), ("homelab-alerts", "/usr/local/sbin"),
            ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"), ("homelab-selftest", "/usr/local/sbin"),
            ("homelab", "/usr/local/bin"), ("homelab-repocheck", "/usr/local/bin"), ("homelab-panel", "/usr/local/sbin")]
 # commands that were renamed or removed: an upgrade deletes the old copies so they do not linger on the server
@@ -80,6 +80,7 @@ class BackupConf(Step):
 CRON_LINES = [
     ("homelab-sample", "*/15 * * * * /usr/local/sbin/homelab-sample >/dev/null 2>&1"),
     ("homelab-stats", "5,20,35,50 * * * * /usr/local/sbin/homelab-stats >/dev/null 2>&1"),
+    ("homelab-alerts", "*/5 * * * * /usr/local/sbin/homelab-alerts >/dev/null 2>&1"),
     ("homelab-calendar build", "30 3 * * 1 /usr/local/bin/homelab-calendar build >/dev/null 2>&1"),
     ("homelab-calendar sync", "40 4 * * * /usr/local/bin/homelab-calendar sync >/dev/null 2>&1"),
     ("homelab-update", "17 * * * * /usr/local/sbin/homelab-update auto >/dev/null 2>&1"),
