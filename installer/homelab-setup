@@ -5195,6 +5195,8 @@ class CronLines(Step):
 
     def run(self):
         crontab_add(self._lines())
+        if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-alerts")):
+            run([P("/usr/local/sbin/homelab-alerts")], timeout=120)      # the bell has its list at once, not after the first 5 minutes
 
 
 @step
