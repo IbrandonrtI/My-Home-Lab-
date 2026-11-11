@@ -79,6 +79,8 @@ SESSION_IDLE = 24 * 3600
 SESSION_MAX = 7 * 24 * 3600
 
 LOOK_B1, LOOK_B2 = "/* >>> homelab look >>>", "/* <<< homelab look <<< */"
+BG_B1, BG_B2 = "/* >>> homelab picture >>>", "/* <<< homelab picture <<< */"
+BLUR_PX = {"sm": 4, "md": 12, "lg": 16, "xl": 24, "2xl": 40, "3xl": 64}       # (the same numbers as the preview in custom.js)
 THEME_B1 = "/* >>> homelab theme >>>"          # the block `homelab theme` writes (the look block always stays in front of it)
 
 
@@ -133,6 +135,11 @@ class Tx:
         self.new[path] = text
 
     def commit(self):
+        if SETTINGS in self.new or CSS in self.new:               # the picture numbers of settings.yaml are written into custom.css too (see css_with_picture)
+            css = self.get(CSS)
+            fixed = css_with_picture(css, self.get(SETTINGS))
+            if fixed != css:
+                self.put(CSS, fixed)
         changed = [p for p in self.new if self.new[p] != self.old[p]]
         for p in changed:
             check_text(p, self.new[p])
@@ -792,6 +799,39 @@ def css_with_look(css, custom):
     t = css.find(THEME_B1)
     if t >= 0:
         return css[:t].rstrip("\n") + "\n\n" + new + "\n" + css[t:]
+    return css.rstrip("\n") + "\n\n" + new
+
+
+def picture_block(settings_text):
+    """The exact blur, brightness and color of the background picture. Homepage only knows a few set values from settings.yaml (for example brightness 50, 75 or 100:
+    a number like 52 makes no style at all, so the picture was not dimmed). The panel writes the real numbers here, the same ones its preview uses."""
+    d = bg_get(settings_text)
+    decl = []
+    if d.get("blur") in BLUR_PX:
+        decl.append("--tw-backdrop-blur: blur(%dpx);" % BLUR_PX[d["blur"]])
+    for key, name in (("brightness", "brightness"), ("saturate", "saturate")):
+        try:
+            n = float(d.get(key))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= n <= 300:
+            decl.append("--tw-backdrop-%s: %s(%s);" % (name, name, num(n / 100.0)))
+    if not decl:
+        return ""
+    return "%s written by the control panel from the picture sliders. It is rewritten when they change. */\nhtml body #inner_wrapper { %s }\n%s\n" % (BG_B1, " ".join(decl), BG_B2)
+
+
+def css_with_picture(css, settings_text):
+    a = css.find(BG_B1)
+    b = css.find(BG_B2, a) if a >= 0 else -1
+    new = picture_block(settings_text)
+    if a >= 0 and b >= 0:
+        end = b + len(BG_B2)
+        if css[end:end + 1] == "\n":
+            end += 1
+        return css[:a] + new + css[end:]
+    if not new:
+        return css
     return css.rstrip("\n") + "\n\n" + new
 
 
