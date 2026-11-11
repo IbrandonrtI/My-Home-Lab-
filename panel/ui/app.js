@@ -1131,8 +1131,8 @@ function updAgo(then, now) {
   const m = Math.max(0, Math.round((now - then) / 60));
   return m < 2 ? "just now" : m < 120 ? m + " minutes ago" : m < 2880 ? Math.round(m / 60) + " hours ago" : Math.round(m / 1440) + " days ago";
 }
-async function loadUpdates() {
-  try { UPD = await api("GET", "/api/updates"); UPDerr = ""; if (UPD.job && UPD.job.running) { UPDjob = UPD.job; UPDwas = UPD.job.action; followUpdates(); } } catch (e) { UPD = null; UPDerr = e.message; }
+async function loadUpdates(fresh) {
+  try { UPD = await api("GET", "/api/updates" + (fresh === true ? "?fresh=1" : "")); UPDerr = ""; if (UPD.job && UPD.job.running) { UPDjob = UPD.job; UPDwas = UPD.job.action; followUpdates(); } } catch (e) { UPD = null; UPDerr = e.message; }
   drawUpdates();
 }
 function followUpdates() {
@@ -1171,7 +1171,7 @@ function drawUpdates() {
   const busy = !!(UPDjob && UPDjob.running);
   const body = [h("div", { class: "ph" },
     h("div", { class: "pt" }, h("h2", {}, "Updates"), h("span", { class: "sub" }, "What is waiting to be updated. The bell on the dashboard shows the same things.")),
-    h("button", { class: "small", disabled: busy, onclick: loadUpdates }, "Refresh"))];
+    h("button", { class: "small", disabled: busy, onclick: () => loadUpdates(true) }, "Refresh"))];
   if (UPDerr) body.push(h("p", { class: "badtext", role: "alert" }, UPDerr), h("button", { class: "small", onclick: loadUpdates }, "Try Again"));
   else if (!UPD) body.push(h("p", { class: "muted" }, "Looking at the updates..."));
   else {
@@ -1182,7 +1182,7 @@ function drawUpdates() {
         h("span", { class: "pill " + (n ? "warn" : "ok") }, n ? n + " waiting" : "Up to date"),
         h("div", { class: "pills" }, h("button", { class: "small", disabled: busy, onclick: () => updStart("check") }, "Check Now"),
           h("button", { class: "small primary", disabled: busy || !n, onclick: () => updStart("containers") }, "Update Containers"))),
-      updRow("System", UPD.system === null ? "Not checked yet. Press Update System to look and install." : UPD.system ? UPD.system + " package" + (UPD.system === 1 ? "" : "s") + " waiting (Ubuntu or Mint). Installing can take several minutes." : "Everything is up to date.",
+      updRow("System", UPD.system === null ? "Not checked yet. Press Update System to look and install." : UPD.system ? UPD.system + " package" + (UPD.system === 1 ? "" : "s") + " waiting (Ubuntu or Mint). Installing can take several minutes." : "Everything that can be installed is installed." + (UPD.kept_back ? " " + UPD.kept_back + " more " + (UPD.kept_back === 1 ? "package is" : "packages are") + " held back by Ubuntu: " + (UPD.kept_back === 1 ? "it needs" : "they need") + " other changes first, or " + (UPD.kept_back === 1 ? "is" : "are") + " being rolled out slowly. " + (UPD.kept_back === 1 ? "It installs" : "They install") + " by itself later. To see the list: apt list --upgradable" : ""),
         h("span", { class: "pill " + (UPD.system ? "warn" : UPD.system === null ? "dim" : "ok") }, UPD.system === null ? "Unknown" : UPD.system ? UPD.system + " waiting" : "Up to date"),
         h("div", { class: "pills" }, h("button", { class: "small primary", disabled: busy || UPD.system === 0, onclick: () => updStart("system") }, "Update System"))),
       updRow("Restart", UPD.restart ? "A system update asked for a restart. Do it when nothing important is running." : "No restart is needed.",
