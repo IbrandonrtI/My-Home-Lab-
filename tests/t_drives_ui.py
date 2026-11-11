@@ -9,6 +9,7 @@ Set DRIVES_SHOTS=/some/folder to also keep screenshots."""
 import json
 import os
 import sys
+import time
 import tempfile
 
 try:
@@ -45,6 +46,17 @@ def main():
             return []
         with open(log) as f:
             return [json.loads(x) for x in f if x.strip()]
+
+    def settled():
+        # the number of calls once the drive script has gone quiet (a late health / check line must not count as a click)
+        last = -1
+        for _ in range(20):
+            now = len(calls())
+            if now == last:
+                return now
+            last = now
+            time.sleep(0.25)
+        return last
 
     def open_drives(br, w=1280, hgt=900):
         ctx = br.new_context(viewport={"width": w, "height": hgt}, device_scale_factor=1)
@@ -139,7 +151,7 @@ def main():
                 if SHOTS:
                     pg.screenshot(path=os.path.join(SHOTS, "drives-%s.png" % label), full_page=True)
                 # ---- the card of a pool drive
-                n = len(calls())
+                n = settled()
                 t1.click()
                 pg.wait_for_selector("dialog.dcard")
                 t = pg.inner_text("dialog.dcard")
@@ -175,7 +187,7 @@ def main():
                 pg.wait_for_selector("dialog.dcard", state="detached")
 
                 # ---- add the spare drive: keep is the default, no typing; erase asks to tick one box
-                n = len(calls())
+                n = settled()
                 card_button(pg, "sdc", "Add to Main")
                 pg.wait_for_selector("dialog")
                 check("%s: Add to Main offers keep and erase, keep first" % label, "Keep the files" in dialog_text(pg) and "Erase the drive and format it" in dialog_text(pg), dialog_text(pg))

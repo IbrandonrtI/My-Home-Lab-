@@ -514,6 +514,17 @@ def main():
         st, js, _, _ = p.req("POST", "/api/background", {"blur": "xl", "brightness": 30, "saturate": 90, "opacity": 70})
         bg = p.state_now()["background"]
         check("background: sliders are saved in settings.yaml", st == 200 and bg["blur"] == "xl" and bg["brightness"] == 30 and bg["saturate"] == 90 and bg["opacity"] == 70, bg)
+        css = p.read("custom.css")
+        check("background: the exact numbers are also written into custom.css (Homepage only knows a few set values)",
+              "--tw-backdrop-brightness: brightness(0.3);" in css and "--tw-backdrop-saturate: saturate(0.9);" in css and "--tw-backdrop-blur: blur(24px);" in css and css.count("homelab picture >>>") == 1, css[-400:])
+        st, js, _, _ = p.req("POST", "/api/background", {"brightness": 52, "saturate": 85, "blur": "sm"})
+        css = p.read("custom.css")
+        check("background: a number Homepage has no style for (52) is written exactly", "--tw-backdrop-brightness: brightness(0.52);" in css and "--tw-backdrop-saturate: saturate(0.85);" in css and "--tw-backdrop-blur: blur(4px);" in css and css.count("homelab picture >>>") == 1, css[-400:])
+        p.req("POST", "/api/look", {"look": {"radius": 20}})
+        css = p.read("custom.css")
+        check("background: saving the look keeps the picture numbers", "--tw-backdrop-brightness: brightness(0.52);" in css and "--lk-radius: 20px;" in css and css.count("homelab picture >>>") == 1)
+        p.req("POST", "/api/look/reset", {})
+        p.req("POST", "/api/background", {"blur": "xl", "brightness": 30, "saturate": 90, "opacity": 70})
         settings = p.read("settings.yaml")
         check("background: the layout block of settings.yaml is intact", "layout:" in settings and "  Customize:" in settings and "language: en" in settings)
         st, js, _, _ = p.req("POST", "/api/background", {"blur": "huge"})
@@ -536,6 +547,8 @@ def main():
         p.req("POST", "/api/background/reset", {})
         bg = p.state_now()["background"]
         check("background: reset puts the sliders back to the shipped values", bg["blur"] == "md" and bg["brightness"] == 42 and bg["saturate"] == 60 and bg["opacity"] == 80, bg)
+        css = p.read("custom.css")
+        check("background: reset also puts the shipped numbers into custom.css", "--tw-backdrop-brightness: brightness(0.42);" in css and "--tw-backdrop-blur: blur(12px);" in css, css[-300:])
 
         # ---- undo
         before = p.read("settings.yaml")
