@@ -5,7 +5,7 @@
 #   homelab commands  every command I use, in groups
 #                     ("Suggested Commands" are up to six that fit the current state)
 #   homelab status    only the status block
-#   homelab login     the short screen shown when a terminal opens (a few lines, read from the bell's file)
+#   homelab login     the screen shown when a terminal opens: the summary, the status and the browser addresses (no suggestions)
 #   homelab docs      list the sections of the README and of the guides in docs/
 #   homelab secrets   rebuild check: what must be in your password manager, and what the
 #                     server can confirm (values are never shown; sudo gives a fuller check)
@@ -20,8 +20,7 @@
 #
 # Apart from theme and bookmark (which edit the Homepage files in your own home folder) and the short
 # forms above (which ask sudo for the real command), it only reads information and never needs sudo.
-# ~/.bashrc runs the short form, "homelab login", when a terminal opens (the installer adds that line): a few lines read from
-# the bell's file, so it appears at once.
+# ~/.bashrc runs the shorter form, "homelab login", when a terminal opens (the installer adds that line).
 
 VERSION="2.1"
 MAIN_POOL="${HOMELAB_MAIN_POOL:-/mnt/storage}"
@@ -35,7 +34,7 @@ STATE_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"        # readings saved by ho
 TEMP_WARN="${HOMELAB_TEMP_WARN:-50}"                       # drive temperature (C) that turns yellow
 TEMP_BAD="${HOMELAB_TEMP_BAD:-60}"                         # ... and red
 SAMPLE_STALE_MIN="${HOMELAB_SAMPLE_STALE_MIN:-60}"         # minutes before the readings count as old
-ALERTS_MAX_AGE="${HOMELAB_ALERTS_MAX_AGE:-900}"            # the bell's file (alerts.json) is trusted by the login screen for this many seconds (cron rewrites it every 5 minutes)
+LOGIN_CACHE_SECS="${HOMELAB_LOGIN_CACHE_SECS:-120}"        # a login screen this young is shown again as it was (terminals opened close together)
 URL_CACHE_SECS="${HOMELAB_URL_CACHE_SECS:-3600}"           # the dashboard addresses are looked up at most this often
 BOOT_GRACE_SECS="${HOMELAB_BOOT_GRACE_SECS:-600}"          # after a boot the login screen only does light checks for this long
 JUST_BOOTED=0

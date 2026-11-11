@@ -11,15 +11,14 @@ rule() {   # rule "Title": a spaced section heading with a thin line
 
 # status rows. While BUFFERING=1 they are collected (so the top summary can count them), otherwise printed.
 OKN=0; WARNN=0; BADN=0; STATUS_BUF=""; BUFFERING=0
-ISSUES_BUF=""   # the warnings and problems only, one per line as LEVEL|LABEL|TEXT (the short login screen lists them when it has to check live)
 row() {   # row COLOUR SYMBOL LABEL TEXT TEXTCOLOUR
   local out
   printf -v out '   %s%s%s  %-16s %s%s%s\n' "$1" "$2" "$N" "$3" "$5" "$4" "$N"
   if [ "$BUFFERING" -eq 1 ]; then STATUS_BUF+="$out"; else printf '%s' "$out"; fi
 }
 ok()   { OKN=$((OKN + 1));     row "$G" "$S_OK"   "$1" "$2" ""; }
-warn() { WARNN=$((WARNN + 1)); ISSUES_BUF+="warn|$1|$2"$'\n'; row "$Y" "$S_WARN" "$1" "$2" "$Y"; }
-bad()  { BADN=$((BADN + 1));   ISSUES_BUF+="bad|$1|$2"$'\n'; row "$R" "$S_BAD"  "$1" "$2" "$R"; }
+warn() { WARNN=$((WARNN + 1)); row "$Y" "$S_WARN" "$1" "$2" "$Y"; }
+bad()  { BADN=$((BADN + 1));   row "$R" "$S_BAD"  "$1" "$2" "$R"; }
 
 # command lists: collected per section, so the whole section is a table (if it fits the window) or stacked
 CMDS_C=(); CMDS_D=()
@@ -100,9 +99,9 @@ dashboard_urls() {   # sets DASH_HOME (the address at home) and DASH_TS (the Tai
   fi
 }
 
-open_section() {   # where to click: the dashboard on the home network, and from anywhere through Tailscale
+open_section() {   # where to click: the dashboard on the home network, and from anywhere through Tailscale (open_section login: the addresses are kept for an hour)
   [ -d "$HOMEPAGE_DIR" ] || return 0
-  dashboard_urls
+  if [ -n "${1:-}" ]; then cached_dashboard_urls; else dashboard_urls; fi
   [ -n "$DASH_HOME" ] || return 0
   rule "Open in your browser"
   printf '   %-30s %s%s%s\n' "Dashboard, at home" "$B" "$DASH_HOME" "$N"
