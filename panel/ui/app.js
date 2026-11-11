@@ -1115,7 +1115,6 @@ function viewDrives() {
 
 // ---------------------------------------------------------------- Look and Colors (one look, two screens)
 function rgb(hex) { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ""); const n = m ? parseInt(m[1], 16) : 0; return [n >> 16 & 255, n >> 8 & 255, n & 255]; }
-const PAINT_KEYS = ["paintAll", "paintStrength", "paintStyle", "cards", "links", "labels", "labelIcon", "names", "logo"];       // (what a built-in look leaves as it is)
 let lookBarEl = null, pvTimer = null, pvSeq = 0;
 
 function lookOut() {                       // what is sent to the server: the look, with only the tab colors that differ from the shipped ones
@@ -1415,7 +1414,6 @@ function themesCard() {
 }
 
 function viewLook() {
-  const sv = S.look.values, def = S.look.defaults;
   if (!lookW) lookW = startLook();
   const L = lookW;
   lookBarEl = h("div", {});
@@ -1743,7 +1741,6 @@ function viewLayout() {
 }
 
 // ---------------------------------------------------------------- Cards and links (one editor for both)
-function groupNames(list, withNew) { return list.map(g => g.group); }
 function viewCards() { return viewItems("cards"); }
 function viewLinks() { return viewItems("links"); }
 
