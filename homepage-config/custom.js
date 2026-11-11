@@ -580,9 +580,94 @@
     });
   }
 
+  // ---- the bell next to the tabs: what needs attention. The list is read from images/alerts.json (homelab-alerts writes it every 5 minutes: a service that is down,
+  // updates waiting, a restart, a drive or the backup, free space, Tailscale, hot drives). Updates and drive problems have a button that opens the control panel on that screen.
+  // Everything shown comes from the file as plain text. Without the file the bell just says so.
+  var BELL = { data: null, at: 0, busy: false, failed: false };
+  var BELL_ICON = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>';
+  function panelUrl(hash) { return "https://" + window.location.hostname + ":1100/" + (hash ? "#" + hash : ""); }
+  function ago(sec) {
+    var m = Math.max(0, Math.round(sec / 60));
+    return m < 2 ? "just now" : m < 120 ? m + " minutes ago" : Math.round(m / 60) + " hours ago";
+  }
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+  function bellLoad() {
+    BELL.busy = true;
+    fetch("/images/alerts.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error("no file"); return r.json(); })
+      .then(function (j) { BELL.data = j && Array.isArray(j.items) ? j : null; BELL.failed = !BELL.data; })
+      .catch(function () { BELL.failed = true; })
+      .then(function () { BELL.busy = false; BELL.at = Date.now(); bellDraw(); });
+  }
+  function bellDraw() {
+    var box = document.getElementById("hl-bell");
+    if (!box) return;
+    var d = BELL.data, items = d ? d.items : [], worst = items.length ? items[0].level : "";
+    var badge = box.querySelector(".hl-bell-n"), btn = box.querySelector("button");
+    badge.textContent = items.length > 9 ? "9+" : String(items.length);
+    badge.hidden = !items.length;
+    badge.className = "hl-bell-n hl-lv-" + (worst || "info");
+    btn.setAttribute("aria-label", items.length ? "Notifications: " + items.length + " need attention" : "Notifications: nothing needs attention");
+    var pop = box.querySelector(".hl-bellpop");
+    while (pop.firstChild) pop.removeChild(pop.firstChild);
+    var head = el("div", "hl-bellhead");
+    head.appendChild(el("strong", "", "Notifications"));
+    var stale = d && d.updated && (Date.now() / 1000 - d.updated) > 1200;
+    head.appendChild(el("span", "hl-bellsub", !d ? "" : (stale ? "Not updated for a while" : "Checked " + ago(Date.now() / 1000 - (d.updated || 0)))));
+    pop.appendChild(head);
+    if (!d) pop.appendChild(el("p", "hl-bellempty", BELL.failed ? "The list is not there yet. It is made every 5 minutes (sudo homelab-alerts makes it now)." : "Looking..."));
+    else if (!items.length) pop.appendChild(el("p", "hl-bellempty hl-allgood", "All good. Nothing needs attention."));
+    items.forEach(function (it) {
+      var row = el("div", "hl-bellrow");
+      row.appendChild(el("span", "hl-dot hl-lv-" + (it.level === "bad" || it.level === "warn" ? it.level : "info")));
+      var txt = el("div", "hl-belltxt");
+      txt.appendChild(el("div", "hl-belltitle", String(it.title || "")));
+      if (it.detail) txt.appendChild(el("div", "hl-belldetail", String(it.detail)));
+      row.appendChild(txt);
+      if (it.action === "update" || it.action === "drives") {
+        var a = el("a", "hl-bellbtn", it.action === "update" ? "Update" : "Open Drives");
+        a.href = panelUrl(it.action === "update" ? "updates" : "drives");
+        a.target = "_blank";
+        a.rel = "noopener";
+        row.appendChild(a);
+      }
+      pop.appendChild(row);
+    });
+  }
+  function bell() {
+    var tabs = document.getElementById("tabs"), ul = document.getElementById("myTab");
+    if (!tabs || !ul) return;
+    var box = document.getElementById("hl-bell");
+    if (!box) {
+      box = el("div", "hl-bellwrap");
+      box.id = "hl-bell";
+      var btn = el("button", "hl-bellbtn-main");
+      btn.type = "button";
+      btn.setAttribute("aria-haspopup", "true");
+      btn.setAttribute("aria-expanded", "false");
+      btn.innerHTML = BELL_ICON;      // (a fixed picture, no text from outside)
+      btn.appendChild(el("span", "hl-bell-n hl-lv-info", "0"));
+      btn.onclick = function () {
+        var open = !box.classList.contains("hl-open");
+        box.classList.toggle("hl-open", open);
+        btn.setAttribute("aria-expanded", String(open));
+        if (open && !BELL.busy) bellLoad();
+      };
+      box.appendChild(btn);
+      var pop = el("div", "hl-bellpop");
+      pop.setAttribute("role", "region");
+      pop.setAttribute("aria-label", "Notifications");
+      box.appendChild(pop);
+      document.addEventListener("click", function (e) { var b = document.getElementById("hl-bell"); if (b && !b.contains(e.target)) { b.classList.remove("hl-open"); b.querySelector("button").setAttribute("aria-expanded", "false"); } });
+      document.addEventListener("keydown", function (e) { if (e.key === "Escape") { var b = document.getElementById("hl-bell"); if (b) b.classList.remove("hl-open"); } });
+      bellDraw();
+    }
+    if (box.parentNode !== tabs || ul.nextSibling !== box) tabs.insertBefore(box, ul.nextSibling);
+    if (!BELL.busy && Date.now() - BELL.at > 60000) bellLoad();
+  }
+
   function run() {
     queued = false;
-    wording(); health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); linkRows(); searchButton(); tabName(); bars(); sharp();
+    wording(); health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); linkRows(); searchButton(); tabName(); bars(); sharp(); bell();
   }
   function soon() { if (!queued) { queued = true; window.requestAnimationFrame(run); } }
   night(); soon();
