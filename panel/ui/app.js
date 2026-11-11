@@ -1105,16 +1105,162 @@ function drivesParts() {
   if ((DR.actions || {}).can_sleep === false) out.push(h("p", { class: "muted small" }, "Sleep and wake need the tool hdparm, which is not installed on this machine."));
   return out;
 }
-function drivesBody() { return [drivesParts(), bkBox]; }
+function drivesBody() { return [drivesParts(), upBox, bkBox]; }
 function viewDrives() {
   drivesBox = h("div", {});
   put(drivesBox, drivesBody());
+  loadUploads();
   loadBackups();
   api("GET", "/api/backup/job").then(j => { if (j.running) { BKjob = j; BKwas = j.action; drawBackups(); followBackup(); } }).catch(() => { /* no backup tool: the section says so */ });
   api("GET", "/api/drives/job").then(j => {      // a change may still be running (the page was reloaded meanwhile)
     if (j.running) { DRbusy = j.action; DRjob = j; followJob(); drawDrives(); } else loadDrives();
   }).catch(() => loadDrives());
   return drivesBox;
+}
+
+// ---------------------------------------------------------------- Upload (above Backups on the Drives tab)
+// Photos and videos go to Immich (with an API key pasted once), songs go into the music folder Navidrome plays from. Files are sent one at a time,
+// each as the raw body of a request, so a video of several GB is fine. The queue lives here, so it keeps going while another tab of the panel is open.
+let UP = null, UPerr = "";
+const UPq = { photo: [], song: [] }, UPrun = { photo: false, song: false };
+const upBox = h("div", { class: "up" });
+const UP_NAMES = { photo: "Photos and Videos", song: "Songs" };
+const upBusy = () => UPrun.photo || UPrun.song;
+window.addEventListener("beforeunload", e => { if (upBusy()) { e.preventDefault(); e.returnValue = ""; } });
+
+async function loadUploads() {
+  try { UP = await api("GET", "/api/upload"); UPerr = ""; } catch (e) { UP = null; UPerr = e.message; }
+  drawUploads();
+}
+const upExt = n => (n.includes(".") ? n.split(".").pop().toLowerCase() : "");
+function upAdd(kind, files) {
+  const ok = new Set(kind === "photo" ? UP.photo_ext : UP.song_ext), max = UP.limits[kind];
+  for (const f of files) {
+    const it = { file: f, state: "wait", pct: 0, msg: "" };
+    if (!ok.has(upExt(f.name))) { it.state = "fail"; it.msg = upExt(f.name) ? "Not accepted here (." + upExt(f.name) + ")" : "No ending like .mp3 or .jpg"; }
+    else if (f.size === 0) { it.state = "fail"; it.msg = "The file is empty"; }
+    else if (f.size > max) { it.state = "fail"; it.msg = "Too big (the most is " + humanBytes(max) + ")"; }
+    UPq[kind].push(it);
+  }
+  drawUploads();
+  upPump(kind);
+}
+function upSendOne(kind, it) {
+  return new Promise(resolve => {
+    const x = new XMLHttpRequest();
+    x.open("POST", "/api/upload/" + kind + "?name=" + encodeURIComponent(it.file.name) + (kind === "photo" ? "&mtime=" + (it.file.lastModified || Date.now()) : ""));
+    x.setRequestHeader("X-Panel", "1");
+    it.xhr = x;
+    x.upload.onprogress = e => {
+      if (!e.lengthComputable) return;
+      it.pct = Math.round(e.loaded * 100 / e.total);
+      if (it.barEl) it.barEl.style.width = it.pct + "%";
+      if (it.pctEl) put(it.pctEl, it.pct + "%");
+    };
+    x.onload = () => {
+      let js = {};
+      try { js = JSON.parse(x.responseText); } catch (e) { /* not JSON */ }
+      if (x.status === 401) { S = null; showLogin(); it.state = "fail"; it.msg = "Please log in again"; }
+      else if (x.status >= 200 && x.status < 300) { it.state = kind === "photo" && js.status === "duplicate" ? "dup" : "done"; it.msg = js.saved && js.saved !== it.file.name ? "Saved as " + js.saved : ""; it.pct = 100; }
+      else { it.state = "fail"; it.msg = js.error || ("Something went wrong (" + x.status + ")"); if (x.status === 409 && kind === "photo") loadUploads(); }
+      resolve();
+    };
+    x.onerror = () => { it.state = "fail"; it.msg = "The connection was lost"; resolve(); };
+    x.onabort = () => { it.state = "fail"; it.msg = "Stopped"; resolve(); };
+    x.send(it.file);
+  });
+}
+async function upPump(kind) {
+  if (UPrun[kind]) return;
+  UPrun[kind] = true;
+  let sent = 0, bad = 0;
+  try {
+    for (;;) {
+      const it = UPq[kind].find(x => x.state === "wait");
+      if (!it) break;
+      it.state = "send";
+      drawUploads();
+      await upSendOne(kind, it);
+      delete it.xhr;
+      if (it.state === "fail") bad++; else sent++;
+      drawUploads();
+    }
+  } finally { UPrun[kind] = false; drawUploads(); }
+  if (sent || bad) toast((UP_NAMES[kind]) + ": " + sent + " sent" + (bad ? ", " + bad + " failed (see the list)" : "") + ".", !!bad && !sent);
+}
+function upStop(kind) {
+  for (const it of UPq[kind]) { if (it.state === "wait") { it.state = "fail"; it.msg = "Stopped"; } else if (it.xhr) it.xhr.abort(); }
+  drawUploads();
+}
+function upClear(kind) { UPq[kind] = UPq[kind].filter(x => x.state === "wait" || x.state === "send"); drawUploads(); }
+
+function upList(kind) {
+  const q = UPq[kind];
+  if (!q.length) return null;
+  const done = q.filter(x => x.state === "done" || x.state === "dup").length, bad = q.filter(x => x.state === "fail").length, running = UPrun[kind];
+  const sumEl = h("span", {}, done + " of " + q.length + " done" + (bad ? ", " + bad + " failed" : ""));
+  return h("div", { class: "uplist" },
+    h("div", { class: "row tight" }, sumEl, h("span", { class: "grow" }),
+      running ? h("button", { class: "small danger", onclick: () => upStop(kind) }, "Stop") : h("button", { class: "small", onclick: () => upClear(kind) }, "Clear the List")),
+    h("div", { class: "upitems" }, q.map(it => {
+      it.barEl = null; it.pctEl = null;
+      const label = { wait: "Waiting", send: "Sending", done: "Sent", dup: "Already in Immich", fail: it.msg }[it.state];
+      it.pctEl = it.state === "send" ? h("span", { class: "muted small" }, it.pct + "%") : null;
+      it.barEl = it.state === "send" ? h("i", { style: { width: it.pct + "%" } }) : null;
+      return h("div", { class: "upit " + it.state },
+        h("span", { class: "n" }, it.file.name),
+        h("span", { class: "s" + (it.state === "fail" ? " badtext" : " muted") }, it.state === "send" ? it.pctEl : label + (it.state !== "fail" && it.msg ? " (" + it.msg + ")" : "")),
+        it.state === "send" ? h("div", { class: "bar" }, it.barEl) : null);
+    })));
+}
+function upZone(kind, accept, title, hint) {
+  const input = h("input", { type: "file", multiple: true, accept, hidden: true, "aria-label": title, onchange: e => { const fs = [...e.target.files]; e.target.value = ""; if (fs.length) upAdd(kind, fs); } });
+  const zone = h("div", { class: "upzone", role: "button", tabindex: "0", onclick: () => input.click(),
+    onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } },
+    ondragover: e => { e.preventDefault(); zone.classList.add("over"); }, ondragleave: () => zone.classList.remove("over"),
+    ondrop: e => { e.preventDefault(); zone.classList.remove("over"); const fs = [...(e.dataTransfer ? e.dataTransfer.files : [])]; if (fs.length) upAdd(kind, fs); } },
+  h("b", {}, title), h("span", { class: "muted small" }, hint), input);
+  return zone;
+}
+function upPhotoBox() {
+  const im = UP.immich;
+  const key = h("input", { type: "password", autocomplete: "new-password", maxlength: 200, "aria-label": "Immich API key", placeholder: "Paste the Immich API key" });
+  const msg = h("p", { class: "badtext small", role: "alert" });
+  const save = async () => {
+    put(msg, "");
+    try { const r = await api("POST", "/api/upload/immich-key", { key: key.value }); toast(r.message); await loadUploads(); } catch (e) { put(msg, e.message); }
+  };
+  const link = "https://" + location.hostname + ":1002/user-settings?isOpen=api-keys";
+  return h("div", { class: "upbox" },
+    h("div", { class: "ph" }, h("div", { class: "pt" }, h("h3", {}, "Photos and Videos"), h("span", { class: "sub" }, "Go to Immich")),
+      h("span", { class: "pill " + (!im.up ? "bad" : im.configured ? "ok" : "warn") }, !im.up ? "Immich is not answering" : im.configured ? "Ready" : "Needs a key")),
+    im.configured ? upZone("photo", "image/*,video/*,.heic,.heif,.dng,.arw,.cr2,.cr3,.nef,.orf,.raf,.rw2,.mkv,.mts,.m2ts", "Drop photos and videos here, or press to choose",
+      "Any size. Sent one at a time. Photos Immich already has are skipped.") :
+      h("div", { class: "upkey" },
+        h("p", { class: "small" }, "Immich needs a key before the panel may add photos for you. In Immich open Account Settings, API Keys, make a new key (allow uploading) and paste it here once. It is kept in a private file on the server and never shown again."),
+        h("p", { class: "small" }, h("a", { href: link, target: "_blank", rel: "noopener" }, "Open Immich's API Keys page")),
+        h("div", { class: "row tight" }, key, h("button", { class: "small primary", onclick: save }, "Save the Key")), msg),
+    upList("photo"),
+    im.configured ? h("button", { class: "small link", onclick: async () => { if (await confirmBox("Forget the Immich key?", "The panel stops uploading to Immich until you paste a key again. The key itself stays in Immich.", "Forget It", true)) { try { await api("POST", "/api/upload/immich-key", { key: "" }); await loadUploads(); } catch (e) { fail(e); } } } }, "Forget the Immich key") : null);
+}
+function upSongBox() {
+  const m = UP.music, usable = m.exists && m.writable;
+  return h("div", { class: "upbox" },
+    h("div", { class: "ph" }, h("div", { class: "pt" }, h("h3", {}, "Songs"), h("span", { class: "sub" }, "Saved in " + m.dir + " (Navidrome plays them, Downtify saves there too)")),
+      h("span", { class: "pill " + (usable ? "ok" : "bad") }, usable ? "Ready" : m.exists ? "Cannot write there" : "Folder not found")),
+    usable ? upZone("song", "audio/*,.flac,.m4a,.opus,.ogg,.wma,.alac,.aiff,.ape,.wv", "Drop songs here, or press to choose",
+      "Saved as they are. A song with the same name is never replaced. Navidrome adds new songs at its next scan (within the hour).") :
+      h("p", { class: "warntext small" }, m.exists ? "The panel is not allowed to write in that folder." : "That folder is not there. Is the music drive connected?"),
+    typeof m.free === "number" ? h("span", { class: "muted small" }, humanBytes(m.free) + " free there") : null,
+    upList("song"));
+}
+function drawUploads() {
+  const body = [h("div", { class: "ph" }, h("div", { class: "pt" }, h("h2", {}, "Upload"), h("span", { class: "sub" }, "Send photos and videos to Immich, and songs to your music folder, from this device. Keep this page open while files are being sent.")),
+    h("button", { class: "small", disabled: upBusy(), onclick: loadUploads }, "Refresh"))];
+  if (UPerr) body.push(h("p", { class: "badtext", role: "alert" }, UPerr), h("button", { class: "small", onclick: loadUploads }, "Try Again"));
+  else if (!UP) body.push(h("p", { class: "muted" }, "Looking at Immich and the music folder..."));
+  else body.push(h("div", { class: "upgrid" }, upPhotoBox(), upSongBox()));
+  put(upBox, h("div", { class: "card" }, body));
 }
 
 // ---------------------------------------------------------------- Backups (the last section of the Drives tab)
