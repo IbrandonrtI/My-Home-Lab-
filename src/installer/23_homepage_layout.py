@@ -1,5 +1,5 @@
 # ================================================================ dashboard layout: tabs, groups, styles and settings edits (managed blocks)
-CSS_LAYOUT_MARK = "How this file is organised"      # in the header of the shipped custom.css since it was tidied up
+CSS_LAYOUT_MARK = "How this file is organised"      # a line in the header of the shipped custom.css
 THEME_BEGIN, THEME_END = "/* >>> homelab theme >>>", "/* <<< homelab theme <<< */"      # the block `homelab theme` writes
 
 
@@ -97,7 +97,7 @@ CAL_BEGIN, CAL_END = "# >>> homelab calendar >>>", "# <<< homelab calendar <<<" 
 CUSTOM_BEGIN, CUSTOM_END = "# >>> homelab customize >>>", "# <<< homelab customize <<<"      # the block with the Customize group (the control panel) in the shipped services.yaml
 CUSTOMIZE_GROUPS = {"Customize": ("mdi-tune", 1)}      # name -> (icon, columns): a tab of its own, after the others, one big card
 LINKEDIT_GROUPS = {"Edit Links": ("mdi-pencil-box-multiple", 1), "Terminal": ("mdi-console", 1)}      # name -> (icon, columns): on the Links tab, above the bookmarks, one drop-down card each
-TERMINAL_GROUPS = {"Terminal": ("mdi-console", 1)}      # name -> (icon, columns): the web terminal is the last card of the Customize tab (it used to be on the Links tab: LINKEDIT_GROUPS still names it for that old move)
+TERMINAL_GROUPS = {"Terminal": ("mdi-console", 1)}      # name -> (icon, columns): the web terminal is the last card of the Customize tab (LINKEDIT_GROUPS still names it, for layouts from before)
 CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, columns): on the Home tab, in a row of its own, last
 
 

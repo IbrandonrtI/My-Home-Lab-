@@ -71,7 +71,7 @@ class NavidromeCard(Step):
                 warn("The dashboard has no Navidrome card yet. homelab-cards makes it within 5 minutes; run `sudo homelab-setup upgrade` after that "
                      "to put the player in it.")
                 return
-        new = services_without_card(old, PLAYER_ID)                    # zip 33 had a second card for the player: it is one card now
+        new = services_without_card(old, PLAYER_ID)
         new = services_with_iframe_widget(new, "navidrome-card", Ctx.lan or svc_host())
         new = card_to_top(new, "navidrome-card")
         new = navidrome_card_named(new)

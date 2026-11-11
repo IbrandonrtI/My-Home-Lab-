@@ -83,7 +83,7 @@ def cards_worded(text):
     return text
 
 
-PLAYER_ID = "navidrome-player"      # the separate player card of zip 33; the player now lives inside the Navidrome card and this card is taken out
+PLAYER_ID = "navidrome-player"      # the old separate player card: the player lives inside the Navidrome card now, so this card is taken out
 
 
 def navidrome_iframe_widget(lan):
