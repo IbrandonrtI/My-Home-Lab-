@@ -38,6 +38,8 @@ run drives-tab-server bash -c "python3 '$HERE/t_drives_tab.py' | tail -1 | grep 
 run drives-tab-ui bash -c "python3 '$HERE/t_drives_ui.py' | tail -1 | grep -q '^OK'"
 run backup-engine bash -c "python3 '$HERE/t_backup_tasks.py' | tail -1 | grep -q '^OK'"
 run backup-tab-server bash -c "python3 '$HERE/t_backup_tab.py' | tail -1 | grep -q '^OK'"
+run upload-tab-server bash -c "python3 '$HERE/t_upload_tab.py' | tail -1 | grep -q '^OK'"
+run upload-tab-ui bash -c "python3 '$HERE/t_upload_ui.py' | tail -1 | grep -q '^OK'"
 run screen-zoom bash -c "python3 '$HERE/t_zoom.py' | tail -1 | grep -q '^OK'"
 run dashboard-wording bash -c "python3 '$HERE/t_wording.py' | tail -1 | grep -q '^OK'"
 run folders-message bash -c "python3 '$HERE/t_folders.py' | tail -1 | grep -q '^OK'"
