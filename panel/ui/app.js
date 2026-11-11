@@ -1251,9 +1251,13 @@ function upSongBox() {
     usable ? upZone("song", "audio/*,.flac,.m4a,.opus,.ogg,.wma,.alac,.aiff,.ape,.wv", "Drop songs here, or press to choose",
       "Saved as they are. A song with the same name is never replaced. Navidrome adds new songs at its next scan (within the hour).") :
       h("p", { class: "warntext small" }, m.exists ? "The panel is not allowed to write in that folder." : "That folder is not there. Is the music drive connected?"),
+    !usable && m.exists ? h("p", { class: "muted small" }, "To allow it, run this once on the server (it only adds this user to that folder; nothing else changes):") : null,
+    !usable && m.exists ? h("code", { class: "upcmd" }, "sudo setfacl -m u:" + (m.user || "USER") + ":rwx " + upQuote(m.dir)) : null,
     typeof m.free === "number" ? h("span", { class: "muted small" }, humanBytes(m.free) + " free there") : null,
     upList("song"));
 }
+function upQuote(t) { return /^[A-Za-z0-9_\/.@%+=:,-]+$/.test(t) ? t : "'" + t.replace(/'/g, "'\\''") + "'"; }
+
 function drawUploads() {
   const body = [h("div", { class: "ph" }, h("div", { class: "pt" }, h("h2", {}, "Upload"), h("span", { class: "sub" }, "Send photos and videos to Immich, and songs to your music folder, from this device. Keep this page open while files are being sent.")),
     h("button", { class: "small", disabled: upBusy(), onclick: loadUploads }, "Refresh"))];
