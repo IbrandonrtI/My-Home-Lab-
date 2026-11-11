@@ -25,10 +25,11 @@ const BLURS = ["none", "sm", "md", "lg", "xl", "2xl", "3xl"];
 const BLUR_NAMES = { none: "None", sm: "Small", md: "Medium", lg: "Large", xl: "Extra Large", "2xl": "Huge", "3xl": "Very Huge" };
 const ONLY = new URLSearchParams(location.search).get("only");       // "links": only the link editor, shown inside the Links tab of the dashboard
 const VIEWS = ONLY === "links" ? [["links", "Links"]]
-  : [["look", "Look"], ["layout", "Layout"], ["cards", "Cards"], ["drives", "Drives"]];
+  : [["look", "Look"], ["layout", "Layout"], ["cards", "Cards"], ["drives", "Drives"], ["updates", "Updates"]];
 if (ONLY === "links") view = "links";
 
 try { const v = sessionStorage.getItem("hlp-view"); if (v && VIEWS.some(x => x[0] === v)) view = v; } catch (e) { /* storage may be blocked */ }
+if (ONLY !== "links" && ["updates", "drives"].includes(location.hash.slice(1))) view = location.hash.slice(1);       // the bell on the dashboard opens these screens
 
 // ---------------------------------------------------------------- small helpers
 function h(tag, attrs, ...kids) {
@@ -233,7 +234,7 @@ function showLogin(passwordSet = true, msg = "") {
 function render() {
   if (!S) return;
   try { sessionStorage.setItem("hlp-view", view); } catch (e) { /* storage may be blocked */ }
-  const fns = { look: viewLook, layout: viewLayout, cards: viewCards, drives: viewDrives, links: viewLinks };
+  const fns = { look: viewLook, layout: viewLayout, cards: viewCards, drives: viewDrives, updates: viewUpdates, links: viewLinks };
   if (ONLY === "links") { put(root, viewLinks()); applyAccent(); return; }
   footEl = h("div", { class: "hactions" });      // the buttons live in the top line, next to the title and the tabs
   drawFoot(false, null, null);
@@ -1116,6 +1117,88 @@ function viewDrives() {
     if (j.running) { DRbusy = j.action; DRjob = j; followJob(); drawDrives(); } else loadDrives();
   }).catch(() => loadDrives());
   return drivesBox;
+}
+
+// ---------------------------------------------------------------- Updates (what the bell on the dashboard points to)
+// Container updates go through homelab-update (a quick database dump first, then one stack at a time), system updates through apt, and a restart through systemd.
+// The panel runs them in the background and shows the lines they print; the page keeps following them when it is reloaded.
+let UPD = null, UPDerr = "", UPDtimer = 0, UPDjob = null, UPDwas = "";
+const updBox = h("div", { class: "upd" });
+const UPD_WORKING = { check: "Looking for new versions...", containers: "Updating the containers...", system: "Updating the system...", restart: "Restarting the machine..." };
+
+function updAgo(then, now) {
+  if (!then) return "never";
+  const m = Math.max(0, Math.round((now - then) / 60));
+  return m < 2 ? "just now" : m < 120 ? m + " minutes ago" : m < 2880 ? Math.round(m / 60) + " hours ago" : Math.round(m / 1440) + " days ago";
+}
+async function loadUpdates() {
+  try { UPD = await api("GET", "/api/updates"); UPDerr = ""; if (UPD.job && UPD.job.running) { UPDjob = UPD.job; UPDwas = UPD.job.action; followUpdates(); } } catch (e) { UPD = null; UPDerr = e.message; }
+  drawUpdates();
+}
+function followUpdates() {
+  clearTimeout(UPDtimer);
+  const tick = async () => {
+    if (!updBox.isConnected) return;
+    let j;
+    try { j = await api("GET", "/api/updates/job"); } catch (e) { UPDtimer = setTimeout(tick, 3000); return; }      // (a restart: the panel is away for a minute)
+    if (j.running) { UPDjob = j; drawUpdates(); UPDtimer = setTimeout(tick, 1500); return; }
+    UPDjob = null;
+    const said = UPDwas;
+    UPDwas = "";
+    await loadUpdates();
+    if (said) toast(j.message || "Done.", !!j.rc);
+  };
+  tick();
+}
+async function updStart(what, extra) {
+  if (UPDjob && UPDjob.running) return;
+  try {
+    await api("POST", "/api/updates/start", Object.assign({ what }, extra || {}));
+    UPDjob = { running: true, action: what, lines: [] };
+    UPDwas = what;
+    drawUpdates();
+    followUpdates();
+  } catch (e) { fail(e); }
+}
+async function updRestart() {
+  if (!(await confirmBox("Restart the machine?", "Every service stops for a minute or two and starts again by itself. Do not do this while a backup or an upload is running.", "Restart Now", true))) return;
+  updStart("restart", { confirm: true });
+}
+function updRow(title, sub, pill, buttons) {
+  return h("div", { class: "bkt" }, h("div", { class: "ph" }, h("div", { class: "pt" }, h("h3", {}, title), h("span", { class: "sub" }, sub)), pill, buttons));
+}
+function drawUpdates() {
+  const busy = !!(UPDjob && UPDjob.running);
+  const body = [h("div", { class: "ph" },
+    h("div", { class: "pt" }, h("h2", {}, "Updates"), h("span", { class: "sub" }, "What is waiting to be updated. The bell on the dashboard shows the same things.")),
+    h("button", { class: "small", disabled: busy, onclick: loadUpdates }, "Refresh"))];
+  if (UPDerr) body.push(h("p", { class: "badtext", role: "alert" }, UPDerr), h("button", { class: "small", onclick: loadUpdates }, "Try Again"));
+  else if (!UPD) body.push(h("p", { class: "muted" }, "Looking at the updates..."));
+  else {
+    const n = UPD.containers.length;
+    const names = UPD.containers.map(c => c.name).join(", ");
+    body.push(h("div", { class: "bkl" },
+      updRow("Containers", n ? n + " waiting: " + names + ". A quick database dump is made first, then each service is updated one after the other." : "Everything is up to date. Last looked " + updAgo(UPD.checked, UPD.now) + ".",
+        h("span", { class: "pill " + (n ? "warn" : "ok") }, n ? n + " waiting" : "Up to date"),
+        h("div", { class: "pills" }, h("button", { class: "small", disabled: busy, onclick: () => updStart("check") }, "Check Now"),
+          h("button", { class: "small primary", disabled: busy || !n, onclick: () => updStart("containers") }, "Update Containers"))),
+      updRow("System", UPD.system === null ? "Not checked yet. Press Update System to look and install." : UPD.system ? UPD.system + " package" + (UPD.system === 1 ? "" : "s") + " waiting (Ubuntu or Mint). Installing can take several minutes." : "Everything is up to date.",
+        h("span", { class: "pill " + (UPD.system ? "warn" : UPD.system === null ? "dim" : "ok") }, UPD.system === null ? "Unknown" : UPD.system ? UPD.system + " waiting" : "Up to date"),
+        h("div", { class: "pills" }, h("button", { class: "small primary", disabled: busy || UPD.system === 0, onclick: () => updStart("system") }, "Update System"))),
+      updRow("Restart", UPD.restart ? "A system update asked for a restart. Do it when nothing important is running." : "No restart is needed.",
+        h("span", { class: "pill " + (UPD.restart ? "warn" : "ok") }, UPD.restart ? "Needed" : "Not needed"),
+        h("div", { class: "pills" }, h("button", { class: "small" + (UPD.restart ? " primary" : ""), disabled: busy, onclick: updRestart }, "Restart Machine")))));
+  }
+  if (UPDjob && UPDjob.running) {
+    body.push(h("p", { class: "muted" }, UPD_WORKING[UPDjob.action] || "Working...", " Keep this page open if you can. It also keeps going if you leave."),
+      h("pre", { class: "updlog", "aria-live": "polite" }, (UPDjob.lines || []).join("\n")));
+  }
+  put(updBox, h("div", { class: "card" }, body));
+}
+function viewUpdates() {
+  drawUpdates();
+  loadUpdates();
+  return updBox;
 }
 
 // ---------------------------------------------------------------- Upload (above Backups on the Drives tab)
