@@ -4461,6 +4461,25 @@ class ImmichAdmin(Step):
                          body={"email": Ctx.email, "name": Ctx.admin, "password": pw}, timeout=60)
         if st not in (200, 201):
             raise Abort("Immich refused the admin account (HTTP %s): %s" % (st, str(js)[:200]))
+        immich_ocr_off(pw)
+
+
+def immich_ocr_off(pw):
+    """A new Immich starts with text recognition (OCR) on. It makes the machine-learning container load extra models, which is heavy on a small server
+    with a spinning drive (the first photo can keep the drive busy for many minutes). It is turned off once, right after the admin account is made;
+    it is one switch in Immich (Administration, Settings, Machine Learning) if you want it back. A failure here only gives a warning."""
+    st, js, _ = http("POST", url("immich", "/api/auth/login"), body={"email": Ctx.email, "password": pw}, timeout=30)
+    token = js.get("accessToken") if st in (200, 201) and isinstance(js, dict) else None
+    auth = {"Authorization": "Bearer " + str(token)}
+    st, cfg, _ = http("GET", url("immich", "/api/system-config"), headers=auth, timeout=30) if token else (0, None, None)
+    ml = cfg.get("machineLearning") if st == 200 and isinstance(cfg, dict) else None
+    if not isinstance(ml, dict) or not isinstance(ml.get("ocr"), dict):
+        warn("Immich text recognition (OCR) could not be switched off (Immich did not give its settings). It is on; turn it off in Immich: Administration, Settings, Machine Learning.")
+        return
+    ml["ocr"]["enabled"] = False
+    st, _, _ = http("PUT", url("immich", "/api/system-config"), body=cfg, headers=auth, timeout=30)
+    if st != 200:
+        warn("Immich text recognition (OCR) could not be switched off (HTTP %s). Turn it off in Immich: Administration, Settings, Machine Learning." % st)
 
 
 # ================================================================ Nextcloud
@@ -5018,7 +5037,7 @@ def _register_widgets():
 _register_widgets()
 # ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-backup-tasks", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
-           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"),
+           ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"), ("homelab-alerts", "/usr/local/sbin"),
            ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"), ("homelab-selftest", "/usr/local/sbin"),
            ("homelab", "/usr/local/bin"), ("homelab-repocheck", "/usr/local/bin"), ("homelab-panel", "/usr/local/sbin")]
 # commands that were renamed or removed: an upgrade deletes the old copies so they do not linger on the server
@@ -5098,6 +5117,7 @@ class BackupConf(Step):
 CRON_LINES = [
     ("homelab-sample", "*/15 * * * * /usr/local/sbin/homelab-sample >/dev/null 2>&1"),
     ("homelab-stats", "5,20,35,50 * * * * /usr/local/sbin/homelab-stats >/dev/null 2>&1"),
+    ("homelab-alerts", "*/5 * * * * /usr/local/sbin/homelab-alerts >/dev/null 2>&1"),
     ("homelab-calendar build", "30 3 * * 1 /usr/local/bin/homelab-calendar build >/dev/null 2>&1"),
     ("homelab-calendar sync", "40 4 * * * /usr/local/bin/homelab-calendar sync >/dev/null 2>&1"),
     ("homelab-update", "17 * * * * /usr/local/sbin/homelab-update auto >/dev/null 2>&1"),
@@ -5483,6 +5503,9 @@ PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", 
 PANEL_SUDO_WITH_WORDS = ["setups", "rename", "sleep", "wake", "add", "wipe", "disconnect", "move", "setup", "bootadd"]
 PANEL_SUDO_BACKUP_EXACT = ["state", "save", "sshkey", "cloud-add"]      # `homelab-backup-tasks panel ...` (the Backups section)
 PANEL_SUDO_BACKUP_WORDS = ["versions", "browse", "run", "dry", "restore", "delete", "toggle", "sshtest"]
+# the Updates tab: exactly these commands, with exactly these words (no `*`, so nothing else can be added to them)
+PANEL_SUDO_UPDATE = ["/usr/local/sbin/homelab-update check", "/usr/local/sbin/homelab-update --yes", "/usr/bin/apt-get update", "/usr/bin/apt-get -y upgrade",
+                     "/usr/bin/systemctl reboot"]
 
 
 def panel_applies():
@@ -5535,12 +5558,14 @@ def panel_sudoers_text():
     backup = "/usr/local/sbin/homelab-backup-tasks panel "
     bcmds = [backup + w for w in PANEL_SUDO_BACKUP_EXACT] + [backup + w + " *" for w in PANEL_SUDO_BACKUP_WORDS]
     return "\n".join([
-        "# Written by homelab-setup. Lets the control panel (the Drives tab) run exactly these drive and backup commands as root, without a password.",
+        "# Written by homelab-setup. Lets the control panel (the Drives and Updates tabs) run exactly these drive, backup and update commands as root, without a password.",
         "# Anything else still asks for your password. Each command checks its own words again. Change nothing here: an upgrade puts it back.",
         "Cmnd_Alias HOMELAB_PANEL_DRIVES = " + ", \\\n    ".join(cmds),
         "Cmnd_Alias HOMELAB_PANEL_BACKUP = " + ", \\\n    ".join(bcmds),
+        "Cmnd_Alias HOMELAB_PANEL_UPDATE = " + ", \\\n    ".join(PANEL_SUDO_UPDATE),
         "%s ALL=(root) NOPASSWD: HOMELAB_PANEL_DRIVES" % user,       # homelab-repocheck: ignore (a sudo rule, not a password)
         "%s ALL=(root) NOPASSWD: HOMELAB_PANEL_BACKUP" % user,       # homelab-repocheck: ignore (a sudo rule, not a password)
+        "%s ALL=(root) NOPASSWD: HOMELAB_PANEL_UPDATE" % user,       # homelab-repocheck: ignore (a sudo rule, not a password)
         ""])
 
 
