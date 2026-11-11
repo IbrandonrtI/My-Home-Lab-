@@ -2296,6 +2296,272 @@ def api_backup_job():
         return dict(BJOB, lines=BJOB["lines"][-(8 if BJOB["running"] else 40):])
 
 
+# ================================================================ the Upload card (Drives tab): photos and videos to Immich, songs to the music folder
+# The page sends one file at a time as the raw body of a request; the panel passes it on in pieces (nothing is kept in memory or in a temporary file),
+# so a video of several GB works. Photos go to Immich with an API key the person pastes once (kept in a private file, never shown again).
+# Songs are saved as they are into the folder Navidrome plays from (the folder Downtify saves into); Navidrome adds them at its next scan (within the hour).
+IMMICH_URL = (os.environ.get("HLP_IMMICH_URL") or "http://127.0.0.1:2283").rstrip("/")
+UPLOAD_FILE = os.path.join(STATE_DIR, "uploads.json")
+PHOTO_MAX = 20 * 1024 ** 3
+SONG_MAX = 2 * 1024 ** 3
+PHOTO_EXT = {"jpg", "jpeg", "png", "gif", "webp", "heic", "heif", "avif", "tif", "tiff", "bmp", "jxl", "dng", "arw", "cr2", "cr3", "nef", "nrw", "orf", "raf", "rw2", "pef", "srw",
+             "mp4", "mov", "m4v", "avi", "mkv", "webm", "3gp", "mpg", "mpeg", "mts", "m2ts", "wmv", "flv"}
+SONG_EXT = {"mp3", "flac", "m4a", "aac", "ogg", "oga", "opus", "wav", "wma", "alac", "aiff", "aif", "ape", "wv", "mka"}
+IMMICH_KEY = re.compile(r"[A-Za-z0-9_-]{16,200}\Z")
+MUSIC_CACHE = {"at": 0.0, "dir": ""}
+UPLOAD_CHUNK = 1 << 20
+
+
+def uploads_cfg():
+    try:
+        with open(UPLOAD_FILE, encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def uploads_save(cfg):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = UPLOAD_FILE + ".tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(cfg, f)
+    os.replace(tmp, UPLOAD_FILE)
+
+
+def music_dir():
+    """The folder Navidrome plays from: HLP_MUSIC_DIR, else the folder the Navidrome container has as /music, else the installer's note, else /mnt/storage/music."""
+    forced = os.environ.get("HLP_MUSIC_DIR")
+    if forced:
+        return forced
+    if time.time() - MUSIC_CACHE["at"] < 60:
+        return MUSIC_CACHE["dir"]
+    found = ""
+    if not NO_DOCKER:
+        try:
+            r = subprocess.run(["docker", "inspect", "navidrome", "--format", '{{range .Mounts}}{{if eq .Destination "/music"}}{{.Source}}{{end}}{{end}}'],
+                               capture_output=True, text=True, timeout=10)
+            found = r.stdout.strip() if r.returncode == 0 else ""
+        except (OSError, subprocess.TimeoutExpired):
+            found = ""
+    if not found:
+        try:
+            with open("/var/lib/homelab/music-dir", encoding="utf-8") as f:
+                found = f.read().strip()
+        except OSError:
+            found = ""
+    MUSIC_CACHE.update(at=time.time(), dir=found or "/mnt/storage/music")
+    return MUSIC_CACHE["dir"]
+
+
+def immich_call(method, path, key, timeout=5):
+    """A small Immich request: (status, parsed JSON or None). A status of 0 means Immich did not answer."""
+    u = urllib.parse.urlparse(IMMICH_URL)
+    try:
+        c = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
+        c.request(method, path, headers={"x-api-key": key, "Accept": "application/json"} if key else {"Accept": "application/json"})
+        r = c.getresponse()
+        raw = r.read(1 << 20)
+        c.close()
+    except (OSError, http.client.HTTPException):
+        return 0, None
+    try:
+        return r.status, json.loads(raw)
+    except ValueError:
+        return r.status, None
+
+
+def api_upload_state():
+    key = uploads_cfg().get("immich_key", "")
+    up = immich_call("GET", "/api/server/ping", "", timeout=3)[0] == 200
+    d = music_dir()
+    ok = os.path.isdir(d)
+    writable = ok and os.access(d, os.W_OK | os.X_OK)
+    try:
+        free = shutil.disk_usage(d).free if ok else None
+    except OSError:
+        free = None
+    return {"immich": {"configured": bool(key), "up": up}, "music": {"dir": d, "exists": ok, "writable": writable, "free": free},
+            "limits": {"photo": PHOTO_MAX, "song": SONG_MAX}, "photo_ext": sorted(PHOTO_EXT), "song_ext": sorted(SONG_EXT)}
+
+
+def api_upload_key(body):
+    """Keep (or, when empty, forget) the Immich API key. A key Immich turns down is not kept."""
+    key = body.get("key")
+    if not isinstance(key, str):
+        raise Fail("Paste the key first.")
+    key = key.strip()
+    if not key:
+        cfg = uploads_cfg()
+        cfg.pop("immich_key", None)
+        uploads_save(cfg)
+        return {"configured": False, "message": "The Immich key was forgotten."}
+    if not IMMICH_KEY.match(key):
+        raise Fail("That does not look like an Immich API key (letters and numbers, at least 16).")
+    st, js = immich_call("GET", "/api/users/me", key)
+    if st == 0:
+        raise Fail("Immich does not answer right now, so the key could not be checked. Is Immich running?", 502)
+    if st == 401:
+        raise Fail("Immich turned that key down. Check that you copied all of it.", 409)
+    if st not in (200, 403):      # (403: a key that may only upload cannot read the account; it is still a good key)
+        raise Fail("Immich answered in a way the panel did not expect (code %d)." % st, 502)
+    cfg = uploads_cfg()
+    cfg["immich_key"] = key
+    uploads_save(cfg)
+    who = js.get("name") or js.get("email") if isinstance(js, dict) else ""
+    return {"configured": True, "message": "The key works" + (" (account: %s)." % who if who else ".")}
+
+
+def upload_name(raw, allowed):
+    """A file name that is safe to save: no folders, no control characters, one of the allowed kinds."""
+    name = re.sub(r"[\x00-\x1f\x7f]", "", (raw or "").replace("\\", "/").split("/")[-1]).strip().lstrip(".").strip()
+    if not name or len(name) > 255:
+        raise Fail("That file has no usable name.", 400)
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in allowed:
+        raise Fail("That kind of file is not accepted here (.%s)." % ext if ext else "That file has no ending like .mp3 or .jpg.", 415)
+    return name
+
+
+def upload_drain(handler, n):
+    """Read and drop a refused upload's body (up to a limit), so the answer reaches a browser that is still sending."""
+    left = min(n, 64 * 1024 * 1024)
+    while left > 0:
+        b = handler.rfile.read(min(left, UPLOAD_CHUNK))
+        if not b:
+            break
+        left -= len(b)
+    handler.close_connection = True
+
+
+def api_upload_stream(handler, kind, q):
+    n = int(handler.headers.get("Content-Length") or 0)
+    try:
+        if n <= 0:
+            raise Fail("The file is empty.", 400)
+        one = lambda k: (q.get(k) or [""])[0]      # noqa: E731
+        if kind == "photo":
+            name = upload_name(one("name"), PHOTO_EXT)
+            if n > PHOTO_MAX:
+                raise Fail("That file is bigger than 20 GB.", 413)
+            key = uploads_cfg().get("immich_key", "")
+            if not key:
+                raise Fail("Paste your Immich key first.", 409)
+        else:
+            name = upload_name(one("name"), SONG_EXT)
+            if n > SONG_MAX:
+                raise Fail("That song is bigger than 2 GB.", 413)
+    except Fail:
+        upload_drain(handler, n)
+        raise
+    try:
+        return upload_photo(handler, name, n, one("mtime"), key) if kind == "photo" else upload_song(handler, name, n)
+    except Fail:
+        handler.close_connection = True      # (the rest of the body, if any, is not read)
+        raise
+
+
+def upload_photo(handler, name, n, mtime, key):
+    try:
+        ms = int(mtime)
+    except ValueError:
+        ms = int(time.time() * 1000)
+    stamp = datetime_iso(ms / 1000.0)
+    safe = name.replace('"', "'")
+    boundary = "hlpanel" + secrets.token_hex(12)
+    fields = {"deviceAssetId": "%s-%d-%d" % (re.sub(r"[^A-Za-z0-9._-]", "_", name)[:120], n, ms), "deviceId": "homelab-panel", "fileCreatedAt": stamp, "fileModifiedAt": stamp}
+    pre = "".join('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n' % (boundary, k, v) for k, v in fields.items())
+    pre += '--%s\r\nContent-Disposition: form-data; name="assetData"; filename="%s"\r\nContent-Type: application/octet-stream\r\n\r\n' % (boundary, safe)
+    pre, post = pre.encode("utf-8"), ("\r\n--%s--\r\n" % boundary).encode("ascii")
+    u = urllib.parse.urlparse(IMMICH_URL)
+    try:
+        c = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=3600)
+        c.putrequest("POST", "/api/assets")
+        c.putheader("x-api-key", key)
+        c.putheader("Accept", "application/json")
+        c.putheader("Content-Type", "multipart/form-data; boundary=" + boundary)
+        c.putheader("Content-Length", str(len(pre) + n + len(post)))
+        c.endheaders()
+        c.send(pre)
+    except (OSError, http.client.HTTPException):
+        raise Fail("Immich does not answer right now. Is it running?", 502) from None
+    left = n
+    try:
+        while left > 0:
+            b = handler.rfile.read(min(left, UPLOAD_CHUNK))
+            if not b:
+                c.close()
+                raise Fail("The upload was cut off.", 400)
+            c.send(b)
+            left -= len(b)
+        c.send(post)
+    except (OSError, http.client.HTTPException):
+        pass      # (Immich may have answered early with a reason; read it below)
+    try:
+        r = c.getresponse()
+        raw = r.read(1 << 20)
+        c.close()
+    except (OSError, http.client.HTTPException):
+        raise Fail("Immich stopped answering while the file was sent.", 502) from None
+    try:
+        js = json.loads(raw)
+    except ValueError:
+        js = {}
+    if r.status in (200, 201):
+        return {"ok": True, "status": "duplicate" if js.get("status") == "duplicate" else "created", "id": js.get("id", "")}
+    if r.status == 401:
+        raise Fail("Immich turned the key down. Paste the key again.", 409)
+    raise Fail("Immich refused the file (code %d): %s" % (r.status, str(js.get("message") or raw[:200])[:200]), 502)
+
+
+def datetime_iso(ts):
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(ts))
+
+
+def upload_song(handler, name, n):
+    d = music_dir()
+    if not os.path.isdir(d):
+        raise Fail("The music folder (%s) is not there. Is the drive connected?" % d, 409)
+    if not os.access(d, os.W_OK | os.X_OK):
+        raise Fail("The panel may not write in the music folder (%s)." % d, 409)
+    try:
+        free = shutil.disk_usage(d).free
+    except OSError:
+        free = n + 10 ** 9
+    if free < n + 200 * 1024 * 1024:
+        raise Fail("There is not enough free space in the music folder for this song.", 507)
+    tmp = os.path.join(d, ".upload-%s.part" % secrets.token_hex(6))
+    try:
+        with open(tmp, "wb") as f:
+            left = n
+            while left > 0:
+                b = handler.rfile.read(min(left, UPLOAD_CHUNK))
+                if not b:
+                    raise Fail("The upload was cut off.", 400)
+                f.write(b)
+                left -= len(b)
+        os.chmod(tmp, 0o664)
+        base, dot, ext = name.rpartition(".")
+        final, i = os.path.join(d, name), 1
+        while True:
+            try:
+                os.close(os.open(final, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o664))      # (take the name; a song that is already there is never replaced)
+                break
+            except FileExistsError:
+                i += 1
+                final = os.path.join(d, "%s (%d).%s" % (base, i, ext))
+        os.replace(tmp, final)
+    except OSError as e:
+        raise Fail("The song could not be saved: %s" % (e.strerror or e), 500) from None
+    finally:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+    return {"ok": True, "saved": os.path.basename(final)}
+
+
 # ================================================================ the web server
 TERM_MAX = 6_000_000             # the biggest page the terminal may send (its own page is under 1 MB)
 TERM_IDLE = 600                  # a terminal connection with no traffic at all for this many seconds is closed (ttyd pings every few seconds)
@@ -2405,6 +2671,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, api_drives_job())
+            if path == "/api/upload":
+                if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
+                    raise Fail("Please log in again.", 401)
+                return self.send(200, api_upload_state())
             if path in ("/api/backup", "/api/backup/job", "/api/backup/versions", "/api/backup/browse"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
@@ -2552,9 +2822,13 @@ class Handler(BaseHTTPRequestHandler):
                 with LOCK:
                     res = api_bg_upload(data)
                 return self.send(200, res)
+            if path in ("/api/upload/photo", "/api/upload/song"):      # (the body is the file itself, passed on piece by piece)
+                return self.send(200, api_upload_stream(self, path.rsplit("/", 1)[1], urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)))
             body = json.loads(self.read_body(1 << 20) or b"{}")
             if not isinstance(body, dict):
                 raise Fail("The request is not understood.")
+            if path == "/api/upload/immich-key":
+                return self.send(200, dict(api_upload_key(body), ok=True))
             if path == "/api/backup/save":
                 return self.send(200, api_backup_save(body))
             if path in ("/api/backup/run", "/api/backup/dry", "/api/backup/restore"):
