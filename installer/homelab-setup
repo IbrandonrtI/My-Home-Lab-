@@ -5017,7 +5017,7 @@ def _register_widgets():
 
 _register_widgets()
 # ================================================================ your scripts, schedule and login screen
-SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
+SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-backup-tasks", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
            ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"),
            ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"), ("homelab-selftest", "/usr/local/sbin"),
            ("homelab", "/usr/local/bin"), ("homelab-repocheck", "/usr/local/bin"), ("homelab-panel", "/usr/local/sbin")]
@@ -5106,7 +5106,9 @@ CRON_LINES = [
     ("hdparm -B 254", '@reboot sleep 60 && /usr/sbin/hdparm -B 254 "/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")" >/dev/null 2>&1'),
 ]
 CRON_PROGRESS = ("homelab-setup progress", "*/10 * * * * /usr/local/sbin/homelab-setup progress >/dev/null 2>&1")
-CRON_BACKUP = ("homelab-backup", "0 6 * * * /usr/local/sbin/homelab-backup")
+CRON_BACKUP_OLD = ("homelab-backup", "0 6 * * * /usr/local/sbin/homelab-backup")      # the nightly job on its own (a server built by hand keeps it)
+CRON_BACKUP = ("homelab-backup-tasks due", "*/5 * * * * /usr/local/sbin/homelab-backup-tasks due >/dev/null 2>&1")      # the scheduler of the backup tasks; the nightly backup is the first task
+OLD_BACKUP_LINE = re.compile(r"^\s*\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+/usr/local/sbin/homelab-backup(\s|$)")
 
 
 def crontab_text():
@@ -5138,6 +5140,24 @@ def crontab_add(lines):
     rc, txt = run(["crontab", "-"], input_text=new)
     if rc != 0:
         raise Abort("Could not save root's crontab: %s" % txt.strip()[-200:])
+
+
+def crontab_remove(match):
+    """Take the lines `match` says yes to out of root's crontab (the old crontab is saved first). Returns how many went."""
+    cur = crontab_text()
+    keep = [l for l in cur.splitlines() if not match(l)]
+    gone = len(cur.splitlines()) - len(keep)
+    if not gone:
+        return 0
+    if Opt.dry:
+        out("      would remove %d old line(s) from root's crontab" % gone)
+        return gone
+    os.makedirs(SECRET_DIR, exist_ok=True)
+    write_file("%s/crontab.before-%s" % (SECRET_DIR, time.strftime("%Y%m%d-%H%M%S")), cur, 0o600)
+    rc, txt = run(["crontab", "-"], input_text="\n".join(keep) + "\n")
+    if rc != 0:
+        raise Abort("Could not save root's crontab: %s" % txt.strip()[-200:])
+    return gone
 
 
 @step
@@ -5172,17 +5192,28 @@ class DataDrive(Step):
 
 @step
 class CronBackup(Step):
-    id, group, title = "cron-backup", "Scripts and schedule", "Daily backup scheduled at 6:00"
+    id, group, title = "cron-backup", "Scripts and schedule", "Backup tasks run on schedule (the nightly backup at 6:00, the others as set in the Backups section)"
     needs = ("scripts", "data-drive")
 
     def applies(self):
-        # homelab-backup refuses to run unless /mnt/storage is a real drive, so a skipped drive means no backup job
+        # the nightly backup refuses to run unless /mnt/storage is a real drive, so a skipped drive means no backup job
         return not State.data["skip"].get("data-drive")
 
     def probe(self):
-        return "done" if CRON_BACKUP[0] in crontab_active(crontab_text()) else "todo"
+        act = crontab_active(crontab_text())
+        if Mode.existing:      # a server built by hand has no panel: it keeps the nightly job as it was
+            return "done" if CRON_BACKUP_OLD[0] in act else "todo"
+        return "done" if CRON_BACKUP[0] in act and not any(OLD_BACKUP_LINE.match(l) for l in act.splitlines()) else "todo"
 
     def run(self):
+        if Mode.existing:
+            crontab_add([CRON_BACKUP_OLD])
+            return
+        if not Opt.dry:      # the task list is made first, from the old line (so the nightly time you had carries over)
+            env = dict(os.environ, HLB_CONF=P("/etc/homelab-backup-tasks.json"), HLB_STATE=P("/var/lib/homelab-backup/tasks"),
+                       HLB_LEGACY_CONF=P("/etc/homelab-backup.conf"))
+            run([P("/usr/local/sbin/homelab-backup-tasks"), "list"], env=env)
+        crontab_remove(lambda l: bool(OLD_BACKUP_LINE.match(l)) and not l.lstrip().startswith("#"))
         crontab_add([CRON_BACKUP])
 
 
@@ -5450,6 +5481,8 @@ PANEL_SUDOERS = "/etc/sudoers.d/homelab-panel"
 # ones that erase or move drives (add, wipe, disconnect, move, setup, bootadd) also ask for the typed confirmations inside the drives tool and refuse while a backup runs
 PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", "setups"]
 PANEL_SUDO_WITH_WORDS = ["setups", "rename", "sleep", "wake", "add", "wipe", "disconnect", "move", "setup", "bootadd"]
+PANEL_SUDO_BACKUP_EXACT = ["state", "save", "sshkey", "cloud-add"]      # `homelab-backup-tasks panel ...` (the Backups section)
+PANEL_SUDO_BACKUP_WORDS = ["versions", "browse", "run", "dry", "restore", "delete", "toggle", "sshtest"]
 
 
 def panel_applies():
@@ -5499,11 +5532,15 @@ def panel_sudoers_text():
         return ""
     drives = "/usr/local/sbin/drives panel "
     cmds = [drives + w for w in PANEL_SUDO_EXACT] + [drives + w + " *" for w in PANEL_SUDO_WITH_WORDS]
+    backup = "/usr/local/sbin/homelab-backup-tasks panel "
+    bcmds = [backup + w for w in PANEL_SUDO_BACKUP_EXACT] + [backup + w + " *" for w in PANEL_SUDO_BACKUP_WORDS]
     return "\n".join([
-        "# Written by homelab-setup. Lets the control panel (the Drives tab) run exactly these drive commands as root, without a password.",
+        "# Written by homelab-setup. Lets the control panel (the Drives tab) run exactly these drive and backup commands as root, without a password.",
         "# Anything else still asks for your password. Each command checks its own words again. Change nothing here: an upgrade puts it back.",
         "Cmnd_Alias HOMELAB_PANEL_DRIVES = " + ", \\\n    ".join(cmds),
+        "Cmnd_Alias HOMELAB_PANEL_BACKUP = " + ", \\\n    ".join(bcmds),
         "%s ALL=(root) NOPASSWD: HOMELAB_PANEL_DRIVES" % user,       # homelab-repocheck: ignore (a sudo rule, not a password)
+        "%s ALL=(root) NOPASSWD: HOMELAB_PANEL_BACKUP" % user,       # homelab-repocheck: ignore (a sudo rule, not a password)
         ""])
 
 
