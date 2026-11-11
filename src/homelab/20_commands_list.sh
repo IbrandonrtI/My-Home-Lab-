@@ -11,7 +11,7 @@ commands() {
   section "Which check do I run?"
   cmd "sudo drives check"              "scan the pool drives for file system errors (changes nothing)"
   cmd "sudo drives health"             "SMART health, temperature and wear of every drive"
-  cmd "homelab status"                 "a quick look at everything (the login screen, live)"
+  cmd "homelab status"                 "a quick look at everything (every row, checked now)"
   cmd "homelab-repocheck ~/My-Home-Lab-" "the repository files only, before an upload (not the server)"
   cmd "sudo homelab-selftest"          "the big check of the whole lab (report saved in ~)"
   cmd "sudo homelab-setup verify"      "does every container and service answer?"

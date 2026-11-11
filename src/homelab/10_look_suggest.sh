@@ -11,14 +11,15 @@ rule() {   # rule "Title": a spaced section heading with a thin line
 
 # status rows. While BUFFERING=1 they are collected (so the top summary can count them), otherwise printed.
 OKN=0; WARNN=0; BADN=0; STATUS_BUF=""; BUFFERING=0
+ISSUES_BUF=""   # the warnings and problems only, one per line as LEVEL|LABEL|TEXT (the short login screen lists them when it has to check live)
 row() {   # row COLOUR SYMBOL LABEL TEXT TEXTCOLOUR
   local out
   printf -v out '   %s%s%s  %-16s %s%s%s\n' "$1" "$2" "$N" "$3" "$5" "$4" "$N"
   if [ "$BUFFERING" -eq 1 ]; then STATUS_BUF+="$out"; else printf '%s' "$out"; fi
 }
 ok()   { OKN=$((OKN + 1));     row "$G" "$S_OK"   "$1" "$2" ""; }
-warn() { WARNN=$((WARNN + 1)); row "$Y" "$S_WARN" "$1" "$2" "$Y"; }
-bad()  { BADN=$((BADN + 1));   row "$R" "$S_BAD"  "$1" "$2" "$R"; }
+warn() { WARNN=$((WARNN + 1)); ISSUES_BUF+="warn|$1|$2"$'\n'; row "$Y" "$S_WARN" "$1" "$2" "$Y"; }
+bad()  { BADN=$((BADN + 1));   ISSUES_BUF+="bad|$1|$2"$'\n'; row "$R" "$S_BAD"  "$1" "$2" "$R"; }
 
 # command lists: collected per section, so the whole section is a table (if it fits the window) or stacked
 CMDS_C=(); CMDS_D=()
@@ -85,21 +86,28 @@ lan_address() {   # this machine's address on the home network
   echo "$ip"
 }
 
-open_section() {   # where to click: the dashboard on the home network, and from anywhere through Tailscale
-  [ -d "$HOMEPAGE_DIR" ] || return 0
-  local ip ts="" port=""
+dashboard_urls() {   # sets DASH_HOME (the address at home) and DASH_TS (the Tailscale one, if there is one)
+  local ip port=""
+  DASH_HOME=""; DASH_TS=""
   ip=$(lan_address)
   [ -n "$ip" ] || return 0
   # the port Homepage listens on: ask Docker (the installer's default is 3001; 3000 belongs to AdGuard Home)
   command -v docker >/dev/null 2>&1 && port=$(timeout 3 docker port homepage 2>/dev/null | awk -F: 'NR == 1 {print $NF}')
   [[ "$port" =~ ^[0-9]+$ ]] || port="${HOMELAB_HOMEPAGE_PORT:-3001}"
+  DASH_HOME="http://$ip:$port"
   if command -v tailscale >/dev/null 2>&1; then
-    ts=$(timeout 3 tailscale serve status 2>/dev/null | awk -v p=":$port" '/^https:\/\// {u = $1} $0 ~ "proxy .*" p "[[:space:]]*$" && u {print u; exit}')
+    DASH_TS=$(timeout 3 tailscale serve status 2>/dev/null | awk -v p=":$port" '/^https:\/\// {u = $1} $0 ~ "proxy .*" p "[[:space:]]*$" && u {print u; exit}')
   fi
+}
+
+open_section() {   # where to click: the dashboard on the home network, and from anywhere through Tailscale
+  [ -d "$HOMEPAGE_DIR" ] || return 0
+  dashboard_urls
+  [ -n "$DASH_HOME" ] || return 0
   rule "Open in your browser"
-  printf '   %-30s %s%s%s\n' "Dashboard, at home" "$B" "http://$ip:$port" "$N"
-  [ -z "$ts" ] || printf '   %-30s %s%s%s\n' "Dashboard, from anywhere" "$B" "$ts" "$N"
-  [ -z "$ts" ] || printf '   %s%-30s needs the Tailscale app on that device, signed in to your account%s\n' "$D" "" "$N"
+  printf '   %-30s %s%s%s\n' "Dashboard, at home" "$B" "$DASH_HOME" "$N"
+  [ -z "$DASH_TS" ] || printf '   %-30s %s%s%s\n' "Dashboard, from anywhere" "$B" "$DASH_TS" "$N"
+  [ -z "$DASH_TS" ] || printf '   %s%-30s needs the Tailscale app on that device, signed in to your account%s\n' "$D" "" "$N"
 }
 
 show_docs() {
