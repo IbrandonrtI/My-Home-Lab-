@@ -571,7 +571,7 @@ print_stack() {   # print_stack N STACK: what is waiting in one stack, with the 
     m=$(anon_volumes_of "${CX[$i]}")
     if [ -n "$m" ]; then
       warn_block "WARNING: ${CN[$i]} keeps data in an anonymous volume ($(echo "$m" | paste -sd, -))." \
-        "Updating can leave it EMPTY (see B6 in docs/troubleshooting.md), so it is NOT updated here. Copy that data out first."
+        "Updating can leave it EMPTY, so it is NOT updated here. Copy that data out first."
     fi
   done
   case "${s,,}" in
@@ -636,8 +636,8 @@ nextcloud_notes() {   # nextcloud_notes STACK   (uses SST from build_plan)
   if read -r old new < <(nc_versions "$s") && [ -n "${new:-}" ]; then
     case "$(nc_jump "$old" "$new")" in
       skip) warn_block "STOP: Nextcloud would jump from $old to $new and skip a major version. It is NOT updated here." \
-              "Nextcloud can only go up one major version at a time. Read the Nextcloud section of docs/updating.md first." ;;
-      major) warn_block "MAJOR upgrade: $old $S_ARR $new. Read the release notes and the Nextcloud section of docs/updating.md first;" \
+              "Nextcloud can only go up one major version at a time. Read the Nextcloud release notes first." ;;
+      major) warn_block "MAJOR upgrade: $old $S_ARR $new. Read the Nextcloud release notes first;" \
               "check that your apps support it. It is only done when you type yes yourself (not with --yes)." ;;
       same) kv version "$old (same number, rebuilt image)" ;;
       *) kv version "$old $S_ARR $new" ;;
@@ -784,13 +784,13 @@ update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop he
   for i in "${!CN[@]}"; do
     [ "${CS[$i]}" = "$s" ] || continue
     v=$(anon_volumes_of "${CX[$i]}")
-    if [ -n "$v" ]; then manual_steps "$s" "${CN[$i]} keeps data in an anonymous volume, so it is not updated here (B6 in docs/troubleshooting.md). Copy that data out first."; return 2; fi
+    if [ -n "$v" ]; then manual_steps "$s" "${CN[$i]} keeps data in an anonymous volume, so it is not updated here (an update can leave it empty). Copy that data out first."; return 2; fi
   done
   case "${s,,}" in
     nextcloud*)
       if read -r old new < <(nc_versions "$s") && [ -n "${new:-}" ]; then
         case "$(nc_jump "$old" "$new")" in
-          skip) line_bad "Nextcloud would skip a major version ($old $S_ARR $new). Not updated. Read docs/updating.md."; return 2 ;;
+          skip) line_bad "Nextcloud would skip a major version ($old $S_ARR $new). Not updated. Read the Nextcloud release notes."; return 2 ;;
           major)
             if [ "$yes" -eq 1 ]; then line_warn "Nextcloud $old $S_ARR $new is a MAJOR upgrade. It is left for you: run  sudo homelab-update  without --yes."; return 2; fi
             confirm "This is a MAJOR Nextcloud upgrade ($old $S_ARR $new). Did you read the release notes and check your apps? Continue?" 0 || { line_note "Nextcloud left as it is."; return 2; } ;;
@@ -819,7 +819,7 @@ update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop he
   echo "      Waiting for the containers to come back (up to 5 minutes)..."
   if ! wait_stack "$s"; then
     line_bad "$s is not healthy yet: ${WAIT_BAD:-unknown}. Look:  docker ps -a   and   docker logs --tail 50 NAME"
-    echo "      Going back: the old version of each image is saved as homelab-rollback:<name>-<date> (docs/updating.md)."
+    echo "      Going back: the old version of each image is saved as homelab-rollback:<name>-<date>."
     return 1
   fi
   # did the containers really change? Portainer can answer before Docker has recreated them, so give it a little time.

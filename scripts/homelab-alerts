@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""homelab-alerts - collects what needs attention and writes it to one small file, alerts.json, for the bell on the dashboard.
+
+  homelab-alerts          look at everything and rewrite the file (cron runs it every 5 minutes)
+  homelab-alerts show     look and print what it found, write nothing
+  homelab-alerts help
+
+What it looks at: containers that are not running, container updates waiting (the list homelab-update saved), system updates and a needed
+restart, the drives and the backup (from stats.json), free space, Tailscale, and drive temperatures. Every kind can be missing (a tool that is not
+installed, a file that is not there yet) and then it is skipped. It changes nothing on the machine and needs no internet.
+
+The file is images/alerts.json in the Homepage folder (the same place as stats.json). Each item has an id, a level (bad, warn or info), a title,
+a detail and an action the bell can offer ("update", "restart" or ""). Settings by environment (for tests): HOMELAB_STATE_DIR, HOMELAB_ALERTS_OUT,
+HOMELAB_STATS_IN, HOMELAB_DOCKER, HOMELAB_TAILSCALE, HOMELAB_REBOOT_FILE, HOMELAB_ROOT_PATH, HOMELAB_TEMP_WARN, HOMELAB_TEMP_BAD."""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+STATE_DIR = os.environ.get("HOMELAB_STATE_DIR", "/var/lib/homelab")
+DOCKER = os.environ.get("HOMELAB_DOCKER", "docker")
+TAILSCALE = os.environ.get("HOMELAB_TAILSCALE", "tailscale")
+REBOOT_FILE = os.environ.get("HOMELAB_REBOOT_FILE", "/var/run/reboot-required")
+ROOT_PATH = os.environ.get("HOMELAB_ROOT_PATH", "/")
+BACKUP_STATUS = os.environ.get("HOMELAB_BACKUP_STATUS", "/var/lib/homelab-backup/last-run")
+ORDER = {"bad": 0, "warn": 1, "info": 2}
+
+
+def run(cmd, timeout=20):
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return p.returncode, p.stdout
+    except (OSError, subprocess.SubprocessError):
+        return 127, ""
+
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def load_json(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def item(iid, level, title, detail="", action=""):
+    return {"id": iid, "level": level, "title": title, "detail": detail, "action": action}
+
+
+def nice(name):
+    """immich_server -> Immich server, netdata-netdata-1 -> Netdata netdata"""
+    words = re.sub(r"-\d+\Z", "", name).replace("_", " ").replace("-", " ").strip()
+    return words[:1].upper() + words[1:]
+
+
+def homepage_dir():
+    saved = read(os.path.join(STATE_DIR, "homepage-dir")).strip()
+    if saved and os.path.isdir(saved):
+        return saved
+    rc, out = run([DOCKER, "inspect", "homepage", "--format", '{{range .Mounts}}{{if eq .Destination "/app/config"}}{{.Source}}{{end}}{{end}}'], 10)
+    out = out.strip()
+    if rc == 0 and out and os.path.isdir(out):
+        return out
+    for line in read("/etc/passwd").splitlines():
+        f = line.split(":")
+        if len(f) > 5 and f[2] == "1000" and os.path.isdir(os.path.join(f[5], "homepage-config")):
+            return os.path.join(f[5], "homepage-config")
+    return ""
+
+
+def out_path():
+    forced = os.environ.get("HOMELAB_ALERTS_OUT")
+    if forced:
+        return forced
+    hp = homepage_dir()
+    return os.path.join(hp, "images", "alerts.json") if hp else ""
+
+
+def stats_path():
+    forced = os.environ.get("HOMELAB_STATS_IN")
+    if forced:
+        return forced
+    hp = homepage_dir()
+    return os.path.join(hp, "images", "stats.json") if hp else ""
+
+
+# ---------------------------------------------------------------- the checks
+def check_containers():
+    rc, out = run([DOCKER, "ps", "-a", "--format", "{{.Names}}|{{.State}}|{{.Status}}"])
+    if rc != 0:
+        return [item("docker", "bad", "Docker does not answer", "The containers cannot be checked. Is Docker running?", "")]
+    res = []
+    for line in out.splitlines():
+        f = line.split("|", 2)
+        if len(f) < 3 or not f[0]:
+            continue
+        name, state, status = f[0], f[1], f[2]
+        if state != "running":
+            res.append(item("down:" + name, "bad", "%s is not running" % nice(name), status, ""))
+        elif "(unhealthy)" in status:
+            res.append(item("sick:" + name, "warn", "%s is not healthy" % nice(name), status, ""))
+    return res
+
+
+def check_updates():
+    lines = [l for l in read(os.path.join(STATE_DIR, "image-updates")).splitlines()[1:] if l.strip()]
+    res = []
+    if lines:
+        names = ", ".join(l.split()[0] for l in lines[:6]) + (" and more" if len(lines) > 6 else "")
+        res.append(item("updates:containers", "info", "%d container update%s waiting" % (len(lines), "" if len(lines) == 1 else "s"), names, "update"))
+    apt = read(os.path.join(STATE_DIR, "apt")).strip().split("|")
+    n = int(apt[0]) if apt and apt[0].isdigit() else 0
+    if n:
+        res.append(item("updates:system", "info", "%d system update%s waiting" % (n, "" if n == 1 else "s"), "Ubuntu or Mint packages", "update"))
+    if os.path.exists(REBOOT_FILE):
+        res.append(item("restart", "warn", "A restart is needed", "A system update asked for it. Restart when nothing important is running.", "update"))
+    return res
+
+
+def stats_items():
+    st = load_json(stats_path())
+    res = []
+    if not st:
+        return res
+    main, backup = st.get("main") or {}, st.get("backup") or {}
+    for key, label, req in (("main", "Main pool", True), ("backup", "Backup pool", False)):
+        blk = main if key == "main" else backup
+        pct, health = str(blk.get("percent", "")), str(blk.get("health", ""))
+        if pct == "Not connected":
+            res.append(item(key + ":missing", "bad" if req else "info", "%s is not connected" % label,
+                            "No drive is connected there." if req else "Connect a drive in the Drives tab to get backups on a second drive.", "drives"))
+            continue
+        if health.startswith("PROBLEM"):
+            res.append(item(key + ":health", "bad", "%s has a drive with a problem" % label, "Open the Drives tab and check the drives.", "drives"))
+        m = re.match(r"(\d+)%", pct)
+        if m and int(m.group(1)) >= 90:
+            res.append(item(key + ":space", "bad" if int(m.group(1)) >= 95 else "warn", "%s is %s full" % (label, pct), "Free: %s" % blk.get("free", "-"), "drives"))
+    last = st.get("last_backup") or {}
+    result = str(last.get("result", ""))
+    if result.startswith("Failed"):
+        res.append(item("backup:failed", "bad", "The last backup failed", "%s. Open the Backups section of the Drives tab." % last.get("when", ""), "drives"))
+    else:
+        text = read(BACKUP_STATUS).strip().splitlines()
+        f = text[0].split("|") if text else []
+        try:
+            t = time.mktime(time.strptime(f[0], "%Y-%m-%d %H:%M"))
+            if time.time() - t > 36 * 3600:
+                res.append(item("backup:late", "warn", "No backup for more than a day", "The last one was %s." % last.get("when", f[0]), "drives"))
+        except (IndexError, ValueError, OverflowError):
+            pass
+    return res
+
+
+def check_space():
+    try:
+        s = os.statvfs(ROOT_PATH)
+        pct = int(round(100.0 * (s.f_blocks - s.f_bfree) / (s.f_blocks - s.f_bfree + s.f_bavail))) if s.f_blocks else 0
+        free = s.f_bavail * s.f_frsize
+    except (OSError, ZeroDivisionError):
+        return []
+    if pct >= 85:
+        return [item("space:boot", "bad" if pct >= 92 else "warn", "The boot drive is %d%% full" % pct, "%.1f GB free. Old Docker images can be removed with 'sudo homelab-update clean'." % (free / 1e9), "")]
+    return []
+
+
+def check_tailscale():
+    rc, out = run([TAILSCALE, "status", "--json"], 10)
+    if rc == 127:
+        return []
+    try:
+        state = json.loads(out).get("BackendState", "")
+    except ValueError:
+        state = ""
+    if state and state != "Running":
+        return [item("tailscale", "bad", "Tailscale is not connected (%s)" % state, "Remote access does not work until it is back. Try: sudo tailscale up", "")]
+    if not state and rc != 0:
+        return [item("tailscale", "bad", "Tailscale does not answer", "Remote access may be down. Try: sudo systemctl restart tailscaled", "")]
+    return []
+
+
+def check_temps():
+    try:
+        warn = int(os.environ.get("HOMELAB_TEMP_WARN", "50"))
+        bad = int(os.environ.get("HOMELAB_TEMP_BAD", "60"))
+    except ValueError:
+        warn, bad = 50, 60
+    res = []
+    for line in read(os.path.join(STATE_DIR, "temps")).splitlines():
+        f = line.split("|")
+        if len(f) < 3 or not f[2].isdigit():
+            continue
+        t = int(f[2])
+        if t >= warn:
+            res.append(item("temp:" + f[0], "bad" if t >= bad else "warn", "%s is hot: %d°C" % (f[0].capitalize() if f[0].islower() else f[0], t), "Check the airflow around the machine.", ""))
+    return res
+
+
+CHECKS = (check_containers, check_updates, stats_items, check_space, check_tailscale, check_temps)
+
+
+def collect():
+    items = []
+    for fn in CHECKS:
+        try:
+            items.extend(fn())
+        except Exception as e:     # one source that breaks must not hide the others
+            items.append(item("check:" + fn.__name__, "warn", "A check failed: %s" % fn.__name__, str(e)[:120], ""))
+    items.sort(key=lambda i: (ORDER[i["level"]], i["title"]))
+    now = int(time.time())
+    return {"version": 1, "updated": now, "counts": {k: sum(1 for i in items if i["level"] == k) for k in ORDER}, "items": items}
+
+
+def save(res, path):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(res, f, indent=1)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, path)
+
+
+def main(argv):
+    cmd = argv[0] if argv else "run"
+    if cmd in ("help", "--help", "-h"):
+        print(__doc__)
+        return 0
+    if cmd not in ("run", "show"):
+        sys.stderr.write("Unknown option: %s\n%s\n" % (cmd, "Use: homelab-alerts [show|help]"))
+        return 1
+    res = collect()
+    if cmd == "show":
+        for i in res["items"]:
+            print("%-5s %-28s %s" % (i["level"], i["title"], i["detail"]))
+        if not res["items"]:
+            print("Nothing needs attention.")
+        return 0
+    path = out_path()
+    if not path:
+        sys.stderr.write("homelab-alerts: the Homepage folder was not found, nothing written.\n")
+        return 1
+    save(res, path)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

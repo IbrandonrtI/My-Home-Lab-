@@ -298,7 +298,7 @@ LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "gl
                 "side": 70, "glassBlur": 14, "glassSat": 125, "glassRim": 0, "glassTint": True, "cardDepth": 0, "text": "#eef2f9", "muted": "#a9b4c7", "theme": "calm", "playerHeight": 600, "paintStrength": 10, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}, "names": {}, "logo": {}}
 LABEL_ICONS = ("plain", "circle", "square", "ring")
 PAINT_STYLES = ("gradient", "solid")
-NO_PAINT = ("customize-card", "navidrome-card", "linkedit-card", "terminal-card")        # the panel's own cards and the music player are never painted
+NO_PAINT = ("customize-card", "linkedit-card", "terminal-card")        # the panel's own cards are never painted (the Navidrome card is: its frame takes the theme color, the player inside keeps its own look)
 # The themes of the Look screen. "look" is what the theme sets (only what differs from the default); "palette" is a list of colors spread over the groups of
 # cards, tiles and bookmarks (one color per group, round and round); "paintAll" is the one color of the cards and tiles (and of the bookmarks, unless "paintLinks" gives them a
 # second color that goes with it); "ui" is how the control panel itself looks.
@@ -2296,6 +2296,108 @@ def api_backup_job():
         return dict(BJOB, lines=BJOB["lines"][-(8 if BJOB["running"] else 40):])
 
 
+# ================================================================ the Updates tab: container updates, system updates and a restart
+# What is waiting is read from the files homelab-update and the nightly check keep in /var/lib/homelab (the same ones the login screen reads). The buttons run the
+# exact commands the sudo rule allows, one at a time in the background (UPJOB); the page follows them with /api/updates/job.
+UPDATE_STATE = os.environ.get("HLP_UPDATE_STATE") or "/var/lib/homelab"
+REBOOT_FILE = os.environ.get("HLP_REBOOT_FILE") or "/var/run/reboot-required"
+UPDATE_STEPS = {         # name -> the commands (run one after the other; the first that fails stops the rest)
+    "check": [["sudo", "-n", "/usr/local/sbin/homelab-update", "check"]],
+    "containers": [["sudo", "-n", "/usr/local/sbin/homelab-update", "--yes"]],
+    "system": [["sudo", "-n", "/usr/bin/apt-get", "update"], ["sudo", "-n", "/usr/bin/apt-get", "-y", "upgrade"]],
+    "restart": [["sudo", "-n", "/usr/bin/systemctl", "reboot"]],
+}
+if os.environ.get("HLP_UPDATE_STEPS"):       # tests: {"name": [[command...], ...]}
+    UPDATE_STEPS = json.loads(os.environ["HLP_UPDATE_STEPS"])
+UPJOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0}
+UPJOB_LOCK = threading.Lock()
+ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def api_updates_state():
+    lines = read_text(os.path.join(UPDATE_STATE, "image-updates")).splitlines()
+    first = lines[0].strip() if lines else ""
+    stacks = []
+    for l in lines[1:]:
+        if l.strip():
+            parts = l.split(None, 1)
+            stacks.append({"name": parts[0], "detail": parts[1] if len(parts) > 1 else ""})
+    apt = read_text(os.path.join(UPDATE_STATE, "apt")).strip().split("|")
+    system = int(apt[0]) if apt and apt[0].isdigit() else None
+    return {"checked": int(first) if first.isdigit() else 0, "containers": stacks, "system": system, "restart": os.path.exists(REBOOT_FILE),
+            "now": int(time.time()), "job": api_updates_job()}
+
+
+def api_updates_job():
+    with UPJOB_LOCK:
+        return dict(UPJOB, lines=UPJOB["lines"][-(10 if UPJOB["running"] else 60):])
+
+
+def updates_job_thread(action):
+    rc = 1
+    try:
+        for cmd in UPDATE_STEPS[action]:
+            with UPJOB_LOCK:
+                UPJOB["lines"] = (UPJOB["lines"] + ["$ " + " ".join(cmd[2:] if cmd[:2] == ["sudo", "-n"] else cmd)])[-300:]
+            try:
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1)
+            except FileNotFoundError:
+                with UPJOB_LOCK:
+                    UPJOB["lines"].append("command not found")
+                rc = 127
+                break
+            timer = threading.Timer(JOB_MAX_SECONDS, p.kill)
+            timer.start()
+            try:
+                for line in p.stdout:
+                    line = ANSI.sub("", line).rstrip()
+                    if line.strip():
+                        with UPJOB_LOCK:
+                            UPJOB["lines"] = (UPJOB["lines"] + [line[:400]])[-300:]
+                rc = p.wait()
+            finally:
+                timer.cancel()
+            if rc != 0:
+                break
+    finally:
+        with UPJOB_LOCK:
+            tail = [x for x in UPJOB["lines"] if x.strip() and not x.startswith("$ ")]
+            text = "\n".join(UPJOB["lines"])
+            UPJOB["rc"] = rc
+            if rc == 0:
+                UPJOB["message"] = tail[-1] if tail else "Done."
+            elif "a password is required" in text or "not allowed to execute" in text or "sudo:" in text:
+                UPJOB["message"] = "The panel is not allowed to run that yet. Run the installer's update (homelab-update) to add the permission."
+            elif rc == 127:
+                UPJOB["message"] = "That tool is not installed on this machine."
+            else:
+                UPJOB["message"] = tail[-1] if tail else "It stopped without saying why."
+            UPJOB["running"] = False
+
+
+def api_updates_start(body):
+    action = body.get("what")
+    if action not in UPDATE_STEPS:
+        raise Fail("Choose what to update.")
+    if action == "restart" and body.get("confirm") is not True:
+        raise Fail("Confirm the restart first.")
+    with UPJOB_LOCK:
+        if UPJOB["running"]:
+            raise Fail("Something is being updated already. Wait until it has finished.", 409)
+        UPJOB.update(id=UPJOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()))
+        jid = UPJOB["id"]
+    threading.Thread(target=updates_job_thread, args=(action,), daemon=True).start()
+    return {"ok": True, "job": jid}
+
+
 # ================================================================ the Upload card (Drives tab): photos and videos to Immich, songs to the music folder
 # The page sends one file at a time as the raw body of a request; the panel passes it on in pieces (nothing is kept in memory or in a temporary file),
 # so a video of several GB works. Photos go to Immich with an API key the person pastes once (kept in a private file, never shown again).
@@ -2675,6 +2777,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, api_upload_state())
+            if path in ("/api/updates", "/api/updates/job"):
+                if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
+                    raise Fail("Please log in again.", 401)
+                return self.send(200, api_updates_state() if path == "/api/updates" else api_updates_job())
             if path in ("/api/backup", "/api/backup/job", "/api/backup/versions", "/api/backup/browse"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
@@ -2829,6 +2935,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise Fail("The request is not understood.")
             if path == "/api/upload/immich-key":
                 return self.send(200, dict(api_upload_key(body), ok=True))
+            if path == "/api/updates/start":
+                return self.send(200, api_updates_start(body))
             if path == "/api/backup/save":
                 return self.send(200, api_backup_save(body))
             if path in ("/api/backup/run", "/api/backup/dry", "/api/backup/restore"):

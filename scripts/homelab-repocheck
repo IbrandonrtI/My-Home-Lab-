@@ -13,7 +13,7 @@ What it checks:
   - scripts (scripts/): syntax (bash -n) and shellcheck if it is installed
   - the installer: installer/homelab-setup compiles, and (with src/ present) is the exact join of its pieces in src/installer/
   - YAML: every .yaml/.yml file, and every yaml code block in the Markdown files
-  - Markdown (README.md, INSTALL.md and docs/**): balanced code fences, links to headings (#...),
+  - Markdown (README.md and docs/**): balanced code fences, links to headings (#...),
     links to files and images (relative to the file that contains them), links between the guides, bash code blocks (bash -n)
   - secrets: app keys, tokens, private keys and password lines that look real (a line can opt out with
     the words "homelab-repocheck: ignore"; the made-up passwords in tests/ are not reported)
