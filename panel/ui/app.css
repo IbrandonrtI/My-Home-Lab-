@@ -326,3 +326,34 @@ details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-siz
 
 .row.check { gap: 10px; align-items: center; margin: 10px 0 4px; font-weight: 600; cursor: pointer; }
 .row.check input { width: 18px; height: 18px; accent-color: rgb(var(--accent)); }
+
+/* Backups: a task is a box in the last card of the Drives tab */
+.bk .card { margin-top: 14px; }
+.bkl { display: grid; gap: 12px; margin-top: 12px; }
+.bkt { background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
+.bkt.isoff { opacity: 0.75; }
+.bkt .ph { margin-bottom: 8px; }
+.bkt .ph h3 { overflow-wrap: anywhere; }
+.bklines { display: grid; gap: 3px; margin: 6px 0 10px; font-size: 14px; }
+.bkline { display: flex; gap: 10px; align-items: baseline; }
+.bkline .k { flex: 0 0 84px; color: var(--muted); font-size: 13px; }
+.bkline .v { min-width: 0; overflow-wrap: anywhere; }
+.bkprog { margin: 6px 0 10px; display: grid; gap: 4px; }
+.bkprog .bar { height: 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+.bkprog .bar i { display: block; height: 100%; border-radius: 6px; background: rgb(var(--accent)); transition: width 0.6s; }
+.bkprog .bar.wait i { opacity: 0.5; animation: bkpulse 1.4s ease-in-out infinite; }
+@keyframes bkpulse { 50% { opacity: 0.15; } }
+@media (prefers-reduced-motion: reduce) { .bkprog .bar.wait i { animation: none; } }
+dialog.bkdlg { width: min(680px, calc(100vw - 24px)); }
+.bkdlg .field select, .bkdlg .field input[type="text"] { width: 100%; }
+.bkdlg .inl { display: inline-flex; align-items: center; gap: 6px; font-weight: 400; }
+.bkdlg .inl input[type="number"], .bkdlg .inl input[type="time"] { width: auto; min-height: 36px; padding: 4px 8px; }
+.bkkeep { display: flex; flex-wrap: wrap; gap: 8px; }
+.bknum { margin: 0; width: 84px; }
+.bknum input { width: 100%; }
+.bkmore { margin: 10px 0; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; }
+.bkmore > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; }
+.bkkey textarea { width: 100%; font: 12px/1.35 ui-monospace, Menlo, monospace; word-break: break-all; }
+.bkcrumbs { display: flex; flex-wrap: wrap; gap: 2px 4px; align-items: center; margin: 6px 0; color: var(--muted); }
+.bklist { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 4px 10px; margin-bottom: 12px; }
+button.link { background: none; border: 0; padding: 2px 4px; min-height: 0; color: rgb(var(--accent)); text-decoration: underline; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
