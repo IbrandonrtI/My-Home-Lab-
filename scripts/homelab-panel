@@ -2382,7 +2382,7 @@ def api_upload_state():
         free = shutil.disk_usage(d).free if ok else None
     except OSError:
         free = None
-    return {"immich": {"configured": bool(key), "up": up}, "music": {"dir": d, "exists": ok, "writable": writable, "free": free},
+    return {"immich": {"configured": bool(key), "up": up}, "music": {"dir": d, "exists": ok, "writable": writable, "free": free, "user": getpass.getuser()},
             "limits": {"photo": PHOTO_MAX, "song": SONG_MAX}, "photo_ext": sorted(PHOTO_EXT), "song_ext": sorted(SONG_EXT)}
 
 
