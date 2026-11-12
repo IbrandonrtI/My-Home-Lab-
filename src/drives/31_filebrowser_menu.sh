@@ -92,15 +92,16 @@ problem_menu() {
   while :; do
     say ""
     say "Fix a problem"
-    say "  1) Mount the drives again after an unplug or power cut"
+    say "  1) Fix the drives after an unplug, a power cut or a lost drive"
     say "  2) Replace a dead drive (restores the missing files from the backup)"
     say "  3) Copy back only the files that are missing from the backup"
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
-      1) intro_ask "Mount the drives again after an unplug or power cut" \
+      1) intro_ask "Fix the drives after an unplug, a power cut or a lost drive" \
            "The services that use the storage are stopped, the drives are mounted again and the services start again." \
-           "No files are changed. It takes about a minute." &&
+           "Then Immich and Nextcloud are checked: if their files are missing you can copy them back from the backup." \
+           "No files are changed unless you say so. It takes about a minute." &&
          { remount_flow && sync_filebrowser; } ;;
       2) intro "Replace a dead drive" \
            "Next I list the pool drives that cannot be found and you pick the dead one." \

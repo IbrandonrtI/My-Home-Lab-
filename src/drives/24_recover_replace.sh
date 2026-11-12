@@ -9,6 +9,7 @@ remount_flow() {
   fi
   pre_change "Stop the containers that use the storage." \
              "Unmount the pools and the drives, then mount every drive and pool again from the saved setup." \
+             "Check that Immich and Nextcloud find their files. If not, offer to copy them back from the backup." \
              "Apply the drive power settings and start the containers again." && return 0
   stop_containers "$MAIN_POOL" "$BACKUP_POOL" "$DISKS_DIR"
   # pools first, then the drives under them
@@ -41,8 +42,13 @@ remount_flow() {
     mount_fstab "$MAIN_POOL" || { echo "The main pool did not mount. Check the cable."; return 1; }
   fi
   power_all >/dev/null 2>&1
+  apps_flow
   start_containers
-  echo "The drives are mounted again and your services are running."
+  if [ -n "${APPS_HELD// /}" ]; then
+    echo "The drives are mounted again. Still stopped:$APPS_HELD (their files are missing, see above)."
+  else
+    echo "The drives are mounted again and your services are running."
+  fi
 }
 
 # ---------- replace a dead drive ----------
@@ -168,6 +174,171 @@ after_restore_hints() {
     say "  - Tell Nextcloud about the restored files:  docker exec -u www-data nextcloud php occ files:scan --all"
   fi
   say "  - Run the backup again when you are happy:  sudo homelab-backup"
+}
+
+# ---------- Immich and Nextcloud: do they find their files? ----------
+# Both refuse to start when the small marker file of their folder is missing (Nextcloud: .ncdata, Immich: .immich in each of its folders). That is
+# on purpose: an app that started on an empty folder would look as if every photo and file had been deleted, and a phone that syncs with it could
+# delete its own copies. The markers live in the Main pool, so when the drive that held them is gone (a dead drive, or one taken out without
+# copying its files) the two stop. Fix Drives (remount) checks this before it starts the containers: the person can copy the files back
+# from the backup, or start the two on empty folders. The accounts and settings stay either way: they are in databases on the boot drive.
+IMMICH_FOLDERS="upload library thumbs profile backups encoded-video"
+APPS_HELD=""
+
+app_container_exists() { docker_ok && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$1"; }
+
+apps_missing() {   # prints nextcloud and/or immich when that app is set up here and its folder in the Main pool has no marker
+  mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
+  local f
+  if app_container_exists nextcloud && [ ! -f "$MAIN_POOL/nextcloud/.ncdata" ]; then echo nextcloud; fi
+  if app_container_exists immich_server; then
+    for f in $IMMICH_FOLDERS; do
+      [ -f "$MAIN_POOL/immich/$f/.immich" ] || { echo immich; break; }
+    done
+  fi
+  return 0
+}
+
+apps_label() {   # nextcloud immich -> "Nextcloud and Immich"
+  local out="" a
+  for a in "$@"; do
+    case "$a" in nextcloud) a=Nextcloud ;; immich) a=Immich ;; esac
+    out="${out:+$out and }$a"
+  done
+  printf '%s' "$out"
+}
+
+apps_fresh() {   # apps_fresh nextcloud|immich ...: make the folders and the marker files, so the apps start on empty folders (nothing is overwritten)
+  local a f
+  for a in "$@"; do
+    case "$a" in
+      nextcloud)
+        mkdir -p "$MAIN_POOL/nextcloud"
+        [ -f "$MAIN_POOL/nextcloud/.ncdata" ] || printf '# Nextcloud data directory\n' >"$MAIN_POOL/nextcloud/.ncdata"
+        chown 33:33 "$MAIN_POOL/nextcloud" "$MAIN_POOL/nextcloud/.ncdata" 2>/dev/null || true      # 33 is www-data inside the Nextcloud image
+        chmod 750 "$MAIN_POOL/nextcloud" 2>/dev/null || true ;;
+      immich)
+        give_to_owner "$MAIN_POOL/immich"
+        for f in $IMMICH_FOLDERS; do
+          mkdir -p "$MAIN_POOL/immich/$f"
+          [ -f "$MAIN_POOL/immich/$f/.immich" ] || : >"$MAIN_POOL/immich/$f/.immich"
+          give_to_owner "$MAIN_POOL/immich/$f"; give_to_owner "$MAIN_POOL/immich/$f/.immich"
+        done ;;
+    esac
+  done
+  sync_fs "$MAIN_POOL"
+  log "started Immich / Nextcloud on empty folders: $*"
+}
+
+apps_hold() {   # apps_hold nextcloud|immich ...: their containers leave STOPPED, so they stay stopped (a later Fix Drives checks again)
+  local n keep="" held=""
+  for n in $STOPPED; do
+    case "$n" in
+      nextcloud*) case " $* " in *" nextcloud "*) held="$held $n"; continue ;; esac ;;
+      immich*)    case " $* " in *" immich "*) held="$held $n"; continue ;; esac ;;
+    esac
+    keep="$keep $n"
+  done
+  STOPPED=${keep# }
+  APPS_HELD="$held"
+  [ -z "${held// /}" ] || note "These stay stopped until their files are back:$held"
+}
+
+apps_explain() {   # apps_explain nextcloud immich: what is wrong, in plain words
+  say ""
+  say "$(apps_label "$@") cannot find their files in $MAIN_POOL."
+  say "Their folder is missing a marker file. That happens when the drive that held their files is not in the pool any more."
+  say "The apps refuse to start without it, so they cannot show an empty library by mistake. Your accounts and settings are not lost: they are on the boot drive."
+}
+
+apps_fix() {   # apps_fix restore|fresh nextcloud immich ...: act on the choice
+  local act=$1 src; shift
+  case "$act" in
+    restore)
+      src=$(find_backup_source) || { note "No backup copy of the main pool was found, so there is nothing to restore from."; return 1; }
+      show_backup_source "$src" || { say "Cancelled."; return 1; }
+      restore_files "$src" || return 1 ;;
+    fresh)
+      # (a script's --confirm-erase never answers this one: only a person typing START, or the panel passing it, counts)
+      if [ "$PANEL_MODE" = 1 ]; then typed START "Type START to start $(apps_label "$@") on empty folders: " || { say "Cancelled."; return 1; }
+      else [ "$(ask "Type START to start $(apps_label "$@") on empty folders: ")" = START ] || { say "Cancelled."; return 1; }; fi
+      apps_fresh "$@" ;;
+  esac
+  return 0
+}
+
+apps_flow() {   # before the containers start again: what is wrong is dealt with (the person chooses) or the two stay stopped
+  local bad
+  bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+  [ -n "$bad" ] || return 0
+  # shellcheck disable=SC2086
+  apps_explain $bad
+  # the control panel asks in its own page and then runs `appsfix` (see 42_panel.sh); here only the terminal asks
+  if [ "$PANEL_MODE" != 1 ]; then
+    if find_backup_source >/dev/null 2>&1; then
+      say "A backup copy of your files exists."
+      # shellcheck disable=SC2086
+      yn "Copy the missing files back from the backup now?" && apps_fix restore $bad
+      bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+    else
+      say "No backup copy of the main pool was found."
+    fi
+    if [ -n "$bad" ]; then
+      say ""
+      say "$(apps_label $bad) can also start on EMPTY folders. The photos and files that were on the missing drive are not shown then,"
+      say "and Nextcloud apps that sync with the server may remove their own copies of files the server no longer has. Do this only when the old files are really gone."
+      # shellcheck disable=SC2086
+      apps_fix fresh $bad
+      bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+    fi
+  fi
+  # shellcheck disable=SC2086
+  [ -z "$bad" ] || { apps_hold $bad; note "Fix it later with:  $(hint "sudo drives remount" "press Fix Drives")"; }
+  return 0
+}
+
+apps_json() {   # panel apps: {"problems":["nextcloud"],"backup":{"found":true,"stamp":"...","result":"OK"}} (look only)
+  local a first=1 src stamp="" result=""
+  printf '{"problems":['
+  for a in $(apps_missing); do
+    [ "$first" = 1 ] || printf ','
+    first=0; printf '%s' "$(json_str "$a")"
+  done
+  printf '],"backup":'
+  if src=$(find_backup_source 2>/dev/null); then
+    if [ -r "$BACKUP_STATUS_FILE" ]; then IFS='|' read -r stamp result _ <"$BACKUP_STATUS_FILE"; fi
+    printf '{"found":true,"stamp":%s,"result":%s}' "$(json_str "$stamp")" "$(json_str "$result")"
+  else
+    printf '{"found":false}'
+  fi
+  printf '}\n'
+}
+
+appsfix_flow() {   # panel appsfix restore|fresh: the person chose in the panel's page (the word they typed is in PANEL_TYPED); then the apps start
+  mountpoint -q "$MAIN_POOL" || { note "The Main pool is not mounted. Press Fix Drives first."; return 1; }
+  local bad
+  bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+  if [ -z "$bad" ]; then say "Done. Immich and Nextcloud find their files."; return 0; fi
+  ASSUME_YES=1      # (the questions of the backup check; the typed word below is still needed)
+  stop_containers "$MAIN_POOL"
+  HOLD_HINT="The containers stay stopped until this is fixed. Press Fix Drives again."
+  # shellcheck disable=SC2086
+  apps_fix "$PANEL_APPS_ACT" $bad || return 1
+  bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+  HOLD_HINT=""
+  # shellcheck disable=SC2086
+  [ -z "$bad" ] || apps_hold $bad
+  start_containers
+  if [ -n "$bad" ]; then
+    say "$(apps_label $bad) still cannot find their files, so they stay stopped."
+    return 1
+  fi
+  if [ "$PANEL_APPS_ACT" = restore ]; then
+    say "Done. The files are back and the apps are running again. Check a few photos and files."
+  else
+    say "Done. The apps are running on empty folders. Your accounts are the same."
+  fi
+  return 0
 }
 
 restore_flow() {   # restore only the missing files from the backup into the main pool

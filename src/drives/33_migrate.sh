@@ -84,7 +84,7 @@ migrate_switch() {   # migrate_switch ID: the new setup (mounted at MIGRATE_DIR,
   if [ "$ok" != 1 ]; then
     if [ "$kind" = zfs ]; then zfs set mountpoint="$MIGRATE_DIR" "$ZFS_POOL_NAME" >/dev/null 2>&1 || true; fi
     fstab_rollback
-    apply_pool main || warn "The old Main pool could not be mounted again. $(hint "Run  sudo drives remount" "Press Mount the Drives Again.")"
+    apply_pool main || warn "The old Main pool could not be mounted again. $(hint "Run  sudo drives remount" "Press Fix Drives.")"
     return 1
   fi
   migrate_retire_main "${old_mps[@]}"

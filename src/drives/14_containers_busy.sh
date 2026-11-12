@@ -233,10 +233,10 @@ on_exit() {
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
-    note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Mount the Drives Again.")}"
+    note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Fix Drives.")}"
   fi
   if [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -s "$PANEL_RESERVE_DIR/held" ]; then
-    note ""; note "The containers ($(tr '\n' ' ' <"$PANEL_RESERVE_DIR/held")) are still STOPPED because something went wrong."; note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Mount the Drives Again.")}"
+    note ""; note "The containers ($(tr '\n' ' ' <"$PANEL_RESERVE_DIR/held")) are still STOPPED because something went wrong."; note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Fix Drives.")}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
   if [ -n "${PANEL_RESERVE_DIR:-}" ]; then rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; fi      # (a drive change of the panel that ended some other way)

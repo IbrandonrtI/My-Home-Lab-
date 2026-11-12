@@ -5,7 +5,9 @@
 #   panel status | health | check | actions     look only (JSON)
 #   panel rename ID NAME                          give a pool drive a name of your own (NAME auto: the automatic name again)
 #   panel sleep ID | panel wake ID                put a spinning hard drive to sleep / wake it (ID is like sda)
-#   panel remount                                 mount the drives again after an unplug (refused while a backup or upload runs)
+#   panel remount                                 Fix Drives: mount the drives again after an unplug or a lost drive (refused while a backup or upload runs); Immich and Nextcloud whose files are missing stay stopped
+#   panel apps                                    look only (JSON): which of Immich / Nextcloud cannot find their files, and whether a backup copy exists
+#   panel appsfix restore|fresh [WORD...]         copy their files back from the backup (needs RESTORE typed) or start them on empty folders (needs START typed)
 #   panel abort                                   Stop: the add / move / disconnect that runs now stops at the next safe moment (not while a drive is being erased)
 #   Stage 4 (these change or erase drives; every one is refused while a backup or upload runs, and none asks a question):
 #   panel add DISK main|backup keep|erase [WORD...]   add a spare drive to a pool, keeping its files or erasing it first (erase needs /dev/DISK and ERASE typed)
@@ -290,12 +292,13 @@ panel_main() {
   local act=${1:-} n=$# i w
   case "$act" in
     setups)       [ "$n" -le 2 ] && { [ "$n" -eq 1 ] || [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._,-]{0,200}$ ]]; } || { panel_refuse "panel setups takes no words, or the drives to leave out."; return 1; } ;;
-    status|health|check|actions|remount|abort) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
+    status|health|check|actions|remount|abort|apps) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
     rename)       [ "$n" -eq 3 ] || { panel_refuse "panel rename takes a drive and a name."; return 1; } ;;
     sleep|wake)   [ "$n" -eq 2 ] || { panel_refuse "panel $act takes one drive."; return 1; } ;;
     add)          [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel add takes a drive, main or backup, keep or erase, and the typed words."; return 1; } ;;
     bootadd)      [ "$n" -ge 3 ] && [ "$n" -le 6 ] || { panel_refuse "panel bootadd takes main or backup, a size in GB and the typed words."; return 1; } ;;
     setup)        [ "$n" -ge 4 ] && [ "$n" -le 8 ] || { panel_refuse "panel setup takes a setup name, the drives and the typed words."; return 1; } ;;
+    appsfix)      [ "$n" -ge 2 ] && [ "$n" -le 4 ] || { panel_refuse "panel appsfix takes restore or fresh, and the typed word."; return 1; } ;;
     wipe)         [ "$n" -ge 3 ] && [ "$n" -le 7 ] || { panel_refuse "panel wipe takes a drive, empty or format, and the typed words."; return 1; } ;;
     disconnect)   [ "$n" -ge 3 ] && [ "$n" -le 22 ] || { panel_refuse "panel disconnect takes a drive, yes or no, and the typed words."; return 1; } ;;
     move)         [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel move takes a drive, keep or erase, yes or no, and the typed words."; return 1; } ;;
@@ -320,6 +323,7 @@ panel_main() {
     disconnect) [[ "$3" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=4 ;;
     move)       [[ "$3" =~ ^(keep|erase|each)$ ]] && [[ "$4" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=5 ;;
     setup)      typed_from=4 ;;
+    appsfix)    [[ "$2" =~ ^(restore|fresh)$ ]] || arg_ok=0; typed_from=3 ;;
     bootadd)    [[ "$2" =~ ^(main|backup)$ ]] && [[ "$3" =~ ^[0-9]{1,6}$ ]] || arg_ok=0; typed_from=4 ;;
   esac
   # a drive with its own choice (ID:keep) needs the word "each"; without it every drive gets the same choice
@@ -335,20 +339,20 @@ panel_main() {
   if [ "$typed_from" -gt 0 ]; then
     for ((i = typed_from; i <= n; i++)); do
       w=${!i}
-      [[ "$w" =~ ^(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)$ ]] || { panel_refuse "A typed word is not allowed."; return 1; }
+      [[ "$w" =~ ^(ERASE|CONTINUE|REMOVE|KEEP|NOW|RESTORE|START|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)$ ]] || { panel_refuse "A typed word is not allowed."; return 1; }
       if [ "$w" = NOW ]; then PANEL_NOW=1; else PANEL_TYPED+=("$w"); fi
     done
   fi
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
   case "$act" in
-    status|health|check|actions|abort|setups) ;;      # looking only (and Stop): these may run beside each other and beside a change (the panel does not start the looking ones during a change)
+    status|health|check|actions|abort|setups|apps) ;;      # looking only (and Stop): these may run beside each other and beside a change (the panel does not start the looking ones during a change)
     *) take_lock ;;
   esac
   PANEL_MODE=1
   ASSUME_YES=0      # nothing is ever answered with yes for the person; a question nobody can answer means no
   local why
   case "$act" in
-    rename|sleep|wake|status|health|check|actions|abort|setups) ASSUME_YES=1 ;;      # (these never ask anything that matters)
+    rename|sleep|wake|status|health|check|actions|abort|setups|apps) ASSUME_YES=1 ;;      # (these never ask anything that matters)
     *) why=""
        # a drive that joins a running pool stops nothing, so a backup or an upload may go on
        if [ "$PANEL_NOW" = 1 ]; then :      # the person chose "Go Ahead Anyway"
@@ -362,6 +366,8 @@ panel_main() {
     check)   JSON=1; check_flow ;;
     actions) with_name_cache panel_actions_json ;;
     abort)   panel_abort ;;
+    apps)    apps_json ;;
+    appsfix) PANEL_APPS_ACT=$2; PROG_ITEM=appsfix; run_changing appsfix_flow ;;
     setups)  PANEL_SKIP=${2:-}; panel_setups_json ;;
     bootadd) PANEL_ROLE=$2; PANEL_UNITS=$3; PROG_ITEM=bootadd; run_changing panel_bootadd_flow ;;
     setup)   PANEL_ID=$2; run_changing panel_setup_run "$2" "$3" ;;
