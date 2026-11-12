@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 680" width="1280" height="680" role="img" aria-labelledby="t d" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif"><title id="t">Where the data lives</title><desc id="d">Three places hold data. The boot drive holds the system, app settings and databases. The Main pool holds photos, files and music. The Backup pool receives the nightly backup, and optional extra backups go to another computer or to the cloud.</desc><defs><marker id="m-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#34d4e0"/></marker><marker id="m-mute" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#9aa8c0"/></marker><marker id="m-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#ffc857"/></marker><marker id="m-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#ff6b6b"/></marker><marker id="m-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#3ddc97"/></marker><marker id="m-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#5b9bff"/></marker></defs><rect width="1280" height="680" rx="18" fill="#0f1623"/><rect x="0.75" y="0.75" width="1278.5" height="678.5" rx="17.5" fill="none" stroke="#2a3a55" stroke-width="1.5"/><text x="40" y="56" font-size="26" fill="#e9eef7" font-weight="700" text-anchor="start">Where the data lives</text>
+<text x="40" y="82" font-size="14" fill="#9aa8c0" font-weight="400" text-anchor="start">Big files on the pools, small settings on the boot drive, copies on a second drive.</text>
+<rect x="40" y="116" width="360" height="356" rx="14" fill="#8fa3c4" stroke="#8fa3c4" stroke-width="1.8" fill-opacity="0.07"/>
+<text x="62" y="152" font-size="18" fill="#8fa3c4" font-weight="700" text-anchor="start">Boot drive</text>
+<text x="62" y="174" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start" font-family="'SF Mono', 'Cascadia Mono', Consolas, Menlo, monospace">750 GB, internal</text>
+<circle cx="67" cy="203" r="3.5" fill="#8fa3c4"/>
+<text x="82" y="208" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">The system</text>
+<text x="82" y="226" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Ubuntu Server on LVM</text>
+<circle cx="67" cy="249" r="3.5" fill="#8fa3c4"/>
+<text x="82" y="254" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">App settings and databases</text>
+<text x="82" y="272" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Kept in the home folder</text>
+<circle cx="67" cy="295" r="3.5" fill="#8fa3c4"/>
+<text x="82" y="300" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">The dashboard's files</text>
+<text x="82" y="318" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Layout, colors, cards</text>
+<circle cx="67" cy="341" r="3.5" fill="#8fa3c4"/>
+<text x="82" y="346" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">The lab's scripts and schedule</text>
+<text x="82" y="364" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">From this repo, installed by setup</text>
+<text x="62" y="416" font-size="10.5" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">USED BY</text>
+<rect x="62" y="430" width="112" height="26" rx="13.0" fill="#8fa3c4" stroke="#8fa3c4" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="118.0" y="447.025" font-size="11.5" fill="#e9eef7" font-weight="600" text-anchor="middle">Every container</text>
+<rect x="460" y="116" width="360" height="356" rx="14" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.8" fill-opacity="0.07"/>
+<text x="482" y="152" font-size="18" fill="#3ddc97" font-weight="700" text-anchor="start">Main pool</text>
+<text x="482" y="174" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start" font-family="'SF Mono', 'Cascadia Mono', Consolas, Menlo, monospace">/mnt/storage</text>
+<circle cx="487" cy="203" r="3.5" fill="#3ddc97"/>
+<text x="502" y="208" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">Photos and videos</text>
+<text x="502" y="226" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Immich, in /mnt/storage/immich</text>
+<circle cx="487" cy="249" r="3.5" fill="#3ddc97"/>
+<text x="502" y="254" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">Files</text>
+<text x="502" y="272" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Nextcloud, in /mnt/storage/nextcloud</text>
+<circle cx="487" cy="295" r="3.5" fill="#3ddc97"/>
+<text x="502" y="300" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">Music</text>
+<text x="502" y="318" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">One folder for Navidrome and Downtify</text>
+<circle cx="487" cy="341" r="3.5" fill="#3ddc97"/>
+<text x="502" y="346" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">Drives fill one at a time</text>
+<text x="502" y="364" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">mergerfs shows them as one folder</text>
+<text x="482" y="416" font-size="10.5" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">USED BY</text>
+<rect x="482" y="430" width="58" height="26" rx="13.0" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="511.0" y="447.025" font-size="11.5" fill="#e9eef7" font-weight="600" text-anchor="middle">Immich</text>
+<rect x="548" y="430" width="82" height="26" rx="13.0" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="589.0" y="447.025" font-size="11.5" fill="#e9eef7" font-weight="600" text-anchor="middle">Nextcloud</text>
+<rect x="638" y="430" width="82" height="26" rx="13.0" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="679.0" y="447.025" font-size="11.5" fill="#e9eef7" font-weight="600" text-anchor="middle">Navidrome</text>
+<rect x="728" y="430" width="70" height="26" rx="13.0" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="763.0" y="447.025" font-size="11.5" fill="#e9eef7" font-weight="600" text-anchor="middle">Downtify</text>
+<rect x="880" y="116" width="360" height="356" rx="14" fill="#ffc857" stroke="#ffc857" stroke-width="1.8" fill-opacity="0.07"/>
+<text x="902" y="152" font-size="18" fill="#ffc857" font-weight="700" text-anchor="start">Backup pool</text>
+<text x="902" y="174" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start" font-family="'SF Mono', 'Cascadia Mono', Consolas, Menlo, monospace">/mnt/backup</text>
+<circle cx="907" cy="203" r="3.5" fill="#ffc857"/>
+<text x="922" y="208" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">Nightly copy of the Main pool</text>
+<text x="922" y="226" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Changed or deleted files kept 30 days</text>
+<circle cx="907" cy="249" r="3.5" fill="#ffc857"/>
+<text x="922" y="254" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">The lab's settings</text>
+<text x="922" y="272" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">So a rebuild gets them back</text>
+<circle cx="907" cy="295" r="3.5" fill="#ffc857"/>
+<text x="922" y="300" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">Database dumps</text>
+<text x="922" y="318" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Nextcloud every night, Immich's own</text>
+<circle cx="907" cy="341" r="3.5" fill="#ffc857"/>
+<text x="922" y="346" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">No backup drive yet?</text>
+<text x="922" y="364" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Goes to the boot drive. Not safe!</text>
+<text x="902" y="416" font-size="10.5" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">USED BY</text>
+<rect x="902" y="430" width="148" height="26" rx="13.0" fill="#ffc857" stroke="#ffc857" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="976.0" y="447.025" font-size="11.5" fill="#e9eef7" font-weight="600" text-anchor="middle">FileBrowser shows it</text>
+<path d="M 820 300 L 878 300" fill="none" stroke="#ffc857" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" marker-end="url(#m-amber)"/>
+<text x="849" y="288" font-size="11" fill="#ffc857" font-weight="600" text-anchor="middle">nightly</text>
+<path d="M 220 474 V 504 Q 220 516 232 516 H 1048 Q 1060 516 1060 504 V 476" fill="none" stroke="#ffc857" stroke-width="2.0" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="5 5" marker-end="url(#m-amber)"/>
+<rect x="480" y="505" width="320" height="22" rx="4" fill="#0f1623"/>
+<text x="640" y="521" font-size="11.5" fill="#ffc857" font-weight="600" text-anchor="middle">settings and database dumps</text>
+<text x="40" y="572" font-size="11" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">THE SAME BACKUP CAN ALSO GO TO (OPTIONAL)</text>
+<rect x="40" y="588" width="560" height="56" rx="12" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="60" y="612" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">Another computer over SSH</text>
+<text x="60" y="631" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Set up in the Backups card of the Customize panel</text>
+<rect x="620" y="588" width="620" height="56" rx="12" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="640" y="612" font-size="13.5" fill="#e9eef7" font-weight="600" text-anchor="start">The cloud</text>
+<text x="640" y="631" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Backblaze B2, Amazon S3, Google Drive and others, through rclone</text></svg>

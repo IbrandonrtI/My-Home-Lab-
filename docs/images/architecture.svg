@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 850" width="1280" height="850" role="img" aria-labelledby="t d" font-family="Inter, 'Segoe UI', -apple-system, Helvetica, Arial, sans-serif"><title id="t">How devices reach the home lab</title><desc id="d">My phone and PC reach the server through Tailscale. Devices at home use AdGuard Home for DNS through the router. Inside the server, Tailscale Serve gives every app an HTTPS address, the apps run in Docker, and the data is on the boot drive, the Main pool and the Backup pool.</desc><defs><marker id="m-teal" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#34d4e0"/></marker><marker id="m-mute" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#9aa8c0"/></marker><marker id="m-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#ffc857"/></marker><marker id="m-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#ff6b6b"/></marker><marker id="m-green" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#3ddc97"/></marker><marker id="m-blue" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9 z" fill="#5b9bff"/></marker></defs><rect width="1280" height="850" rx="18" fill="#0f1623"/><rect x="0.75" y="0.75" width="1278.5" height="848.5" rx="17.5" fill="none" stroke="#2a3a55" stroke-width="1.5"/><text x="40" y="56" font-size="26" fill="#e9eef7" font-weight="700" text-anchor="start">How devices reach the lab</text>
+<text x="40" y="82" font-size="14" fill="#9aa8c0" font-weight="400" text-anchor="start">Everything is private. Nothing is open to the public internet.</text>
+<text x="40" y="128" font-size="11" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">DEVICES</text>
+<rect x="40" y="148" width="250" height="58" rx="10" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="60" y="172" font-size="14" fill="#e9eef7" font-weight="600" text-anchor="start">Any device at home</text>
+<text x="60" y="192" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">TV, tablet, guests: DNS only</text>
+<rect x="40" y="228" width="250" height="58" rx="10" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="60" y="252" font-size="14" fill="#e9eef7" font-weight="600" text-anchor="start">My phone and PC</text>
+<text x="60" y="272" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">With the Tailscale app, anywhere</text>
+<text x="350" y="128" font-size="11" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">NETWORK</text>
+<rect x="350" y="148" width="220" height="58" rx="10" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="370" y="172" font-size="14" fill="#e9eef7" font-weight="600" text-anchor="start">Home router</text>
+<text x="370" y="192" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Hands out the server as DNS</text>
+<rect x="350" y="228" width="220" height="58" rx="10" fill="#34d4e0" stroke="#34d4e0" stroke-width="1.5" fill-opacity="0.1"/>
+<text x="370" y="252" font-size="14" fill="#34d4e0" font-weight="700" text-anchor="start">Tailscale</text>
+<text x="370" y="272" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Private, encrypted VPN</text>
+<line x1="292" y1="177" x2="348" y2="177" stroke="#9aa8c0" stroke-width="2" stroke-linecap="round" marker-end="url(#m-mute)"/>
+<line x1="572" y1="177" x2="632" y2="177" stroke="#9aa8c0" stroke-width="2" stroke-linecap="round" marker-end="url(#m-mute)"/>
+<text x="602" y="169" font-size="11" fill="#9aa8c0" font-weight="600" text-anchor="middle">DNS</text>
+<line x1="292" y1="257" x2="348" y2="257" stroke="#34d4e0" stroke-width="2" stroke-linecap="round" marker-end="url(#m-teal)"/>
+<line x1="572" y1="257" x2="632" y2="257" stroke="#34d4e0" stroke-width="2" stroke-linecap="round" marker-end="url(#m-teal)"/>
+<text x="602" y="249" font-size="11" fill="#34d4e0" font-weight="600" text-anchor="middle">HTTPS</text>
+<text x="40" y="336" font-size="11" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">PUBLIC INTERNET</text>
+<rect x="40" y="356" width="250" height="76" rx="10" fill="#162033" stroke="#2a3a55" stroke-width="1.5" stroke-dasharray="5 4"/>
+<text x="60" y="382" font-size="14" fill="#e9eef7" font-weight="600" text-anchor="start">Closed from outside</text>
+<text x="60" y="402" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">No ports are forwarded on</text>
+<text x="60" y="419" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">the router.</text>
+<line x1="292" y1="394" x2="580" y2="394" stroke="#ff6b6b" stroke-width="2" stroke-linecap="round" stroke-dasharray="6 6"/>
+<circle cx="600" cy="394" r="13" fill="#0f1623" stroke="#ff6b6b" stroke-width="2"/>
+<line x1="594" y1="388" x2="606" y2="400" stroke="#ff6b6b" stroke-width="2.2" stroke-linecap="round"/>
+<line x1="606" y1="388" x2="594" y2="400" stroke="#ff6b6b" stroke-width="2.2" stroke-linecap="round"/>
+<text x="40" y="488" font-size="11" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">HOW I USE IT</text>
+<rect x="40" y="512" width="250" height="46" rx="10" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="58" y="532" font-size="13" fill="#e9eef7" font-weight="600" text-anchor="start">Dashboard</text>
+<text x="58" y="549" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start">one page with a card for every app</text>
+<rect x="40" y="568" width="250" height="46" rx="10" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="58" y="588" font-size="13" fill="#e9eef7" font-weight="600" text-anchor="start">Apps on my phone</text>
+<text x="58" y="605" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start">Immich, Nextcloud, Navidrome</text>
+<rect x="40" y="624" width="250" height="46" rx="10" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="58" y="644" font-size="13" fill="#e9eef7" font-weight="600" text-anchor="start">Customize panel</text>
+<text x="58" y="661" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start">look, drives, backups, updates</text>
+<rect x="40" y="680" width="250" height="46" rx="10" fill="#162033" stroke="#2a3a55" stroke-width="1.5"/>
+<text x="58" y="700" font-size="13" fill="#e9eef7" font-weight="600" text-anchor="start">Terminal</text>
+<text x="58" y="717" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start">SSH, or the web terminal in the panel</text>
+<rect x="632" y="108" width="616" height="716" rx="14" fill="#121b2c" stroke="#8fa3c4" stroke-width="1.8"/>
+<text x="652" y="138" font-size="16" fill="#e9eef7" font-weight="700" text-anchor="start">The server</text>
+<text x="1228" y="138" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="end">HP ProDesk 600 G3 Mini  ·  Ubuntu Server</text>
+<rect x="648" y="148" width="584" height="58" rx="10" fill="#34d4e0" stroke="#34d4e0" stroke-width="1.5" fill-opacity="0.08"/>
+<text x="666" y="172" font-size="14" fill="#34d4e0" font-weight="700" text-anchor="start">AdGuard Home</text>
+<text x="788" y="172" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">DNS on port 53, web page on 3000</text>
+<text x="666" y="192" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">Blocks ads and trackers for every device that uses the server as its DNS.</text>
+<rect x="648" y="228" width="584" height="58" rx="10" fill="#34d4e0" stroke="#34d4e0" stroke-width="1.5" fill-opacity="0.08"/>
+<text x="666" y="252" font-size="14" fill="#34d4e0" font-weight="700" text-anchor="start">Tailscale Serve</text>
+<text x="788" y="252" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">HTTPS addresses on ports 1000 to 1008 and 1100</text>
+<text x="666" y="272" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">A real certificate for every app, so there are no browser warnings.</text>
+<line x1="940.0" y1="288" x2="940.0" y2="318" stroke="#34d4e0" stroke-width="2" stroke-linecap="round" marker-end="url(#m-teal)"/>
+<rect x="648" y="322" width="584" height="366" rx="12" fill="none" stroke="#2a3a55" stroke-width="1.5" stroke-dasharray="6 5"/>
+<text x="666" y="348" font-size="14" fill="#e9eef7" font-weight="700" text-anchor="start">Docker</text>
+<text x="728" y="348" font-size="12" fill="#9aa8c0" font-weight="400" text-anchor="start">managed by</text>
+<rect x="800" y="333" width="108" height="22" rx="11.0" fill="#8fa3c4" stroke="#8fa3c4" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="854.0" y="348.025" font-size="11.5" fill="#e9eef7" font-weight="600" text-anchor="middle">Portainer :1001</text>
+<text x="1214" y="348" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="end">Numbers are the Tailscale HTTPS ports</text>
+<rect x="664" y="368" width="272" height="124" rx="10" fill="#5b9bff" stroke="#5b9bff" stroke-width="1.5" fill-opacity="0.07"/>
+<text x="680" y="392" font-size="13" fill="#5b9bff" font-weight="700" text-anchor="start">Dashboard</text>
+<rect x="678" y="406" width="124" height="28" rx="14.0" fill="#5b9bff" stroke="#5b9bff" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="740.0" y="424.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Homepage :1000</text>
+<rect x="808" y="406" width="124" height="28" rx="14.0" fill="#5b9bff" stroke="#5b9bff" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="870.0" y="424.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Notification bell</text>
+<rect x="678" y="444" width="124" height="28" rx="14" fill="none" stroke="#5b9bff" stroke-width="1.2" stroke-dasharray="4 3"/>
+<text x="740" y="462.5" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Panel :1100</text>
+<text x="810" y="462" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start">runs beside Docker</text>
+<rect x="944" y="368" width="272" height="124" rx="10" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.5" fill-opacity="0.07"/>
+<text x="960" y="392" font-size="13" fill="#3ddc97" font-weight="700" text-anchor="start">Photos and files</text>
+<rect x="958" y="406" width="124" height="28" rx="14.0" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="1020.0" y="424.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Immich :1002</text>
+<rect x="1088" y="406" width="124" height="28" rx="14.0" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="1150.0" y="424.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Nextcloud :1005</text>
+<rect x="958" y="444" width="124" height="28" rx="14.0" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="1020.0" y="462.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">FileBrowser :1006</text>
+<rect x="664" y="506" width="272" height="162" rx="10" fill="#b18cff" stroke="#b18cff" stroke-width="1.5" fill-opacity="0.07"/>
+<text x="680" y="530" font-size="13" fill="#b18cff" font-weight="700" text-anchor="start">Music</text>
+<rect x="678" y="544" width="124" height="28" rx="14.0" fill="#b18cff" stroke="#b18cff" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="740.0" y="562.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Navidrome</text>
+<rect x="808" y="544" width="124" height="28" rx="14.0" fill="#b18cff" stroke="#b18cff" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="870.0" y="562.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">NaviList</text>
+<rect x="678" y="582" width="124" height="28" rx="14.0" fill="#b18cff" stroke="#b18cff" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="740.0" y="600.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">AudioMuse-AI</text>
+<rect x="808" y="582" width="124" height="28" rx="14.0" fill="#b18cff" stroke="#b18cff" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="870.0" y="600.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Downtify</text>
+<rect x="678" y="620" width="124" height="28" rx="14.0" fill="#b18cff" stroke="#b18cff" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="740.0" y="638.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">MeTube</text>
+<rect x="944" y="506" width="272" height="162" rx="10" fill="#ffc857" stroke="#ffc857" stroke-width="1.5" fill-opacity="0.07"/>
+<text x="960" y="530" font-size="13" fill="#ffc857" font-weight="700" text-anchor="start">Watching the server</text>
+<rect x="958" y="544" width="124" height="28" rx="14.0" fill="#ffc857" stroke="#ffc857" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="1020.0" y="562.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Beszel :1003</text>
+<rect x="1088" y="544" width="124" height="28" rx="14.0" fill="#ffc857" stroke="#ffc857" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="1150.0" y="562.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Netdata :1008</text>
+<rect x="958" y="582" width="124" height="28" rx="14.0" fill="#ffc857" stroke="#ffc857" stroke-width="1.2" fill-opacity="0.14"/>
+<text x="1020.0" y="600.2" font-size="12" fill="#e9eef7" font-weight="600" text-anchor="middle">Speedtest :1007</text>
+<text x="960" y="636" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start">Graphs of the machine, and my</text>
+<text x="960" y="652" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start">internet speed over time.</text>
+<text x="648" y="710" font-size="11" fill="#9aa8c0" font-weight="700" text-anchor="start" letter-spacing="1.5">STORAGE</text>
+<rect x="648.0" y="722" width="186.66666666666666" height="78" rx="10" fill="#8fa3c4" stroke="#8fa3c4" stroke-width="1.5" fill-opacity="0.09"/>
+<text x="662.0" y="746" font-size="13.5" fill="#8fa3c4" font-weight="700" text-anchor="start">Boot drive</text>
+<text x="662.0" y="765" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start" font-family="'SF Mono', 'Cascadia Mono', Consolas, Menlo, monospace">750 GB, internal</text>
+<text x="662.0" y="784" font-size="11.5" fill="#e9eef7" font-weight="400" text-anchor="start">System, settings, databases</text>
+<line x1="741.3333333333334" y1="690" x2="741.3333333333334" y2="718" stroke="#9aa8c0" stroke-width="1.6" stroke-linecap="round" marker-end="url(#m-mute)"/>
+<rect x="846.6666666666666" y="722" width="186.66666666666666" height="78" rx="10" fill="#3ddc97" stroke="#3ddc97" stroke-width="1.5" fill-opacity="0.09"/>
+<text x="860.6666666666666" y="746" font-size="13.5" fill="#3ddc97" font-weight="700" text-anchor="start">Main pool</text>
+<text x="860.6666666666666" y="765" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start" font-family="'SF Mono', 'Cascadia Mono', Consolas, Menlo, monospace">/mnt/storage</text>
+<text x="860.6666666666666" y="784" font-size="11.5" fill="#e9eef7" font-weight="400" text-anchor="start">Photos, files and music</text>
+<line x1="940.0" y1="690" x2="940.0" y2="718" stroke="#9aa8c0" stroke-width="1.6" stroke-linecap="round" marker-end="url(#m-mute)"/>
+<rect x="1045.3333333333333" y="722" width="186.66666666666666" height="78" rx="10" fill="#ffc857" stroke="#ffc857" stroke-width="1.5" fill-opacity="0.09"/>
+<text x="1059.3333333333333" y="746" font-size="13.5" fill="#ffc857" font-weight="700" text-anchor="start">Backup pool</text>
+<text x="1059.3333333333333" y="765" font-size="11.5" fill="#9aa8c0" font-weight="400" text-anchor="start" font-family="'SF Mono', 'Cascadia Mono', Consolas, Menlo, monospace">/mnt/backup</text>
+<text x="1059.3333333333333" y="784" font-size="11.5" fill="#e9eef7" font-weight="400" text-anchor="start">Nightly backups</text>
+<line x1="1138.6666666666665" y1="690" x2="1138.6666666666665" y2="718" stroke="#9aa8c0" stroke-width="1.6" stroke-linecap="round" marker-end="url(#m-mute)"/></svg>
