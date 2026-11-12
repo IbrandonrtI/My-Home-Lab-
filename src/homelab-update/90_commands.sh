@@ -83,7 +83,7 @@ cmd_run() {
   if [ "${#CHECK_NEW[@]}" -eq 0 ]; then line_ok "Nothing new to download (the newer images are already here)."; else
     free=$(free_gb); free=${free:-0}
     if [ "$free" -lt "$MIN_FREE_GB" ]; then die "Only ${free} GB free where Docker keeps its images; need at least $MIN_FREE_GB. Free some space (sudo homelab-update clean) and try again."; fi
-    echo "  One at a time. Big images take a few minutes."
+    echo "  ${#CHECK_NEW[@]} image(s) to download. One at a time. Big images take a few minutes."
     echo
     local out prc msg pr failed_pull=()
     for img in "${CHECK_NEW[@]}"; do
@@ -139,6 +139,8 @@ cmd_run() {
   load_containers; build_images
   build_plan
   if [ "${#PLAN_STACKS[@]}" -eq 0 ]; then line_ok "Nothing is waiting any more."; echo; return 0; fi
+  echo "  ${#PLAN_STACKS[@]} stack(s) to update."
+  echo
   local n=0 s r updated=0 left=0
   for s in "${PLAN_STACKS[@]}"; do
     n=$((n + 1)); [ "$n" -gt 1 ] && echo
