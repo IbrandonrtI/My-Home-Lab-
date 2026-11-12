@@ -116,7 +116,7 @@
 # The STATS tab. Every number comes from one small file, stats.json, that the command homelab-stats rewrites every 15 minutes
 # (sudo homelab-stats does it now). The Immich and Nextcloud numbers use the keys of the Immich and Nextcloud cards above.
 # This block is brought up to date by the installer. To remove the tab: delete everything between the two marker lines, then
-# delete the five STATS groups from the layout: block of settings.yaml.
+# delete the six STATS groups from the layout: block of settings.yaml.
 
 - At a Glance:
 
