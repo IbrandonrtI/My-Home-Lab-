@@ -21,10 +21,12 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 
 VERSION = "1.0"
 CONF = os.environ.get("HLB_CONF", "/etc/homelab-backup-tasks.json")
@@ -156,6 +158,32 @@ def legacy_setting(key, default):
     except OSError:
         pass
     return default
+
+
+def set_legacy_setting(key, value):
+    """Keep a setting of the older nightly backup in step with the task (it reads /etc/homelab-backup.conf itself when it runs, also when it is started by hand)."""
+    try:
+        with open(LEGACY_CONF, encoding="utf-8") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        lines = []
+    done = False
+    for i, line in enumerate(lines):
+        if re.match(r"\s*%s=" % key, line):
+            lines[i] = "%s=%s" % (key, value)
+            done = True
+    if not done:
+        while lines and lines[-1] == "":
+            lines.pop()
+        lines += ["%s=%s" % (key, value), ""]
+    tmp = LEGACY_CONF + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines))
+    try:
+        os.chmod(tmp, os.stat(LEGACY_CONF).st_mode & 0o777)
+    except OSError:
+        os.chmod(tmp, 0o644)
+    os.replace(tmp, LEGACY_CONF)
 
 
 def legacy_cron_time():
@@ -371,7 +399,7 @@ def clean_dest(d, source):
 
 
 def clean_task(d, old=None):
-    """The task as it is stored. For the nightly task only the name, the switch and the schedule can change."""
+    """The task as it is stored. For the nightly task only the name, the switch, the schedule and the days older files are kept can change."""
     if not isinstance(d, dict):
         raise Bad("That is not a backup task.")
     name = (d.get("name") or "").strip()
@@ -380,6 +408,9 @@ def clean_task(d, old=None):
     if old and old["kind"] == "nightly":
         t = dict(old)
         t.update({"name": name, "enabled": bool(d.get("enabled", True)), "schedule": clean_schedule(d.get("schedule"))})
+        if isinstance(d.get("keep"), dict) and "days" in d["keep"]:      # how long files that are deleted or replaced are kept (days; the default is 30)
+            t["keep"] = clean_keep(d["keep"], "cloud")
+            set_legacy_setting("RETENTION_DAYS", t["keep"]["days"])
         return t
     source = clean_abs(d.get("source"), "The folder to back up")
     if source == "/" or any(inside(source, s) for s in SKIP_SOURCE):
@@ -973,6 +1004,68 @@ def browse(task, version, rel):
     return sorted(place.entries(path), key=lambda e: (e["type"] != "dir", e["name"].lower()))
 
 
+def cmd_stream(task_id, version, rel, mode):
+    """panel stream TASK VERSION REL file|zip: writes one file, or a folder as a .zip, to standard output (the panel's Download button). Only for a backup kept on a drive of
+    this computer. What is written never leaves the version's own folder (a link that points elsewhere is skipped)."""
+    task = find_task(load_tasks(), task_id)
+    place, folder = version_path(task, version)
+    if not isinstance(place, Local):
+        raise Bad("Downloading is offered for a backup kept on a drive of this computer. For another computer or the cloud, use Restore.")
+    if mode not in ("file", "zip"):
+        raise Bad("Choose file or zip.")
+    rel = clean_rel(rel)
+    root = os.path.realpath(folder)
+    path = os.path.realpath(os.path.join(root, rel) if rel else root)
+    if path != root and not path.startswith(root + os.sep):
+        raise Bad("That path is not in this version.")
+    out = sys.stdout.buffer
+    if mode == "file":
+        if not os.path.isfile(path):
+            raise Bad("That file is not in this version.")
+        with open(path, "rb") as f:
+            shutil.copyfileobj(f, out, 1 << 20)
+        out.flush()
+        return
+    if not os.path.isdir(path):
+        raise Bad("That folder is not in this version.")
+
+    class Sink:      # (a zip stream: no seeking, so the zip is written with the sizes after each file)
+        def write(self, b):
+            out.write(b)
+            return len(b)
+
+        def flush(self):
+            out.flush()
+
+    top = os.path.basename(path) if rel else "backup"
+    skipped = 0
+    with zipfile.ZipFile(Sink(), "w", zipfile.ZIP_STORED, allowZip64=True) as zf:
+        for dirpath, dirnames, filenames in os.walk(path, followlinks=False):
+            dirnames.sort()
+            relroot = os.path.relpath(dirpath, path)
+            base = top if relroot == "." else top + "/" + relroot.replace(os.sep, "/")
+            if not dirnames and not filenames:
+                zi = zipfile.ZipInfo(base + "/")
+                zi.external_attr = (0o40755 << 16) | 0x10
+                zf.writestr(zi, b"")
+            for name in sorted(filenames):
+                full = os.path.join(dirpath, name)
+                try:
+                    st = os.lstat(full)
+                    if not stat.S_ISREG(st.st_mode):
+                        skipped += 1
+                        continue
+                    zi = zipfile.ZipInfo(base + "/" + name, time.localtime(max(st.st_mtime, 315532800))[:6])
+                    zi.compress_type = zipfile.ZIP_STORED
+                    zi.external_attr = (st.st_mode & 0o777) << 16
+                    with open(full, "rb") as src, zf.open(zi, "w", force_zip64=True) as dst:
+                        shutil.copyfileobj(src, dst, 1 << 20)
+                except OSError:
+                    skipped += 1
+    if skipped:
+        sys.stderr.write("%d items could not be read and are not in the zip.\n" % skipped)
+
+
 def restore(task, version, rel, target):
     """Copy a file or folder of a version back. target 'folder': into <source>/_restored/<time>/ (safe). 'original': over the files in the source;
     what it replaces is first moved to <source>/_restored/<time>-replaced/."""
@@ -1180,6 +1273,11 @@ def run_panel(argv):
             out_json({"versions": versions_of(find_task(load_tasks(), argv[1]))})
         elif w == "browse" and len(argv) in (3, 4):
             out_json({"entries": browse(find_task(load_tasks(), argv[1]), argv[2], argv[3] if len(argv) == 4 else "")})
+        elif w == "stream" and len(argv) == 5:
+            try:
+                cmd_stream(argv[1], argv[2], argv[3], argv[4])
+            except BrokenPipeError:      # the person closed the download
+                return 0
         elif w == "restore" and len(argv) in (4, 5):
             restore(find_task(load_tasks(), argv[1]), argv[2], argv[3] if len(argv) == 5 else "", argv[-1])
         elif w == "sshkey" and len(argv) == 1:

@@ -1905,11 +1905,44 @@ def drives_json(action, extra=()):
     return data
 
 
+DRIVES_LAST = {"state": None}      # the last state that was read: shown (marked stale) while a change is running, so the page still has its drive boxes
+DRIVES_LAST_FILE = os.path.join(STATE_DIR, "drives-last.json")
+
+
+def drives_last_load():
+    if DRIVES_LAST["state"] is None:
+        try:
+            with open(DRIVES_LAST_FILE) as f:
+                data = json.load(f)
+            if isinstance(data, dict) and isinstance(data.get("status"), dict):
+                DRIVES_LAST["state"] = data
+        except (OSError, ValueError):
+            pass
+    return DRIVES_LAST["state"]
+
+
 def api_drives_state():
-    """Pools, drives and the last backup, plus what can be renamed or put to sleep."""
-    st = drives_json("status")
-    ac = drives_json("actions")
-    return {"status": st, "actions": ac}
+    """Pools, drives and the last backup, plus what can be renamed or put to sleep.
+    While a change is running the drives are not read (they are being changed): the last state that was read is shown instead, marked "stale"."""
+    try:
+        st = drives_json("status")
+        ac = drives_json("actions")
+    except Fail as e:
+        last = drives_last_load() if e.code == 409 and DRIVES_STATE["changing"] else None
+        if last is None:
+            raise
+        return dict(last, stale=True)
+    state = {"status": st, "actions": ac}
+    DRIVES_LAST["state"] = state
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp = DRIVES_LAST_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(state, f)
+        os.replace(tmp, DRIVES_LAST_FILE)
+    except OSError:
+        pass
+    return state
 
 
 def drive_message(out, err, limit=600, problem=False):
@@ -2113,7 +2146,9 @@ def api_drives_abort():
         raise Fail("No drive change is running right now.", 409)
     if action == "setup" and not copying:
         raise Fail("A new setup can be stopped only while the files of the Main pool are being copied. Erasing and building the drives is not something to cut off halfway.", 409)
-    if action not in ("add", "move", "disconnect", "setup"):
+    if action == "appsfix" and not copying:
+        raise Fail("Cancel works while the files are being copied from the backup. Right now nothing is being copied.", 409)
+    if action not in ("add", "move", "disconnect", "setup", "appsfix"):
         raise Fail("That cannot be stopped: erasing a drive is not something to cut off halfway.", 409)
     try:
         p = subprocess.run(DRIVES_CMD + ["panel", "abort"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
@@ -2233,6 +2268,78 @@ def api_backup_look(path, query):
     if path == "versions":
         return backup_json(["versions", backup_id(q.get("id"))], timeout=120)
     return backup_json(["browse", backup_id(q.get("id")), backup_version(q.get("v")), backup_rel(q.get("rel"))], timeout=180)
+
+
+DL_TOKENS = {}      # one-time download links: {token: (valid until, session, task, version, rel, mode, file name)}
+DL_LOCK = threading.Lock()
+
+
+def api_backup_dltoken(body, session):
+    """The Download button: a link that works once, for two minutes, for this session only (a plain link cannot carry the panel's own header)."""
+    mode = body.get("mode")
+    if mode not in ("file", "zip"):
+        raise Fail("Choose a file or a folder.")
+    task, version, rel = backup_id(body.get("id")), backup_version(body.get("v")), backup_rel(body.get("rel"))
+    rel = "" if rel == "." else rel
+    name = os.path.basename(rel) if rel else "backup"
+    if mode == "zip":
+        name += ".zip"
+    tok = secrets.token_urlsafe(24)
+    with DL_LOCK:
+        now = time.time()
+        for k in [k for k, v in DL_TOKENS.items() if v[0] < now]:
+            del DL_TOKENS[k]
+        if len(DL_TOKENS) > 200:
+            raise Fail("Too many downloads are waiting. Try again in a moment.", 429)
+        DL_TOKENS[tok] = (now + 120, session, task, version, rel or ".", mode, name)
+    return {"url": "/api/backup/download?t=" + tok}
+
+
+def backup_download(handler, query):
+    """Streams one file, or a folder as a .zip, from the backup tool to the browser. The tool does the reading as root; nothing is kept on the way."""
+    t = urllib.parse.parse_qs(query).get("t", [""])[0]
+    with DL_LOCK:
+        entry = DL_TOKENS.pop(t, None)
+    if not entry or entry[0] < time.time() or entry[1] != handler.cookie_token():
+        raise Fail("That download link has run out. Press Download again.", 403)
+    _, _, task, version, rel, mode, name = entry
+    p = subprocess.Popen(BACKUP_CMD + ["stream", task, version, rel, mode], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
+    try:
+        first = p.stdout.read(65536)
+        if len(first) < 65536:      # the end of the data came: the tool is done (a short file) or it refused (it prints {"error": ...} and stops)
+            rc = p.wait()
+            if rc != 0:
+                msg = ""
+                try:
+                    msg = str(json.loads(first.decode("utf-8", "replace")).get("error", ""))
+                except ValueError:
+                    pass
+                err = (p.stderr.read() or b"").decode("utf-8", "replace")
+                raise Fail(msg or backup_problem(rc, err) or "That could not be downloaded.", 409)
+        safe = re.sub(r'[^A-Za-z0-9._ ()+,-]', "_", name) or "download"
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/zip" if mode == "zip" else "application/octet-stream")
+        handler.send_header("Content-Disposition", "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (safe, urllib.parse.quote(name)))
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("X-Content-Type-Options", "nosniff")
+        handler.send_header("Connection", "close")      # (no length is known: the end of the data is the end of the connection)
+        handler.end_headers()
+        handler.close_connection = True
+        try:
+            handler.wfile.write(first)
+            while True:
+                chunk = p.stdout.read(1 << 20)
+                if not chunk:
+                    break
+                handler.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass      # the person closed the download
+    finally:
+        if p.poll() is None:
+            p.kill()
+        p.wait()
+        p.stdout.close()
+        p.stderr.close()
 
 
 def backup_job_thread(words):
@@ -2822,6 +2929,10 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, api_updates_state("fresh=1" in self.path) if path == "/api/updates" else api_updates_job())
+            if path == "/api/backup/download":      # (a link the page opened: the one-time token in it, and the session cookie, are the proof)
+                if not session_ok(self.cookie_token()):
+                    raise Fail("Please log in again.", 401)
+                return backup_download(self, urllib.parse.urlparse(self.path).query)
             if path in ("/api/backup", "/api/backup/job", "/api/backup/versions", "/api/backup/browse"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
@@ -2980,6 +3091,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, api_updates_start(body))
             if path == "/api/backup/save":
                 return self.send(200, api_backup_save(body))
+            if path == "/api/backup/dltoken":
+                return self.send(200, api_backup_dltoken(body, self.cookie_token()))
             if path in ("/api/backup/run", "/api/backup/dry", "/api/backup/restore"):
                 return self.send(200, api_backup_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/backup/job
             if path in ("/api/backup/delete", "/api/backup/toggle", "/api/backup/sshkey", "/api/backup/sshtest", "/api/backup/cloud-add"):
