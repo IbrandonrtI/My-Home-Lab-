@@ -103,13 +103,18 @@ CALENDAR_GROUPS = {"Calendar": ("mdi-calendar-month", 2)}      # name -> (icon, 
 
 def services_block(live, shipped, begin, end):
     """This machine's services.yaml with a managed block (the lines between two marker lines of the shipped file) put in at the end, or
-    brought up to date. Everything outside the block is left alone. `shipped` already has this machine's address filled in."""
+    brought up to date. Everything outside the block is left alone, and a block whose first marker line ends with `customized` is left alone
+    too (the control panel writes that word when someone changes one of its cards). `shipped` already has this machine's address filled in."""
     a = shipped.find(begin)
     z = shipped.find(end, a) if a >= 0 else -1
     if a < 0 or z < 0:
         return live
     block = shipped[a:z + len(end)]
     la = live.find(begin)
+    if la >= 0:
+        eol = live.find("\n", la)
+        if "customized" in live[la + len(begin):eol if eol >= 0 else len(live)]:
+            return live                   # the control panel marked it `customized` (cards renamed, moved, hidden or added): the person's version stays
     lz = live.find(end, la) if la >= 0 else -1
     if la >= 0 and lz >= 0:
         return live[:la] + block + live[lz + len(end):]

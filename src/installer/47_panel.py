@@ -7,6 +7,7 @@ PANEL_HTTPS = 1100                      # the Tailscale Serve port (https://NAME
 PANEL_SHARE = "/usr/local/share/homelab-panel"
 PANEL_UNIT = "/etc/systemd/system/homelab-panel.service"
 PANEL_UI_FILES = ["index.html", "app.js", "app.css", "icon.svg"]
+PANEL_SHIPPED_FILES = [("shipped-services.yaml", "services.yaml"), ("shipped-stat-extras.yaml", "stat-extras.yaml")]      # (name next to the panel, file in homepage-config)
 PANEL_SUDOERS = "/etc/sudoers.d/homelab-panel"
 # the only commands the panel's user may run as root without a password (the Drives tab); `drives panel` checks every word again, and the
 # ones that erase or move drives (add, wipe, disconnect, move, setup, bootadd) also ask for the typed confirmations inside the drives tool and refuse while a backup runs
@@ -103,6 +104,8 @@ def panel_sudoers_install():
 def panel_files_wanted():
     """[(path, text)] of everything the panel needs on disk: its page files and the unit."""
     items = [(P(PANEL_SHARE + "/ui/" + fn), read_file(repo_file("panel", "ui", fn))) for fn in PANEL_UI_FILES]
+    # the cards HomeLab ships, with this machine's address in: the panel reads them for "Add From HomeLab's List" and "Put Them Back"
+    items += [(P(PANEL_SHARE + "/" + dst), subst(read_file(repo_file("homepage-config", src)))) for dst, src in PANEL_SHIPPED_FILES]
     return items + [(P(PANEL_UNIT), panel_unit_text())]
 
 
