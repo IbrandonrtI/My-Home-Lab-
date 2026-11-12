@@ -290,13 +290,14 @@ function saveBar(dirty, onSave, onRevert, saveLabel, extra) {      // (kept for 
 // add a spare drive to a pool, move a drive between pools, take one out, erase a spare drive)
 // The panel never touches a drive itself: the server asks the drives tool through a narrow sudo rule. The changes that erase or move things ask for
 // typed confirmations here, and the drives tool asks for them again (it only goes on when it gets exactly the words), and refuses while a backup runs.
+let DRapps = null;      // /api/drives/apps: which of Immich / Nextcloud cannot find their files, and whether a backup copy exists
 let DR = null, DRerr = "", DRbusy = "", DRhealth = null, DRcheck = null, DRwait = "", DRjob = null, DRpoll = 0;
 let drivesBox = null;
 const ROLE_TEXT = { main: "Main", backup: "Backup", parity: "Parity", array: "Array", spare: "Spare", system: "System", "plain-data": "Plain Data" };
 const STATE_TEXT = { connected: "Connected", "connected (used last)": "Connected", MISSING: "Missing", "NOT MOUNTED": "Not Mounted",
   "not connected to a pool": "Not in a Pool", "boot/system drive (never touched)": "Boot Drive" };      // (short words: they must fit in their column)
 const STATE_HINT = { "connected (used last)": "A backup copy on the boot drive. It is only used when the other backup drives are full.", "boot/system drive (never touched)": "The boot drive. The panel never changes it." };
-const JOB_TEXT = { add: "Adding the drive...", wipe: "Erasing the drive...", disconnect: "Taking the drive out of its pool...", move: "Moving the drive...", remount: "Mounting the drives again. This can take a minute...",
+const JOB_TEXT = { add: "Adding the drive...", wipe: "Erasing the drive...", disconnect: "Taking the drive out of its pool...", move: "Moving the drive...", remount: "Fixing the drives. This can take a minute...", appsfix: "Fixing Immich and Nextcloud. Copying files back from the backup can take a long time...",
   setup: "Building the new setup. This can take a few minutes...", bootadd: "Setting aside part of the boot drive...", rename: "Saving the name...", sleep: "Telling the drive to sleep...", wake: "Waking the drive up..." };
 function humanBytes(n) {
   if (typeof n !== "number" || !(n >= 0)) return "-";
@@ -324,7 +325,7 @@ function loadDrives(tries) {
   DRwait = "Looking at the drives...";
   drawDrives();
   const gaveUp = e => { DRerr = e.message; DRwait = ""; drawDrives(); };
-  return api("GET", "/api/drives").then(d => { DR = d; DRerr = ""; DRwait = ""; drawDrives(); if (!DRhealth) quietHealth(); rescanConfig(); }).catch(e => {
+  return api("GET", "/api/drives").then(d => { DR = d; DRerr = ""; DRwait = ""; drawDrives(); if (!DRhealth) quietHealth(); rescanConfig(); quietApps(); }).catch(e => {
     if (e.status !== 409) return gaveUp(e);
     // another drive command is running: when it is a change, follow its progress; else look again in a moment (nothing for the person to do)
     return api("GET", "/api/drives/job").then(j => {
@@ -341,6 +342,41 @@ function quietHealth(tries) {      // temperature, health, model and serial are 
     if (e.status === 409 && tries < 20) { DRhealthRetry = setTimeout(() => { if (drivesBox && drivesBox.isConnected && !DRhealth) quietHealth(tries + 1); }, 3000); return; }
     DRhealth = { drives: [], ok: true }; drawDrives();
   });
+}
+function quietApps() {      // does Immich or Nextcloud miss its files? (looking only; nothing is shown when it cannot be told)
+  api("GET", "/api/drives/apps").then(a => { DRapps = a; drawDrives(); }).catch(() => { DRapps = null; });
+}
+async function appsRestore() {
+  const b = (DRapps || {}).backup || {};
+  const ok = await confirmBox("Restore From the Backup?",
+    "The files that are missing are copied back from the last backup" + (b.stamp ? " (" + b.stamp + ", result " + (b.result || "unknown") + ")" : "") + ". Files that are already there are never overwritten. Files that were added or changed after that backup are not in it and cannot come back. Immich and Nextcloud stay stopped while the files are copied, and start by themselves when it is done. Their accounts and settings are the same. This can take a long time.",
+    "Restore From Backup");
+  if (ok) startJob("appsfix", { mode: "restore", typed: ["RESTORE"] }, "The files are back and Immich and Nextcloud are running again.");
+}
+async function appsFresh() {
+  const names = ((DRapps || {}).problems || []).map(a => a === "nextcloud" ? "Nextcloud" : a === "immich" ? "Immich" : a).join(" and ");
+  const r = await driveDialog({
+    title: "Start on Empty Folders",
+    lead: [names + " will start on empty folders. Their accounts and settings stay the same, because those are saved on the boot drive."],
+    questions: [],
+    warn: () => "The photos and files that were on the missing drive will not show up. Immich keeps a list of photos it cannot open, and apps that sync with Nextcloud may remove their own copies of files the server no longer has. Do this only when the old files are really gone, or after you restored what you could.",
+    typed: () => [{ word: "START" }],
+    sure: () => "I understand that the old photos and files will not be shown.",
+    ok: () => "Start on Empty Folders", danger: () => true });
+  if (!r) return;
+  startJob("appsfix", { mode: "fresh", typed: r.typed }, names + " started on empty folders.");
+}
+function appsCard() {      // shown after Fix Drives, or whenever a drive was lost: the two apps are stopped on purpose
+  const p = (DRapps && DRapps.problems) || [];
+  if (!p.length) return null;
+  const names = p.map(a => a === "nextcloud" ? "Nextcloud" : a === "immich" ? "Immich" : a).join(" and ");
+  const bk = (DRapps.backup || {}).found;
+  return h("div", { class: "card warncard", role: "alert" }, h("h2", {}, names + " Cannot Find Their Files"),
+    h("p", {}, "Their files were on a drive that is not in the Main pool now, so " + (p.length > 1 ? "they refuse" : "it refuses") + " to start. That is on purpose: started on an empty folder, they would look as if everything was deleted. Their accounts and settings are not lost."),
+    h("p", { class: "muted small" }, bk ? "A backup copy of your files was found. Restoring copies back only what is missing." : "No backup copy of your files was found. If the old drive still works, connect it again and press Fix Drives. Otherwise you can start on empty folders."),
+    h("div", { class: "row" },
+      bk ? h("button", { class: "primary small", disabled: !!DRbusy, onclick: appsRestore }, "Restore From Backup") : null,
+      h("button", { class: "small", disabled: !!DRbusy, onclick: appsFresh }, "Start on Empty Folders")));
 }
 function drawDrives() {
   if (!(drivesBox && drivesBox.isConnected)) return;
@@ -589,9 +625,9 @@ async function autoName(a) {
   if (await confirmBox("Use the Automatic Name?", "The drive will be called by its size, make and type again instead of \"" + a.name + "\".", "Use Automatic Name")) driveDo("rename", { id: a.id, name: "auto" }, true);
 }
 async function remountDrives() {
-  const ok = await confirmBox("Mount the Drives Again?",
-    "Use this after a drive was unplugged or the power was cut. The containers that use the pool stop, every drive and pool is mounted again from the saved setup, and the containers start again. It can take a minute, and nothing is erased or moved. If a backup or an upload is running right now, it is refused and nothing changes.",
-    "Mount Again");
+  const ok = await confirmBox("Fix Drives?",
+    "Use this after a drive was unplugged, the power was cut or a drive was lost. The containers that use the pool stop, every drive and pool is mounted again from the saved setup, and the containers start again. Then it checks that Immich and Nextcloud can find their files. If they cannot, they stay stopped and you choose what to do next. It can take a minute, and nothing is erased or moved. If a backup or an upload is running right now, it is refused and nothing changes.",
+    "Fix Drives");
   if (ok) driveDo("remount", {}, true);
 }
 
@@ -1014,7 +1050,7 @@ function cardBody(t) {
     typeof d.used_bytes === "number" ? usageBar(d.used_bytes, d.size_bytes) : null,
     connected ? h("div", { class: "row tight" },
       btn(DRhealth ? "Check Health Again" : "Check Health", runLook("health")),
-      btn(DRcheck ? "Run Quick Check Again" : "Run Quick Check", runLook("check"))) : h("p", { class: "muted small" }, "This drive is not connected. Connect it and press Mount the Drives Again."),
+      btn(DRcheck ? "Run Quick Check Again" : "Run Quick Check", runLook("check"))) : h("p", { class: "muted small" }, "This drive is not connected. Connect it and press Fix Drives."),
     wait ? h("p", { class: "muted small", role: "status" }, DRwait) : null,
     healthBlock(d), checkBlock(d, !!sp),
     actions.length ? h("div", { class: "row tight cardactions" }, actions) : null,
@@ -1085,13 +1121,15 @@ function drivesParts() {
       typeof st.boot_free_bytes === "number" ? h("span", {}, "Free space on the boot drive: " + humanBytes(st.boot_free_bytes)) : null),
     h("button", { class: "small" + (DRselMode ? " on" : ""), "aria-pressed": DRselMode ? "true" : "false", disabled: !!DRbusy, onclick: () => { DRselMode = !DRselMode; if (!DRselMode) DRsel = new Set(); drawDrives(); }, title: "Press drives to pick several, then use the buttons that show up" }, DRselMode ? "Done Selecting" : "Select"),
     h("button", { class: "small", disabled: off, onclick: () => { DRhealth = null; loadDrives(); } }, "Refresh"),
-    h("button", { class: "small", disabled: !!DRbusy, onclick: remountDrives, title: "Mounts every drive and pool again from the saved setup (after an unplug or a power cut)" }, "Mount the Drives Again")));
+    h("button", { class: "small", disabled: !!DRbusy, onclick: remountDrives, title: "Mounts every drive and pool again from the saved setup and checks that Immich and Nextcloud find their files (after an unplug, a power cut or a lost drive)" }, "Fix Drives")));
   if (st.main_empty && !DRbusy) {      // no drive in Main: the services that keep files there wait; say which, and how to fix it
     const held = st.main_held || [];
     out.push(h("div", { class: "card warncard", role: "alert" }, h("h2", {}, "Main Has No Drive"),
       h("p", {}, "Nothing is connected to the Main pool, so the services that keep their files there (Immich and Nextcloud, for example) have no safe place to save them. " + (held.length ? "These services are kept stopped until a drive is added: " + held.join(", ") + "." : "Any service that needs Main waits until a drive is added.")),
       h("p", { class: "muted small" }, "Updates still install. Only the parts that need Main wait. To fix it, drag a drive into Main, or press Configure Drives and build a setup. The stopped services start again by themselves.")));
   }
+  const ac = appsCard();
+  if (ac && !DRbusy) out.push(ac);
   out.push(selBar());
   const inPool = t => t.kind === "pool" || t.kind === "boot" || t.kind === "array" || (t.kind === "other" && (t.d.role === "main" || t.d.role === "backup"));
   const top = tiles.filter(t => !inPool(t) && !isMember(t));
