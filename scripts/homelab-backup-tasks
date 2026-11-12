@@ -85,6 +85,14 @@ def at(ref, sch, day=None):
     return (day or ref).replace(hour=h, minute=m, second=0, microsecond=0)
 
 
+def from_day(sch, ref):
+    """The day an every-N-days schedule counts from (the day it was saved)."""
+    try:
+        return datetime.date.fromisoformat(sch.get("from", ""))
+    except (TypeError, ValueError):
+        return ref.date()
+
+
 def last_scheduled(sch, ref):
     """The latest scheduled moment at or before ref."""
     kind = sch["kind"]
@@ -96,6 +104,10 @@ def last_scheduled(sch, ref):
     if kind == "weekly":
         c -= datetime.timedelta(days=(c.weekday() - int(sch["dow"])) % 7)
         return c - datetime.timedelta(days=7) if c > ref else c
+    if kind == "days":          # every N days, counted from the day the schedule was saved ("from")
+        if c > ref:
+            c -= datetime.timedelta(days=1)
+        return c - datetime.timedelta(days=(c.date() - from_day(sch, ref)).days % int(sch["every"]))
     c = c.replace(day=int(sch["dom"]))
     if c > ref:
         c = (c.replace(day=1) - datetime.timedelta(days=1)).replace(day=int(sch["dom"]))
@@ -113,6 +125,8 @@ def next_scheduled(sch, ref):
         return last + datetime.timedelta(days=1)
     if kind == "weekly":
         return last + datetime.timedelta(days=7)
+    if kind == "days":
+        return last + datetime.timedelta(days=int(sch["every"]))
     first = last.replace(day=1) + datetime.timedelta(days=32)
     return at(first.replace(day=int(sch["dom"])), sch)
 
@@ -126,6 +140,8 @@ def describe_schedule(sch):
         return "Every day at " + sch["time"]
     if kind == "weekly":
         return "Every %s at %s" % (days[int(sch["dow"])], sch["time"])
+    if kind == "days":
+        return "Every %d days at %s" % (int(sch["every"]), sch["time"])
     return "On day %d of every month at %s" % (int(sch["dom"]), sch["time"])
 
 
@@ -325,9 +341,17 @@ def clean_schedule(s):
             out["minute"] = int(s.get("minute", 0))
             if not 0 <= out["minute"] <= 59:
                 raise ValueError
-        elif kind in ("daily", "weekly", "monthly"):
+        elif kind in ("daily", "weekly", "monthly", "days"):
             hhmm(s.get("time"))
             out["time"] = s["time"]
+            if kind == "days":
+                out["every"] = int(s.get("every"))
+                if not 2 <= out["every"] <= 30:
+                    raise ValueError
+                try:
+                    out["from"] = datetime.date.fromisoformat(s.get("from", "")).isoformat()
+                except (TypeError, ValueError):
+                    out["from"] = now().date().isoformat()
             if kind == "weekly":
                 out["dow"] = int(s.get("dow"))
                 if not 0 <= out["dow"] <= 6:
@@ -337,9 +361,9 @@ def clean_schedule(s):
                 if not 1 <= out["dom"] <= 28:
                     raise ValueError
         else:
-            raise Bad("The schedule must be hourly, daily, weekly or monthly.")
+            raise Bad("The schedule must be hourly, daily, every few days, weekly or monthly.")
     except (TypeError, ValueError):
-        raise Bad("The schedule has a value that does not fit (minute 0-59, weekday 0-6, day of the month 1-28).") from None
+        raise Bad("The schedule has a value that does not fit (minute 0-59, weekday 0-6, day of the month 1-28, every 2-30 days).") from None
     return out
 
 

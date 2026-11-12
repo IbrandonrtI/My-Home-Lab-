@@ -67,6 +67,8 @@ NO_DOCKER = bool(os.environ.get("HLP_NO_DOCKER"))
 DRIVES_CMD = shlex.split(os.environ.get("HLP_DRIVES") or "sudo -n /usr/local/sbin/drives")      # the one door to the drives (see "the Drives tab")
 BACKUP_CMD = shlex.split(os.environ.get("HLP_BACKUP") or "sudo -n /usr/local/sbin/homelab-backup-tasks panel")      # the one door to the backup tasks (see "the Backups section")
 
+SHIPPED = os.environ.get("HLP_SHIPPED") or "/usr/local/share/homelab-panel/shipped-services.yaml"           # the cards HomeLab ships (for Add From List and Restore)
+SHIPPED_EXTRAS = os.environ.get("HLP_SHIPPED_EXTRAS") or "/usr/local/share/homelab-panel/shipped-stat-extras.yaml"      # more single-number cards on offer
 SETTINGS = os.path.join(HP, "settings.yaml")
 SERVICES = os.path.join(HP, "services.yaml")
 BOOKMARKS = os.path.join(HP, "bookmarks.yaml")
@@ -473,7 +475,7 @@ def look_clean(raw):
     if "glassRim" in raw:
         out["glassRim"] = number(raw["glassRim"], "How bright the shine on the glass edge is", 0, 100)
     if "theme" in raw:
-        if raw["theme"] not in THEME_IDS:
+        if raw["theme"] not in THEME_IDS and not MYTHEME_ID.match(str(raw["theme"])):
             raise Fail("The theme is not understood.")
         out["theme"] = raw["theme"]
     if "playerHeight" in raw:
@@ -955,8 +957,14 @@ def bg_numbers(body, tx_text):
 def api_bg_save(body):
     tx = Tx("Background changed")
     text = tx.get(SETTINGS)
-    if body.get("url"):
-        text = bg_set(text, "image", clean_url(body["url"], "The picture address", False))
+    u = body.get("url")
+    if u and isinstance(u, str) and u.startswith("/images/"):            # a picture of this machine (the picture of a theme of your own)
+        name = u[len("/images/"):]
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", name) or not os.path.isfile(os.path.join(IMAGES, name)):
+            raise Fail("That picture is not in the images folder any more.")
+        text = bg_set(text, "image", u)
+    elif u:
+        text = bg_set(text, "image", clean_url(u, "The picture address", False))
     text = bg_numbers(body, text)
     tx.put(SETTINGS, text)
     tx.commit()
@@ -1063,6 +1071,11 @@ def theme_picture(body):
 
 # ================================================================ layout: tabs, groups, their order (settings.yaml: layout:)
 AUTOMATIC = {"At a Glance", "Music Library", "Library Totals", "Storage", "Backup & Updates", "Folder Sizes", "Calendar"}     # made by the lab's scripts
+HL_ID = re.compile(r"^(stat|cal)-")      # the ids of the cards HomeLab fills in (numbers, calendar)
+HL_BLOCKS = (("# >>> homelab stats >>>", "# <<< homelab stats <<<"), ("# >>> homelab calendar >>>", "# <<< homelab calendar <<<"))      # the installer's blocks in services.yaml
+HL_GROUP_LOOK = {"At a Glance": ("mdi-view-dashboard", 4, "Stats"), "Music Library": ("mdi-music", 2, "Stats"), "Library Totals": ("mdi-image-multiple", 2, "Stats"),
+                 "Storage": ("mdi-harddisk", 3, "Stats"), "Backup & Updates": ("mdi-backup-restore", 2, "Stats"), "Folder Sizes": ("mdi-folder-multiple", 1, "Stats"),
+                 "Calendar": ("mdi-calendar-month", 2, "Home")}      # group -> (icon, columns, tab) for a group that Add From List or Restore has to make again
 PROTECTED = {"Customize", "Edit Links", "Terminal"}          # the panel itself (the Customize tab and the link editor of the Links tab): it can be moved, but not removed
 
 
@@ -1264,14 +1277,15 @@ def card_public(lines, c, group):
     managed = bool(f.get("widget")) or f.get("id", "").endswith("-card")
     return {"name": c["name"], "id": f.get("id", ""), "href": f.get("href", ""), "icon": f.get("icon", ""), "description": f.get("description", ""),
             "siteMonitor": f.get("siteMonitor", ""), "widget": f.get("widget", ""), "managed": managed,
-            "locked": group in AUTOMATIC or f.get("id", "") in ("customize-card", "navidrome-card")}
+            "hl": bool(HL_ID.match(f.get("id", ""))),
+            "locked": f.get("id", "") in ("customize-card", "navidrome-card")}
 
 
 def services_state():
     lines = read(SERVICES).split("\n")
     out = []
     for g in services_parse(lines):
-        out.append({"group": g["name"], "locked": g["name"] in AUTOMATIC or g["name"] in PROTECTED,
+        out.append({"group": g["name"], "locked": g["name"] in PROTECTED, "automatic": g["name"] in AUTOMATIC,
                     "cards": [card_public(lines, c, g["name"]) for c in g["cards"]]})
     return out
 
@@ -1372,15 +1386,115 @@ def card_values(body, managed_card=False):
     return v
 
 
-def ensure_layout_group(tx, group, tab=None):
-    """A new group gets a line in the layout (on the tab given, else the first tab)."""
+def ensure_layout_group(tx, group, tab=None, props=None):
+    """A new group gets a line in the layout (on the tab given, else the first tab; `props` are its icon and columns)."""
     text = tx.get(SETTINGS)
     gs = layout_groups(text)
     if any(g["name"] == group for g in gs) or not gs:
         return
     t = tab or layout_tabs(gs)[0]["name"]
-    gs.append({"name": group, "props": {"tab": t}, "extra": []})
+    gs.append({"name": group, "props": dict(props or {}, tab=t), "extra": []})
     tx.put(SETTINGS, layout_write(text, gs))
+
+
+def hl_adopt(lines):
+    """The first time a card HomeLab fills in is changed: the marker line of its block says `customized`, so the installer stops
+    rewriting the block on an upgrade (it would put the shipped cards back). Returns True when a block was marked."""
+    done = False
+    for b, _e in HL_BLOCKS:
+        for i, l in enumerate(lines):
+            if l.startswith(b) and not l[len(b):].strip():
+                lines[i] = b + " customized"
+                done = True
+    return done
+
+
+def hl_lan(live_text):
+    m = re.search(r"http://([A-Za-z0-9._-]+):3001/images/", live_text or "")
+    return m.group(1) if m else ""
+
+
+def hl_catalog():
+    """The cards HomeLab can fill in, from the files the installer keeps next to the panel: [{id, name, group, icon, description, extra, lines}]."""
+    out, seen = [], set()
+    lan = hl_lan(read(SERVICES))
+    for path, extra in ((SHIPPED, False), (SHIPPED_EXTRAS, True)):
+        text = read(path)
+        if not text:
+            continue
+        if lan:
+            text = text.replace("192.168.X.X", lan)
+        lines = text.split("\n")
+        for g in services_parse(lines):
+            if g["name"] not in HL_GROUP_LOOK:
+                continue
+            for c in g["cards"]:
+                f = card_fields(lines, c)
+                if not HL_ID.match(f.get("id", "")) or f["id"] in seen:
+                    continue
+                seen.add(f["id"])
+                out.append({"id": f["id"], "name": c["name"], "group": g["name"], "icon": f.get("icon", ""), "description": f.get("description", ""),
+                            "extra": extra, "lines": lines[c["start"]:c["end"]]})
+    return out
+
+
+def hl_state():
+    """What the page needs for Add From List: every card on offer and whether it is on the dashboard now."""
+    lines = read(SERVICES).split("\n")
+    where = {}
+    for g in services_parse(lines):
+        for c in g["cards"]:
+            i = card_fields(lines, c).get("id", "")
+            if i:
+                where[i] = g["name"]
+    return [{"id": c["id"], "name": c["name"], "group": c["group"], "icon": c["icon"], "description": c["description"], "extra": c["extra"],
+             "in": where.get(c["id"], "")} for c in hl_catalog()]
+
+
+def hl_place(tx, lines, card, group, tab=None):
+    """Put a card of the catalog into a group (made when it is missing) and make sure the layout knows the group."""
+    if any(c["name"] == card["name"] for g in services_parse(lines) if g["name"] == group for c in g["cards"]):
+        raise Fail("The group '%s' already has a card called '%s'. Change that card's name first." % (group, card["name"]))
+    card_insert(lines, group, list(card["lines"]))
+    look = HL_GROUP_LOOK.get(group)
+    text = tx.get(SETTINGS)
+    names = [t["name"] for t in layout_tabs(layout_groups(text))] if layout_groups(text) else []
+    want = tab if tab in names else (look[2] if look and look[2] in names else None)
+    ensure_layout_group(tx, group, want, {"icon": look[0], "columns": str(look[1])} if look else None)
+
+
+def api_hl_restore(body):
+    """Put every card HomeLab ships back (the ones changed, moved or hidden), each in its own group. Cards you added stay."""
+    cat = [c for c in hl_catalog() if not c["extra"]]
+    if not cat:
+        raise Fail("The list of HomeLab's cards is not on this machine yet. Run:  sudo homelab-setup upgrade")
+    tx = Tx("HomeLab cards restored")
+    lines = tx.get(SERVICES).split("\n")
+    hl_adopt(lines)
+    ids = {c["id"] for c in cat}
+    while True:
+        hit = None
+        for g in services_parse(lines):
+            for c in g["cards"]:
+                if card_fields(lines, c).get("id") in ids:
+                    hit = (g, c)
+                    break
+            if hit:
+                break
+        if not hit:
+            break
+        g, c = hit
+        del lines[c["start"]:c["end"]]
+        tidy_blank(lines, c["start"])
+        left = next((x for x in services_parse(lines) if x["name"] == g["name"]), None)
+        if left is not None and not left["cards"]:
+            del lines[left["start"]:left["end"]]
+            tidy_blank(lines, left["start"])
+    for card in cat:
+        hl_place(tx, lines, card, card["group"])
+    tx.put(SERVICES, "\n".join(lines))
+    tx.commit()
+    return {}
 
 
 def drop_layout_group(tx, group):
@@ -1393,12 +1507,32 @@ def drop_layout_group(tx, group):
 
 def api_card(body):
     op = body.get("op")
-    tx = Tx({"add": "Card added", "edit": "Card changed", "remove": "Card removed", "move": "Card moved"}.get(op, "Cards changed"))
+    tx = Tx({"add": "Card added", "add-list": "Cards added", "edit": "Card changed", "remove": "Card removed", "move": "Card moved"}.get(op, "Cards changed"))
     lines = tx.get(SERVICES).split("\n")
-    if op == "add":
+    if op == "add-list":
+        want = body.get("ids")
+        if not isinstance(want, list) or not want or len(want) > 40:
+            raise Fail("Choose at least one card from the list.")
+        cat = {c["id"]: c for c in hl_catalog()}
+        here = {card_fields(lines, c).get("id") for g in services_parse(lines) for c in g["cards"]}
+        hl_adopt(lines)
+        for i in want:
+            card = cat.get(i)
+            if card is None:
+                raise Fail("That card is not on the list. Reload the panel and try again.")
+            if i in here:
+                raise Fail("The card '%s' is already on the dashboard." % card["name"])
+            group = check_group_name(body.get("group")) if body.get("group") else card["group"]
+            if group in PROTECTED:
+                raise Fail("Choose another group.")
+            hl_place(tx, lines, card, group, body.get("tab"))
+        tx.put(SERVICES, "\n".join(lines))
+    elif op == "add":
         group = check_group_name(body.get("group"))
-        if group in AUTOMATIC or group in PROTECTED:
-            raise Fail("The group '%s' is kept up to date by HomeLab. Put the card in another group." % group)
+        if group in PROTECTED:
+            raise Fail("The group '%s' is part of the panel itself. Put the card in another group." % group)
+        if group in AUTOMATIC:
+            hl_adopt(lines)
         v = card_values(body)
         if any(c["name"] == v["name"] for g in services_parse(lines) for c in g["cards"]):
             raise Fail("There is already a card called '%s'. Choose another name." % v["name"])
@@ -1409,7 +1543,9 @@ def api_card(body):
         g, c = find_card(lines, body.get("group"), body.get("old"))
         pub = card_public(lines, c, g["name"])
         if pub["locked"]:
-            raise Fail("This card is kept up to date by HomeLab and cannot be changed here.")
+            raise Fail("This card is part of the panel itself and cannot be changed here.")
+        if pub["hl"] or g["name"] in AUTOMATIC:
+            hl_adopt(lines)
         v = card_values(body, pub["managed"])
         if v["name"] != c["name"] and any(x["name"] == v["name"] for gg in services_parse(lines) for x in gg["cards"]):
             raise Fail("There is already a card called '%s'." % v["name"])
@@ -1424,7 +1560,9 @@ def api_card(body):
         g, c = find_card(lines, body.get("group"), body.get("name"))
         pub = card_public(lines, c, g["name"])
         if pub["locked"]:
-            raise Fail("This card is kept up to date by HomeLab and cannot be removed here.")
+            raise Fail("This card is part of the panel itself and cannot be removed here.")
+        if pub["hl"] or g["name"] in AUTOMATIC:
+            hl_adopt(lines)
         del lines[c["start"]:c["end"]]
         tidy_blank(lines, c["start"])
         left = next((x for x in services_parse(lines) if x["name"] == g["name"]), None)
@@ -1436,11 +1574,14 @@ def api_card(body):
             tx.put(SERVICES, "\n".join(lines))
     elif op == "move":
         g, c = find_card(lines, body.get("group"), body.get("name"))
-        if card_public(lines, c, g["name"])["locked"]:
-            raise Fail("This card is kept up to date by HomeLab and cannot be moved here.")
+        mv = card_public(lines, c, g["name"])
+        if mv["locked"]:
+            raise Fail("This card is part of the panel itself and cannot be moved here.")
         to = check_group_name(body.get("to") or g["name"])
-        if to in AUTOMATIC or to in PROTECTED:
-            raise Fail("The group '%s' is kept up to date by HomeLab. Choose another group." % to)
+        if to in PROTECTED:
+            raise Fail("The group '%s' is part of the panel itself. Choose another group." % to)
+        if mv["hl"] or g["name"] in AUTOMATIC or to in AUTOMATIC:
+            hl_adopt(lines)
         block = lines[c["start"]:c["end"]]
         del lines[c["start"]:c["end"]]
         tidy_blank(lines, c["start"])
@@ -1455,6 +1596,336 @@ def api_card(body):
         raise Fail("Unknown action.")
     tx.commit()
     return {}
+
+
+# ================================================================ your own themes: a look, and if you want a picture, a layout and the cards
+# A theme you make is saved in a small file next to the Homepage files (.panel-themes.json), so it is kept with them and travels with a backup.
+# It holds the look as the page shows it, and (only if its box was ticked) the picture settings, the layout (tabs, groups, their order) and the
+# presentation of the cards (which cards, their names, icons, texts, groups and order). The cards' own addresses and widgets are never copied
+# back over the live ones: a theme only puts cards in order, renames them and brings back the ones HomeLab fills in or you made yourself.
+MYTHEMES = os.path.join(HP, ".panel-themes.json")
+MYTHEME_ID = re.compile(r"^my-[a-z0-9]{4,24}$")
+MAX_MYTHEMES = 24
+MYTHEME_PARTS = ("look", "background", "layout", "cards")
+
+
+def mythemes_load():
+    try:
+        data = json.loads(read(MYTHEMES) or "{}")
+        lst = data.get("themes") if isinstance(data, dict) else None
+        return [t for t in lst if isinstance(t, dict) and MYTHEME_ID.match(str(t.get("id", "")))] if isinstance(lst, list) else []
+    except ValueError:
+        return []
+
+
+def mythemes_save(lst):
+    write_atomic(MYTHEMES, json.dumps({"version": 1, "themes": lst}, indent=1, sort_keys=True), 0o644)
+
+
+def mythemes_state():
+    """What the page needs of each theme: its look and picture (for the tile and for trying it) and which parts it holds. The layout and the cards stay on the server."""
+    out = []
+    for t in mythemes_load():
+        parts = [p for p in MYTHEME_PARTS if p in t]
+        look = t.get("look") or {}
+        out.append({"id": t["id"], "name": t.get("name", ""), "blurb": t.get("blurb", ""), "mine": True, "parts": parts, "look": look, "background": t.get("background"),
+                    "ui": t.get("ui") or {}, "paintAll": look.get("paintAll", ""), "palette": [],
+                    "counts": {"tabs": len(t.get("layout") or []), "cards": sum(len(g.get("cards", [])) for g in (t.get("cards") or {}).get("groups", []))}})
+    return out
+
+
+def layout_snapshot():
+    out = []
+    for t in layout_tabs(layout_groups(read(SETTINGS))):
+        out.append({"name": t["name"], "groups": [{"name": g["name"], "icon": g["props"].get("icon", ""), "style": g["props"].get("style", ""),
+                                                   "columns": str(g["props"].get("columns", ""))} for g in t["groups"]]})
+    return out
+
+
+def cards_snapshot():
+    lines = read(SERVICES).split("\n")
+    groups = []
+    for g in services_parse(lines):
+        if g["name"] in PROTECTED:
+            continue
+        cards = []
+        for c in g["cards"]:
+            pub = card_public(lines, c, g["name"])
+            if pub["locked"]:
+                continue
+            kind = "hl" if pub["hl"] else ("managed" if pub["managed"] else "own")
+            item = {"key": pub["id"] or c["name"], "id": pub["id"], "name": c["name"], "icon": pub["icon"], "description": pub["description"], "kind": kind}
+            if kind == "own":
+                item["href"], item["siteMonitor"] = pub["href"], pub["siteMonitor"]
+            cards.append(item)
+        if cards:
+            groups.append({"group": g["name"], "cards": cards})
+    return {"groups": groups}
+
+
+def mytheme_background(raw, tid, old_image=None):
+    """The picture settings of a theme, checked. A picture on this machine is copied to a file of the theme's own, so replacing the background later does not change it."""
+    if not isinstance(raw, dict):
+        raise Fail("The picture settings are missing.")
+    out = {}
+    img = raw.get("image") or ""
+    if img.startswith("/images/"):
+        name = img[len("/images/"):]
+        src = os.path.join(IMAGES, name)
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", name) or not os.path.isfile(src):
+            raise Fail("The background picture cannot be found. Choose it again on the Look screen.")
+        ext = os.path.splitext(name)[1].lower()
+        mine = "theme-%s%s" % (tid, ext)
+        if name != mine:
+            shutil.copyfile(src, os.path.join(IMAGES, mine))
+            os.chmod(os.path.join(IMAGES, mine), 0o644)
+        img = "/images/" + mine
+    elif img:
+        img = clean_url(img, "The picture address")
+    out["image"] = img
+    b = raw.get("blur")
+    if b in (None, "", "none"):
+        out["blur"] = "none"
+    elif b in BLURS:
+        out["blur"] = b
+    else:
+        raise Fail("The blur must be none or one of: %s." % ", ".join(BLURS))
+    for k in ("saturate", "brightness", "opacity"):
+        out[k] = number(raw.get(k, BG_DEFAULT[k]), k.capitalize(), 0, 100)
+    return out
+
+
+def api_mytheme(body):
+    op = body.get("op")
+    lst = mythemes_load()
+    if op == "create":
+        if len(lst) >= MAX_MYTHEMES:
+            raise Fail("You have %d themes already. Delete one first." % MAX_MYTHEMES)
+        name = clean_text(body.get("name"), "The theme name", 30)
+        if not re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", name):
+            raise Fail("The name '%s' has characters that are not allowed (use letters, digits, spaces and - _ . , ( ) + )." % name)
+        if any(t.get("name", "").lower() == name.lower() for t in lst) or any(t["name"].lower() == name.lower() for t in LOOK_THEMES):
+            raise Fail("There is already a theme called '%s'. Choose another name." % name)
+        parts = body.get("parts")
+        if not isinstance(parts, list) or not parts or any(p not in MYTHEME_PARTS for p in parts):
+            raise Fail("Tick at least one thing for the theme to hold.")
+        tid = "my-" + secrets.token_hex(4)
+        t = {"id": tid, "name": name, "blurb": clean_text(body.get("blurb", ""), "The description", 90, True) or "Your own theme.", "created": int(time.time())}
+        if "look" in parts:
+            custom = look_clean(body.get("look"))
+            custom["theme"] = tid
+            t["look"] = custom
+            ui = body.get("ui")
+            if isinstance(ui, dict):
+                t["ui"] = {k: str(v)[:140] for k, v in ui.items() if k in ("bg", "panel", "panel2", "line", "field", "dialog", "blur", "rim") and re.fullmatch(r"[#A-Za-z0-9 .,()%-]+", str(v))}
+        if "background" in parts:
+            t["background"] = mytheme_background(body.get("background"), tid)
+        if "layout" in parts:
+            t["layout"] = layout_snapshot()
+        if "cards" in parts:
+            t["cards"] = cards_snapshot()
+        lst.append(t)
+        mythemes_save(lst)
+        return {"id": tid}
+    t = next((x for x in lst if x["id"] == body.get("id")), None)
+    if t is None:
+        raise Fail("I cannot find that theme. Reload the panel and try again.")
+    if op == "rename":
+        name = clean_text(body.get("name"), "The theme name", 30)
+        if not re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", name):
+            raise Fail("The name '%s' has characters that are not allowed." % name)
+        if any(x is not t and x.get("name", "").lower() == name.lower() for x in lst) or any(x["name"].lower() == name.lower() for x in LOOK_THEMES):
+            raise Fail("There is already a theme called '%s'." % name)
+        t["name"] = name
+        t["blurb"] = clean_text(body.get("blurb", t.get("blurb", "")), "The description", 90, True)
+        mythemes_save(lst)
+    elif op == "delete":
+        lst.remove(t)
+        mythemes_save(lst)
+        if os.path.isdir(IMAGES):
+            for f in os.listdir(IMAGES):
+                if re.fullmatch(r"theme-%s\.\w+" % re.escape(t["id"]), f):
+                    try:
+                        os.remove(os.path.join(IMAGES, f))
+                    except OSError:
+                        pass
+    elif op == "apply":
+        if "cards" not in t and "layout" not in t:
+            return {"changed": False}
+        tx = Tx("Theme “%s”: layout and cards" % t.get("name", ""))
+        if "cards" in t:
+            cards_apply(tx, t["cards"])
+        if "layout" in t:
+            layout_apply(tx, t["layout"])
+        tx.commit()
+        return {"changed": True}
+    else:
+        raise Fail("Unknown action.")
+    return {}
+
+
+def layout_apply(tx, snap):
+    """The tabs, the order of the groups and their icons, styles and columns of a theme, for the groups that are here now. Groups the theme does not know stay on their tab, after the others."""
+    text = tx.get(SETTINGS)
+    cur = layout_groups(text)
+    if not cur:
+        return
+    state = {g["name"]: g for g in cur}
+    out, seen = [], set()
+    for t in snap if isinstance(snap, list) else []:
+        tname = str(t.get("name", ""))
+        if not tname or not re.fullmatch(r"[^\"'\\{};<>/*:#]+", tname) or len(tname) > 24:
+            continue
+        for g in t.get("groups") or []:
+            n = g.get("name")
+            if n not in state or n in seen:
+                continue
+            seen.add(n)
+            props = dict(state[n]["props"])
+            props["tab"] = tname
+            icon = g.get("icon", "")
+            try:
+                icon = clean_icon(icon)
+            except Fail:
+                icon = ""
+            props["icon"] = icon
+            if not icon:
+                props.pop("icon")
+            for k, ok in (("style", ("row", "column")), ("columns", tuple(str(i) for i in range(1, 9)))):
+                v = str(g.get(k, "") or "")
+                if v in ok:
+                    props[k] = v
+                else:
+                    props.pop(k, None)
+            out.append({"name": n, "props": props, "extra": state[n]["extra"]})
+    out.extend(g for g in cur if g["name"] not in seen)
+    tx.put(SETTINGS, layout_write(text, out))
+
+
+def cards_apply(tx, snap):
+    """Put the cards the way a theme had them: names, icons, texts, groups and order. A card that is gone is made again when it is one HomeLab fills in or one you made yourself
+    (a card with a widget is never copied). The cards HomeLab fills in that the theme did not have are hidden (Add From HomeLab's List brings them back)."""
+    lines = tx.get(SERVICES).split("\n")
+    want = [(g["group"], c) for g in (snap.get("groups") if isinstance(snap, dict) else []) or [] for c in g.get("cards", [])]
+    catalog = {c["id"]: c for c in hl_catalog()}
+    if any(c.get("kind") == "hl" for _g, c in want) or any(HL_ID.match(i) for i in card_ids(lines)):
+        hl_adopt(lines)
+
+    def find(item):
+        for g in services_parse(lines):
+            for c in g["cards"]:
+                f = card_fields(lines, c)
+                if item.get("id"):
+                    if f.get("id") == item["id"]:
+                        return g, c
+                elif not f.get("id") and c["name"] == item.get("key"):
+                    return g, c
+        if item.get("kind") == "own" and item.get("href"):                 # a card of yours that was renamed since: the same address is the same card
+            for g in services_parse(lines):
+                for c in g["cards"]:
+                    f = card_fields(lines, c)
+                    if not f.get("id") and not f.get("widget") and f.get("href") == item["href"]:
+                        return g, c
+        return None
+
+    for group, item in want:
+        try:
+            group = check_group_name(group)
+        except Fail:
+            continue
+        got = find(item)
+        if got is None:
+            if item.get("kind") == "hl" and item.get("id") in catalog:
+                card = dict(catalog[item["id"]])
+                try:
+                    hl_place(tx, lines, card, group)
+                except Fail:
+                    continue
+                got = find(item)
+            elif item.get("kind") == "own" and item.get("name"):
+                try:
+                    v = card_values({"name": item["name"], "description": item.get("description", ""), "icon": item.get("icon", ""), "href": item.get("href", ""),
+                                     "dot": bool(item.get("siteMonitor"))})
+                except Fail:
+                    continue
+                if any(x["name"] == v["name"] for g in services_parse(lines) if g["name"] == group for x in g["cards"]):
+                    continue
+                card_insert(lines, group, new_card_lines(v["name"], v["href"], v["icon"], v["description"], v["siteMonitor"]))
+                ensure_layout_group(tx, group)
+                got = find(item)
+        if got is None:
+            continue
+        g, c = got
+        pub = card_public(lines, c, g["name"])
+        if pub["locked"]:
+            continue
+        # name, icon and text (a name that another card of the group has already is not used)
+        nm = item.get("name") or c["name"]
+        if nm != c["name"] and not any(x["name"] == nm for gg in services_parse(lines) if gg["name"] == group for x in gg["cards"]) and re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", nm) and len(nm) <= 60:
+            lines[c["start"]] = "    - %s:" % yq(nm)
+        try:
+            set_line(lines, c, "icon", clean_icon(item.get("icon", "")))
+        except Fail:
+            pass
+        try:
+            set_line(lines, c, "description", clean_text(item.get("description", ""), "The description", 160, True))
+        except Fail:
+            pass
+        # to the end of its group: after all the cards of the theme the group has them in the theme's order
+        block = lines[c["start"]:c["end"]]
+        del lines[c["start"]:c["end"]]
+        tidy_blank(lines, c["start"])
+        card_insert(lines, group, block)
+        ensure_layout_group(tx, group)
+        left = next((x for x in services_parse(lines) if x["name"] == g["name"]), None)
+        if left is not None and not left["cards"]:
+            del lines[left["start"]:left["end"]]
+            drop_layout_group(tx, g["name"])
+    # the cards the theme does not have: the ones HomeLab fills in are hidden, the others stay where they are (after the theme's)
+    sids = {c["id"] for _g, c in want if c.get("id")}
+    skeys = {c.get("key") for _g, c in want if not c.get("id")}
+    for _ in range(200):
+        hit = None
+        for g in services_parse(lines):
+            for c in g["cards"]:
+                i = card_fields(lines, c).get("id", "")
+                if HL_ID.match(i) and i not in sids:
+                    hit = (g, c)
+                    break
+            if hit:
+                break
+        if not hit:
+            break
+        g, c = hit
+        del lines[c["start"]:c["end"]]
+        tidy_blank(lines, c["start"])
+        left = next((x for x in services_parse(lines) if x["name"] == g["name"]), None)
+        if left is not None and not left["cards"]:
+            del lines[left["start"]:left["end"]]
+            tidy_blank(lines, left["start"])
+            drop_layout_group(tx, g["name"])
+    gnames = {g for g, _c in want}
+    later = []
+    for g in services_parse(lines):
+        if g["name"] in gnames:
+            for c in g["cards"]:
+                i = card_fields(lines, c).get("id", "")
+                if not ((i in sids) if i else (c["name"] in skeys)):
+                    later.append((g["name"], c["name"], i))
+    for gname, cname, i in later:
+        g = next((x for x in services_parse(lines) if x["name"] == gname), None)
+        c = next((x for x in (g["cards"] if g else []) if x["name"] == cname and card_fields(lines, x).get("id", "") == i), None)
+        if c is None:
+            continue
+        block = lines[c["start"]:c["end"]]
+        del lines[c["start"]:c["end"]]
+        tidy_blank(lines, c["start"])
+        card_insert(lines, gname, block)
+    tx.put(SERVICES, "\n".join(lines))
+
+
+def card_ids(lines):
+    return [card_fields(lines, c).get("id", "") for g in services_parse(lines) for c in g["cards"]]
 
 
 # ================================================================ links (bookmarks.yaml): the whole file is rewritten from the parsed groups
@@ -1806,7 +2277,7 @@ def icon_index():
 # ================================================================ the state the page shows
 def full_state():
     h = history_last()
-    return {"version": VERSION, "look": look_state(), "background": bg_state(), "layout": layout_state(), "services": services_state(),
+    return {"version": VERSION, "look": look_state(), "background": bg_state(), "layout": layout_state(), "services": services_state(), "hlcards": hl_state(), "mythemes": mythemes_state(),
             "links": marks_state(), "paint": paint_state(), "undo": (h[1]["label"] if h else ""), "automatic": sorted(AUTOMATIC), "protected": sorted(PROTECTED)}
 
 
@@ -3209,7 +3680,7 @@ class Handler(BaseHTTPRequestHandler):
             if path in ("/api/drives/rename", "/api/drives/sleep", "/api/drives/wake", "/api/drives/remount"):
                 return self.send(200, dict(api_drives_do(path.rsplit("/", 1)[1], body), ok=True))      # not under LOCK: a remount takes a while
             routes = {"/api/look": api_look_save, "/api/look/css": api_look_css, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
-                      "/api/layout": api_layout_save, "/api/card": api_card, "/api/link": api_link, "/api/group": api_group,
+                      "/api/layout": api_layout_save, "/api/card": api_card, "/api/hlcards/restore": api_hl_restore, "/api/mytheme": api_mytheme, "/api/link": api_link, "/api/group": api_group,
                       "/api/undo": lambda b: {"undone": undo()}}
             fn = routes.get(path)
             if not fn:

@@ -5143,6 +5143,10 @@ smart_detail() {   # smart_detail /dev/sdX -> health US temperature(C) US power-
     if [ -n "${DRIVES_SMARTCTL:-}" ]; then sc=$DRIVES_SMARTCTL; else printf '%s\n' "skipped (test mode)$US$US$US$US$US"; return 0; fi
   fi
   if ! command -v "$sc" >/dev/null 2>&1; then printf '%s\n' "smartctl not installed$US$US$US$US${US}install it with: sudo apt install smartmontools"; return 0; fi
+  # a USB stick or a memory card has no health report (and no motor, so it is never "asleep"): say so instead of guessing
+  if [ "$(drive_kind "$dev" "$(lsblk -dno MODEL "$dev" 2>/dev/null | sed 's/ *$//' | head -1)")" = Flash ]; then
+    printf '%s\n' "unsupported$US$US$US$US${US}a USB stick or memory card does not report its health"; return 0
+  fi
   for opt in "" "-d sat"; do
     # -n standby: a sleeping drive is not woken up just to read its health
     # shellcheck disable=SC2086
@@ -5151,6 +5155,9 @@ smart_detail() {   # smart_detail /dev/sdX -> health US temperature(C) US power-
     grep -Eq 'overall-health|SMART Health Status|Attribute' <<<"$o" && break
   done
   h=unknown
+  if ! grep -Eq 'overall-health|SMART Health Status|Attribute' <<<"$o" && grep -Eqi 'Unknown USB bridge|SMART support is: *(Unavailable|Unsupported)|Operation not supported|Device Read Identity Failed|unsupported' <<<"$o"; then
+    printf '%s\n' "unsupported$US$US$US$US${US}this drive (or its USB adapter) does not report its health"; return 0
+  fi
   if grep -E 'overall-health|SMART Health Status' <<<"$o" | grep -Eq 'PASSED|: OK'; then h=PASSED; fi
   if grep -E 'overall-health|SMART Health Status' <<<"$o" | grep -q 'FAILED'; then h=FAILED; fi
   t=$(awk '$1 == 194 && $10 ~ /^[0-9]/ {sub(/[^0-9].*/, "", $10); print $10; f = 1; exit} $1 == 190 && $10 ~ /^[0-9]/ {sub(/[^0-9].*/, "", $10); a = $10} END {if (!f && a != "") print a}' <<<"$o")
@@ -5166,7 +5173,41 @@ smart_detail() {   # smart_detail /dev/sdX -> health US temperature(C) US power-
   printf '%s\n' "$h$US$t$US$hrs$US$re$US$pe$US$note"
 }
 
-health_rows() {   # one row per physical drive: name US device US health US temp US hours US reallocated US pending US note
+disk_extra() {   # disk_extra /dev/sdX -> removable US file system US label US used bytes US free bytes
+  # For a drive that is in no pool. The drive is looked at read-only for a moment (or where the desktop mounted it already): nothing is written to it,
+  # and an ext or xfs file system is not even repaired (noload / norecovery). Without a readable file system the last two are empty.
+  local d=$1 kind rem=false fst lbl used=0 free=0 got=0 part pfs mp tmp opts u f
+  local -a ps=()
+  kind=$(drive_kind "$d" "$(lsblk -dno MODEL "$d" 2>/dev/null | sed 's/ *$//' | head -1)")
+  { [ "$kind" = Flash ] || [ "$(lsblk -dno RM "$d" 2>/dev/null | tr -d ' ' | head -1)" = 1 ]; } && rem=true
+  mapfile -t ps < <(parts_of "$d")
+  [ "${#ps[@]}" -gt 0 ] || ps=("$d")
+  fst=$(fs_type "${ps[0]}")
+  lbl=$(blkid -p -s LABEL -o value "${ps[0]}" 2>/dev/null | sed 's/ *$//' | head -1)
+  if [ "$TEST_MODE" = 1 ]; then
+    if [ -n "${DRIVES_PEEK:-}" ]; then read -r used free <<<"$DRIVES_PEEK"; got=1; fi
+  else
+    for part in "${ps[@]}"; do
+      pfs=$(fs_type "$part")
+      case "$pfs" in ""|swap|crypto_LUKS|LVM2_member|linux_raid_member|zfs_member|ddf_raid_member|isw_raid_member) continue ;; esac
+      tmp=""
+      mp=$(findmnt -rno TARGET "$part" 2>/dev/null | head -1)
+      if [ -z "$mp" ]; then
+        tmp=$(mktemp -d /run/drives-peek.XXXXXX 2>/dev/null) || continue
+        opts=ro,noexec,nosuid,nodev
+        case "$pfs" in ext2|ext3|ext4) opts=$opts,noload ;; xfs) opts=$opts,norecovery ;; esac
+        if timeout 20 mount -o "$opts" "$part" "$tmp" >/dev/null 2>&1; then mp=$tmp; else rmdir "$tmp" 2>/dev/null; continue; fi
+      fi
+      read -r u f < <(df -B1 --output=used,avail "$mp" 2>/dev/null | tail -1)
+      [ -z "$tmp" ] || { umount "$tmp" >/dev/null 2>&1 || umount -l "$tmp" >/dev/null 2>&1; rmdir "$tmp" 2>/dev/null; }
+      [[ "$u" =~ ^[0-9]+$ && "$f" =~ ^[0-9]+$ ]] || continue
+      used=$((used + u)); free=$((free + f)); got=1
+    done
+  fi
+  if [ "$got" = 1 ]; then printf '%s\n' "$rem$US$fst$US$lbl$US$used$US$free"; else printf '%s\n' "$rem$US$fst$US$lbl$US$US"; fi
+}
+
+health_rows() {   # one row per physical drive: name US device US health US temp US hours US reallocated US pending US note US removable US file system US label US used US free (the last five only for a drive in no pool)
   local d mp p managed
   managed=$(managed_disks)
   for mp in $(all_branches); do
@@ -5186,7 +5227,7 @@ health_rows() {   # one row per physical drive: name US device US health US temp
   for d in $(all_disks | sort -u); do
     grep -qx "$d" <<<"$managed" && continue
     grep -qx "$d" <<<"$(array_disks)" && continue
-    printf '%s\n' "$(disk_base_name "$d")$US$d$US$(smart_detail "$d")"
+    printf '%s\n' "$(disk_base_name "$d")$US$d$US$(smart_detail "$d")$US$(disk_extra "$d")"
   done
 }
 
@@ -5198,18 +5239,19 @@ disk_ident() {   # disk_ident sdb -> "MODEL US SERIAL" as the drive reports them
 }
 
 health_flow() {
-  local name dev h t hrs re pe note bad=0 first=1 n=0 ident model serial
+  local name dev h t hrs re pe note rem fst lbl used free bad=0 first=1 n=0 ident model serial
   if [ "$JSON" = 1 ]; then printf '{"drives":['; fi
   [ "$JSON" = 1 ] || { say ""; printf '%-26s %-10s %-9s %-6s %-8s %-9s %-8s %s\n' DRIVE DEVICE HEALTH TEMP HOURS REALLOC PENDING NOTE; }
-  while IFS=$US read -r name dev h t hrs re pe note; do
+  while IFS=$US read -r name dev h t hrs re pe note rem fst lbl used free; do
     n=$((n + 1))
     if [ "$h" = FAILED ] || { [[ "$pe" =~ ^[0-9]+$ ]] && [ "$pe" -gt 0 ]; }; then bad=1; fi
     if [ "$JSON" = 1 ]; then
       [ "$first" = 1 ] || printf ','
       first=0
       ident=$(disk_ident "$dev"); model=${ident%%"$US"*}; serial=${ident#*"$US"}
-      printf '{"name":%s,"device":%s,"model":%s,"serial":%s,"health":%s,"temperature_c":%s,"power_on_hours":%s,"reallocated_sectors":%s,"pending_sectors":%s,"note":%s}' \
-        "$(json_str "$name")" "$(json_str "$dev")" "$(json_str "$model")" "$(json_str "$serial")" "$(json_str "$h")" "$(json_num "$t")" "$(json_num "$hrs")" "$(json_num "$re")" "$(json_num "$pe")" "$(json_str "$note")"
+      printf '{"name":%s,"device":%s,"model":%s,"serial":%s,"health":%s,"temperature_c":%s,"power_on_hours":%s,"reallocated_sectors":%s,"pending_sectors":%s,"note":%s,"removable":%s,"filesystem":%s,"label":%s,"used_bytes":%s,"free_bytes":%s}' \
+        "$(json_str "$name")" "$(json_str "$dev")" "$(json_str "$model")" "$(json_str "$serial")" "$(json_str "$h")" "$(json_num "$t")" "$(json_num "$hrs")" "$(json_num "$re")" "$(json_num "$pe")" "$(json_str "$note")" \
+        "$([ "$rem" = true ] && echo true || echo false)" "$(json_str "$fst")" "$(json_str "$lbl")" "$(json_num "$used")" "$(json_num "$free")"
     else
       printf '%-26s %-10s %-9s %-6s %-8s %-9s %-8s %s\n' "$name" "$dev" "$h" "${t:+${t} C}" "${hrs:--}" "${re:--}" "${pe:--}" "$note"
     fi
