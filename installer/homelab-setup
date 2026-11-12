@@ -7324,14 +7324,21 @@ def un_serve_ports():
         js = {}
     ours = {p: PORTS[s] for p, s in SERVE}
     ours[PANEL_HTTPS] = PANEL_PORT
+    # the addresses homelab-cards gave to the containers you added yourself (1009 and up) are written down in its list
+    try:
+        cards = json.loads(read_file(P("/var/lib/homelab/cards.json")) or "{}").get("managed") or {}
+    except ValueError:
+        cards = {}
+    extra = {int(m["serve"]) for m in cards.values() if isinstance(m, dict) and str(m.get("serve") or "").isdigit()}
     found = []
     for k, v in (js.get("Web") or {}).items():
         m = re.search(r":(\d+)$", k)
-        if not m or int(m.group(1)) not in ours:
+        if not m:
             continue
+        port = int(m.group(1))
         prox = ((v.get("Handlers") or {}).get("/") or {}).get("Proxy", "")
-        if re.search(r":%d/?$" % ours[int(m.group(1))], prox):
-            found.append(int(m.group(1)))
+        if port in extra or (port in ours and re.search(r":%d/?$" % ours[port], prox)):
+            found.append(port)
     return sorted(found)
 
 
@@ -7467,7 +7474,7 @@ def un_show_plan(f):
     if f["containers"]:
         say("  - %d containers (%s) and their images; Portainer, the dashboard and every service" % (len(f["containers"]), ", ".join(f["containers"][:6]) + (", ..." if len(f["containers"]) > 6 else "")))
     if f["serve"]:
-        say("  - the %d Tailscale addresses HomeLab set up (ports %s)" % (len(f["serve"]), ", ".join(str(p) for p in f["serve"])))
+        say("  - the %d Tailscale addresses HomeLab set up, also the ones it gave to apps you added yourself (ports %s)" % (len(f["serve"]), ", ".join(str(p) for p in f["serve"])))
     if f["units"]:
         say("  - the control panel and the web terminal (services %s)" % ", ".join(f["units"]))
     if f["cron"]:
