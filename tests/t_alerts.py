@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory() as d:
     stats = os.path.join(d, "stats.json")
     env = dict(os.environ, HOMELAB_STATE_DIR=state, HOMELAB_ALERTS_OUT=out, HOMELAB_STATS_IN=stats, HOMELAB_DOCKER=docker, HOMELAB_TAILSCALE=ts,
                HOMELAB_REBOOT_FILE=os.path.join(d, "no-reboot"), HOMELAB_ROOT_PATH=d, HOMELAB_BACKUP_STATUS=os.path.join(d, "last-run"),
-               DOCKER_LIST=lst, TS_JSON=json.dumps({"BackendState": "Running"}))
+               HOMELAB_APT_GET=os.path.join(d, "no-such-apt"), DOCKER_LIST=lst, TS_JSON=json.dumps({"BackendState": "Running"}))
 
     def run(args=()):
         return subprocess.run([sys.executable, SCRIPT] + list(args), capture_output=True, text=True, env=env, timeout=60)
@@ -87,6 +87,17 @@ with tempfile.TemporaryDirectory() as d:
     levels = [i["level"] for i in data["items"]]
     check("the worst come first", levels == sorted(levels, key=lambda x: {"bad": 0, "warn": 1, "info": 2}[x]), levels)
     check("the counts match the items", data["counts"]["bad"] == levels.count("bad") and data["counts"]["info"] == levels.count("info"), data["counts"])
+
+    # apt itself is asked for the count (the saved number is only refreshed every few hours)
+    apt = os.path.join(d, "apt-get")
+    put(apt, "#!/bin/sh\necho 'Inst a [1] (2)'\necho 'Inst b [1] (2)'\necho 'Conf a (2)'\n", 0o755)
+    env["HOMELAB_APT_GET"] = apt
+    run()
+    check("the system update count comes from apt, not the old saved number", "2 system updates" in {i["id"]: i for i in items()["items"]}.get("updates:system", {}).get("title", ""), items())
+    put(apt, "#!/bin/sh\necho 'Reading package lists...'\n", 0o755)
+    run()
+    check("nothing waiting in apt means no system update alert, even if the saved number is old", "updates:system" not in {i["id"] for i in items()["items"]}, items())
+    env["HOMELAB_APT_GET"] = os.path.join(d, "no-such-apt")
 
     # an old backup, and the file never half written
     put(stats, json.dumps({"main": {"percent": "41%", "health": "Healthy"}, "backup": {"percent": "30%", "health": "Healthy"}, "last_backup": {"result": "OK", "when": "3 days ago"}}))

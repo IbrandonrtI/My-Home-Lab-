@@ -194,21 +194,29 @@ out=$(PATH="$T/bin:$PATH" COLUMNS=100 TERM=xterm-256color hl commands)
 check "no description is printed below its command at 100 columns" '! echo "$out" | grep -q "^       [a-z(]"'
 check "the Homepage commands show COLOR NUMBER and SERVICE COLOR" 'echo "$out" | grep -q "theme cards COLOR NUMBER" && echo "$out" | grep -q "theme cards SERVICE COLOR" && echo "$out" | grep -q "bookmark move NAME CATEGORY"'
 
-# ---- the login screen is remembered for 2 minutes; a fresh boot only gets light checks
-export HOMELAB_CACHE_DIR="$T/cache" HOMELAB_STATE_DIR="$T/st"
-out=$(hl login); check "login: the first terminal does the checks" '! echo "$out" | grep -q "Shown as it was" && echo "$out" | grep -q "Status" && [ -s $T/cache/homelab-login/screen ]'
+# ---- the login screen: summary, status and browser addresses, no suggestions; remembered for 2 minutes; a fresh boot only gets light checks
+export HOMELAB_CACHE_DIR="$T/cache" HOMELAB_STATE_DIR="$T/st" HOMELAB_LAN_IP=192.168.1.50 HOMELAB_UPTIME=90000
+mkdir -p "$T/st"
+out=$(hl login); check "login: the first terminal does the checks and shows the Status block" 'echo "$out" | grep -q "Status" && echo "$out" | grep -q "Main Pool" && [ -s $T/cache/homelab-login/screen ]'
+check "login: it has the Open in your browser block with the dashboard address" 'echo "$out" | grep -q "Open in your browser" && echo "$out" | grep -q "http://192.168.1.50:"'
+check "login: the hint comes last, under the browser block" '[ "$(echo "$out" | grep -v "^$" | tail -n 1)" = "  Type homelab for the full status, or homelab commands." ] && [ "$(echo "$out" | grep -n "Open in your browser" | cut -d: -f1)" -lt "$(echo "$out" | grep -n "Type homelab for the full status" | cut -d: -f1)" ]'
+check "login: it leaves out the suggested commands" '! echo "$out" | grep -q "Suggested Commands"'
+check "login: it does not add a note about an old screen" '! echo "$out" | grep -q "Shown as it was"'
 check "login: the saved screen is private to the user" '[ "$(stat -c %a $T/cache/homelab-login)" = 700 ]'
-out=$(hl login); check "login: a terminal opened right after shows the saved screen and says how to get it live" 'echo "$out" | grep -q "Shown as it was" && echo "$out" | grep -q "homelab status" && echo "$out" | grep -q "Status"'
-out=$(hl); check "login: typing homelab is always live" '! echo "$out" | grep -q "Shown as it was"'
-out=$(hl status); check "login: homelab status is always live" '! echo "$out" | grep -q "Shown as it was"'
-out=$(HOMELAB_LOGIN_CACHE_SECS=0 hl login); check "login: an old screen is not reused" '! echo "$out" | grep -q "Shown as it was"'
-out=$(COLUMNS=60 hl login); check "login: a different window width gets a new screen" '! echo "$out" | grep -q "Shown as it was"'
-out=$(HOMELAB_UPTIME=0 hl login); check "login: a screen made before the last boot is not reused" '! echo "$out" | grep -q "Shown as it was"'
+check "login: the dashboard addresses are kept for an hour" '[ -s $T/cache/homelab-login/urls ]'
+out2=$(hl login); check "login: a terminal opened right after shows the same screen from the file" '[ "$out2" = "$out" ]'
+out=$(hl); check "login: typing homelab is always live and still has the suggestions" 'echo "$out" | grep -q "Suggested Commands" && echo "$out" | grep -q "Status"'
+out=$(hl status); check "login: homelab status is always live" 'echo "$out" | grep -q "Main Pool"'
+out=$(HOMELAB_LOGIN_CACHE_SECS=0 hl login); check "login: an old screen is not reused" 'echo "$out" | grep -q "Main Pool"'
+touch -d "5 minutes ago" "$T/cache/homelab-login/screen"; out=$(hl login); check "login: after 2 minutes the screen is made again" '[ "$(( $(date +%s) - $(stat -c %Y $T/cache/homelab-login/screen) ))" -lt 60 ]'
+out=$(COLUMNS=60 hl login); check "login: a different window width gets a new screen" 'echo "$out" | grep -q "Status"'
+out=$(HOMELAB_UPTIME=0 hl login); check "login: a screen made before the last boot is not reused" 'echo "$out" | grep -q "Status"'
 rm -rf "$T/cache"
 out=$(HOMELAB_UPTIME=120 hl login); check "login: right after a boot the apps are not asked, and it says why" 'echo "$out" | grep -q "just started and the apps are still starting"'
 rm -rf "$T/cache"
 out=$(HOMELAB_UPTIME=5000 hl login); check "login: later it checks the apps as usual" '! echo "$out" | grep -q "just started and the apps"'
-unset HOMELAB_CACHE_DIR HOMELAB_STATE_DIR
+printf '12|56|\n' >"$T/st/setup-progress"; out=$(HOMELAB_LOGIN_CACHE_SECS=0 hl login); check "login: an unfinished setup is named, with the next step" 'echo "$out" | grep -q "Setup is not finished" && echo "$out" | grep -q "sudo homelab-setup"'; rm -f "$T/st/setup-progress"
+unset HOMELAB_CACHE_DIR HOMELAB_STATE_DIR HOMELAB_LAN_IP HOMELAB_UPTIME
 
 # ---- the readings job: low priority; system updates are looked up at most every 6 hours when the schedule runs it
 mkdir -p "$T/fb"; cat >"$T/fb/apt-get" <<'EOS'

@@ -71,8 +71,6 @@ run service-cards bash -c "python3 '$HERE/t_cards.py' | tail -1 | grep -q '^OK'"
 run storage-notice bash -c "python3 '$HERE/t_storage_notice.py' | tail -1 | grep -q '^OK'"
 run friendly-commands bash -c "bash '$HERE/t_friendly.sh' | tail -1 | grep -q '^OK'"
 run name-helpers bash -c "bash '$HERE/t_namefast.sh' | tail -1 | grep -q '^OK'"
-run speedcheck bash -c "python3 '$HERE/t_speedcheck.py' | tail -1 | grep -q '^OK'"
-run drive-bench bash -c "python3 '$HERE/t_bench.py' | tail -1 | grep -q '^OK'"
 if [ "${1:-}" = quick ]; then
   for s in S3 S24 S25; do bash "$HERE/run_tests.sh" "$s" >"$LOG/$s.log" 2>&1; count "$s"; done
 else

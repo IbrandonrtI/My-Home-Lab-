@@ -48,6 +48,8 @@ class Panel:
         self.env = dict(os.environ, HLP_HOME=tmp, HOMELAB_HOMEPAGE_DIR=self.hp, HLP_STATE=self.state, HLP_PORT=str(self.port),
                         HLP_UI=os.path.join(ROOT, "panel", "ui"), HLP_COOKIE_PLAIN="1", HLP_NO_DOCKER="1",
                         HLP_HOSTS="lab.example.ts.net:1100", HLP_FRAME="https://lab.example.ts.net:1000")
+        self.env.setdefault("HLP_APT_GET", os.path.join(tmp, "no-such-apt-get"))      # the real apt and the real bell file are never touched by a test
+        self.env.setdefault("HLP_ALERTS", os.path.join(tmp, "no-such-alerts"))
         self.env.update(extra_env or {})
         self.cookie = ""
         self.proc = None

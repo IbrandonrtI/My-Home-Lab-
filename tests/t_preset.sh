@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Tests of `drives preset`: the capacity arithmetic against an independent Python version, the rules about the number of drives,
-# and the words people type. (The building itself runs on fake drives in tools/drive-bench.)
+# and the words people type.
 # Run: bash tests/t_preset.sh   (last line is OK or FAIL)
 # shellcheck disable=SC2034,SC2046  # test code: the checks read these variables as strings, and the file names are plain
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

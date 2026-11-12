@@ -6,6 +6,8 @@ color follow the worst alert, the list shows what the file says (as text only), 
 file is explained, an empty list says all is well, a click outside or Escape closes it, and it fits a phone.
 Screenshots (when BELL_SHOTS names a folder) are for looking at. Run: python3 tests/t_bell.py   (last line is OK or FAIL)"""
 import http.server
+import importlib.machinery
+import importlib.util
 import json
 import os
 import sys
@@ -22,11 +24,32 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 JS = os.path.join(HERE, "..", "homepage-config", "custom.js")
 CSS = os.path.join(HERE, "..", "homepage-config", "custom.css")
 SHOTS = os.environ.get("BELL_SHOTS")
+_ld = importlib.machinery.SourceFileLoader("homelab_panel", os.path.join(HERE, "..", "scripts", "homelab-panel"))
+_sp = importlib.util.spec_from_loader("homelab_panel", _ld)
+PANEL = importlib.util.module_from_spec(_sp)
+_ld.exec_module(PANEL)
+
+# contrast of every piece of text in the open list against what is really behind it (the real colors, mixed down to plain RGB by a canvas)
+CONTRAST_JS = """(() => {
+  var cv = document.createElement('canvas'); cv.width = cv.height = 1; var cx = cv.getContext('2d', { willReadFrequently: true });
+  function rgba(c) { cx.clearRect(0, 0, 1, 1); cx.fillStyle = '#000'; cx.fillStyle = c; cx.fillRect(0, 0, 1, 1); var d = cx.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255]; }
+  function over(top, bot) { var a = top[3]; return [top[0] * a + bot[0] * (1 - a), top[1] * a + bot[1] * (1 - a), top[2] * a + bot[2] * (1 - a), 1]; }
+  function lum(c) { var f = function (v) { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); }
+  function behind(el) { var chain = []; for (var e = el; e; e = e.parentElement) chain.push(rgba(getComputedStyle(e).backgroundColor)); var acc = [255, 255, 255, 1]; for (var i = chain.length - 1; i >= 0; i--) acc = over(chain[i], acc); return acc; }
+  var out = [];
+  document.querySelectorAll('#hl-bell .hl-bellpop .hl-bellsub, #hl-bell .hl-bellpop .hl-belltitle, #hl-bell .hl-bellpop .hl-belldetail, #hl-bell .hl-bellpop a.hl-bellbtn, #hl-bell .hl-bellpop .hl-bellhead > *:first-child').forEach(function (el) {
+    var fg = rgba(getComputedStyle(el).color), bg = behind(el); fg = over(fg, bg);
+    var l1 = lum(fg), l2 = lum(bg), hi = Math.max(l1, l2), lo = Math.min(l1, l2);
+    out.push([el.className || el.tagName, Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100, (el.textContent || '').slice(0, 24)]);
+  });
+  var pop = document.querySelector('#hl-bell .hl-bellpop'), pb = rgba(getComputedStyle(pop).backgroundColor);
+  return { rows: out, popAlpha: pb[3] };
+})()"""
 
 PAGE = b"""<!doctype html><html><head><style>ul{margin:0;padding:0;list-style:none}button{font:inherit}</style><link rel="stylesheet" href="/custom.css"></head><body>
 <div id="inner_wrapper"><div class="container">
 <div id="tabs"><ul id="myTab"><li><button id="Home-tab" aria-selected="true">Home</button></li><li><button id="Stats-tab" aria-selected="false">Stats</button></li><li><button id="Customize-tab" aria-selected="false">Customize</button></li></ul></div>
-<div id="layout-groups"><div class="services-group"><div class="service-group-name" data-group="x">Group</div><ul class="services-list"><li class="service" id="a-card"><div class="service-card"><div class="service-title">A</div></div></li></ul></div></div>
+<div id="layout-groups"><div class="services-group"><div class="service-group-name" data-group="x">Group</div><ul class="services-list"><li class="service" id="a-card"><div class="service-card"><div class="service-title">A</div></div></li><li class="service"><div class="service-card"><div class="service-title">Card 2</div></div></li><li class="service"><div class="service-card"><div class="service-title">Card 3</div></div></li><li class="service"><div class="service-card"><div class="service-title">Card 4</div></div></li><li class="service"><div class="service-card"><div class="service-title">Card 5</div></div></li><li class="service"><div class="service-card"><div class="service-title">Card 6</div></div></li><li class="service"><div class="service-card"><div class="service-title">Card 7</div></div></li><li class="service"><div class="service-card"><div class="service-title">Card 8</div></div></li></ul></div></div>
 </div></div><script src="/custom.js"></script></body></html>"""
 
 ALERTS = {"data": None}
@@ -105,6 +128,32 @@ try:
         pg.locator("#hl-bell > button").click()
         pg.wait_for_timeout(200)
         check("pressing the bell opens the list", pg.is_visible("#hl-bell .hl-bellpop") and pg.get_attribute("#hl-bell > button", "aria-expanded") == "true")
+        over = pg.evaluate("""(() => { var r = document.querySelector('#hl-bell .hl-bellpop').getBoundingClientRect(), bad = 0, n = 0;
+            [[0.15, 0.2], [0.5, 0.5], [0.85, 0.8], [0.5, 0.95]].forEach(function (f) { var e = document.elementFromPoint(r.left + r.width * f[0], r.top + r.height * f[1]); n++; if (!e || !e.closest('#hl-bell')) bad++; });
+            return bad; })()""")
+        check("the list lies above the cards (nothing covers it)", over == 0, over)
+        bg = pg.evaluate("getComputedStyle(document.querySelector('#hl-bell .hl-bellpop')).backgroundColor")
+        check("the list is solid, so the cards behind it do not show through", pg.evaluate(CONTRAST_JS)["popAlpha"] == 1, bg)
+
+        # every theme of the panel (and a few extreme colors the Colors screen allows): all the text in the list must be easy to read
+        looks = [(t["id"], t["look"]) for t in PANEL.LOOK_THEMES]
+        looks += [("custom: white glass, black text", {"glass": "#ffffff", "glassOpacity": 100, "text": "#000000", "muted": "#222222", "accent": "#ffffff"}),
+                  ("custom: yellow accent, light glass", {"glass": "#fff7c2", "glassOpacity": 90, "accent": "#ffe600", "text": "#fffbe0", "muted": "#fff2a0"}),
+                  ("custom: black glass, black text", {"glass": "#000000", "glassOpacity": 100, "text": "#101010", "muted": "#202020", "accent": "#000000"})]
+        worst = 99
+        for name, look in looks:
+            css_text = PANEL.look_css(look, full=True)
+            h = pg.add_style_tag(content=css_text)
+            pg.wait_for_timeout(60)
+            res = pg.evaluate(CONTRAST_JS)
+            low = [r for r in res["rows"] if r[1] < 4.5]
+            worst = min([worst] + [r[1] for r in res["rows"]])
+            check("theme %s: the list is solid and all its text has a contrast of 4.5 or more (%d texts)" % (name, len(res["rows"])), res["popAlpha"] == 1 and len(res["rows"]) >= 8 and not low, (low, res["popAlpha"]))
+            if SHOTS:
+                os.makedirs(SHOTS, exist_ok=True)
+                pg.screenshot(path=os.path.join(SHOTS, "theme-%s.png" % "".join(c if c.isalnum() else "-" for c in name)), clip={"x": 0, "y": 0, "width": 1000, "height": 520})
+            h.evaluate("e => e.remove()")
+        print("     lowest contrast in any theme: %s" % worst)
         rows = pg.locator("#hl-bell .hl-bellrow")
         check("every alert is a row, the worst first", rows.count() == 4 and "Immich server is not running" in rows.nth(0).inner_text(), rows.count())
         check("the detail is shown", "Exited (1)" in rows.nth(0).inner_text())

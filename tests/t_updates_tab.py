@@ -40,8 +40,21 @@ def main():
         with open(path, "w") as f:
             f.write(text)
         os.chmod(path, 0o755)
+    count_file = os.path.join(tmp, "aptcount")
+    marker = os.path.join(tmp, "alerts-ran")
+    fake_apt = os.path.join(tmp, "apt-get")
+    fake_alerts = os.path.join(tmp, "alerts")
+    with open(fake_apt, "w") as f:
+        f.write("#!/bin/sh\n[ \"$1 $2\" = \"-s upgrade\" ] || exit 1\necho 'Reading package lists...'\nn=$(cat %s); m=$n\nwhile [ \"$n\" -gt 0 ]; do echo \"Inst pkg$n [1.0] (2.0 Ubuntu)\"; n=$((n-1)); done\necho 'Conf pkg1 (2.0 Ubuntu)'\necho \"$m upgraded, 0 newly installed, 0 to remove and 3 not upgraded.\"\n" % count_file)
+    with open(fake_alerts, "w") as f:
+        f.write("#!/bin/sh\ntouch %s\n" % marker)
+    os.chmod(fake_apt, 0o755)
+    os.chmod(fake_alerts, 0o755)
+    with open(count_file, "w") as f:
+        f.write("3\n")
     steps = {"check": [[ok_cmd]], "containers": [[slow_cmd]], "system": [[ok_cmd], [ok_cmd]], "restart": [[fail_cmd]]}
     p = t_panel.Panel(tmp, {"HLP_UPDATE_STATE": state, "HLP_REBOOT_FILE": reboot, "HLP_UPDATE_STEPS": json.dumps(steps)})
+    no_apt = p.env["HLP_APT_GET"]
     try:
         p.set_password()
         p.start()
@@ -84,6 +97,43 @@ def main():
         check("updates: a refused sudo is explained in words", st == 200 and job.get("rc") == 1 and "not allowed" in job["message"], job)
         st, js, _, _ = p.req("GET", "/api/updates")
         check("updates: the state carries the last job", js["job"]["action"] == "restart" and js["job"]["running"] is False, js["job"])
+
+        # the count of waiting system updates is asked from apt itself (the saved number is only refreshed every few hours)
+        p.stop()
+        p.env["HLP_APT_GET"] = fake_apt
+        p.env["HLP_ALERTS"] = fake_alerts
+        p.start()
+        p.login()
+        st, js, _, _ = p.req("GET", "/api/updates")
+        check("updates: the system count comes from apt now, not from the old saved number", js["system"] == 3, js)
+        with open(count_file, "w") as f:
+            f.write("0\n")
+        st, js, _, _ = p.req("GET", "/api/updates")
+        check("updates: packages that apt keeps back are reported separately", js["kept_back"] == 3, js)
+        check("updates: the count is kept for a minute (apt is not asked on every look)", js["system"] == 3, js)
+        st, js, _, _ = p.req("GET", "/api/updates?fresh=1")
+        check("updates: Refresh asks apt again at once", js["system"] == 0, js)
+        with open(count_file, "w") as f:
+            f.write("3\n")
+        st, js, _, _ = p.req("GET", "/api/updates?fresh=1")
+        check("updates: ... also when something new is waiting", js["system"] == 3, js)
+        with open(count_file, "w") as f:
+            f.write("0\n")
+        st, js, _, _ = p.req("POST", "/api/updates/start", {"what": "system"})
+        wait_done(p)
+        st, js, _, _ = p.req("GET", "/api/updates")
+        check("updates: right after the system update the count is asked again and shows nothing waiting", js["system"] == 0, js)
+        check("updates: ... and the bell's list was rewritten at once", os.path.exists(marker))
+        os.remove(marker)
+        st, js, _, _ = p.req("POST", "/api/updates/start", {"what": "restart", "confirm": True})
+        wait_done(p)
+        check("updates: a restart does not rewrite the bell (nothing to count)", not os.path.exists(marker))
+        p.stop()
+        p.env["HLP_APT_GET"] = no_apt
+        p.start()
+        p.login()
+        st, js, _, _ = p.req("GET", "/api/updates")
+        check("updates: if apt cannot be asked, the saved number is used", js["system"] == 7, js)
     finally:
         p.stop()
         shutil.rmtree(tmp, ignore_errors=True)

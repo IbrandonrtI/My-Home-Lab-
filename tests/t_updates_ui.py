@@ -45,7 +45,14 @@ def main():
     with open(os.path.join(state, "apt"), "w") as f:
         f.write("7|2\n")
     open(reboot, "w").close()
-    p = tp.Panel(tmp, {"HLP_UPDATE_STATE": state, "HLP_REBOOT_FILE": reboot, "HLP_UPDATE_STEPS": json.dumps(steps), "HLP_DRIVES": os.path.join(HERE, "fake_drives.py"),
+    count_file = os.path.join(tmp, "aptcount")
+    fake_apt = os.path.join(tmp, "apt-get")
+    with open(count_file, "w") as f:
+        f.write("7\n")
+    with open(fake_apt, "w") as f:
+        f.write("#!/bin/sh\nn=$(cat %s); m=$n\nwhile [ \"$n\" -gt 0 ]; do echo \"Inst pkg$n [1] (2)\"; n=$((n-1)); done\necho \"$m upgraded, 0 newly installed, 0 to remove and 3 not upgraded.\"\n" % count_file)
+    os.chmod(fake_apt, 0o755)
+    p = tp.Panel(tmp, {"HLP_APT_GET": fake_apt, "HLP_UPDATE_STATE": state, "HLP_REBOOT_FILE": reboot, "HLP_UPDATE_STEPS": json.dumps(steps), "HLP_DRIVES": os.path.join(HERE, "fake_drives.py"),
                        "FAKE_DRIVES_LOG": os.path.join(tmp, "drives.log"), "HLP_BACKUP": os.path.join(tmp, "no-such-tool")})
     p.set_password()
     p.start()
@@ -88,13 +95,14 @@ def main():
             check("updates: Cancel starts nothing", pg.locator(".updlog").count() == 0)
             # all up to date
             os.remove(os.path.join(state, "image-updates"))
-            with open(os.path.join(state, "apt"), "w") as f:
-                f.write("0|0\n")
+            with open(count_file, "w") as f:
+                f.write("0\n")
             os.remove(reboot)
             pg.locator(".upd .ph button:has-text('Refresh')").click()
             pg.locator(".upd .pill", has_text="Not needed").wait_for()
             txt = pg.inner_text(".upd")
             check("updates: nothing waiting says up to date and the update buttons are off", txt.count("Up to date") == 2 and pg.locator(".upd button:has-text('Update Containers')").is_disabled() and pg.locator(".upd button:has-text('Update System')").is_disabled(), txt)
+            check("updates: packages that apt keeps back are explained, not counted as waiting", "3 more packages are held back" in txt and "apt list --upgradable" in txt, txt)
             shot(pg, "3-uptodate")
             ph = br.new_context(viewport={"width": 390, "height": 800}, device_scale_factor=1).new_page()
             ph.goto("http://127.0.0.1:%d/#updates" % p.port)
