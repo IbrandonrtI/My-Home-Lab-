@@ -726,9 +726,22 @@
     };
   }
   function put(el, prop, val) { if (!el) return; if (val) el.style.setProperty(prop, val); else el.style.removeProperty(prop); }
+  var SAVED_ID = "hl-saved-sheet", headWatch = null;
+  // the preview must come after the saved look in the page, or the saved look (the older one) would win over what is being tried
+  function placePreview(s) {
+    var sv = document.getElementById(SAVED_ID);
+    if (sv && sv.parentNode && (s.parentNode !== sv.parentNode || !(sv.compareDocumentPosition(s) & 4))) sv.parentNode.appendChild(s);
+    else if (!s.parentNode) document.head.appendChild(s);
+    return s;
+  }
+  var pendingCss = null, savedSeq = 0;      // pendingCss: the look that was saved but whose style sheet has not arrived yet
   function clearAll() {
     var s = document.getElementById(STYLE_ID);
-    if (s) s.remove();
+    if (pendingCss !== null) {      // (what was only tried is dropped; what was saved stays until the new style sheet is here)
+      if (!s) { s = document.createElement("style"); s.id = STYLE_ID; }
+      s.textContent = pendingCss;
+      placePreview(s);
+    } else if (s) s.remove();
     if (kept) {
       var w = document.getElementById("inner_wrapper"), b = document.getElementById("background");
       put(w, "backdrop-filter", kept.filter);
@@ -742,8 +755,9 @@
   function look(css) {
     if (typeof css !== "string" || css.length > 60000 || /[<\\]|url\s*\(|@import|expression|javascript:/i.test(css) || !/^[A-Za-z0-9 \n#,.:;(){}\[\]="%@&_>*~+!-]*$/.test(css)) return;
     var s = document.getElementById(STYLE_ID);
-    if (!s) { s = document.createElement("style"); s.id = STYLE_ID; document.head.appendChild(s); }
+    if (!s) { s = document.createElement("style"); s.id = STYLE_ID; }
     s.textContent = css;
+    placePreview(s);
   }
   function background(d) {
     if (!inRange(d.saturate) || !inRange(d.brightness) || !inRange(d.opacity) || !Object.prototype.hasOwnProperty.call(BLUR_PX, d.blur)) return;
@@ -783,11 +797,55 @@
     } catch (e) { /* no storage */ }
     var prevSheet = document.querySelector('link[rel="stylesheet"][href*="custom.css"]');
     if (!prevSheet) { clearAll(); return; }
-    var fresh = prevSheet.cloneNode();
-    fresh.setAttribute("href", prevSheet.getAttribute("href").replace(/[?&]hl=\d+/, "") + (prevSheet.getAttribute("href").indexOf("?") < 0 ? "?" : "&") + "hl=" + Date.now());
-    fresh.onload = function () { prevSheet.remove(); clearAll(); };
-    fresh.onerror = function () { fresh.remove(); };
-    prevSheet.parentNode.insertBefore(fresh, prevSheet.nextSibling);
+    // Until the new style sheet is really loaded, the old one is still what the page has. The look that was just saved is therefore kept as the preview
+    // (also when the panel is left in the meantime), and the sheet is asked for again until it arrives: Homepage can be restarting right now.
+    var cur = document.getElementById(STYLE_ID);
+    if (cur) pendingCss = cur.textContent;
+    var base = prevSheet.getAttribute("href").replace(/[?&]hl=\d+/, "");
+    var tries = 0, mine = ++savedSeq;
+    (function load() {
+      if (mine !== savedSeq) return;      // (a newer save took over)
+      var fresh = prevSheet.cloneNode();
+      fresh.setAttribute("href", base + (base.indexOf("?") < 0 ? "?" : "&") + "hl=" + Date.now());
+      fresh.onload = function () {
+        if (mine !== savedSeq) { fresh.remove(); return; }
+        var all = document.querySelectorAll('link[rel="stylesheet"][href*="custom.css"]');
+        for (var i = 0; i < all.length; i++) if (all[i] !== fresh) all[i].remove();      // (every older copy goes, whichever save asked for it)
+        pendingCss = null; clearAll();
+        keepSaved(fresh.getAttribute("href"));
+      };
+      fresh.onerror = function () {
+        fresh.remove();
+        if (++tries < 40) setTimeout(load, 1500);      // (about a minute: a restart of Homepage is over long before)
+      };
+      (prevSheet.parentNode || document.head).insertBefore(fresh, prevSheet.nextSibling);
+    })();
+  }
+  // The saved look is also kept as a style of its own on the page (not in the head, where Homepage manages its own tags). When the dashboard changes tab, it can put
+  // its own copy of the style sheet back (and that copy is the version from before the save), so any copy of custom.css that comes without the new version is
+  // switched off. The saved text wins in both cases. A reload of the page brings the file itself back (it is the saved version then).
+  function keepSaved(href) {
+    try {
+      fetch(href, { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error("no"); return r.text(); }).then(function (txt) {
+        if (!txt || txt.length > 400000) return;
+        var s = document.getElementById(SAVED_ID);
+        if (!s) { s = document.createElement("style"); s.id = SAVED_ID; (document.body || document.head).appendChild(s); }
+        s.textContent = txt;
+        var pv = document.getElementById(STYLE_ID); if (pv) placePreview(pv);
+        if (!headWatch && window.MutationObserver) {
+          headWatch = new MutationObserver(function (list) {
+            for (var i = 0; i < list.length; i++) for (var j = 0; j < list[i].addedNodes.length; j++) {
+              var n = list[i].addedNodes[j];
+              if (n.nodeType === 1 && n.tagName === "LINK" && /custom\.css/.test(n.getAttribute("href") || "") && !/[?&]hl=\d+/.test(n.getAttribute("href"))) n.setAttribute("media", "not all");
+            }
+          });
+          headWatch.observe(document.head, { childList: true });
+        }
+        // (a copy of the style sheet that is on the page without the new version, for example one that Homepage put back, is switched off)
+        var all = document.querySelectorAll('link[rel="stylesheet"][href*="custom.css"]');
+        for (var k = 0; k < all.length; k++) if (!/[?&]hl=\d+/.test(all[k].getAttribute("href"))) all[k].setAttribute("media", "not all");
+      }).catch(function () { /* the new style sheet link itself is on the page */ });
+    } catch (e) { /* no fetch */ }
   }
   // Homepage restarts for a few seconds after a new picture was saved: the page is reloaded when it answers again (not after a fixed time, which was sometimes too early)
   var waiting = false;
