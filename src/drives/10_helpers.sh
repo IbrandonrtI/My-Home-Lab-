@@ -74,6 +74,32 @@ rsync_run() {   # rsync_run FROM TO "Text" RSYNC-ARGS...: like rsync; in the pan
   return "${rc:-1}"
 }
 
+gb2() {   # gb2 BYTES -> "5.00 GB" (as drives are sold: 1 GB = 1000 MB)
+  awk -v b="${1:-0}" 'BEGIN { if (b >= 1e12) printf "%.2f TB", b / 1e12; else printf "%.2f GB", b / 1e9 }'
+}
+
+rsync_bytes_run() {   # rsync_bytes_run TOTAL_BYTES "Text" RSYNC-ARGS...: like rsync; in the panel the bar shows "Text 5.00 GB / 11.00 GB" (TOTAL_BYTES is what the preview found)
+  local total=$1 text=$2 rc=0 rcfile; shift 2
+  if [ "$PANEL_MODE" != 1 ]; then rsync "$@"; return $?; fi
+  rcfile=$(mktemp) || { rsync "$@"; return $?; }
+  local line done_b pct last=-1 lastb=0
+  [ "${total:-0}" -gt 0 ] 2>/dev/null || total=1
+  { rsync --info=progress2 --no-inc-recursive "$@" 2>&1; echo "RSYNC_RC=$?"; } | tr '\r' '\n' | while IFS= read -r line; do
+    case "$line" in
+      RSYNC_RC=*) echo "${line#RSYNC_RC=}" >"$rcfile" ;;
+      *%*) if [[ "$line" =~ ^[[:space:]]*([0-9,]+)[[:space:]]+([0-9]+)% ]]; then
+             done_b=${BASH_REMATCH[1]//,/}
+             [ "$done_b" -gt "$total" ] && done_b=$total
+             pct=$(( done_b * 100 / total ))
+             # a new line when the percent moved, or about every 50 MB (a few big files move the number long before the percent changes)
+             if [ "$pct" != "$last" ] || [ $(( done_b - lastb )) -ge 50000000 ]; then last=$pct; lastb=$done_b; progress "$pct" "$text $(gb2 "$done_b") / $(gb2 "$total")"; fi
+           fi ;;
+    esac
+  done
+  rc=$(cat "$rcfile" 2>/dev/null || echo 1); rm -f "$rcfile"
+  return "${rc:-1}"
+}
+
 # ---------- several drives at once, and the Stop button (the control panel only) ----------
 abort_requested() {   # 0 when the person pressed Stop (not while a drive is being put back)
   [ "$ABORT_IGNORE" = 1 ] && return 1

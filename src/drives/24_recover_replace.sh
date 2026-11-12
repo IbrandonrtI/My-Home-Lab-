@@ -42,6 +42,7 @@ remount_flow() {
     mount_fstab "$MAIN_POOL" || { echo "The main pool did not mount. Check the cable."; return 1; }
   fi
   power_all >/dev/null 2>&1
+  repair_music_folder
   apps_flow
   start_containers
   if [ -n "${APPS_HELD// /}" ]; then
@@ -102,6 +103,31 @@ stat_num() {   # stat_num "Total transferred file size" file -> the number, with
   awk -F': ' -v k="$1" 'index($0, k ":") == 1 {gsub(/[^0-9]/, "", $2); print $2; exit}' "$2"
 }
 
+restore_undo() {   # restore_undo LIST N: Cancel was pressed: the files this restore copied are removed again, so Main is as it was before (only paths that the preview listed as missing, which cannot have been there before)
+  local list=$1 n=$2 rel gone=0 skipped=0
+  RESTORE_STOPPED=1
+  note "Cancelled. Removing the files that were copied so far..."
+  progress 0 "Removing the copied files"
+  while IFS= read -r rel; do
+    [ -n "$rel" ] || continue
+    case "$rel" in /*|..|../*|*/..|*/../*|*'\#'*) skipped=$((skipped + 1)); continue ;; esac      # (never a path that leaves the pool; a name with a control character is left alone)
+    if [ -e "$MAIN_POOL/$rel" ] || [ -L "$MAIN_POOL/$rel" ]; then rm -f -- "$MAIN_POOL/$rel" && gone=$((gone + 1)); fi
+  done <"$list"
+  if [ -s "$list.dirs" ]; then      # the folders this restore made (only the ones that are empty now are removed, the deepest first)
+    while IFS= read -r rel; do
+      rel=${rel%/}
+      case "$rel" in ""|/*|..|../*|*/..|*/../*|*'\#'*|.) continue ;; esac
+      echo "$rel"
+    done <"$list.dirs" | sort -r | while IFS= read -r rel; do rmdir -- "$MAIN_POOL/$rel" 2>/dev/null || true; done
+  fi
+  sync_fs "$MAIN_POOL"
+  log "restore cancelled: $gone of $n copied files removed again ($skipped left alone)"
+  local msg="Stopped as you asked. The $gone files that were copied are removed again, so the Main pool is as it was before."
+  [ "$skipped" -eq 0 ] || msg="$msg ($skipped files with unusual names were left alone.)"
+  RESTORE_MSG=$msg
+  [ "$PANEL_MODE" = 1 ] || say "$msg"      # (the panel's flow says it last, after the services are started again: that line is the answer the page shows)
+}
+
 restore_files() {   # restore_files folder  (main pool mounted, containers stopped): preview, ask, copy only what is missing, verify
   local src=$1 base out list n bytes avail miss tag
   base="$src/main/"
@@ -110,11 +136,12 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
   mkdir -p "$STATE_DIR"
   say ""
   say "Checking what is missing from $MAIN_POOL (nothing is copied yet)..."
-  if ! rsync -aHn --numeric-ids --ignore-existing --exclude=/lost+found --itemize-changes --stats "$base" "$MAIN_POOL/" >"$out" 2>"$out.err"; then
+  if ! rsync -aHn8 --numeric-ids --ignore-existing --exclude=/lost+found --itemize-changes --stats "$base" "$MAIN_POOL/" >"$out" 2>"$out.err"; then
     warn "The check failed: $(tail -3 "$out.err" | tr '\n' ' ')"
     return 1
   fi
   grep -E '^[<>ch][fLDS]' "$out" | sed -E 's/^[^ ]+ //' >"$list" || true
+  grep -E '^cd\+{9} ' "$out" | sed -E 's/^[^ ]+ //' >"$list.dirs" || true      # (the folders the copy will make: kept for Cancel)
   n=$(wc -l <"$list" | tr -d ' ')
   bytes=$(stat_num "Total transferred file size" "$out"); bytes=${bytes:-0}
   if [ "$n" -eq 0 ]; then
@@ -145,9 +172,20 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
     HOLD_HINT="The containers stay stopped until the restore is checked. Run  sudo drives restore  again, or  sudo drives remount  to start them without restoring."
   fi
   say "Copying (the services stay stopped)..."
-  local prog=--info=stats1
-  [ -t 1 ] && prog=--info=progress2
-  rsync -aH --numeric-ids --ignore-existing --exclude=/lost+found "$prog" "$base" "$MAIN_POOL/" || { warn "The copy stopped with an error."; return 1; }
+  RESTORE_STOPPED=0
+  progress 0 "Copying files 0.00 GB / $(gb2 "$bytes")"
+  if [ "$PANEL_MODE" = 1 ]; then
+    if ! rsync_bytes_run "$bytes" "Copying files" -aH8 --numeric-ids --ignore-existing --exclude=/lost+found "$base" "$MAIN_POOL/"; then
+      if abort_requested; then restore_undo "$list" "$n"; return 1; fi
+      warn "The copy stopped with an error."; return 1
+    fi
+    if abort_requested; then restore_undo "$list" "$n"; return 1; fi      # (Cancel arrived in the last moment, after the copy was done)
+  else
+    local prog=--info=stats1
+    [ -t 1 ] && prog=--info=progress2
+    rsync -aH --numeric-ids --ignore-existing --exclude=/lost+found "$prog" "$base" "$MAIN_POOL/" || { warn "The copy stopped with an error."; return 1; }
+  fi
+  progress 100 "Checking the files"
   local -a mains=()
   mapfile -t mains < <(branches_of main)
   sync_fs "${mains[@]}" "$MAIN_POOL"
@@ -176,6 +214,25 @@ after_restore_hints() {
   say "  - Run the backup again when you are happy:  sudo homelab-backup"
 }
 
+# The music folder (Navidrome's /music, also where the panel's Upload card puts songs). When its drive was replaced, Docker made the folder again,
+# owned by root, and the panel could not write songs in it ("Cannot write there"). Fix Drives gives the folder back to the user who runs the lab.
+music_folder() {   # prints the folder Navidrome has as /music (empty when Navidrome is not set up here)
+  docker_ok || return 0
+  docker inspect navidrome --format '{{range .Mounts}}{{if eq .Destination "/music"}}{{.Source}}{{end}}{{end}}' 2>/dev/null
+  return 0
+}
+
+repair_music_folder() {   # only a folder inside the pools that root owns: nothing else is touched, and only the folder itself (not what is in it)
+  local d
+  d=$(music_folder)
+  [ -n "$d" ] && [ -d "$d" ] || return 0
+  case "$d" in "$MAIN_POOL"|"$MAIN_POOL"/*|"$BACKUP_POOL"|"$BACKUP_POOL"/*) ;; *) return 0 ;; esac
+  [ "$(stat -c %u "$d" 2>/dev/null)" = 0 ] || return 0
+  id -u "$OWNER" >/dev/null 2>&1 || return 0
+  chown "$OWNER:$OWNER" "$d" 2>/dev/null && { say "The music folder ($d) is yours again, so songs can be uploaded to it."; log "gave the music folder $d to $OWNER"; }
+  return 0
+}
+
 # ---------- Immich and Nextcloud: do they find their files? ----------
 # Both refuse to start when the small marker file of their folder is missing (Nextcloud: .ncdata, Immich: .immich in each of its folders). That is
 # on purpose: an app that started on an empty folder would look as if every photo and file had been deleted, and a phone that syncs with it could
@@ -184,6 +241,8 @@ after_restore_hints() {
 # from the backup, or start the two on empty folders. The accounts and settings stay either way: they are in databases on the boot drive.
 IMMICH_FOLDERS="upload library thumbs profile backups encoded-video"
 APPS_HELD=""
+RESTORE_MSG=""
+RESTORE_STOPPED=0      # 1 when Cancel was pressed while files were copied from the backup (the copied files were removed again)
 
 app_container_exists() { docker_ok && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$1"; }
 
@@ -320,12 +379,26 @@ appsfix_flow() {   # panel appsfix restore|fresh: the person chose in the panel'
   bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
   if [ -z "$bad" ]; then say "Done. Immich and Nextcloud find their files."; return 0; fi
   ASSUME_YES=1      # (the questions of the backup check; the typed word below is still needed)
+  rm -f "$ABORT_FILE"; echo $$ >"$BATCH_PID_FILE"      # (the Cancel button of the panel finds this run through the file)
   stop_containers "$MAIN_POOL"
   HOLD_HINT="The containers stay stopped until this is fixed. Press Fix Drives again."
   # shellcheck disable=SC2086
-  apps_fix "$PANEL_APPS_ACT" $bad || return 1
+  if ! apps_fix "$PANEL_APPS_ACT" $bad; then
+    rm -f "$BATCH_PID_FILE" "$ABORT_FILE"
+    if [ "$RESTORE_STOPPED" = 1 ]; then      # Cancel: the copied files are removed again; what does not need the missing files starts again, the two stay stopped
+      HOLD_HINT=""
+      # shellcheck disable=SC2086
+      apps_hold $bad
+      start_containers
+      say "$RESTORE_MSG"
+      return 4
+    fi
+    return 1
+  fi
+  rm -f "$BATCH_PID_FILE" "$ABORT_FILE"
   bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
   HOLD_HINT=""
+  repair_music_folder
   # shellcheck disable=SC2086
   [ -z "$bad" ] || apps_hold $bad
   start_containers
