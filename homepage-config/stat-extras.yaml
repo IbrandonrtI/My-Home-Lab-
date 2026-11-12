@@ -1,0 +1,121 @@
+# More single-number cards for the STATS tab. They are not on the dashboard until you pick them: Customize > Cards > Add From HomeLab's List.
+# Every number comes from the same stats.json file as the other STATS cards (homelab-stats rewrites it every 15 minutes).
+# The installer keeps a copy of this file next to the panel; the panel reads it when you open that list. The addresses are filled in for this machine.
+
+- At a Glance:
+
+    - Photos:
+        id: stat-photos
+        icon: mdi-image-multiple
+        description: How many photos Immich has
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: glance.photos
+              label: Photos
+
+    - Videos:
+        id: stat-videos
+        icon: mdi-video
+        description: How many videos Immich has
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: glance.videos
+              label: Videos
+
+    - Files:
+        id: stat-files
+        icon: mdi-file-multiple
+        description: How many files Nextcloud has
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: glance.files
+              label: Files
+
+    - Songs:
+        id: stat-songcount
+        icon: mdi-music-note
+        description: Songs Downtify saved
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: music.songs
+              label: Songs
+
+    - Containers Running:
+        id: stat-running
+        icon: mdi-docker
+        description: Apps running right now
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: glance.containers
+              label: Running
+            - field: containers.problems
+              label: Problems
+
+    - Updates Waiting:
+        id: stat-updatecount
+        icon: mdi-update
+        description: Containers and system
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: updates.images
+              label: Containers
+            - field: updates.system
+              label: System
+
+    - Backup Result:
+        id: stat-backupresult
+        icon: mdi-check-circle
+        description: How the last backup went
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: last_backup.result
+              label: Result
+            - field: last_backup.took
+              label: Took
+
+    - Pool Health:
+        id: stat-poolhealth
+        icon: mdi-heart-pulse
+        description: Are the drives happy
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: main.health
+              label: Main Pool
+            - field: backup.health
+              label: Backup Pool
+
+    - Refreshed:
+        id: stat-refreshed
+        icon: mdi-clock-outline
+        description: When these numbers were made
+        widget:
+          type: customapi
+          url: http://192.168.X.X:3001/images/stats.json
+          refreshInterval: 60000
+          mappings:
+            - field: updated_text
+              label: Refreshed
