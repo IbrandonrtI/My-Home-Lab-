@@ -1231,10 +1231,10 @@ on_exit() {
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."
-    note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Mount the Drives Again.")}"
+    note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Fix Drives.")}"
   fi
   if [ -n "${PANEL_RESERVE_DIR:-}" ] && [ -s "$PANEL_RESERVE_DIR/held" ]; then
-    note ""; note "The containers ($(tr '\n' ' ' <"$PANEL_RESERVE_DIR/held")) are still STOPPED because something went wrong."; note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Mount the Drives Again.")}"
+    note ""; note "The containers ($(tr '\n' ' ' <"$PANEL_RESERVE_DIR/held")) are still STOPPED because something went wrong."; note "${HOLD_HINT:-Fix the problem, then $(hint "run:  sudo drives remount" "press Fix Drives.")}"
   fi
   if [ -n "$PENDING_NOTE" ]; then note ""; note "$PENDING_NOTE"; fi
   if [ -n "${PANEL_RESERVE_DIR:-}" ]; then rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; fi      # (a drive change of the panel that ended some other way)
@@ -1469,7 +1469,7 @@ connect_flow_run() {   # connect_flow [dev] [role] [force_erase: 1 = erase witho
   if ! apply_pool "$role"; then
     fstab_rollback
     pool_umount "$mp"
-    die "The $role pool did not mount. fstab was restored.$(hint " Check: sudo drives status" " Press Mount the Drives Again, or look at the Drives screen.")"
+    die "The $role pool did not mount. fstab was restored.$(hint " Check: sudo drives status" " Press Fix Drives, or look at the Drives screen.")"
   fi
   progress 90 "Starting the containers"
   start_containers
@@ -1917,6 +1917,7 @@ remount_flow() {
   fi
   pre_change "Stop the containers that use the storage." \
              "Unmount the pools and the drives, then mount every drive and pool again from the saved setup." \
+             "Check that Immich and Nextcloud find their files. If not, offer to copy them back from the backup." \
              "Apply the drive power settings and start the containers again." && return 0
   stop_containers "$MAIN_POOL" "$BACKUP_POOL" "$DISKS_DIR"
   # pools first, then the drives under them
@@ -1949,8 +1950,13 @@ remount_flow() {
     mount_fstab "$MAIN_POOL" || { echo "The main pool did not mount. Check the cable."; return 1; }
   fi
   power_all >/dev/null 2>&1
+  apps_flow
   start_containers
-  echo "The drives are mounted again and your services are running."
+  if [ -n "${APPS_HELD// /}" ]; then
+    echo "The drives are mounted again. Still stopped:$APPS_HELD (their files are missing, see above)."
+  else
+    echo "The drives are mounted again and your services are running."
+  fi
 }
 
 # ---------- replace a dead drive ----------
@@ -2076,6 +2082,171 @@ after_restore_hints() {
     say "  - Tell Nextcloud about the restored files:  docker exec -u www-data nextcloud php occ files:scan --all"
   fi
   say "  - Run the backup again when you are happy:  sudo homelab-backup"
+}
+
+# ---------- Immich and Nextcloud: do they find their files? ----------
+# Both refuse to start when the small marker file of their folder is missing (Nextcloud: .ncdata, Immich: .immich in each of its folders). That is
+# on purpose: an app that started on an empty folder would look as if every photo and file had been deleted, and a phone that syncs with it could
+# delete its own copies. The markers live in the Main pool, so when the drive that held them is gone (a dead drive, or one taken out without
+# copying its files) the two stop. Fix Drives (remount) checks this before it starts the containers: the person can copy the files back
+# from the backup, or start the two on empty folders. The accounts and settings stay either way: they are in databases on the boot drive.
+IMMICH_FOLDERS="upload library thumbs profile backups encoded-video"
+APPS_HELD=""
+
+app_container_exists() { docker_ok && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$1"; }
+
+apps_missing() {   # prints nextcloud and/or immich when that app is set up here and its folder in the Main pool has no marker
+  mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
+  local f
+  if app_container_exists nextcloud && [ ! -f "$MAIN_POOL/nextcloud/.ncdata" ]; then echo nextcloud; fi
+  if app_container_exists immich_server; then
+    for f in $IMMICH_FOLDERS; do
+      [ -f "$MAIN_POOL/immich/$f/.immich" ] || { echo immich; break; }
+    done
+  fi
+  return 0
+}
+
+apps_label() {   # nextcloud immich -> "Nextcloud and Immich"
+  local out="" a
+  for a in "$@"; do
+    case "$a" in nextcloud) a=Nextcloud ;; immich) a=Immich ;; esac
+    out="${out:+$out and }$a"
+  done
+  printf '%s' "$out"
+}
+
+apps_fresh() {   # apps_fresh nextcloud|immich ...: make the folders and the marker files, so the apps start on empty folders (nothing is overwritten)
+  local a f
+  for a in "$@"; do
+    case "$a" in
+      nextcloud)
+        mkdir -p "$MAIN_POOL/nextcloud"
+        [ -f "$MAIN_POOL/nextcloud/.ncdata" ] || printf '# Nextcloud data directory\n' >"$MAIN_POOL/nextcloud/.ncdata"
+        chown 33:33 "$MAIN_POOL/nextcloud" "$MAIN_POOL/nextcloud/.ncdata" 2>/dev/null || true      # 33 is www-data inside the Nextcloud image
+        chmod 750 "$MAIN_POOL/nextcloud" 2>/dev/null || true ;;
+      immich)
+        give_to_owner "$MAIN_POOL/immich"
+        for f in $IMMICH_FOLDERS; do
+          mkdir -p "$MAIN_POOL/immich/$f"
+          [ -f "$MAIN_POOL/immich/$f/.immich" ] || : >"$MAIN_POOL/immich/$f/.immich"
+          give_to_owner "$MAIN_POOL/immich/$f"; give_to_owner "$MAIN_POOL/immich/$f/.immich"
+        done ;;
+    esac
+  done
+  sync_fs "$MAIN_POOL"
+  log "started Immich / Nextcloud on empty folders: $*"
+}
+
+apps_hold() {   # apps_hold nextcloud|immich ...: their containers leave STOPPED, so they stay stopped (a later Fix Drives checks again)
+  local n keep="" held=""
+  for n in $STOPPED; do
+    case "$n" in
+      nextcloud*) case " $* " in *" nextcloud "*) held="$held $n"; continue ;; esac ;;
+      immich*)    case " $* " in *" immich "*) held="$held $n"; continue ;; esac ;;
+    esac
+    keep="$keep $n"
+  done
+  STOPPED=${keep# }
+  APPS_HELD="$held"
+  [ -z "${held// /}" ] || note "These stay stopped until their files are back:$held"
+}
+
+apps_explain() {   # apps_explain nextcloud immich: what is wrong, in plain words
+  say ""
+  say "$(apps_label "$@") cannot find their files in $MAIN_POOL."
+  say "Their folder is missing a marker file. That happens when the drive that held their files is not in the pool any more."
+  say "The apps refuse to start without it, so they cannot show an empty library by mistake. Your accounts and settings are not lost: they are on the boot drive."
+}
+
+apps_fix() {   # apps_fix restore|fresh nextcloud immich ...: act on the choice
+  local act=$1 src; shift
+  case "$act" in
+    restore)
+      src=$(find_backup_source) || { note "No backup copy of the main pool was found, so there is nothing to restore from."; return 1; }
+      show_backup_source "$src" || { say "Cancelled."; return 1; }
+      restore_files "$src" || return 1 ;;
+    fresh)
+      # (a script's --confirm-erase never answers this one: only a person typing START, or the panel passing it, counts)
+      if [ "$PANEL_MODE" = 1 ]; then typed START "Type START to start $(apps_label "$@") on empty folders: " || { say "Cancelled."; return 1; }
+      else [ "$(ask "Type START to start $(apps_label "$@") on empty folders: ")" = START ] || { say "Cancelled."; return 1; }; fi
+      apps_fresh "$@" ;;
+  esac
+  return 0
+}
+
+apps_flow() {   # before the containers start again: what is wrong is dealt with (the person chooses) or the two stay stopped
+  local bad
+  bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+  [ -n "$bad" ] || return 0
+  # shellcheck disable=SC2086
+  apps_explain $bad
+  # the control panel asks in its own page and then runs `appsfix` (see 42_panel.sh); here only the terminal asks
+  if [ "$PANEL_MODE" != 1 ]; then
+    if find_backup_source >/dev/null 2>&1; then
+      say "A backup copy of your files exists."
+      # shellcheck disable=SC2086
+      yn "Copy the missing files back from the backup now?" && apps_fix restore $bad
+      bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+    else
+      say "No backup copy of the main pool was found."
+    fi
+    if [ -n "$bad" ]; then
+      say ""
+      say "$(apps_label $bad) can also start on EMPTY folders. The photos and files that were on the missing drive are not shown then,"
+      say "and Nextcloud apps that sync with the server may remove their own copies of files the server no longer has. Do this only when the old files are really gone."
+      # shellcheck disable=SC2086
+      apps_fix fresh $bad
+      bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+    fi
+  fi
+  # shellcheck disable=SC2086
+  [ -z "$bad" ] || { apps_hold $bad; note "Fix it later with:  $(hint "sudo drives remount" "press Fix Drives")"; }
+  return 0
+}
+
+apps_json() {   # panel apps: {"problems":["nextcloud"],"backup":{"found":true,"stamp":"...","result":"OK"}} (look only)
+  local a first=1 src stamp="" result=""
+  printf '{"problems":['
+  for a in $(apps_missing); do
+    [ "$first" = 1 ] || printf ','
+    first=0; printf '%s' "$(json_str "$a")"
+  done
+  printf '],"backup":'
+  if src=$(find_backup_source 2>/dev/null); then
+    if [ -r "$BACKUP_STATUS_FILE" ]; then IFS='|' read -r stamp result _ <"$BACKUP_STATUS_FILE"; fi
+    printf '{"found":true,"stamp":%s,"result":%s}' "$(json_str "$stamp")" "$(json_str "$result")"
+  else
+    printf '{"found":false}'
+  fi
+  printf '}\n'
+}
+
+appsfix_flow() {   # panel appsfix restore|fresh: the person chose in the panel's page (the word they typed is in PANEL_TYPED); then the apps start
+  mountpoint -q "$MAIN_POOL" || { note "The Main pool is not mounted. Press Fix Drives first."; return 1; }
+  local bad
+  bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+  if [ -z "$bad" ]; then say "Done. Immich and Nextcloud find their files."; return 0; fi
+  ASSUME_YES=1      # (the questions of the backup check; the typed word below is still needed)
+  stop_containers "$MAIN_POOL"
+  HOLD_HINT="The containers stay stopped until this is fixed. Press Fix Drives again."
+  # shellcheck disable=SC2086
+  apps_fix "$PANEL_APPS_ACT" $bad || return 1
+  bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
+  HOLD_HINT=""
+  # shellcheck disable=SC2086
+  [ -z "$bad" ] || apps_hold $bad
+  start_containers
+  if [ -n "$bad" ]; then
+    say "$(apps_label $bad) still cannot find their files, so they stay stopped."
+    return 1
+  fi
+  if [ "$PANEL_APPS_ACT" = restore ]; then
+    say "Done. The files are back and the apps are running again. Check a few photos and files."
+  else
+    say "Done. The apps are running on empty folders. Your accounts are the same."
+  fi
+  return 0
 }
 
 restore_flow() {   # restore only the missing files from the backup into the main pool
@@ -3459,15 +3630,16 @@ problem_menu() {
   while :; do
     say ""
     say "Fix a problem"
-    say "  1) Mount the drives again after an unplug or power cut"
+    say "  1) Fix the drives after an unplug, a power cut or a lost drive"
     say "  2) Replace a dead drive (restores the missing files from the backup)"
     say "  3) Copy back only the files that are missing from the backup"
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
-      1) intro_ask "Mount the drives again after an unplug or power cut" \
+      1) intro_ask "Fix the drives after an unplug, a power cut or a lost drive" \
            "The services that use the storage are stopped, the drives are mounted again and the services start again." \
-           "No files are changed. It takes about a minute." &&
+           "Then Immich and Nextcloud are checked: if their files are missing you can copy them back from the backup." \
+           "No files are changed unless you say so. It takes about a minute." &&
          { remount_flow && sync_filebrowser; } ;;
       2) intro "Replace a dead drive" \
            "Next I list the pool drives that cannot be found and you pick the dead one." \
@@ -3792,7 +3964,7 @@ migrate_switch() {   # migrate_switch ID: the new setup (mounted at MIGRATE_DIR,
   if [ "$ok" != 1 ]; then
     if [ "$kind" = zfs ]; then zfs set mountpoint="$MIGRATE_DIR" "$ZFS_POOL_NAME" >/dev/null 2>&1 || true; fi
     fstab_rollback
-    apply_pool main || warn "The old Main pool could not be mounted again. $(hint "Run  sudo drives remount" "Press Mount the Drives Again.")"
+    apply_pool main || warn "The old Main pool could not be mounted again. $(hint "Run  sudo drives remount" "Press Fix Drives.")"
     return 1
   fi
   migrate_retire_main "${old_mps[@]}"
@@ -5125,7 +5297,7 @@ Change the drives:
   spare         add a hot spare drive to a ZFS or RAID array (it takes over by itself when a drive dies)
   cache         add an SSD read cache to a ZFS array
   release       take every drive out of the pools (the files stay on the drives)
-  remount       after an unplug or a power cut: mount the drives and start the containers again
+  remount       Fix Drives: after an unplug, a power cut or a lost drive, mount the drives, check Immich and Nextcloud, start the containers
   replace       a drive died: put a new one in its place and copy the files back from the backup
   restore       copy only the missing files back from the backup
   fillorder     how a pool picks a drive for a new file (one at a time or spread) and which drive goes first
@@ -5248,8 +5420,11 @@ EOF
     ;;
     remount) cat <<'EOF'
 sudo drives remount [--dry-run] [--now]
-  After an unplug or a power cut: stops the containers, mounts every drive and pool again, applies the power settings
-  and starts the containers. When a main drive is missing the containers stay stopped on purpose.
+  Fix Drives. After an unplug, a power cut or a lost drive: stops the containers, mounts every drive and pool again, applies the
+  power settings and starts the containers. When a main drive is missing the containers stay stopped on purpose.
+  Then it checks that Immich and Nextcloud find their files. If not (the drive that held them is gone), they stay stopped and
+  you choose: copy the files back from the backup (type RESTORE), or start them on empty folders (type START). Their
+  accounts and settings are the same either way.
 EOF
     ;;
     replace) cat <<'EOF'
@@ -5411,7 +5586,9 @@ EOF
 #   panel status | health | check | actions     look only (JSON)
 #   panel rename ID NAME                          give a pool drive a name of your own (NAME auto: the automatic name again)
 #   panel sleep ID | panel wake ID                put a spinning hard drive to sleep / wake it (ID is like sda)
-#   panel remount                                 mount the drives again after an unplug (refused while a backup or upload runs)
+#   panel remount                                 Fix Drives: mount the drives again after an unplug or a lost drive (refused while a backup or upload runs); Immich and Nextcloud whose files are missing stay stopped
+#   panel apps                                    look only (JSON): which of Immich / Nextcloud cannot find their files, and whether a backup copy exists
+#   panel appsfix restore|fresh [WORD...]         copy their files back from the backup (needs RESTORE typed) or start them on empty folders (needs START typed)
 #   panel abort                                   Stop: the add / move / disconnect that runs now stops at the next safe moment (not while a drive is being erased)
 #   Stage 4 (these change or erase drives; every one is refused while a backup or upload runs, and none asks a question):
 #   panel add DISK main|backup keep|erase [WORD...]   add a spare drive to a pool, keeping its files or erasing it first (erase needs /dev/DISK and ERASE typed)
@@ -5696,12 +5873,13 @@ panel_main() {
   local act=${1:-} n=$# i w
   case "$act" in
     setups)       [ "$n" -le 2 ] && { [ "$n" -eq 1 ] || [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._,-]{0,200}$ ]]; } || { panel_refuse "panel setups takes no words, or the drives to leave out."; return 1; } ;;
-    status|health|check|actions|remount|abort) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
+    status|health|check|actions|remount|abort|apps) [ "$n" -eq 1 ] || { panel_refuse "panel $act takes no more words."; return 1; } ;;
     rename)       [ "$n" -eq 3 ] || { panel_refuse "panel rename takes a drive and a name."; return 1; } ;;
     sleep|wake)   [ "$n" -eq 2 ] || { panel_refuse "panel $act takes one drive."; return 1; } ;;
     add)          [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel add takes a drive, main or backup, keep or erase, and the typed words."; return 1; } ;;
     bootadd)      [ "$n" -ge 3 ] && [ "$n" -le 6 ] || { panel_refuse "panel bootadd takes main or backup, a size in GB and the typed words."; return 1; } ;;
     setup)        [ "$n" -ge 4 ] && [ "$n" -le 8 ] || { panel_refuse "panel setup takes a setup name, the drives and the typed words."; return 1; } ;;
+    appsfix)      [ "$n" -ge 2 ] && [ "$n" -le 4 ] || { panel_refuse "panel appsfix takes restore or fresh, and the typed word."; return 1; } ;;
     wipe)         [ "$n" -ge 3 ] && [ "$n" -le 7 ] || { panel_refuse "panel wipe takes a drive, empty or format, and the typed words."; return 1; } ;;
     disconnect)   [ "$n" -ge 3 ] && [ "$n" -le 22 ] || { panel_refuse "panel disconnect takes a drive, yes or no, and the typed words."; return 1; } ;;
     move)         [ "$n" -ge 4 ] && [ "$n" -le 24 ] || { panel_refuse "panel move takes a drive, keep or erase, yes or no, and the typed words."; return 1; } ;;
@@ -5726,6 +5904,7 @@ panel_main() {
     disconnect) [[ "$3" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=4 ;;
     move)       [[ "$3" =~ ^(keep|erase|each)$ ]] && [[ "$4" =~ ^(yes|no)$ ]] || arg_ok=0; typed_from=5 ;;
     setup)      typed_from=4 ;;
+    appsfix)    [[ "$2" =~ ^(restore|fresh)$ ]] || arg_ok=0; typed_from=3 ;;
     bootadd)    [[ "$2" =~ ^(main|backup)$ ]] && [[ "$3" =~ ^[0-9]{1,6}$ ]] || arg_ok=0; typed_from=4 ;;
   esac
   # a drive with its own choice (ID:keep) needs the word "each"; without it every drive gets the same choice
@@ -5741,20 +5920,20 @@ panel_main() {
   if [ "$typed_from" -gt 0 ]; then
     for ((i = typed_from; i <= n; i++)); do
       w=${!i}
-      [[ "$w" =~ ^(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)$ ]] || { panel_refuse "A typed word is not allowed."; return 1; }
+      [[ "$w" =~ ^(ERASE|CONTINUE|REMOVE|KEEP|NOW|RESTORE|START|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)$ ]] || { panel_refuse "A typed word is not allowed."; return 1; }
       if [ "$w" = NOW ]; then PANEL_NOW=1; else PANEL_TYPED+=("$w"); fi
     done
   fi
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
   case "$act" in
-    status|health|check|actions|abort|setups) ;;      # looking only (and Stop): these may run beside each other and beside a change (the panel does not start the looking ones during a change)
+    status|health|check|actions|abort|setups|apps) ;;      # looking only (and Stop): these may run beside each other and beside a change (the panel does not start the looking ones during a change)
     *) take_lock ;;
   esac
   PANEL_MODE=1
   ASSUME_YES=0      # nothing is ever answered with yes for the person; a question nobody can answer means no
   local why
   case "$act" in
-    rename|sleep|wake|status|health|check|actions|abort|setups) ASSUME_YES=1 ;;      # (these never ask anything that matters)
+    rename|sleep|wake|status|health|check|actions|abort|setups|apps) ASSUME_YES=1 ;;      # (these never ask anything that matters)
     *) why=""
        # a drive that joins a running pool stops nothing, so a backup or an upload may go on
        if [ "$PANEL_NOW" = 1 ]; then :      # the person chose "Go Ahead Anyway"
@@ -5768,6 +5947,8 @@ panel_main() {
     check)   JSON=1; check_flow ;;
     actions) with_name_cache panel_actions_json ;;
     abort)   panel_abort ;;
+    apps)    apps_json ;;
+    appsfix) PANEL_APPS_ACT=$2; PROG_ITEM=appsfix; run_changing appsfix_flow ;;
     setups)  PANEL_SKIP=${2:-}; panel_setups_json ;;
     bootadd) PANEL_ROLE=$2; PANEL_UNITS=$3; PROG_ITEM=bootadd; run_changing panel_bootadd_flow ;;
     setup)   PANEL_ID=$2; run_changing panel_setup_run "$2" "$3" ;;

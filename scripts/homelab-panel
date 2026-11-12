@@ -1818,8 +1818,8 @@ DRIVES_GATE = threading.Condition()           # looking at the drives (any numbe
 DRIVES_STATE = {"readers": 0, "changing": False}
 DRIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 DRIVE_NAME = re.compile(r"[A-Za-z0-9 .()+,-]{1,40}\Z")
-DRIVE_TIMEOUT = {"status": 90, "actions": 90, "setups": 120, "health": 180, "check": 180, "remount": 600}
-DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|NOW|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
+DRIVE_TIMEOUT = {"status": 90, "actions": 90, "setups": 120, "health": 180, "check": 180, "remount": 600, "apps": 60}
+DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|NOW|RESTORE|START|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
 JOB_MAX_SECONDS = 8 * 3600
 JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "items": [], "progress": {}, "current": "", "stopping": False}      # the drive change that runs (or ran last) in the background
 JOB_LOCK = threading.Lock()
@@ -2001,6 +2001,8 @@ def job_words(action, body):
         if v not in allowed:
             raise Fail("Choose %s first." % key)
         return v
+    if action == "appsfix":      # Fix Drives found that Immich or Nextcloud cannot find their files: restore them from the backup, or start them on empty folders (needs START typed)
+        return ["appsfix", pick("mode", ("restore", "fresh"))] + typed
     if action == "bootadd":
         units = body.get("units")
         if not isinstance(units, int) or isinstance(units, bool) or not 1 <= units <= 999999:
@@ -2088,7 +2090,7 @@ def job_thread(words):
 
 def api_drives_job_start(action, body):
     words = job_words(action, body)
-    items = [t.split(":")[0] for t in job_ids(body)] if action not in ("wipe", "setup", "bootadd") else ([body.get("id")] if action == "wipe" else ["bootadd"] if action == "bootadd" else [str(t).split(":")[0] for t in (body.get("ids") or [])])
+    items = [t.split(":")[0] for t in job_ids(body)] if action not in ("wipe", "setup", "bootadd", "appsfix") else ([body.get("id")] if action == "wipe" else ["bootadd"] if action == "bootadd" else ["appsfix"] if action == "appsfix" else [str(t).split(":")[0] for t in (body.get("ids") or [])])
     drives_change_begin()
     with JOB_LOCK:
         JOB.update(id=JOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), items=items, progress={}, current="", stopping=False)
@@ -2828,7 +2830,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/backup":
                     return self.send(200, api_backup_state())
                 return self.send(200, api_backup_look(path.rsplit("/", 1)[1], urllib.parse.urlparse(self.path).query))
-            if path in ("/api/drives", "/api/drives/health", "/api/drives/check", "/api/drives/setups"):
+            if path in ("/api/drives", "/api/drives/health", "/api/drives/check", "/api/drives/setups", "/api/drives/apps"):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 if path == "/api/drives":
@@ -2984,7 +2986,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, dict(api_backup_task(path.rsplit("/", 1)[1], body), ok=True))
             if path == "/api/drives/abort":
                 return self.send(200, dict(api_drives_abort(), ok=True))
-            if path in ("/api/drives/add", "/api/drives/wipe", "/api/drives/disconnect", "/api/drives/move", "/api/drives/setup", "/api/drives/bootadd"):
+            if path in ("/api/drives/add", "/api/drives/wipe", "/api/drives/disconnect", "/api/drives/move", "/api/drives/setup", "/api/drives/bootadd", "/api/drives/appsfix"):
                 return self.send(200, api_drives_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/drives/job
             if path in ("/api/drives/rename", "/api/drives/sleep", "/api/drives/wake", "/api/drives/remount"):
                 return self.send(200, dict(api_drives_do(path.rsplit("/", 1)[1], body), ok=True))      # not under LOCK: a remount takes a while
