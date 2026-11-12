@@ -2418,7 +2418,7 @@ UPDATE_STEPS = {         # name -> the commands (run one after the other; the fi
 }
 if os.environ.get("HLP_UPDATE_STEPS"):       # tests: {"name": [[command...], ...]}
     UPDATE_STEPS = json.loads(os.environ["HLP_UPDATE_STEPS"])
-UPJOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0}
+UPJOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "pct": None, "stage": ""}
 UPJOB_LOCK = threading.Lock()
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -2486,12 +2486,112 @@ def api_updates_job():
         return dict(UPJOB, lines=UPJOB["lines"][-(10 if UPJOB["running"] else 60):])
 
 
+def upd_progress(action, st, line):
+    """The bar of the Updates tab: reads what the update tools print (a line at a time, colors already removed) and works out how far along they are.
+    st is the memory of one job (a dict that starts empty). Returns (percent or None, a few words), or None when this line says nothing new.
+    The percent never goes backwards. None means 'cannot tell how far' (the bar then pulses). The numbers are honest counts of what the tools print:
+    packages downloaded, unpacked and set up (apt), images downloaded and stacks updated (homelab-update)."""
+    def done(pct, text):
+        pct = None if pct is None else max(st.get("pct", 0), min(99, int(round(pct))))
+        if pct is not None:
+            st["pct"] = pct
+        return pct, text
+    if action == "containers":
+        m = re.search(r"Step (\d) of 4", line)
+        if m:
+            st["step"] = int(m.group(1))
+            if st["step"] == 1:
+                return done(3, "Step 1 of 4: looking online for new versions")
+            if st["step"] == 2:
+                return done(10, "Step 2 of 4: downloading the new images")
+            if st["step"] == 3:
+                return done(52, "Step 3 of 4: making sure nothing is being uploaded")
+            return done(55, "Step 4 of 4: updating the services one after the other")
+        step = st.get("step", 0)
+        m = re.search(r"(\d+) image\(s\) to download", line)
+        if m and step == 2:
+            st["images"] = int(m.group(1))
+            st["got"] = 0
+            return done(10, "Step 2 of 4: downloading the new images (0 of %d)" % st["images"])
+        if step == 2 and re.match(r" {6}\S ", line):                  # (the line under an image: downloaded / already up to date / FAILED)
+            st["got"] = st.get("got", 0) + 1
+            total = st.get("images") or 0
+            if total:
+                return done(10 + 40 * min(st["got"], total) / total, "Step 2 of 4: downloading the new images (%d of %d)" % (min(st["got"], total), total))
+            return done(10 + 40 * (1 - 1 / (1 + st["got"])), "Step 2 of 4: downloading the new images (%d done)" % st["got"])
+        m = re.search(r"(\d+) stack\(s\) to update", line)
+        if m and step == 4:
+            st["total_stacks"] = int(m.group(1))
+            return done(55, "Step 4 of 4: updating %d service%s one after the other" % (st["total_stacks"], "" if st["total_stacks"] == 1 else "s"))
+        if step == 4:
+            total = st.get("total_stacks") or 0
+            m = re.match(r" {3}(\d+) {2}(\S+)", line)
+            if m:
+                st["cur"], st["name"], st["frac"] = int(m.group(1)), m.group(2), 0.0
+            cur, name = st.get("cur", 0), st.get("name", "")
+            stage = None
+            if "Quick database dump" in line:
+                stage = (0.15, "making a quick database dump")
+            elif "Updating the stack through Portainer" in line or "Recreating Portainer" in line:
+                stage = (0.35, "installing the new version")
+            elif "Waiting for the containers to come back" in line:
+                stage = (0.65, "waiting for the containers to come back")
+            elif "is updated and running" in line or "left as it is" in line:
+                stage = (1.0, "finished")
+            if m:
+                stage = (0.0, "starting")
+            if stage is not None and cur:
+                st["frac"] = max(st.get("frac", 0), stage[0])
+                what = "Step 4 of 4: %s%s: %s" % (name, " (%d of %d)" % (cur, total) if total else "", stage[1])
+                return done(55 + 45 * ((cur - 1) + st["frac"]) / total if total else 55 + 40 * (1 - 1 / (1 + cur - 1 + st["frac"])), what)
+        return None
+    if action == "system":
+        if line.startswith("$ "):
+            if "update" in line.split():
+                st["phase"] = "list"
+                return done(2, "Step 1 of 2: getting the newest list of packages")
+            if "upgrade" in line.split():
+                st["phase"] = "pkgs"
+                st.setdefault("total", APT_CACHE["n"] or 0)
+                return done(10, "Step 2 of 2: installing the packages" + (" (%d)" % st["total"] if st["total"] else ""))
+            return None
+        m = re.search(r"(\d+) upgraded, (\d+) newly installed", line)
+        if m:
+            st["total"] = int(m.group(1)) + int(m.group(2))
+            if st["total"] == 0:
+                return done(95, "Step 2 of 2: nothing to install")
+            return done(10, "Step 2 of 2: installing %d package%s" % (st["total"], "" if st["total"] == 1 else "s"))
+        if st.get("phase") == "list":
+            st["lists"] = st.get("lists", 0) + 1
+            return done(2 + min(7, st["lists"] // 2), "Step 1 of 2: getting the newest list of packages") if re.match(r"(Hit|Get|Ign):", line) else None
+        if st.get("phase") == "pkgs":
+            kind = "dl" if re.match(r"Get:\d+ ", line) else "un" if line.startswith("Unpacking ") else "set" if line.startswith("Setting up ") else ""
+            if not kind:
+                if line.startswith("Processing triggers"):
+                    return done(max(st.get("pct", 0), 96), "Step 2 of 2: finishing up")
+                return None
+            st[kind] = st.get(kind, 0) + 1
+            total = st.get("total") or 0
+            if not total:                                       # (the number of packages is not known: a bar that slows down as it goes)
+                n = st.get("dl", 0) + st.get("un", 0) + st.get("set", 0)
+                return done(10 + 85 * (1 - 1 / (1 + n / 20.0)), "Step 2 of 2: installing the packages (%d steps done)" % n)
+            n = min(st.get("dl", 0), total) + min(st.get("un", 0), total) + min(st.get("set", 0), total)
+            word = {"dl": "downloading", "un": "unpacking", "set": "setting up"}[kind]
+            return done(10 + 86 * n / (3.0 * total), "Step 2 of 2: %s package %d of %d" % (word, min(st[kind], total), total))
+    return None
+
+
 def updates_job_thread(action):
     rc = 1
+    mem = {}
     try:
         for cmd in UPDATE_STEPS[action]:
             with UPJOB_LOCK:
-                UPJOB["lines"] = (UPJOB["lines"] + ["$ " + " ".join(cmd[2:] if cmd[:2] == ["sudo", "-n"] else cmd)])[-300:]
+                head = "$ " + " ".join(cmd[2:] if cmd[:2] == ["sudo", "-n"] else cmd)
+                UPJOB["lines"] = (UPJOB["lines"] + [head])[-300:]
+                got = upd_progress(action, mem, head)
+                if got:
+                    UPJOB["pct"], UPJOB["stage"] = got
             try:
                 p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, text=True, bufsize=1)
             except FileNotFoundError:
@@ -2507,6 +2607,9 @@ def updates_job_thread(action):
                     if line.strip():
                         with UPJOB_LOCK:
                             UPJOB["lines"] = (UPJOB["lines"] + [line[:400]])[-300:]
+                            got = upd_progress(action, mem, line[:400])
+                            if got:
+                                UPJOB["pct"], UPJOB["stage"] = got
                 rc = p.wait()
             finally:
                 timer.cancel()
@@ -2520,6 +2623,8 @@ def updates_job_thread(action):
             tail = [x for x in UPJOB["lines"] if x.strip() and not x.startswith("$ ")]
             text = "\n".join(UPJOB["lines"])
             UPJOB["rc"] = rc
+            if rc == 0 and UPJOB["pct"] is not None:
+                UPJOB["pct"], UPJOB["stage"] = 100, "Done"
             if rc == 0:
                 UPJOB["message"] = tail[-1] if tail else "Done."
             elif "a password is required" in text or "not allowed to execute" in text or "sudo:" in text:
@@ -2540,7 +2645,7 @@ def api_updates_start(body):
     with UPJOB_LOCK:
         if UPJOB["running"]:
             raise Fail("Something is being updated already. Wait until it has finished.", 409)
-        UPJOB.update(id=UPJOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()))
+        UPJOB.update(id=UPJOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), pct=None, stage="")
         jid = UPJOB["id"]
     threading.Thread(target=updates_job_thread, args=(action,), daemon=True).start()
     return {"ok": True, "job": jid}
