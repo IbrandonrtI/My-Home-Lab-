@@ -12,8 +12,8 @@
 #   homelab version   the version of this command
 #
 #   Short forms (they run the real command with sudo and say which one):
-#   homelab backup | update | upgrade | setup | drives | cards | selftest   [options]
-#                     = sudo homelab-backup | homelab-update | homelab-setup upgrade | homelab-setup | drives | homelab-cards | homelab-selftest
+#   homelab backup | update | upgrade | uninstall | setup | drives | cards | selftest   [options]
+#                     = sudo homelab-backup | homelab-update | homelab-setup upgrade | homelab-setup uninstall | homelab-setup | drives | homelab-cards | homelab-selftest
 #
 #   homelab theme     change the Homepage dashboard's background, and the colour of all cards or of one card (homelab theme shows how)
 #   homelab bookmark  add, list, move or remove bookmarks, by category; logos come from Brandfetch as SVG files

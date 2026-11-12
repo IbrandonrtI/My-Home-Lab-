@@ -33,6 +33,10 @@ def main(argv):
             return 0
         elif a == "--quiet":
             pass
+        elif a == "--wipe-data":
+            Opt.wipe_data = True
+        elif a == "--wipe-drives":
+            Opt.wipe_drives = True
         elif a in ("--all", "-a"):
             Opt.all = True
         elif a in ("--details", "-d"):

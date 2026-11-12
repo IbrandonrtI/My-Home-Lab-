@@ -12,8 +12,8 @@
 #   homelab version   the version of this command
 #
 #   Short forms (they run the real command with sudo and say which one):
-#   homelab backup | update | upgrade | setup | drives | cards | selftest   [options]
-#                     = sudo homelab-backup | homelab-update | homelab-setup upgrade | homelab-setup | drives | homelab-cards | homelab-selftest
+#   homelab backup | update | upgrade | uninstall | setup | drives | cards | selftest   [options]
+#                     = sudo homelab-backup | homelab-update | homelab-setup upgrade | homelab-setup uninstall | homelab-setup | drives | homelab-cards | homelab-selftest
 #
 #   homelab theme     change the Homepage dashboard's background, and the colour of all cards or of one card (homelab theme shows how)
 #   homelab bookmark  add, list, move or remove bookmarks, by category; logos come from Brandfetch as SVG files
@@ -322,6 +322,7 @@ commands() {
   section "Short forms"
   cmd "homelab backup"                 "the same as: sudo homelab-backup (also update, cards, selftest)"
   cmd "homelab drives"                 "the same as: sudo drives (add a command: homelab drives health)"
+  cmd "homelab uninstall"              "the same as: sudo homelab-setup uninstall (asks first)"
   cmd "homelab upgrade"                "the same as: sudo homelab-setup upgrade"
   section "Words used here"
   cmd "Backup / Main"                  "Main holds your files; Backup holds the nightly copy of them"
@@ -1854,6 +1855,7 @@ forward() {   # short forms: "homelab backup" runs "sudo homelab-backup" (it say
     backup)          real=(homelab-backup) ;;
     update)          real=(homelab-update) ;;
     upgrade)         real=(homelab-setup upgrade) ;;
+    uninstall)       real=(homelab-setup uninstall) ;;
     setup)           real=(homelab-setup) ;;
     drives|drive)    real=(drives) ;;
     cards)           real=(homelab-cards) ;;
@@ -1881,7 +1883,7 @@ did_you_mean() {   # a word that is not a homelab option: point to the command t
 }
 
 case "${1:-}" in
-  backup|update|upgrade|setup|drives|drive|cards|selftest) forward "$@" ;;
+  backup|update|upgrade|uninstall|setup|drives|drive|cards|selftest) forward "$@" ;;
   panel)  panel_cmd "${@:2}" ;;
   theme)  homepage_edit theme "${@:2}" ;;
   simple) homepage_edit simple "${@:2}" ;;

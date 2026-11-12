@@ -60,6 +60,7 @@ forward() {   # short forms: "homelab backup" runs "sudo homelab-backup" (it say
     backup)          real=(homelab-backup) ;;
     update)          real=(homelab-update) ;;
     upgrade)         real=(homelab-setup upgrade) ;;
+    uninstall)       real=(homelab-setup uninstall) ;;
     setup)           real=(homelab-setup) ;;
     drives|drive)    real=(drives) ;;
     cards)           real=(homelab-cards) ;;
@@ -87,7 +88,7 @@ did_you_mean() {   # a word that is not a homelab option: point to the command t
 }
 
 case "${1:-}" in
-  backup|update|upgrade|setup|drives|drive|cards|selftest) forward "$@" ;;
+  backup|update|upgrade|uninstall|setup|drives|drive|cards|selftest) forward "$@" ;;
   panel)  panel_cmd "${@:2}" ;;
   theme)  homepage_edit theme "${@:2}" ;;
   simple) homepage_edit simple "${@:2}" ;;

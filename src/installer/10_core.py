@@ -8,6 +8,7 @@
 #   sudo homelab-setup fill            walk through the keys and logins that need you
 #   sudo homelab-setup done STEP       mark a by-hand step as done   (skip STEP: not wanted)
 #   sudo homelab-setup secrets         show the generated passwords (once, then keep them in a password manager)
+#   sudo homelab-setup uninstall       take the lab off this machine (asks: keep or wipe the apps' data, keep or erase the drives)
 #   homelab-setup progress | version | help
 #
 # It never formats or erases a drive (the one exception: it can grow an LVM system volume into unused space, after asking). It never stores the password you type.
@@ -112,5 +113,7 @@ class Opt:
     no_restore = False
     force_existing = False
     all = False
+    wipe_data = False        # uninstall --yes: wipe the apps' data (without --yes the person is asked)
+    wipe_drives = False      # uninstall --yes: erase the drives of the pools (each still needs its typed words)
     details = False
     repo = None

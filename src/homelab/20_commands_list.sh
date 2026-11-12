@@ -106,6 +106,7 @@ commands() {
   section "Short forms"
   cmd "homelab backup"                 "the same as: sudo homelab-backup (also update, cards, selftest)"
   cmd "homelab drives"                 "the same as: sudo drives (add a command: homelab drives health)"
+  cmd "homelab uninstall"              "the same as: sudo homelab-setup uninstall (asks first)"
   cmd "homelab upgrade"                "the same as: sudo homelab-setup upgrade"
   section "Words used here"
   cmd "Backup / Main"                  "Main holds your files; Backup holds the nightly copy of them"
