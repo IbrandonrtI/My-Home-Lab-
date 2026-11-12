@@ -250,6 +250,29 @@ function render() {
     framed ? h("p", { class: "muted small" }, h("label", { for: "auto" }, auto, " Refresh the dashboard by itself after I change layout, cards or links")) : null);
   applyAccent();
 }
+function colorParts(str) {      // "#0d1422", "#fff", "rgb(1, 2, 3)", "rgba(1, 2, 3, 0.4)" -> [r, g, b, a], or null
+  str = String(str || "");
+  let m = str.match(/#([0-9a-f]{8}|[0-9a-f]{6}|[0-9a-f]{3})\b/i);
+  if (m) {
+    let x = m[1];
+    if (x.length === 3) x = x.split("").map(c => c + c).join("");
+    return [parseInt(x.slice(0, 2), 16), parseInt(x.slice(2, 4), 16), parseInt(x.slice(4, 6), 16), x.length === 8 ? parseInt(x.slice(6, 8), 16) / 255 : 1];
+  }
+  m = str.match(/rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:\s*[,/]\s*([\d.]+%?))?\s*\)/i);
+  if (m) {
+    let a = m[4] === undefined ? 1 : m[4].endsWith("%") ? parseFloat(m[4]) / 100 : parseFloat(m[4]);
+    return [+m[1], +m[2], +m[3], isNaN(a) ? 1 : a];
+  }
+  return null;
+}
+function optionColors(ui) {      // a solid background for the options of a drop down (a theme's colours are often see-through) and a text colour that reads on it
+  const base = colorParts(ui.bg) || colorParts("#0a0f19");
+  let c = colorParts(ui.panel2) || colorParts(ui.panel) || colorParts(ui.field) || [23, 32, 51, 1];
+  const a = Math.max(0, Math.min(1, c[3]));
+  const mix = [0, 1, 2].map(i => Math.round(c[i] * a + base[i] * (1 - a)));
+  const lum = (0.2126 * mix[0] + 0.7152 * mix[1] + 0.0722 * mix[2]) / 255;
+  return { bg: "rgb(" + mix.join(", ") + ")", fg: lum > 0.55 ? "#101418" : "#f2f5fa", dark: lum <= 0.55 };
+}
 function applyAccent() {
   const v = lookW || S.look.values;
   const [r, g, b] = rgb(v.accent);
@@ -259,6 +282,8 @@ function applyAccent() {
   for (const [k, name] of [["bg", "--bg"], ["panel", "--panel"], ["panel2", "--panel2"], ["line", "--line"], ["field", "--field"], ["dialog", "--dialog"], ["blur", "--pblur"]]) {
     if (ui[k]) st.setProperty(name, ui[k]); else st.removeProperty(name);
   }
+  const opt = optionColors(ui);      // the open list of a drop down is drawn by the browser: it gets solid colours that always read well, whatever the theme
+  st.setProperty("--opt-bg", opt.bg); st.setProperty("--opt-fg", opt.fg);
   document.documentElement.classList.toggle("glassy", !!ui.blur);
   if (ui.rim) st.setProperty("--prim", rimShadow(ui.rim)); else st.removeProperty("--prim");
 }
@@ -325,7 +350,14 @@ function loadDrives(tries) {
   DRwait = "Looking at the drives...";
   drawDrives();
   const gaveUp = e => { DRerr = e.message; DRwait = ""; drawDrives(); };
-  return api("GET", "/api/drives").then(d => { DR = d; DRerr = ""; DRwait = ""; drawDrives(); if (!DRhealth) quietHealth(); rescanConfig(); quietApps(); }).catch(e => {
+  const follow = () => api("GET", "/api/drives/job").then(j => { if (j.running) { DRbusy = j.action; DRjob = j; DRwait = ""; followJob(); drawDrives(); return true; } return false; }).catch(() => false);
+  return api("GET", "/api/drives").then(d => {
+    DR = d; DRerr = ""; DRwait = "";
+    if (d.stale) {      // a change is running: the boxes show the drives as they were before it, and the progress is followed
+      return follow().then(running => { if (!running && tries < 20) DRretry = setTimeout(() => { if (drivesBox && drivesBox.isConnected) loadDrives(tries + 1); }, 2500); drawDrives(); });
+    }
+    drawDrives(); if (!DRhealth) quietHealth(); rescanConfig(); quietApps();
+  }).catch(e => {
     if (e.status !== 409) return gaveUp(e);
     // another drive command is running: when it is a change, follow its progress; else look again in a moment (nothing for the person to do)
     return api("GET", "/api/drives/job").then(j => {
@@ -1078,7 +1110,13 @@ function refreshCard() {
 function closeCard() { if (DRcard) { const d = DRcard.dlg; DRcard = null; try { d.close(); } catch (e) { /* closed */ } d.remove(); } }
 async function abortJob() {      // the Abort button of a running add, move or take out
   const act = DRbusy;
-  if (!/^(add|disconnect|move|setup)$/.test(act) || (DRjob && DRjob.stopping)) return;
+  if (!/^(add|disconnect|move|setup|appsfix)$/.test(act) || (DRjob && DRjob.stopping)) return;
+  if (act === "appsfix") {      // Cancel of the copy from the backup: what was copied is removed again
+    if (!await confirmBox("Cancel the Copy?", "The copy stops right away and the files that were already copied from the backup are removed again, so the Main pool has none of this restore's data. Files that were in Main before are not touched. Immich and Nextcloud stay stopped, and you can start the restore again later.", "Cancel the Copy", true)) return;
+    try { const r = await api("POST", "/api/drives/abort", {}); if (DRjob) DRjob.stopping = true; toast(r.message || "Stopping."); } catch (e) { fail(e); }
+    drawDrives();
+    return;
+  }
   const text = act === "add"
     ? "Drives that are not added yet are not added. A drive that is already added stays added. A drive that is being erased finishes that step first."
     : act === "setup"
@@ -1092,23 +1130,36 @@ async function abortJob() {      // the Abort button of a running add, move or t
   } catch (e) { fail(e); }
   drawDrives();
 }
+let DRlogOpen = false;      // the "Show the steps" box stays open while the page draws itself again (it redraws every two seconds during a change)
+function stepsBox(lines) {
+  const pre = h("pre", { class: "joblog" }, lines.join("\n"));
+  const box = h("details", { class: "joblogbox", open: DRlogOpen }, h("summary", {}, "Show the steps"), pre);
+  box.addEventListener("toggle", () => { DRlogOpen = box.open; });
+  const keep = DRlogOpen && drivesBox && drivesBox.querySelector("details.joblogbox pre.joblog");      // (also keep the place the person scrolled to, unless it was at the end)
+  if (keep) { const atEnd = keep.scrollTop + keep.clientHeight >= keep.scrollHeight - 4; setTimeout(() => { pre.scrollTop = atEnd ? pre.scrollHeight : keep.scrollTop; }, 0); }
+  return box;
+}
 function drivesParts() {
   const out = [];
   if (DRwait || DRbusy) {
-    const lines = DRjob && DRjob.lines ? DRjob.lines.filter(l => !/\(typed in the panel\)|^Type /.test(l)).slice(-8) : [];
+    const lines = DRjob && DRjob.lines ? DRjob.lines.filter(l => !/\(typed in the panel\)|^Type /.test(l)).slice(-60) : [];
     const copying = !!DRjob && Object.values(DRjob.progress || {}).some(p => /^Copying files/.test(p.text || ""));      // (a new setup can be stopped only while the files are copied: before that it is erasing, after that it is checking and switching over)
-    const stopping = !!(DRjob && DRjob.stopping), canStop = !!DRbusy && (/^(add|disconnect|move)$/.test(DRbusy) || (DRbusy === "setup" && copying));
+    const stopping = !!(DRjob && DRjob.stopping), canStop = !!DRbusy && (/^(add|disconnect|move)$/.test(DRbusy) || ((DRbusy === "setup" || DRbusy === "appsfix") && copying));
+    const rp = DRbusy === "appsfix" && DRjob && DRjob.progress ? DRjob.progress.appsfix : null;      // the bar of the copy from the backup: "5.00 GB / 11.00 GB"
     out.push(h("div", { class: "card working", role: "status" }, DRbusy ? (stopping ? "Stopping at the next safe moment..." : (JOB_TEXT[DRbusy] || "Working...")) : DRwait,
-      canStop ? h("div", { class: "row tight" }, h("button", { class: "danger small", disabled: stopping, onclick: abortJob, title: "Stops what is not finished yet, and puts the drives that are done back" }, stopping ? "Stopping..." : "Abort"),
-        stopping ? h("span", { class: "muted small" }, DRbusy === "setup" ? "The copy has been told to stop. The drives still have to finish writing what they already received, and then the new setup is taken apart and the services start again. This can take a few minutes (longer the more was already copied). Your Main pool is not touched." : "A copy stops at once; a step that has started finishes first. Drives that are already done are put back. This can take a few minutes.") : null) : null,
+      canStop ? h("div", { class: "row tight" }, h("button", { class: "danger small", disabled: stopping, onclick: abortJob, title: "Stops what is not finished yet, and puts the drives that are done back" }, stopping ? "Stopping..." : (DRbusy === "appsfix" ? "Cancel" : "Abort")),
+        stopping ? h("span", { class: "muted small" }, DRbusy === "appsfix" ? "The copy has been told to stop. The files copied so far are being removed again. This can take a minute or two." : DRbusy === "setup" ? "The copy has been told to stop. The drives still have to finish writing what they already received, and then the new setup is taken apart and the services start again. This can take a few minutes (longer the more was already copied). Your Main pool is not touched." : "A copy stops at once; a step that has started finishes first. Drives that are already done are put back. This can take a few minutes.") : null) : null,
+      rp ? h("div", { class: "tprog big", role: "progressbar", "aria-valuenow": rp.pct, "aria-valuemin": 0, "aria-valuemax": 100, "aria-label": rp.text },
+        h("div", { class: "bar" }, h("i", { style: { width: Math.max(2, rp.pct) + "%" } })), h("small", {}, rp.text + "  (" + rp.pct + "%)")) : null,
+      DRbusy === "appsfix" && !stopping ? h("p", { class: "muted small" }, copying ? "Cancel stops the copy and removes the files copied so far, so Main has none of this restore's data. You can leave this page: the work goes on." : "You can leave this page: the work goes on. The Cancel button shows up while the files are being copied.") : null,
       DRbusy && /^(add|wipe|disconnect|move)$/.test(DRbusy) ? h("p", { class: "muted small" }, "Please keep this page open or come back later. Copying files can take a long time. You can leave the page: the work goes on.") : null,
       DRbusy === "setup" && !stopping ? h("p", { class: "muted small" }, copying ? "You can stop while the files are copied: your Main pool then stays as it is. You can leave this page: the work goes on." : "A new setup can be stopped only while its files are copied (the Abort button shows up then). You can leave this page: the work goes on.") : null,
-      lines.length ? h("details", { class: "joblogbox" }, h("summary", {}, "Show the steps"), h("pre", { class: "joblog" }, lines.join("\n"))) : null));
+      lines.length ? stepsBox(lines) : null));
   }
   if (DRfail && !DRbusy) out.push(h("div", { class: "card failcard", role: "alert" }, h("h2", {}, "What Happened"),
     h("p", {}, h("b", {}, DRfail.what + " did not work. "), DRfail.message),
     h("p", { class: "muted small" }, "Nothing else was changed unless the message above says so. " + DRfail.time.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })),
-    DRfail.lines.length ? h("details", { class: "joblogbox" }, h("summary", {}, "Show the steps"), h("pre", { class: "joblog" }, DRfail.lines.join("\n"))) : null,
+    DRfail.lines.length ? stepsBox(DRfail.lines) : null,
     h("div", { class: "row tight" }, h("button", { class: "small", onclick: () => { DRfail = null; drawDrives(); } }, "Dismiss"))));
   if (DRerr) out.push(h("div", { class: "card", role: "alert" }, h("h2", {}, "The Drives Could Not Be Read"), h("p", { class: "muted" }, DRerr), h("button", { onclick: loadDrives }, "Try Again")));
   if (!DR) return out;
@@ -1152,7 +1203,10 @@ function viewDrives() {
   loadBackups();
   api("GET", "/api/backup/job").then(j => { if (j.running) { BKjob = j; BKwas = j.action; drawBackups(); followBackup(); } }).catch(() => { /* no backup tool: the section says so */ });
   api("GET", "/api/drives/job").then(j => {      // a change may still be running (the page was reloaded meanwhile)
-    if (j.running) { DRbusy = j.action; DRjob = j; followJob(); drawDrives(); } else loadDrives();
+    if (j.running) {      // (the drive boxes are asked for too: during a change the server answers with the last good look, marked stale, so the boxes stay on the page)
+      DRbusy = j.action; DRjob = j; followJob(); drawDrives();
+      api("GET", "/api/drives").then(d => { if (!DR) { DR = d; drawDrives(); } }).catch(() => { /* the progress card is still there */ });
+    } else loadDrives();
   }).catch(() => loadDrives());
   return drivesBox;
 }
@@ -1477,6 +1531,7 @@ function bkTask(t) {
       h("button", { class: "small primary", disabled: off, onclick: () => bkStart("run", { id: t.id }) }, "Run Now"),
       nightly ? null : h("button", { class: "small", disabled: off, onclick: () => bkStart("dry", { id: t.id }), title: "Shows how much would be copied. Nothing is changed" }, "Preview"),
       h("button", { class: "small", disabled: off, onclick: () => bkRestore(t) }, "Restore"),
+      t.dest.type === "local" ? h("button", { class: "small", onclick: () => bkDownload(t), title: "Download files or folders of this backup to this device (for when you have no other way to get your files)" }, "Download") : null,
       h("button", { class: "small", onclick: () => bkEdit(t) }, "Edit"),
       h("button", { class: "small", onclick: () => bkToggle(t) }, t.enabled ? "Turn Off" : "Turn On"),
       nightly ? null : h("button", { class: "small danger", disabled: off, onclick: () => bkDelete(t) }, "Delete")));
@@ -1621,7 +1676,10 @@ function bkEdit(t) {
   const form = [h("h2", {}, t ? "Edit " + t.name : "New Backup Task"),
     bkField("Name", h("input", { type: "text", value: f.name, maxlength: 40, placeholder: "My documents", oninput: e => { f.name = e.target.value; } }))];
   if (nightly) {
-    form.push(h("p", { class: "muted" }, "This is the nightly backup of " + f.source + " to " + f.dest.path + ". You can rename it, turn it off or change when it runs."), when);
+    form.push(h("p", { class: "muted" }, "This is the nightly backup of " + f.source + " to " + f.dest.path + ". You can rename it, turn it off, change when it runs and how long it keeps files you delete or replace."), when,
+      bkField("Keep files that are deleted or replaced for how many days?",
+        h("input", { type: "number", min: 1, max: 3650, value: (f.keep && f.keep.days) || 30, "aria-label": "Days to keep deleted or replaced files", oninput: e => { f.keep = { days: Math.max(1, Math.min(3650, parseInt(e.target.value, 10) || 30)) }; } }),
+        "The default is 30 days. When a file is deleted or changed, the older copy stays in the backup for this long, and is then removed to free space. A longer time needs more room on the backup drive."));
   } else {
     form.push(bkField("Folder to back up", h("input", { type: "text", value: f.source, placeholder: "/mnt/storage/photos", maxlength: 300, list: "bk-src", oninput: e => { f.source = e.target.value.trim(); } }), "The full path of the folder on this machine."),
       h("datalist", { id: "bk-src" }, BK.drives.map(x => h("option", { value: x.path }))),
@@ -1636,6 +1694,7 @@ function bkEdit(t) {
         setErr("");
         const out = { id: f.id, name: f.name, enabled: f.enabled, schedule: f.schedule };
         if (!nightly) Object.assign(out, { source: f.source, exclude: f.exclude, dest: f.dest, keep: f.keep });
+        else out.keep = { days: (f.keep && f.keep.days) || 30 };
         if (!t) delete out.id;
         try { await api("POST", "/api/backup/save", out); d.close(); toast("Saved."); await loadBackups(); } catch (e) { setErr(e.message); }
       } }, "Save")));
@@ -1644,6 +1703,49 @@ function bkEdit(t) {
   d.addEventListener("close", () => d.remove());
   document.body.append(d);
   d.showModal();
+}
+
+// ---- the download dialog: look inside a backup and save a file, or a folder as a .zip, to this device (for when there is no other way to get the files)
+async function bkDownload(t) {
+  let versions;
+  try { versions = (await api("GET", "/api/backup/versions?id=" + encodeURIComponent(t.id))).versions; } catch (e) { fail(e); return; }
+  if (!versions.length) { toast("There is nothing to download yet. Run the backup first.", true); return; }
+  let ver = versions[0], path = [];
+  const list = h("div", { class: "bklist" });
+  const crumbs = h("div", { class: "bkcrumbs" });
+  const note = h("p", { class: "muted small" });
+  const err = h("p", { class: "badtext", role: "alert" });
+  const rel = () => path.join("/") || ".";
+  const go = async p => {
+    path = p;
+    put(err, "");
+    let entries = [];
+    try { entries = (await api("GET", "/api/backup/browse?id=" + encodeURIComponent(t.id) + "&v=" + encodeURIComponent(ver.name) + "&rel=" + encodeURIComponent(rel()))).entries; } catch (e) { put(err, e.message); }
+    put(crumbs, h("button", { class: "small link", onclick: () => go([]) }, "Top"), path.map((n, i) => [" / ", h("button", { class: "small link", onclick: () => go(path.slice(0, i + 1)) }, n)]));
+    put(note, ver.kind === "changes" ? "This version holds only the files that were replaced or deleted at that time." : "");
+    put(list, entries.length ? entries.map(e => h("div", { class: "item" },
+      h("div", { class: "txt" }, e.type === "dir" ? h("button", { class: "small link", onclick: () => go(path.concat(e.name)) }, "\uD83D\uDCC1 " + e.name) : h("b", {}, e.name), e.type === "file" ? h("span", {}, humanBytes(e.size)) : null),
+      h("button", { class: "small", onclick: () => fetchOut(path.concat(e.name).join("/"), e.type === "dir" ? "zip" : "file") }, e.type === "dir" ? "Download .zip" : "Download"))) : h("p", { class: "muted" }, "Nothing in this folder."));
+  };
+  const fetchOut = async (r, mode) => {
+    put(err, "");
+    try {
+      const j = await api("POST", "/api/backup/dltoken", { id: t.id, v: ver.name, rel: r, mode });
+      const a = h("a", { href: j.url, target: "_blank", rel: "noopener" });      // (a link opens it: the browser saves the stream as it arrives, nothing is held in memory)
+      document.body.append(a); a.click(); a.remove();
+      toast(mode === "zip" ? "The .zip is on its way. A big folder takes a while: the download starts at once and runs until it is done." : "The download has started.");
+    } catch (e) { put(err, e.message); }
+  };
+  const d = h("dialog", { class: "wide dcard bkdlg" }, h("h2", {}, "Download from " + t.name),
+    h("p", { class: "muted small" }, "Saves a file, or a whole folder as one .zip, to this device. Use it when you have no other way to get your files back. The zip of a big folder has no size shown while it downloads. Keep this page open until the browser says it is done."),
+    h("div", { class: "field" }, h("label", {}, "Which version?"),
+      h("select", { "aria-label": "Version", onchange: e => { ver = versions.find(v => v.name === e.target.value); go([]); } }, versions.map(v => h("option", { value: v.name }, v.label)))),
+    note, crumbs, list, err,
+    h("div", { class: "actions" }, h("button", { onclick: () => d.close() }, "Close"), h("button", { class: "primary", onclick: () => fetchOut(rel(), "zip") }, "Download This Folder as .zip")));
+  d.addEventListener("close", () => d.remove());
+  document.body.append(d);
+  d.showModal();
+  go([]);
 }
 
 // ---- the restore dialog: pick a version, look inside, bring back a file or a folder
@@ -1750,7 +1852,8 @@ async function saveLook() {                // saves what was changed on the Look
   try {
     const both = lookDirty() && bgDirty();
     let restarting = false;
-    if (bgDirty()) {
+    const bgSaved = bgDirty();
+    if (bgSaved) {
       const B = bgW;
       const nums = { blur: B.blur, saturate: B.saturate, brightness: B.brightness, opacity: B.opacity };
       if (B.theme && B.url) { toast("Getting the picture of the theme…"); const r = await api("POST", "/api/background/theme", Object.assign({ theme: B.theme }, nums)); restarting = !!r.restarting; }
@@ -1759,12 +1862,12 @@ async function saveLook() {                // saves what was changed on the Look
     if (lookDirty()) {
       clearTimeout(pvTimer); pvSeq++;
       await api("POST", "/api/look", { look: lookOut() });
-      clearTimeout(pvTimer); pvSeq++; send({ type: "saved" });
+      clearTimeout(pvTimer); pvSeq++; send({ type: "saved", bg: !!bgSaved });
     }
     const what = both ? "Look and background saved." : (bgDirty() ? "Background saved." : "Look saved.");
     toast(restarting ? what + " The dashboard restarts for about 10 seconds…" : what);
     await afterChange(false);
-    if (restarting) setTimeout(() => send({ type: "reload" }), 12000);
+    if (restarting) setTimeout(() => send({ type: "reload", wait: true }), 4000);      // (the dashboard waits until Homepage answers again, then reloads)
   } catch (e) { fail(e); }
 }
 async function resetLook() {

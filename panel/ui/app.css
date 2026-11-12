@@ -68,6 +68,8 @@ html.glassy .card { -webkit-backdrop-filter: blur(var(--pblur)); backdrop-filter
 input[type="text"], input[type="password"], input[type="url"], input[type="number"], select, textarea {
   width: 100%; min-height: 44px; padding: 8px 12px; border-radius: 11px; border: 1px solid var(--line); background: var(--field);
 }
+select option, select optgroup { background-color: var(--opt-bg, #172033); color: var(--opt-fg, #eef2f9); }      /* the open list: solid colours that read on every theme */
+select option:disabled { opacity: 0.55; }
 input[type="color"] { width: 54px; height: 44px; padding: 3px; border-radius: 11px; border: 1px solid var(--line); background: var(--field); cursor: pointer; }
 input[type="range"] { width: 100%; height: 36px; accent-color: rgb(var(--accent)); }
 input[type="checkbox"] { width: 22px; height: 22px; accent-color: rgb(var(--accent)); }
@@ -284,6 +286,9 @@ svg.hdd { display: block; }
 .tprog { width: 100%; display: grid; gap: 3px; }
 .tprog .bar { height: 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
 .tprog .bar i { display: block; height: 100%; border-radius: 6px; background: rgb(var(--accent)); transition: width 0.6s; }
+.tprog.big { margin-top: 10px; max-width: 560px; }
+.tprog.big .bar { height: 12px; }
+.tprog.big small { font-size: 14px; color: var(--text); white-space: normal; }
 .tprog small { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .selbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 14px; margin-bottom: 12px; border-radius: 14px; border: 1px solid rgba(var(--accent), 0.6); background: rgba(var(--accent), 0.12); position: sticky; top: 0; z-index: 5; }
 .selbar b { margin-right: 6px; }
