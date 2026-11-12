@@ -769,7 +769,15 @@
   }
   // The look was saved in the panel (only custom.css changed): Homepage would reload the whole page when it notices the new file, so it is told that this version is known,
   // and the new style sheet is loaded in place of the old one (then the preview is not needed any more).
-  function saved() {
+  function saved(d) {
+    // when the background was saved too, the picture on screen now is the new one: it is what stays after the preview ends (Homepage still has the old
+    // address until its next start, and clearing the preview would otherwise put the old picture back)
+    if (d && d.bg === true && kept) {
+      var w0 = document.getElementById("inner_wrapper"), b0 = document.getElementById("background");
+      kept.image = b0 ? b0.style.getPropertyValue("background-image") : kept.image;
+      kept.filter = w0 ? w0.style.getPropertyValue("backdrop-filter") : kept.filter;
+      kept.webkit = w0 ? w0.style.getPropertyValue("-webkit-backdrop-filter") : kept.webkit;
+    }
     try {
       fetch("/api/hash", { cache: "no-store" }).then(function (r) { return r.json(); }).then(function (j) { if (j && j.hash) window.localStorage.setItem("hash", j.hash); }).catch(function () { /* the page may reload then: nothing is lost */ });
     } catch (e) { /* no storage */ }
@@ -781,15 +789,31 @@
     fresh.onerror = function () { fresh.remove(); };
     prevSheet.parentNode.insertBefore(fresh, prevSheet.nextSibling);
   }
+  // Homepage restarts for a few seconds after a new picture was saved: the page is reloaded when it answers again (not after a fixed time, which was sometimes too early)
+  var waiting = false;
+  function reloadWhenUp() {
+    if (waiting) return;
+    waiting = true;
+    var t0 = Date.now(), sawDown = false;
+    (function poll() {
+      fetch("/api/hash", { cache: "no-store" }).then(function (r) {
+        if (!r.ok) throw new Error("not yet");
+        if (sawDown || Date.now() - t0 >= 10000) window.location.reload(); else setTimeout(poll, 1500);
+      }).catch(function () {
+        sawDown = true;
+        if (Date.now() - t0 > 90000) window.location.reload(); else setTimeout(poll, 1500);
+      });
+    })();
+  }
   window.addEventListener("message", function (e) {
     var d = e.data;
     if (!d || d.hlp !== 1 || typeof d.type !== "string" || !fromPanel(e)) return;
     if (d.type === "css") look(d.css);
     else if (d.type === "bg") background(d);
     else if (d.type === "names") names(d);
-    else if (d.type === "saved") saved();
+    else if (d.type === "saved") saved(d);
     else if (d.type === "clear") clearAll();
-    else if (d.type === "reload") window.location.reload();
+    else if (d.type === "reload") { if (d.wait === true) reloadWhenUp(); else window.location.reload(); }
   });
 })();
 /* <<< homelab panel <<< */

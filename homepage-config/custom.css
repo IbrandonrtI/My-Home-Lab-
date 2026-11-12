@@ -777,7 +777,7 @@ html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height
 
 /* ---- Cards come up one after the other when a tab opens, and lift a little when you point at one (not the music player: the frame lies over it) */
 @keyframes hl-rise { from { opacity: 0; transform: translateY(8px); } }
-#inner_wrapper .services-list > li:not(#navidrome-card), #inner_wrapper .bookmarks-list > li, #inner_wrapper .bookmark-list > li { animation: hl-rise 0.45s ease both; }
+#inner_wrapper .services-list > li:not(#navidrome-card), #inner_wrapper .bookmarks-list > li, #inner_wrapper .bookmark-list > li { animation: hl-rise 0.45s ease backwards; }      /* (backwards, not both: a finished animation that keeps its last frame turns the card into a layer of its own, and the glass behind it can then show as clear) */
 #inner_wrapper .services-list > li:nth-child(2), #inner_wrapper .bookmark-list > li:nth-child(2) { animation-delay: 0.04s; }
 #inner_wrapper .services-list > li:nth-child(3), #inner_wrapper .bookmark-list > li:nth-child(3) { animation-delay: 0.08s; }
 #inner_wrapper .services-list > li:nth-child(4), #inner_wrapper .bookmark-list > li:nth-child(4) { animation-delay: 0.12s; }
@@ -1073,6 +1073,9 @@ html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wi
 #hl-bell.hl-open .hl-bellpop { display: block; }
 @media (min-width: 701px) {      /* the tab bar and its list lie above the cards (on a phone the bar is sticky with its own layer already) */
   #inner_wrapper #tabs { position: relative; z-index: 30; }
+  /* while the search box is in use, it and its list of suggestions lie above the tab bar (the list drops down over the tabs) */
+  #information-widgets .information-widget-search:focus-within,
+  #information-widgets .information-widget-search:has(ul, [role="listbox"], [role="menu"]) { z-index: 45 !important; }
 }
 #hl-bell .hl-bellhead { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 8px 10px 6px; }
 #hl-bell .hl-bellsub { font-size: 12px; color: var(--hl-pop-muted); }
