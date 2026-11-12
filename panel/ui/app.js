@@ -207,7 +207,17 @@ function iconField(initial, getHref) {
       if (!u) return toast("Type the address first.", true);
       inp.value = u; redraw();
     } }, "Use the Site's Icon") : null);
-  return { input: inp, el: h("div", { class: "field" }, h("label", {}, "Icon"), row, h("div", { class: "hint" }, "Optional. Leave it empty for no icon.")) };
+  const swatch = h("input", { type: "color", value: ((inp.value.match(/#[0-9a-fA-F]{6}$/) || ["#ffffff"])[0]), "aria-label": "Icon color", title: "Color of the icon" });
+  const colorRow = h("div", { class: "row tight", style: { marginTop: "6px" } }, h("span", { class: "muted small" }, "Icon color"), swatch,
+    h("button", { class: "small", type: "button", onclick: () => { inp.value = inp.value.replace(/-?#[0-9a-fA-F]{3,8}$/, ""); redraw(); } }, "No Color"),
+    h("span", { class: "muted small" }, "(for the round icon library: names that start with mdi- or si-)"));
+  swatch.addEventListener("input", () => {
+    const base = inp.value.trim().replace(/-?#[0-9a-fA-F]{3,8}$/, "");
+    if (!/^(mdi|si)-/.test(base)) { toast("Colors work with icons that start with mdi- or si-. Choose one of those first.", true); return; }
+    inp.value = base + "-" + swatch.value;
+    redraw();
+  });
+  return { input: inp, el: h("div", { class: "field" }, h("label", {}, "Icon"), row, colorRow, h("div", { class: "hint" }, "Optional. Leave it empty for no icon.")) };
 }
 
 // ---------------------------------------------------------------- the login
@@ -273,12 +283,13 @@ function optionColors(ui) {      // a solid background for the options of a drop
   const lum = (0.2126 * mix[0] + 0.7152 * mix[1] + 0.0722 * mix[2]) / 255;
   return { bg: "rgb(" + mix.join(", ") + ")", fg: lum > 0.55 ? "#101418" : "#f2f5fa", dark: lum <= 0.55 };
 }
+function allThemes() { return ((S.look && S.look.themes) || []).concat(S.mythemes || []); }      // the ready-made themes, then the ones you made
 function applyAccent() {
   const v = lookW || S.look.values;
   const [r, g, b] = rgb(v.accent);
   const st = document.documentElement.style;
   st.setProperty("--accent", r + ", " + g + ", " + b);
-  const t = (S.look.themes || []).find(x => x.id === v.theme), ui = (t && t.ui) || {};      // the panel itself wears the theme too
+  const t = allThemes().find(x => x.id === v.theme), ui = (t && t.ui) || {};      // the panel itself wears the theme too
   for (const [k, name] of [["bg", "--bg"], ["panel", "--panel"], ["panel2", "--panel2"], ["line", "--line"], ["field", "--field"], ["dialog", "--dialog"], ["blur", "--pblur"]]) {
     if (ui[k]) st.setProperty(name, ui[k]); else st.removeProperty(name);
   }
@@ -850,7 +861,7 @@ function healthBlock(d) {
     typeof r.reallocated_sectors === "number" ? r.reallocated_sectors + " moved sectors" : "", typeof r.pending_sectors === "number" ? r.pending_sectors + " waiting sectors" : ""].filter(Boolean);
   const bad = r.health === "FAILED" || r.pending_sectors > 0;
   return h("div", { class: "result" },
-    h("div", { class: "row tight" }, h("b", {}, "Health"), h("span", { class: "pill " + (r.health === "PASSED" ? "ok" : bad ? "bad" : "dim") }, r.health === "PASSED" ? "Passed" : r.health === "FAILED" ? "Failing" : r.health === "asleep" ? "Asleep" : stateText(r.health))),
+    h("div", { class: "row tight" }, h("b", {}, "Health"), h("span", { class: "pill " + (r.health === "PASSED" ? "ok" : bad ? "bad" : "dim") }, r.health === "PASSED" ? "Passed" : r.health === "FAILED" ? "Failing" : r.health === "asleep" ? "Asleep" : r.health === "unsupported" ? "Not Reported" : stateText(r.health))),
     bits.length ? h("p", { class: "muted small" }, bits.join("  ·  ")) : null,
     r.note ? h("p", { class: bad ? "badtext" : "muted small" }, cap(r.note)) : null,
     bad ? h("p", { class: "badtext" }, "Copy its files to another drive soon.") : null);
@@ -887,14 +898,15 @@ function ring(used, size) {
 function tempCell(r, pw) {
   if (!DRhealth) return h("span", { class: "muted" }, "...");
   if (pw && pw.state === "asleep") return h("span", { class: "muted", title: "The drive is asleep, so its temperature is not read." }, "Asleep");
-  if (!r || typeof r.temperature_c !== "number") return h("span", { class: "muted" }, "-");
+  if (!r || typeof r.temperature_c !== "number") return h("span", { class: "muted", title: r && r.health === "unsupported" ? "This drive does not report a temperature." : null }, "-");
   return h("span", { class: r.temperature_c >= 60 ? "badtext" : r.temperature_c >= 50 ? "warntext" : "" }, r.temperature_c + " °C");
 }
 function healthCell(r) {
   if (!DRhealth) return h("span", { class: "muted" }, "...");
   if (!r) return h("span", { class: "muted", title: "This drive did not report anything." }, "-");
   const bad = r.health === "FAILED" || r.pending_sectors > 0;
-  return h("span", { class: "pill " + (r.health === "PASSED" && !bad ? "ok" : bad ? "bad" : "dim") }, bad && r.health !== "FAILED" ? "Warning" : r.health === "PASSED" ? "Passed" : r.health === "FAILED" ? "Failing" : r.health === "asleep" ? "Asleep" : stateText(r.health));
+  return h("span", { class: "pill " + (r.health === "PASSED" && !bad ? "ok" : bad ? "bad" : "dim"), title: r.health === "unsupported" ? (cap(r.note) || "This drive does not report its health.") : null },
+    bad && r.health !== "FAILED" ? "Warning" : r.health === "PASSED" ? "Passed" : r.health === "FAILED" ? "Failing" : r.health === "asleep" ? "Asleep" : r.health === "unsupported" ? "Not Reported" : stateText(r.health));
 }
 
 let DRsel = new Set(), DRselMode = false, DRdrag = null, DRdrawLater = false, DRcard = null, DRlast = null;
@@ -1060,7 +1072,8 @@ function cardBody(t) {
   const d = t.d, act = DR.actions || {}, pw = powerFor(d, act.power), hr = rowFor(d, DRhealth && DRhealth.drives);
   const dis = !!DRbusy, ren = t.ren, sp = t.sp, wait = !!DRwait;
   const dev = devOf(t);
-  const ident = hr ? [hr.model, hr.serial ? "Serial " + hr.serial : ""].filter(Boolean).join("  ·  ") : "";
+  const ident = hr ? [hr.model, hr.serial ? "Serial " + hr.serial : "", hr.filesystem ? hr.filesystem + (hr.label ? ' "' + hr.label + '"' : "") : ""].filter(Boolean).join("  ·  ") : "";
+  const used = typeof d.used_bytes === "number" ? d : hr && typeof hr.used_bytes === "number" ? { used_bytes: hr.used_bytes, free_bytes: hr.free_bytes, size_bytes: d.size_bytes } : null;      // (a drive in no pool: its space is read from the drive itself)
   const poolName = t.kind === "spare" ? "Not in a pool" : t.kind === "other" ? "Outside the pools" : cap(ren.role) + " Pool";
   const go = f => () => { closeCard(); f(); };
   const btn = (label, f, opt) => h("button", { class: (opt && opt.danger ? "danger " : "") + "small", disabled: dis || wait || (opt && opt.off), onclick: f }, label);
@@ -1079,14 +1092,15 @@ function cardBody(t) {
     h("p", { class: "muted" }, [d.device && d.device !== "-" ? d.device : "", ident].filter(Boolean).join("  ·  ")),
     h("div", { class: "stats" },
       cardStat("Status", h("span", { class: "pill " + stateClass(d.state), title: STATE_HINT[d.state] || null }, stateText(d.state))),
-      cardStat("Power", pw ? h("span", { class: "pill " + (pw.state === "asleep" ? "dim" : "") }, pw.state === "asleep" ? "Asleep" : pw.state === "awake" ? "Awake" : "Unknown") : h("span", { class: "muted" }, "-")),
+      cardStat("Power", pw ? h("span", { class: "pill " + (pw.state === "asleep" ? "dim" : "") }, pw.state === "asleep" ? "Asleep" : pw.state === "awake" ? "Awake" : "Unknown")
+        : hr && hr.removable ? h("span", { class: "pill", title: "A USB stick or memory card has no motor, so it never sleeps." }, "Always On") : h("span", { class: "muted" }, "-")),
       cardStat("Temp", tempCell(hr, pw)),
       cardStat("Health", healthCell(hr)),
       cardStat("Hours On", hr && typeof hr.power_on_hours === "number" ? hr.power_on_hours.toLocaleString() : h("span", { class: "muted" }, DRhealth ? "-" : "...")),
       cardStat("Size", typeof d.size_bytes === "number" ? humanBytes(d.size_bytes) : "-"),
-      cardStat("Used", typeof d.used_bytes === "number" ? humanBytes(d.used_bytes) + " (" + humanBytes(d.free_bytes) + " free)" : "-"),
+      cardStat("Used", used ? humanBytes(used.used_bytes) + " (" + humanBytes(used.free_bytes) + " free)" : t.kind === "spare" && !DRhealth ? "..." : "-"),
       cardStat("Pool", poolName)),
-    typeof d.used_bytes === "number" ? usageBar(d.used_bytes, d.size_bytes) : null,
+    used ? usageBar(used.used_bytes, used.size_bytes || (used.used_bytes + used.free_bytes)) : null,
     connected ? h("div", { class: "row tight" },
       btn(DRhealth ? "Check Health Again" : "Check Health", runLook("health")),
       btn(DRcheck ? "Run Quick Check Again" : "Run Quick Check", runLook("check"))) : h("p", { class: "muted small" }, "This drive is not connected. Connect it and press Fix Drives."),
@@ -1676,10 +1690,12 @@ function bkEdit(t) {
     const s = f.schedule;
     const kind = h("select", { "aria-label": "How often", onchange: e => {
       const k = e.target.value;
-      f.schedule = k === "hourly" ? { kind: k, minute: 0 } : k === "weekly" ? { kind: k, dow: 6, time: s.time || "02:00" } : k === "monthly" ? { kind: k, dom: 1, time: s.time || "02:00" } : { kind: k, time: s.time || "02:00" };
+      f.schedule = k === "hourly" ? { kind: k, minute: 0 } : k === "weekly" ? { kind: k, dow: 6, time: s.time || "02:00" } : k === "monthly" ? { kind: k, dom: 1, time: s.time || "02:00" } : k === "days" ? { kind: k, every: 3, time: s.time || "02:00" } : { kind: k, time: s.time || "02:00" };
       drawWhen();
-    } }, [["hourly", "Every hour"], ["daily", "Every day"], ["weekly", "Every week"], ["monthly", "Every month"]].map(([k, l]) => h("option", { value: k, selected: s.kind === k }, l)));
+    } }, [["hourly", "Every hour"], ["daily", "Every day"], ["days", "Every few days"], ["weekly", "Every week"], ["monthly", "Every month"]].map(([k, l]) => h("option", { value: k, selected: s.kind === k }, l)));
     const kids = [kind];
+    if (s.kind === "days") kids.push(h("label", { class: "inl" }, "every ", h("input", { type: "number", min: 2, max: 30, value: s.every || 3, "aria-label": "Number of days between backups",
+      oninput: e => { s.every = Math.max(2, Math.min(30, parseInt(e.target.value, 10) || 3)); delete s.from; } }), " days"));      // (a new number counts from the day it is saved)
     if (s.kind === "weekly") kids.push(h("select", { "aria-label": "Day of the week", onchange: e => { s.dow = +e.target.value; } }, WEEKDAYS.map((n, i) => h("option", { value: i, selected: s.dow === i }, n))));
     if (s.kind === "monthly") kids.push(h("select", { "aria-label": "Day of the month", onchange: e => { s.dom = +e.target.value; } }, Array.from({ length: 28 }, (_, i) => h("option", { value: i + 1, selected: s.dom === i + 1 }, "Day " + (i + 1)))));
     if (s.kind === "hourly") kids.push(h("label", { class: "inl" }, "at minute ", h("input", { type: "number", min: 0, max: 59, value: s.minute || 0, "aria-label": "Minute of the hour", oninput: e => { s.minute = Math.max(0, Math.min(59, parseInt(e.target.value, 10) || 0)); } })));
@@ -2084,7 +2100,83 @@ function chooseTheme(t) {            // like every change here it is only a draf
   render(); lookChanged(); previewBg();
   toast(t.name + " is a draft. Press Save to keep it, or Discard Changes to go back.");
 }
-function themeTile(t, now) {
+async function chooseMyTheme(t) {          // a theme you made: its look and picture are a draft (Save keeps them); its layout and cards, if it has them, are put back at once (Undo takes that back)
+  const server = t.parts.filter(p => p === "layout" || p === "cards");
+  if (server.length) {
+    const what = server.map(p => p === "layout" ? "layout (tabs and groups)" : "cards (their names, icons, groups and order)").join(" and ");
+    const draft = t.parts.includes("look") || t.parts.includes("background");
+    if (!await confirmBox("Use “" + t.name + "”?", "This theme also puts back its " + what + ". That happens right now, and the Undo button at the top takes it back. " +
+      (draft ? "The colors and the picture are a draft until you press Save." : ""), "Use This Theme")) return;
+    try { await api("POST", "/api/mytheme", { op: "apply", id: t.id }); await afterChange(true); } catch (e) { return fail(e); }
+    if (framed && autoReload()) await new Promise(r => setTimeout(r, 1400));      // (the dashboard reloads itself first, then the draft is shown on it)
+  }
+  const def = S.look.defaults;
+  if (t.parts.includes("look")) {
+    const base = clone(def); base.tabs = Object.assign({}, def.tabs);
+    const pl = clone(t.look || {}); const tabs = Object.assign({}, base.tabs, pl.tabs || {}); delete pl.tabs;
+    lookW = Object.assign(base, pl, { tabs, theme: t.id });
+  } else if (!lookW) lookW = startLook();
+  if (t.parts.includes("background") && t.background) {
+    const g = t.background;
+    bgW = { url: g.image || "", blur: g.blur || "none", saturate: g.saturate, brightness: g.brightness, opacity: g.opacity };
+  }
+  render(); lookChanged(); previewBg();
+  toast(t.name + (t.parts.includes("look") || t.parts.includes("background") ? " is a draft. Press Save to keep it, or Discard Changes to go back." : " is in place."));
+}
+async function refreshMyThemes() { const s = await api("GET", "/api/state"); S.mythemes = s.mythemes; S.undo = s.undo; render(); }
+function createThemeDialog() {          // takes the settings on the Look screen (what you see now, also what is not saved yet) and, if you tick them, the picture, the layout and the cards
+  const name = h("input", { type: "text", maxlength: 30, placeholder: "For example: Movie Night", "aria-label": "Theme name" });
+  const blurb = h("input", { type: "text", maxlength: 90, placeholder: "Optional: a few words about it", "aria-label": "Theme description" });
+  const err = h("div", { class: "err", role: "alert", style: { color: "var(--bad)", minHeight: "20px" } });
+  const parts = [
+    ["look", "Look", "Colors, glass, shapes, the colors of tabs and cards, names and logo, as they are on this screen now (also what is not saved yet).", true],
+    ["background", "Background Picture", "The picture and its sliders (blur, brightness and so on).", true],
+    ["layout", "Layout", "The tabs, which groups are on each tab, their order, icons and columns (the Layout screen).", false],
+    ["cards", "Cards", "The list of cards with their names, icons, texts, groups and order (the Cards screen). Picking the theme later puts them back; Undo can bring your old ones back.", false]];
+  const boxes = parts.map(([id, label, hint, on]) => ({ id, box: h("input", { type: "checkbox", checked: on, "aria-label": label }), label, hint }));
+  const d = h("dialog", {}, h("h2", {}, "Make a Theme"),
+    h("p", { class: "muted" }, "Your settings on the Look screen are the start. Tick what else the theme should hold, so picking it later changes those too."),
+    h("div", { class: "field" }, h("label", {}, "Name"), name), h("div", { class: "field" }, h("label", {}, "Description"), blurb),
+    boxes.map(b => h("label", { class: "partrow" }, b.box, h("span", {}, h("b", {}, b.label), h("span", { class: "muted small" }, b.hint)))),
+    err,
+    h("div", { class: "actions" }, h("button", { onclick: () => d.close() }, "Cancel"), h("button", { class: "primary", onclick: async () => {
+      err.textContent = "";
+      const chosen = boxes.filter(b => b.box.checked).map(b => b.id);
+      if (!name.value.trim()) { err.textContent = "Give the theme a name."; name.focus(); return; }
+      if (!chosen.length) { err.textContent = "Tick at least one thing for the theme to hold."; return; }
+      const cur = allThemes().find(x => x.id === lookW.theme);
+      const B = bgW || savedBg(), sb = S.background;
+      const body = { op: "create", name: name.value.trim(), blurb: blurb.value.trim(), parts: chosen, look: lookOut(), ui: cur && cur.ui,
+        background: { image: B.url || sb.image || "", blur: B.blur || "none", saturate: B.saturate, brightness: B.brightness, opacity: B.opacity } };
+      try {
+        const r = await api("POST", "/api/mytheme", body);
+        d.close(); await refreshMyThemes();
+        if (chosen.includes("look")) { lookW.theme = r.id; lookChanged(); render(); }
+        toast("The theme “" + body.name + "” is saved. It is in the list under Your Themes.");
+      } catch (e) { err.textContent = e.message; }
+    } }, "Save the Theme")));
+  d.addEventListener("close", () => d.remove());
+  document.body.append(d);
+  d.showModal();
+  name.focus();
+}
+function myThemeTile(t) {
+  const partName = { look: "Look", background: "Picture", layout: "Layout", cards: "Cards" };
+  const tile = themeTile(t, lookW.theme, () => chooseMyTheme(t));
+  const chips = h("div", { class: "chips2" }, t.parts.map(p => h("span", { class: "badge" }, partName[p])));
+  return h("div", { class: "mytheme" }, tile, chips,
+    h("div", { class: "row tight" },
+      h("button", { class: "small", onclick: async () => {
+        const n = await askText("Rename the Theme", "New name for “" + t.name + "”", t.name);
+        if (!n || n === t.name) return;
+        try { await api("POST", "/api/mytheme", { op: "rename", id: t.id, name: n, blurb: t.blurb }); await refreshMyThemes(); } catch (e) { fail(e); }
+      } }, "Rename"),
+      h("button", { class: "small danger", onclick: async () => {
+        if (!await confirmBox("Delete “" + t.name + "”?", "The theme is deleted from the list. What is on your dashboard now stays as it is.", "Delete the Theme", true)) return;
+        try { await api("POST", "/api/mytheme", { op: "delete", id: t.id }); await refreshMyThemes(); toast("Deleted."); } catch (e) { fail(e); }
+      } }, "Delete")));
+}
+function themeTile(t, now, onpick) {
   const lk = Object.assign({}, S.look.defaults, t.look);
   const alpha = glassAlpha(lk);
   const cols = (t.palette && t.palette.length) ? t.palette : t.paintAll ? [t.paintAll].concat(t.paintLinks ? [t.paintLinks] : []) : S.paint.cards.slice(0, 3).map(c => c.color);
@@ -2098,12 +2190,14 @@ function themeTile(t, now) {
   shot.style.setProperty("--pe", lk.edge / 100);
   shot.style.setProperty("--bl", Math.round(lk.glassBlur * 0.5) + "px");
   shot.style.setProperty("--prm", rimShadow(lk.glassRim));
-  return h("button", { class: "theme", "aria-pressed": String(now === t.id), onclick: () => chooseTheme(t) }, shot, h("b", {}, t.name), h("span", { class: "small muted" }, t.blurb));
+  return h("button", { class: "theme", "aria-pressed": String(now === t.id), onclick: onpick || (() => chooseTheme(t)) }, shot, h("b", {}, t.name), h("span", { class: "small muted" }, t.blurb));
 }
 function themesCard() {
   return h("div", { class: "card" }, h("h2", {}, "Themes"),
     h("p", { class: "muted" }, "A theme changes the colors, glass and shapes of the dashboard and of this panel together, and gives every card, tile and bookmark a matching color. Pick one to try it. Nothing is saved until you press “Save”."),
     h("div", { class: "themes" }, S.look.themes.map(t => themeTile(t, lookW.theme))),
+    (S.mythemes || []).length ? [h("h3", {}, "Your Themes"), h("div", { class: "themes" }, S.mythemes.map(myThemeTile))] : null,
+    h("div", { class: "row", style: { marginBottom: "10px" } }, h("button", { onclick: createThemeDialog }, "+ Make a Theme from These Settings…")),
     h("label", { class: "row check" }, h("input", { type: "checkbox", checked: themePic, "aria-label": "Also change the background picture", onchange: ev => {
       themePic = ev.target.checked;
       const t = S.look.themes.find(x => x.id === lookW.theme);
@@ -2447,7 +2541,6 @@ function viewLinks() { return viewItems("links"); }
 function viewItems(kind) {
   const isCards = kind === "cards";
   const groups = (isCards ? S.services.filter(g => !g.locked) : S.links);
-  const locked = isCards ? S.services.filter(g => g.locked && !S.protected.includes(g.group)) : [];
   const path = isCards ? "/api/card" : "/api/link";
   const items = g => isCards ? g.cards : g.links;
   const tabsList = S.layout.tabs.map(t => t.name);
@@ -2466,8 +2559,47 @@ function viewItems(kind) {
     await op({ op: "edit", group: g.group, old: it.name, name: it.name, href: it.href, icon: pick, description: it.description, dot: !!it.siteMonitor }, "Icon saved.");
   }
   async function remove(g, it) {
+    if (it.hl) {
+      if (!await confirmBox("Hide “" + it.name + "”?", "It disappears from the dashboard. Bring it back any time with Add From HomeLab's List (or with Undo).", "Hide It", true)) return;
+      return op({ op: "remove", group: g.group, name: it.name }, "Hidden.");
+    }
     if (!await confirmBox("Remove “" + it.name + "”?", "It disappears from the dashboard. Undo can bring it back.", "Remove It", true)) return;
     await op({ op: "remove", group: g.group, name: it.name }, "Removed.");
+  }
+  function hlList() {                                      // the cards HomeLab fills in, to pick from (shown ones are ticked and cannot be added twice)
+    const list = S.hlcards || [];
+    if (!list.length) { toast("The list of HomeLab's cards is not on this machine yet. On the server run: sudo homelab-setup upgrade", true); return; }
+    const picks = new Set();
+    const err = h("div", { class: "err", role: "alert", style: { color: "var(--bad)", minHeight: "20px" } });
+    const gsel = h("select", { "aria-label": "Put them in" }, h("option", { value: "" }, "Each in its usual group"), groups.map(x => h("option", { value: x.group }, x.group)));
+    const names = [...new Set(list.map(c => c.group))];
+    const rows = names.map(n => h("div", { class: "card", style: { margin: "8px 0" } }, h("h3", {}, n),
+      list.filter(c => c.group === n).map(c => {
+        const on = !!c.in;
+        const box = h("input", { type: "checkbox", disabled: on, "aria-label": c.name + (on ? " (already on the dashboard)" : ""), onchange: ev => { ev.target.checked ? picks.add(c.id) : picks.delete(c.id); } });
+        return h("label", { class: "item", style: { cursor: on ? "default" : "pointer" } }, box, iconEl(c.icon),
+          h("div", { class: "txt" }, h("b", {}, c.name), h("span", {}, c.description || "")),
+          on ? h("span", { class: "badge" }, "On the dashboard" + (c.in !== n ? " (in " + c.in + ")" : "")) : (c.extra ? h("span", { class: "badge" }, "Extra") : null));
+      })));
+    const d = h("dialog", {}, h("h2", {}, "Add From HomeLab's List"),
+      h("p", { class: "muted" }, "Cards HomeLab fills in with numbers. Tick the ones you want. The ones already on the dashboard are greyed out. “Extra” cards show a single number."),
+      h("div", { style: { maxHeight: "50vh", overflow: "auto" } }, rows),
+      h("div", { class: "field" }, h("label", {}, "Put them in"), gsel), err,
+      h("div", { class: "actions" }, h("button", { onclick: () => d.close() }, "Cancel"), h("button", { class: "primary", onclick: async () => {
+        err.textContent = "";
+        if (!picks.size) { err.textContent = "Tick at least one card."; return; }
+        try {
+          await api("POST", "/api/card", { op: "add-list", ids: [...picks], group: gsel.value || undefined });
+          d.close(); toast("Added."); await afterChange(true);
+        } catch (e) { err.textContent = e.message; }
+      } }, "Add the Ticked Cards")));
+    d.addEventListener("close", () => d.remove());
+    document.body.append(d);
+    d.showModal();
+  }
+  async function hlRestore() {
+    if (!await confirmBox("Put HomeLab's Cards Back?", "Every card HomeLab fills in goes back to its own name, icon and group, and the ones you hid come back. Cards you added yourself stay. Undo can take this back.", "Put Them Back", true)) return;
+    try { await api("POST", "/api/hlcards/restore", {}); toast("Put back."); await afterChange(true); } catch (e) { fail(e); }
   }
 
   function editor(g, it) {
@@ -2479,7 +2611,7 @@ function viewItems(kind) {
     const desc = h("input", { type: "text", value: v.description || "", maxlength: isCards ? 160 : 120, "aria-label": "Description" });
     const abbr = h("input", { type: "text", value: v.abbr || "", maxlength: 6, placeholder: "automatic", "aria-label": "Short label" });
     const dot = h("input", { type: "checkbox", id: "dot", checked: !!v.siteMonitor });
-    const ic = iconField(v.icon, () => href.value);
+    const ic = iconField(v.icon, v.hl ? null : () => href.value);
     const names = groups.map(x => x.group);
     const gsel = h("select", { "aria-label": "Group" }, names.map(n => h("option", { value: n, selected: g && n === g.group }, n)), h("option", { value: "__new" }, "A new group…"));
     const gnew = h("input", { type: "text", placeholder: "Name of the new group", maxlength: 40, hidden: true, "aria-label": "New group name" });
@@ -2489,7 +2621,8 @@ function viewItems(kind) {
     const err = h("div", { class: "err", role: "alert", style: { color: "var(--bad)", minHeight: "20px" } });
     const d = h("dialog", {}, h("h2", {}, adding ? "Add a " + word : "Change “" + v.name + "”"),
       h("div", { class: "field" }, h("label", {}, "Name"), name),
-      h("div", { class: "field" }, h("label", {}, "Web address"), href, managed ? h("div", { class: "hint" }, "HomeLab keeps this address right (the Tailscale name and ports), so it cannot be changed here.") : null),
+      v.hl ? h("p", { class: "muted small" }, "HomeLab fills in the numbers of this card by itself, so only its name, icon, color, text and group change here.") :
+        h("div", { class: "field" }, h("label", {}, "Web address"), href, managed ? h("div", { class: "hint" }, "HomeLab keeps this address right (the Tailscale name and ports), so it cannot be changed here.") : null),
       ic.el,
       h("div", { class: "field" }, h("label", {}, "Short text"), desc, h("div", { class: "hint" }, isCards ? "Shown under the name." : "Optional.")),
       isCards ? (managed ? null : h("div", { class: "field" }, h("label", { for: "dot", class: "row" }, dot, "Show a green/red dot to tell if it is up"))) : h("div", { class: "field" }, h("label", {}, "Short label"), abbr, h("div", { class: "hint" }, "Up to 6 letters, shown when there is no icon.")),
@@ -2532,7 +2665,8 @@ function viewItems(kind) {
 
   const cards = groups.map(g => h("div", { class: "card group-card" },
     h("header", {}, h("h2", {}, g.group), h("span", { class: "badge" }, items(g).length + (items(g).length === 1 ? " " + word : " " + word + "s")),
-      h("button", { class: "small", onclick: () => groupMenu(g) }, "Rename"), h("button", { class: "small danger", onclick: () => groupRemove(g) }, "Remove Group")),
+      isCards && g.automatic ? h("span", { class: "badge", title: "HomeLab fills in the numbers of these cards" }, "Filled in by HomeLab") : null,
+      isCards && g.automatic ? null : [h("button", { class: "small", onclick: () => groupMenu(g) }, "Rename"), h("button", { class: "small danger", onclick: () => groupRemove(g) }, "Remove Group")]),
     items(g).map((it, i) => h("div", { class: "item" }, iconEl(it.icon),
       h("div", { class: "txt" }, h("b", {}, it.name), h("span", {}, [it.description, it.href].filter(Boolean).join("  ·  ") || "No address")),
       isCards && it.managed ? h("span", { class: "badge", title: "Made by HomeLab; it keeps the address right" }, "Built-In") : null,
@@ -2540,17 +2674,17 @@ function viewItems(kind) {
       h("button", { class: "small icon", "aria-label": "Move " + it.name + " down", disabled: i === items(g).length - 1, onclick: () => reorder(g, i, 1) }, "↓"),
       isCards && !it.locked ? h("button", { class: "small", onclick: () => quickIcon(g, it) }, "Icon…") : null,
       h("button", { class: "small", onclick: () => editor(g, it) }, "Change"),
-      h("button", { class: "small danger", onclick: () => remove(g, it) }, "Remove"))),
+      h("button", { class: "small danger", onclick: () => remove(g, it) }, it.hl ? "Hide" : "Remove"))),
     h("div", { style: { marginTop: "10px" } }, h("button", { class: "small", onclick: () => editor(g, null) }, "+ Add a " + (word === "card" ? "Card" : "Link") + " here"))));
 
   return h("div", {},
     h("div", { class: "card" }, h("h2", {}, isCards ? "Cards on the Dashboard" : "Links (Bookmarks)"),
       h("p", { class: "muted" }, isCards ? "The cards of Home. Add your own cards for any web page, change a name or text, put them in another order or group, or remove them."
         : "The bookmarks of the Links tab, in groups. Add your own sites with their icons."),
-      h("button", { class: "primary", onclick: () => editor(groups[0] || null, null) }, "+ Add a " + (word === "card" ? "Card" : "Link"))),
-    cards.length ? cards : h("p", { class: "muted" }, "There is nothing here yet."),
-    locked.length ? h("details", { class: "card" }, h("summary", {}, "Kept up to date by HomeLab (" + locked.map(g => g.group).join(", ") + ")"),
-      h("p", { class: "muted small" }, "These groups are filled in by HomeLab itself (numbers, calendar). You can move them to another tab on the Layout screen, but not change their cards.")) : null);
+      h("div", { class: "row" }, h("button", { class: "primary", onclick: () => editor(groups[0] || null, null) }, "+ Add a " + (word === "card" ? "Card" : "Link")),
+        isCards ? [h("button", { onclick: hlList }, "Add From HomeLab's List…"), h("button", { onclick: hlRestore, title: "Bring back the cards HomeLab fills in, as they came" }, "Put HomeLab's Cards Back…")] : null),
+      isCards ? h("p", { class: "muted small" }, "The groups marked “Filled in by HomeLab” hold the numbers and the calendar. Their cards can be renamed, given another icon or color, moved, put in another order, hidden and brought back like any other card.") : null),
+    cards.length ? cards : h("p", { class: "muted" }, "There is nothing here yet."));
 }
 
 // ---------------------------------------------------------------- start

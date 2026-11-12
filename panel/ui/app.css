@@ -96,6 +96,12 @@ input[type="checkbox"] { width: 22px; height: 22px; accent-color: rgb(var(--acce
 .preview .mini-card i { display: block; height: 4px; border-radius: 3px; margin-top: 10px; background: linear-gradient(90deg, rgba(var(--pc), 0.4), rgb(var(--pc))); width: 70%; }
 .themes { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; margin-bottom: 12px; }
 .theme { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 4px; text-align: left; padding: 10px; min-height: 0; border-width: 2px; border-radius: 14px; background: var(--panel2); }
+.mytheme { display: flex; flex-direction: column; gap: 6px; }
+.mytheme .theme { width: 100%; }
+.mytheme .chips2 { display: flex; flex-wrap: wrap; gap: 6px; }
+.partrow { display: grid; grid-template-columns: 22px 1fr; gap: 10px; align-items: start; margin: 0 0 12px; cursor: pointer; }
+.partrow input { margin-top: 3px; }
+.partrow span { display: flex; flex-direction: column; gap: 2px; }
 .theme[aria-pressed="true"] { border-color: rgb(var(--accent)); }
 .theme b { font-size: 15px; margin-top: 4px; }
 .theme .shot { display: flex; flex-direction: column; gap: 7px; height: 86px; padding: 9px; border-radius: 10px; overflow: hidden; background: linear-gradient(135deg, #1d2f4d, #3b2a52 60%, #1b3b3a); }
