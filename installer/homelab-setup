@@ -5504,7 +5504,7 @@ PANEL_SUDOERS = "/etc/sudoers.d/homelab-panel"
 PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", "setups", "apps"]
 PANEL_SUDO_WITH_WORDS = ["setups", "rename", "sleep", "wake", "add", "wipe", "disconnect", "move", "setup", "bootadd", "appsfix"]
 PANEL_SUDO_BACKUP_EXACT = ["state", "save", "sshkey", "cloud-add"]      # `homelab-backup-tasks panel ...` (the Backups section)
-PANEL_SUDO_BACKUP_WORDS = ["versions", "browse", "run", "dry", "restore", "delete", "toggle", "sshtest"]
+PANEL_SUDO_BACKUP_WORDS = ["versions", "browse", "run", "dry", "restore", "delete", "toggle", "sshtest", "stream"]
 # the Updates tab: exactly these commands, with exactly these words (no `*`, so nothing else can be added to them)
 PANEL_SUDO_UPDATE = ["/usr/local/sbin/homelab-update check", "/usr/local/sbin/homelab-update --yes", "/usr/bin/apt-get update", "/usr/bin/apt-get -y upgrade",
                      "/usr/bin/systemctl reboot"]
