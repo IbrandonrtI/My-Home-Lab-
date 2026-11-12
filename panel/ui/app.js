@@ -293,7 +293,14 @@ async function doUndo() {
 function discardPreview() { send({ type: "clear" }); lookW = bgW = layW = null; clearDraft(); }
 
 // the buttons in the top line of every screen: what is not saved yet, then Discard, Undo, Save and (in the dashboard's frame) Open in Tab, or Log Out
-let footEl = null;
+let footEl = null, footSave = null;
+// the Save button is kept (not made again) when the bar is drawn again: a hex code that is typed and then followed by a click on Save makes the field fire
+// "change" while the mouse button is down, the bar is drawn again, and a button that is replaced at that moment never receives its click
+function saveButton(off, fn) {
+  if (!footSave) footSave = h("button", { class: "primary" }, "Save");
+  footSave.disabled = off; footSave.onclick = fn;
+  return footSave;
+}
 function drawFoot(dirty, onSave, onRevert, extra) {
   if (!footEl) return;
   put(footEl,
@@ -301,7 +308,7 @@ function drawFoot(dirty, onSave, onRevert, extra) {
     onRevert ? h("button", { disabled: !dirty, onclick: onRevert }, "Discard Changes") : null,
     extra || null,
     view === "drives" ? null : h("button", { disabled: !S.undo, onclick: doUndo, title: S.undo ? "Undo: " + S.undo : "Nothing to undo" }, "Undo"),      // (the Drives screen changes no files of the dashboard: nothing to undo or save)
-    view === "drives" ? null : h("button", { class: "primary", disabled: !onSave || !dirty, onclick: onSave || (() => {}) }, "Save"),
+    view === "drives" ? null : saveButton(!onSave || !dirty, onSave || (() => {})),
     framed ? h("a", { class: "btn", href: location.href, target: "_blank", rel: "noopener" }, "Open in New Tab") : null,
     h("button", { class: "ghost", onclick: async () => { try { await api("POST", "/api/logout", {}); } catch (e) { /* already out */ } S = null; showLogin(); } }, "Log Out"));
 }
@@ -1246,7 +1253,7 @@ async function updStart(what, extra) {
   if (UPDjob && UPDjob.running) return;
   try {
     await api("POST", "/api/updates/start", Object.assign({ what }, extra || {}));
-    UPDjob = { running: true, action: what, lines: [] };
+    UPDjob = { running: true, action: what, lines: [], pct: null, stage: "" };
     UPDwas = what;
     drawUpdates();
     followUpdates();
@@ -1256,8 +1263,18 @@ async function updRestart() {
   if (!(await confirmBox("Restart the machine?", "Every service stops for a minute or two and starts again by itself. Do not do this while a backup or an upload is running.", "Restart Now", true))) return;
   updStart("restart", { confirm: true });
 }
-function updRow(title, sub, pill, buttons) {
-  return h("div", { class: "bkt" }, h("div", { class: "ph" }, h("div", { class: "pt" }, h("h3", {}, title), h("span", { class: "sub" }, sub)), pill, buttons));
+function updRow(title, sub, pill, buttons, prog) {
+  return h("div", { class: "bkt" }, h("div", { class: "ph" }, h("div", { class: "pt" }, h("h3", {}, title), h("span", { class: "sub" }, sub)), pill, buttons), prog || null);
+}
+// the bar of a running update: the server counts what the tools print (images, services, packages) and sends a percent and a few words;
+// without a percent (a check, a restart) the bar pulses
+function updBar(job) {
+  const pct = typeof job.pct === "number" ? Math.max(2, Math.min(100, job.pct)) : null;
+  const words = job.stage || UPD_WORKING[job.action] || "Working...";
+  return h("div", { class: "bkprog updprog" },
+    h("div", { class: "bar" + (pct === null ? " wait" : ""), role: "progressbar", "aria-label": words, "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": pct === null ? null : String(pct) },
+      h("i", { style: { width: (pct === null ? 100 : pct) + "%" } })),
+    h("span", { class: "muted small" }, words + (pct === null ? "" : "  (" + pct + "%)")));
 }
 function drawUpdates() {
   const busy = !!(UPDjob && UPDjob.running);
@@ -1273,16 +1290,20 @@ function drawUpdates() {
       updRow("Containers", n ? n + " waiting: " + names + ". A quick database dump is made first, then each service is updated one after the other." : "Everything is up to date. Last looked " + updAgo(UPD.checked, UPD.now) + ".",
         h("span", { class: "pill " + (n ? "warn" : "ok") }, n ? n + " waiting" : "Up to date"),
         h("div", { class: "pills" }, h("button", { class: "small", disabled: busy, onclick: () => updStart("check") }, "Check Now"),
-          h("button", { class: "small primary", disabled: busy || !n, onclick: () => updStart("containers") }, "Update Containers"))),
+          h("button", { class: "small primary", disabled: busy || !n, onclick: () => updStart("containers") }, "Update Containers")),
+        busy && (UPDjob.action === "containers" || UPDjob.action === "check") ? updBar(UPDjob) : null),
       updRow("System", UPD.system === null ? "Not checked yet. Press Update System to look and install." : UPD.system ? UPD.system + " package" + (UPD.system === 1 ? "" : "s") + " waiting (Ubuntu or Mint). Installing can take several minutes." : "Everything that can be installed is installed." + (UPD.kept_back ? " " + UPD.kept_back + " more " + (UPD.kept_back === 1 ? "package is" : "packages are") + " held back by Ubuntu: " + (UPD.kept_back === 1 ? "it needs" : "they need") + " other changes first, or " + (UPD.kept_back === 1 ? "is" : "are") + " being rolled out slowly. " + (UPD.kept_back === 1 ? "It installs" : "They install") + " by itself later. To see the list: apt list --upgradable" : ""),
         h("span", { class: "pill " + (UPD.system ? "warn" : UPD.system === null ? "dim" : "ok") }, UPD.system === null ? "Unknown" : UPD.system ? UPD.system + " waiting" : "Up to date"),
-        h("div", { class: "pills" }, h("button", { class: "small primary", disabled: busy || UPD.system === 0, onclick: () => updStart("system") }, "Update System"))),
+        h("div", { class: "pills" }, h("button", { class: "small primary", disabled: busy || UPD.system === 0, onclick: () => updStart("system") }, "Update System")),
+        busy && UPDjob.action === "system" ? updBar(UPDjob) : null),
       updRow("Restart", UPD.restart ? "A system update asked for a restart. Do it when nothing important is running." : "No restart is needed.",
         h("span", { class: "pill " + (UPD.restart ? "warn" : "ok") }, UPD.restart ? "Needed" : "Not needed"),
-        h("div", { class: "pills" }, h("button", { class: "small" + (UPD.restart ? " primary" : ""), disabled: busy, onclick: updRestart }, "Restart Machine")))));
+        h("div", { class: "pills" }, h("button", { class: "small" + (UPD.restart ? " primary" : ""), disabled: busy, onclick: updRestart }, "Restart Machine")),
+        busy && UPDjob.action === "restart" ? updBar(UPDjob) : null)));
   }
   if (UPDjob && UPDjob.running) {
-    body.push(h("p", { class: "muted" }, UPD_WORKING[UPDjob.action] || "Working...", " Keep this page open if you can. It also keeps going if you leave."),
+    if (!UPD || UPDerr) body.push(updBar(UPDjob));
+    body.push(h("p", { class: "muted" }, "Keep this page open if you can. It also keeps going if you leave."),
       h("pre", { class: "updlog", "aria-live": "polite" }, (UPDjob.lines || []).join("\n")));
   }
   put(updBox, h("div", { class: "card" }, body));
@@ -1886,7 +1907,8 @@ function colorField(label, key, hint, swatches) {
   const pick = h("input", { type: "color", value: L[key], "aria-label": label });
   const set = v => { L[key] = v; hex.value = v; pick.value = v; lookChanged(); };
   pick.addEventListener("input", () => set(pick.value));
-  hex.addEventListener("change", () => { if (/^#[0-9a-f]{6}$/i.test(hex.value.trim())) set(hex.value.trim().toLowerCase()); else hex.value = L[key]; });
+  hex.addEventListener("input", () => { const v = hex.value.trim().toLowerCase(); if (/^#[0-9a-f]{6}$/.test(v) && v !== L[key]) { L[key] = v; pick.value = v; lookChanged(); } });      // (a complete code counts at once: Save is ready before the field is left)
+  hex.addEventListener("change", () => { const v = hex.value.trim().toLowerCase(); if (/^#[0-9a-f]{6}$/.test(v)) { if (v !== L[key]) set(v); hex.value = v; } else hex.value = L[key]; });      // (nothing is drawn again when the code was already taken: the bar under the mouse keeps its Save button)
   return h("div", { class: "field" }, h("div", { class: "lab" }, label),
     h("div", { class: "row" }, pick, hex, h("div", { class: "swatches" }, (swatches || []).map(c => h("button", { class: "swatch", style: { background: c }, title: c, "aria-label": "Use " + c, onclick: () => set(c) })))),
     hint ? h("div", { class: "hint" }, hint) : null);
