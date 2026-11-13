@@ -33,19 +33,29 @@ remount_flow() {
   if [ -n "$(branches_of backup)" ]; then
     mount_fstab "$BACKUP_POOL" || warn "The backup pool did not mount."
   fi
+  local onboot=0
   if [ "$fail" = 1 ]; then
-    HOLD_HINT="They stay stopped on purpose: with a main drive missing they would write to an incomplete storage. Plug the drive in and run  sudo drives remount  again. If it is dead:  sudo drives replace"
-    return 1
-  fi
-  # main pool: the pool, or the plain drive before it is converted
-  if pool_in_fstab "$MAIN_POOL"; then
+    # a Main drive is missing: the pool is not mounted (it would be an incomplete storage). The boot drive is the storage until the drive is back
+    if main_fallback_start; then
+      onboot=1
+      warn "A Main drive was not found. Your services run from the boot drive for now (files on the missing drive are not visible)."
+    else
+      HOLD_HINT="The folder on the boot drive could not be made. Plug the drive in and run  sudo drives remount  again. If it is dead:  sudo drives replace"
+      return 1
+    fi
+  elif pool_in_fstab "$MAIN_POOL"; then
+    # main pool: the pool, or the plain drive before it is converted
     mount_fstab "$MAIN_POOL" || { echo "The main pool did not mount. Check the cable."; return 1; }
+    rm -f "$(main_boot_flag)"
+    moveboot_offer
   fi
   power_all >/dev/null 2>&1
   repair_music_folder
-  apps_flow
+  [ "$onboot" = 1 ] || apps_flow
   start_containers
-  if [ -n "${APPS_HELD// /}" ]; then
+  if [ "$onboot" = 1 ]; then
+    echo "Your services are running from the boot drive. Plug the missing Main drive in and run  sudo drives remount  to use it again."
+  elif [ -n "${APPS_HELD// /}" ]; then
     echo "The drives are mounted again. Still stopped:$APPS_HELD (their files are missing, see above)."
   else
     echo "The drives are mounted again and your services are running."

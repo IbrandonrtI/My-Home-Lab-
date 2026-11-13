@@ -94,7 +94,7 @@ BOOT_UNIT_BYTES="${BOOT_UNIT_BYTES:-1000000000}"; BOOT_UNIT_NAME="${BOOT_UNIT_NA
 # (set per drive in the pool line: /mnt/disks/MAIN1=RW,<size>). POOL_MINFREE is only the fallback for a drive whose size is unknown.
 POOL_MINFREE="${POOL_MINFREE:-20G}"
 POOL_FREE_PERCENT="${POOL_FREE_PERCENT:-5}"
-POOL_OPTS_BASE="allow_other,cache.files=off,category.create=ff,moveonenospc=true,dropcacheonclose=true,minfreespace=$POOL_MINFREE,nofail"
+POOL_OPTS_BASE="allow_other,cache.files=off,category.create=ff,moveonenospc=true,dropcacheonclose=true,minfreespace=$POOL_MINFREE,nonempty,nofail"
 # A drive is shown by what it is, e.g. "1 TB Samsung HDD", never by its internal label (MAIN1, BACKUP1). The names you chose
 # yourself are in DRIVE_NAMES_FILE (LABEL=Name per line); the name scanned when a drive was connected is kept in NAME_STORE,
 # so a drive that is unplugged or dead still shows its name.

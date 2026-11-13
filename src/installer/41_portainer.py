@@ -294,9 +294,9 @@ class StackStep(Step):
             return
         Portainer.deploy(self.name, text, env)
         wait_for(lambda: stack_up(self.name), "the %s containers to start" % self.name, self.wait)
-        if self.name == "immich":
-            wait_for(lambda: docker("inspect", "-f", "{{.State.Health.Status}}", "immich_server")[1].strip() == "healthy",
-                     "Immich to become healthy", 900, every=5)
+        # The stack is only waited for until its containers are RUNNING. Immich can need many minutes to become "healthy" (it prepares its database
+        # on the first start), and nothing here needs that yet: the next stacks go on while it finishes in the background. The steps that really need
+        # Immich or Nextcloud to answer (their admin accounts) come later in the list and wait for them there.
 
 
 def _register_stacks():

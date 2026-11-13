@@ -151,21 +151,15 @@ pre_change() {   # pre_change STEP...: the last stop before the first change. 0 
   dry_gate "$@"
 }
 
-# The Main pool can be left empty on purpose (every Main drive taken out). The services that use it must NOT start then: they would
-# write into the bare folder on the boot drive. They are written down here and start again when a Main drive is back.
-main_hold_file() { printf '%s' "$STATE_DIR/main-empty-stopped"; }
+# The Main pool can be left empty on purpose (every Main drive taken out). The services that use it keep running: the boot drive is the
+# storage until a drive is in Main (see 16_boot_storage.sh), so nothing is held back here any more.
+main_hold_file() { printf '%s' "$STATE_DIR/main-empty-stopped"; }      # (older versions kept a list of held services here; it is still read and cleared)
 
-main_hold_apply() {   # takes the containers that use the Main pool out of STOPPED when Main has no drive
+main_hold_apply() {   # Main has no drive: its folder on the boot drive is made ready for the services
   [ -z "$(branches_of main)" ] || return 0
   array_active && return 0      # (a ZFS / RAID setup is the Main pool too)
-  local keep n rest="" mine=""
-  keep=$(containers_using "$MAIN_POOL" | tr '\n' ' ')
-  for n in $STOPPED; do case " $keep " in *" $n "*) mine="$mine $n" ;; *) rest="$rest $n" ;; esac; done
-  [ -n "${mine// /}" ] || return 0
-  mkdir -p "$STATE_DIR" 2>/dev/null
-  for n in $mine; do echo "$n" >>"$(main_hold_file)"; done
-  note "The Main pool is empty, so these containers stay stopped until a Main drive is added:$mine"
-  STOPPED=${rest# }
+  boot_folder_ready
+  return 0
 }
 
 main_hold_resume() {   # a Main drive is back and mounted: the containers that were kept stopped join the ones to start
@@ -230,6 +224,7 @@ restore_services() {   # a step failed after the containers were stopped: when t
 
 on_exit() {
   release_started
+  boot_view_close
   if [ -n "${STOPPED// /}" ]; then
     note ""
     note "The containers ($STOPPED) are still STOPPED because something went wrong."

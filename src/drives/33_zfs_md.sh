@@ -399,7 +399,7 @@ preset_flow() {   # preset_flow ID
       note "$MAIN_POOL is already used by something else (check: findmnt $MAIN_POOL). A RAID setup needs it to be an ordinary empty folder."
       return 1
     fi
-    if [ "$migrate" != 1 ] && [ -n "$(find "$MAIN_POOL" ! -type d -print -quit 2>/dev/null)" ]; then
+    if [ "$migrate" != 1 ] && boot_has_files "$MAIN_POOL"; then
       note "The folder $MAIN_POOL (on the boot drive) has files in it. The new storage would hide them."
       note "Move them somewhere else first, then try again."
       return 1

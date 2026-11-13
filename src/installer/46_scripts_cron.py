@@ -58,6 +58,45 @@ class ScriptsInstalled(Step):
                 os.remove(P(old))
 
 
+GUARD_UNIT = "/etc/systemd/system/homelab-storage-guard.service"
+
+
+def guard_unit_text():
+    return "\n".join([
+        "# Written by homelab-setup. Change nothing here: an upgrade puts it back.",
+        "[Unit]",
+        "Description=Homelab storage guard (the boot drive is the storage when the Main drive is missing)",
+        "After=local-fs.target",
+        "Before=docker.service",
+        "",
+        "[Service]",
+        "Type=oneshot",
+        "RemainAfterExit=yes",
+        "ExecStart=/usr/local/sbin/drives guard",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+        ""])
+
+
+@step
+class StorageGuard(Step):
+    id, group, title = "storage-guard", "Platform", "Storage guard at start-up (the services keep running on the boot drive when the Main drive is missing)"
+    needs = ("scripts",)
+
+    def probe(self):
+        if Mode.existing:      # a server built by hand is only read, never changed
+            return "na"
+        if read_file(P(GUARD_UNIT)) != guard_unit_text():
+            return "todo"
+        return "done" if run(["systemctl", "is-enabled", "homelab-storage-guard"])[1].strip() == "enabled" else "todo"
+
+    def run(self):
+        write_file(P(GUARD_UNIT), guard_unit_text(), 0o644)
+        act(["systemctl", "daemon-reload"])
+        act(["systemctl", "enable", "homelab-storage-guard"])
+
+
 @step
 class BackupConf(Step):
     id, group, title = "backup-conf", "Scripts and schedule", "Backup settings file (/etc/homelab-backup.conf)"

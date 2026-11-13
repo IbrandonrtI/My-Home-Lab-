@@ -110,6 +110,11 @@ json_drives() {   # {"pools":[...],"drives":[...]} (usage, list and status all u
   held=$(sort -u "$(main_hold_file)" 2>/dev/null)
   for n in $held; do [ "$hf" = 1 ] || printf ','; hf=0; printf '%s' "$(json_str "$n")"; done
   printf ']'
+  # the boot drive is the storage (no Main drive, or its drive is missing); files saved there wait under a mounted pool
+  local onboot=false pend=false
+  main_drive_missing && onboot=true
+  boot_files_pending && pend=true
+  printf ',"main_on_boot":%s,"boot_files_waiting":%s' "$onboot" "$pend"
   # a RAID or ZFS setup: its name and health (the panel shows it as one tile inside Main, with its drives)
   if array_active; then
     local ah; ah=$(array_health_text); ah=${ah%%   (*}

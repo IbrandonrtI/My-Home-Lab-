@@ -12,10 +12,14 @@ ensure_mp() {
 mount_fstab() {   # fd 9 is the lock (and fd 8 the pool lock of a batch): the mergerfs daemon must not inherit them
   # From the control panel the daemon of a pool would live inside the panel's service, and a restart of the panel (an upgrade does that) would end it and
   # unmount the pool. In its own scope it belongs to the system instead.
+  # A pool is mounted over the folder on the boot drive even when files lie in it (the services save there while Main has no drive): "nonempty" lets
+  # it, also for pools whose fstab line was written by an older version.
+  local -a extra=()
+  [ "$(awk -v m="$1" '!/^[[:space:]]*#/ && $2 == m {print $3; exit}' "$FSTAB" 2>/dev/null)" = fuse.mergerfs ] && extra=(-o nonempty)      # (not for a RAID or ZFS setup mounted at the pool path)
   if [ "$PANEL_MODE" = 1 ] && [ -d "${SYSTEMD_DIR:-/run/systemd/system}" ] && command -v systemd-run >/dev/null 2>&1; then
-    systemd-run --scope --quiet --collect --slice=system.slice mount -T "$FSTAB" "$1" 6>&- 8>&- 9>&- || return 1
+    systemd-run --scope --quiet --collect --slice=system.slice mount -T "$FSTAB" "${extra[@]}" "$1" 6>&- 8>&- 9>&- || return 1
   else
-    mount -T "$FSTAB" "$1" 6>&- 8>&- 9>&- || return 1
+    mount -T "$FSTAB" "${extra[@]}" "$1" 6>&- 8>&- 9>&- || return 1
   fi
   mountpoint -q "$1"   # a mount that "succeeds" without mounting counts as a failure
 }
@@ -44,7 +48,9 @@ apply_pool() {   # rebuild the pool line for a role and (re)mount the pool
   fstab_set_pool "$role"
   sd_reload
   pool_umount "$mp"
-  if [ -n "$(branches_of "$role")" ]; then mount_fstab "$mp" || return 1; fi
+  if [ -n "$(branches_of "$role")" ]; then mount_fstab "$mp" || return 1
+  elif [ "$role" = main ]; then boot_folder_ready      # no drive in Main: the boot drive is the storage
+  fi
   [ "$role" = main ] && snapraid_active && snapraid_conf_write   # the drives of the Main pool changed: SnapRAID has to know
   return 0
 }

@@ -23,6 +23,7 @@ Change the drives:
   cache         add an SSD read cache to a ZFS array
   release       take every drive out of the pools (the files stay on the drives)
   remount       Fix Drives: after an unplug, a power cut or a lost drive, mount the drives, check Immich and Nextcloud, start the containers
+  moveboot      copy the files that were saved on the boot drive while Main had no drive onto the Main pool (asks before it removes the old ones)
   replace       a drive died: put a new one in its place and copy the files back from the backup
   restore       copy only the missing files back from the backup
   fillorder     how a pool picks a drive for a new file (one at a time or spread) and which drive goes first
@@ -146,10 +147,25 @@ EOF
     remount) cat <<'EOF'
 sudo drives remount [--dry-run] [--now]
   Fix Drives. After an unplug, a power cut or a lost drive: stops the containers, mounts every drive and pool again, applies the
-  power settings and starts the containers. When a main drive is missing the containers stay stopped on purpose.
+  power settings and starts the containers. When a main drive is missing the services run from the boot drive for now
+  (files on the missing drive are not visible until it is back). When the drive is back, files saved on the boot drive
+  meanwhile are offered for copying to the pool.
   Then it checks that Immich and Nextcloud find their files. If not (the drive that held them is gone), they stay stopped and
   you choose: copy the files back from the backup (type RESTORE), or start them on empty folders (type START). Their
   accounts and settings are the same either way.
+EOF
+    ;;
+    moveboot) cat <<'EOF'
+sudo drives moveboot [--dry-run] [--yes] [--now]
+  With no drive in Main (or with its drive missing) the services keep running and save their files on the boot drive. When a
+  Main drive is back, those files lie hidden under the mounted pool. This copies them onto the pool (nothing in the pool is
+  replaced), checks every file, and only then asks whether to remove the old copies from the boot drive.
+EOF
+    ;;
+    guard) cat <<'EOF'
+sudo drives guard
+  Runs by itself at start-up, before Docker. If the Main drive is not there, the boot drive becomes the storage so the services
+  start anyway. You do not need to run it.
 EOF
     ;;
     replace) cat <<'EOF'

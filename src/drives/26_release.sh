@@ -50,9 +50,7 @@ release_flow() {   # take every drive out of both pools; the files on the drives
     mkdir -p "$dir"
   done
   # the folders the services expect, so they keep running on the boot drive until a drive is chosen again
-  mkdir -p "$MAIN_POOL/immich" "$MAIN_POOL/nextcloud"
-  give_to_owner "$MAIN_POOL/immich"
-  chown 33:33 "$MAIN_POOL/nextcloud" 2>/dev/null || true
+  boot_folder_ready
   start_containers
   log "released all pool drives (${#all[@]})"
   say ""

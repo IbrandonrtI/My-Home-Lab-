@@ -21,6 +21,14 @@ status_flow() {
       printf '%-8s %-14s NOT MOUNTED\n' "$role" "$pool"
     fi
   done
+  if [ -z "$(branches_of main)" ] && ! mountpoint -q "$MAIN_POOL" && ! array_active; then
+    say "Note: no drive is in the Main pool, so the services use the boot drive as their storage. Connect a drive with  sudo drives  and you are asked whether to move the files over."
+  elif main_drive_missing; then
+    say "Note: the Main drive is missing, so the services use the boot drive for now (since $(cat "$(main_boot_flag)" 2>/dev/null)). Plug it in, then run  sudo drives remount."
+  fi
+  if boot_files_pending; then
+    say "Note: files saved on the boot drive ($(human "$(boot_view_open && boot_files_bytes "$BOOT_UNDER"; boot_view_close)")) are waiting under the Main pool. Copy them onto it with:  sudo drives moveboot"
+  fi
   for role in main backup; do
     if [ -n "$(branches_of "$role")" ] && ! pool_has_limits "$(role_pool "$role")"; then
       say "Note: the $role pool uses an older setting. Run  sudo drives fillorder  (menu: Settings and upgrades) to update it: it then keeps ${POOL_FREE_PERCENT}% of each drive free."

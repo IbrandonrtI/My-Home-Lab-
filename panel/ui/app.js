@@ -776,7 +776,7 @@ async function takeOutDrives(tiles) {
       { value: "yes", label: "Copy them to another " + role + " drive first (recommended)", hint: "Every file is copied and checked before the drive is taken out. Nothing is lost." },
       { value: "no", label: "Do not copy them", hint: "The files stay on the drive only. They disappear from the " + role + " pool." }] }] : [],
     note: () => bootData && !f.only ? "The files in the Boot Drive Space are copied to the other " + role + " drives first. Taking it out gives its space back to the boot drive, which deletes it." : null,
-    warn: s => bootData && f.only ? "There is no other " + role + " drive to copy the files of the Boot Drive Space to, and taking it out deletes it. Every file in it is permanently lost. If you want to keep them, add another " + role + " drive first (or cancel)." : f.only ? "No " + role + " drive stays, so nothing can be copied: the files stay on the " + (one ? "drive" : "drives") + " only (nothing is deleted). " + (role === "main" ? "The Main pool will be empty, and the services that use it (like Immich, Nextcloud and FileBrowser) stay stopped until you add a Main drive again." : "Backups stop until another backup drive is added.") : f.copyable && s.copy === "no" ? "Without copying, the files on " + (one ? "this drive" : "these drives") + " will not show in the " + role + " pool any more. They stay on the drive." : f.noRoom && s.copy === "yes" ? f.roomText : "The drive" + (one ? " is" : "s are") + " taken out of the " + role + " pool. The data on the drive is not touched. The containers that use the pool stop for a minute.",
+    warn: s => bootData && f.only ? "There is no other " + role + " drive to copy the files of the Boot Drive Space to, and taking it out deletes it. Every file in it is permanently lost. If you want to keep them, add another " + role + " drive first (or cancel)." : f.only ? "No " + role + " drive stays, so nothing can be copied: the files stay on the " + (one ? "drive" : "drives") + " only (nothing is deleted). " + (role === "main" ? "The Main pool will be empty, and the services that use it (like Immich, Nextcloud and FileBrowser) will keep running and save their files on the boot drive until you add a Main drive again." : "Backups stop until another backup drive is added.") : f.copyable && s.copy === "no" ? "Without copying, the files on " + (one ? "this drive" : "these drives") + " will not show in the " + role + " pool any more. They stay on the drive." : f.noRoom && s.copy === "yes" ? f.roomText : "The drive" + (one ? " is" : "s are") + " taken out of the " + role + " pool. The data on the drive is not touched. The containers that use the pool stop for a minute.",
     typed: s => bootData && f.only ? [{ word: "ERASE" }, { word: "REMOVE" }] : f.only ? [{ word: "REMOVE" }] : f.copyable && s.copy === "no" ? [{ word: "CONTINUE" }] : [],
     sure: () => bootData && f.only ? "I understand that the files in the Boot Drive Space will be permanently deleted." : f.only ? (role === "main" ? "I understand that the Main pool will be empty and the services that use it stay stopped until a Main drive is added." : "I understand that backups stop until another backup drive is added.") : "I understand that the files on " + (one ? "this drive" : "these drives") + " will no longer show in the " + role + " pool.",
     ok: () => one ? "Take Drive Out" : "Take Drives Out", danger: s => f.only || (f.copyable && s.copy === "no") });
@@ -1194,11 +1194,19 @@ function drivesParts() {
     h("button", { class: "small" + (DRselMode ? " on" : ""), "aria-pressed": DRselMode ? "true" : "false", disabled: !!DRbusy, onclick: () => { DRselMode = !DRselMode; if (!DRselMode) DRsel = new Set(); drawDrives(); }, title: "Press drives to pick several, then use the buttons that show up" }, DRselMode ? "Done Selecting" : "Select"),
     h("button", { class: "small", disabled: off, onclick: () => { DRhealth = null; loadDrives(); } }, "Refresh"),
     h("button", { class: "small", disabled: !!DRbusy, onclick: remountDrives, title: "Mounts every drive and pool again from the saved setup and checks that Immich and Nextcloud find their files (after an unplug, a power cut or a lost drive)" }, "Fix Drives")));
-  if (st.main_empty && !DRbusy) {      // no drive in Main: the services that keep files there wait; say which, and how to fix it
-    const held = st.main_held || [];
-    out.push(h("div", { class: "card warncard", role: "alert" }, h("h2", {}, "Main Has No Drive"),
-      h("p", {}, "Nothing is connected to the Main pool, so the services that keep their files there (Immich and Nextcloud, for example) have no safe place to save them. " + (held.length ? "These services are kept stopped until a drive is added: " + held.join(", ") + "." : "Any service that needs Main waits until a drive is added.")),
-      h("p", { class: "muted small" }, "Updates still install. Only the parts that need Main wait. To fix it, drag a drive into Main, or press Configure Drives and build a setup. The stopped services start again by themselves.")));
+  if ((st.main_empty || st.main_on_boot) && !DRbusy) {      // no drive in Main, or its drive is missing: the services keep running on the boot drive
+    out.push(h("div", { class: "card warncard", role: "alert" }, h("h2", {}, st.main_on_boot ? "A Main Drive Is Missing" : "Main Has No Drive"),
+      h("p", {}, st.main_on_boot
+        ? "The Main drive was not found, so your services (Immich and Nextcloud, for example) are running from the boot drive for now. Files on the missing drive are not visible until it is back."
+        : "Nothing is connected to the Main pool, so your services (Immich and Nextcloud, for example) are using the boot drive as their storage."),
+      h("p", { class: "muted small" }, st.main_on_boot
+        ? "Plug the drive in and press Fix Drives. Files saved on the boot drive meanwhile can then be copied onto the drive."
+        : "To use a drive instead, drag it into Main, or press Configure Drives and build a setup. Files already saved on the boot drive are copied to the drive first.")));
+  }
+  if (st.boot_files_waiting && !DRbusy) {      // files saved on the boot drive lie hidden under the mounted Main pool
+    out.push(h("div", { class: "card warncard", role: "status" }, h("h2", {}, "Files Are Waiting On The Boot Drive"),
+      h("p", {}, "Some files were saved on the boot drive while Main had no drive. They are hidden while the Main pool is mounted."),
+      h("p", { class: "muted small" }, "Open the Terminal and run: sudo drives moveboot. It copies them onto the pool, checks them, and asks before it removes the old copies.")));
   }
   const ac = appsCard();
   if (ac && !DRbusy) out.push(ac);

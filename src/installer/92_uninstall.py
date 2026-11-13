@@ -6,7 +6,7 @@
 #   2. the drives of the pools: keep every file on them (the pools are only taken apart), or erase them (each one needs typed words)
 # Nothing is changed before a last "UNINSTALL" is typed. `--dry-run` shows everything and changes nothing.
 
-UN_UNITS = [("homelab-terminal", TERMINAL_UNIT), ("homelab-panel", PANEL_UNIT)]
+UN_UNITS = [("homelab-terminal", TERMINAL_UNIT), ("homelab-panel", PANEL_UNIT), ("homelab-storage-guard", GUARD_UNIT)]
 
 
 def un_drives_tool():
@@ -423,7 +423,9 @@ def un_remove_login_block():
 
 
 def un_restore_dns(f):
-    """HomeLab turned the system's own DNS resolver off so AdGuard Home could use port 53. Turn it on again."""
+    """HomeLab turned the system's own DNS resolver off so AdGuard Home could use port 53. Turn it on again.
+    Tailscale is NOT told to manage DNS again: HomeLab set it to leave /etc/resolv.conf alone because Tailscale's own resolver (100.100.100.100) can lose
+    its upstream servers while systemd-resolved is off, and then the machine cannot look up any name. That setting stays, it is Tailscale's safe one."""
     if not f["adguard"]:
         return True
     if run(["systemctl", "is-active", "systemd-resolved"])[1].strip() == "active":
@@ -432,8 +434,6 @@ def un_restore_dns(f):
         return True
     old = read_file(P("/etc/resolv.conf"))
     act(["systemctl", "enable", "--now", "systemd-resolved"])
-    if have("tailscale"):
-        act(["tailscale", "set", "--accept-dns=true"])
     if Opt.dry:
         out("      would point /etc/resolv.conf at the system resolver again")
         return True
@@ -444,10 +444,11 @@ def un_restore_dns(f):
     try:
         os.remove(P("/etc/resolv.conf"))
         os.symlink("../run/systemd/resolve/stub-resolv.conf", P("/etc/resolv.conf"))
-        time.sleep(2)
+        time.sleep(3)
         socket.gethostbyname("github.com")
     except OSError:
-        set_resolv_conf(old)
+        # keep the machine able to look up names: the plain file with the router and a public server, like the installer sets it
+        set_resolv_conf("nameserver %s\nnameserver 1.1.1.1\n" % (Ctx.gateway or "1.1.1.1") if "nameserver" not in old or "100.100.100.100" in old else old)
         act(["systemctl", "disable", "--now", "systemd-resolved"])
         warn("The system's DNS resolver did not work, so the machine keeps asking your router for names (as before).")
         return True
@@ -465,7 +466,7 @@ def un_remove_files(f, wipe_data, keep_drives_tool):
         un_rm(p)
     files = ["/etc/homelab-backup.conf", "/etc/homelab-backup-tasks.json", "/etc/homelab-update.conf", "/var/lib/homelab", "/var/lib/homelab-backup",
              "/etc/homelab-drive-names", "/var/log/homelab-backup.log", "/var/log/homelab-backup-tasks.log", "/var/log/homelab-cards.log",
-             "/var/log/homelab-restore-configs.log", "/etc/resolv.pre-tailscale-backup.conf", "/run/homelab-terminal", "/run/homelab-stats", "/run/homelab-update"]
+             "/var/log/homelab-restore-configs.log", "/run/homelab-terminal", "/run/homelab-stats", "/run/homelab-update"]
     if not keep_drives_tool:
         files += ["/var/lib/homelab-drives", "/var/log/homelab-drives.log", "/etc/homelab-drives"]
     for p in files:

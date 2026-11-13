@@ -446,11 +446,37 @@ class Folders(Step):
         return "done" if all(os.path.isdir(P(p)) for p, _, _ in folder_plan()) else "todo"
 
     def run(self):
+        unlock_storage_folders()
         for p, u, g in folder_plan():
             try:
                 mkdirs(P(p), u, g)
             except OSError as e:
                 raise Abort(folder_problem(p, e)) from e
+        prepare_boot_storage()
+
+
+IMMICH_FOLDERS = ("upload", "library", "thumbs", "encoded-video", "profile", "backups")
+
+
+def unlock_storage_folders():
+    """/mnt/storage and /mnt/backup have no drive mounted: older versions of the drives tool locked such a folder (so nothing was written onto the boot
+    drive). Now the boot drive IS the storage until a drive is connected, so the lock is taken off and the services can use the folder."""
+    for root in ("/mnt/storage", "/mnt/backup"):
+        if locked_mountpoint(root):
+            act(["chattr", "-i", P(root)])
+
+
+def prepare_boot_storage():
+    """With no drive mounted at /mnt/storage the boot drive is the storage: Immich gets its folders, each with the `.immich` marker file it looks for
+    (without the markers Immich refuses to start when it finds its folders half-made). A mounted drive is left alone: it has its own."""
+    if Opt.dry or os.path.ismount(P("/mnt/storage")):
+        return
+    for name in IMMICH_FOLDERS:
+        d = P("/mnt/storage/immich/" + name)
+        mkdirs(d, Ctx.uid, Ctx.gid)
+        marker = d + "/.immich"
+        if not os.path.exists(marker):
+            write_file(marker, "", 0o644, (Ctx.uid, Ctx.gid))
 
 
 def locked_mountpoint(path):
@@ -463,8 +489,9 @@ def locked_mountpoint(path):
 
 
 def main_storage_missing():
-    """True when /mnt/storage is the locked folder of a drive that is not mounted: Main has no drive right now (or its drive is away)."""
-    return locked_mountpoint("/mnt/storage")
+    """Always False now: when Main has no drive (or its drive is away) the boot drive is the storage, so nothing waits for a drive any more.
+    (A locked folder left by an older drives tool is unlocked by the 'Folders for the services exist' step.)"""
+    return False
 
 
 def waits_for_folders(step, _seen=None):

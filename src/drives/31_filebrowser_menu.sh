@@ -95,6 +95,7 @@ problem_menu() {
     say "  1) Fix the drives after an unplug, a power cut or a lost drive"
     say "  2) Replace a dead drive (restores the missing files from the backup)"
     say "  3) Copy back only the files that are missing from the backup"
+    say "  4) Copy files saved on the boot drive onto the Main pool"
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
@@ -112,6 +113,10 @@ problem_menu() {
            "Next I look for the backup copy and show what it holds." \
            "Only files that are missing in the main pool are copied back. Nothing is overwritten." &&
          { restore_flow && sync_filebrowser; } ;;
+      4) intro "Copy files saved on the boot drive onto the Main pool" \
+           "While the Main pool had no drive, the services saved their files on the boot drive." \
+           "They are copied to the pool, checked, and you are asked before the old copies are removed." &&
+         { moveboot_flow && sync_filebrowser; } ;;
       0|"") return 0 ;;
       *) say "Please type a number from the list." ;;
     esac

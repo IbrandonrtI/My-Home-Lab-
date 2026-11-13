@@ -86,6 +86,8 @@ main() {
     adopt)        run_changing adopt_flow ;;
     power)        power_all ;;
     remount)      run_changing remount_flow ;;
+    moveboot)     run_changing moveboot_flow ;;
+    guard)        guard_flow ;;
     replace)      run_changing replace_flow ;;
     fillorder|reorder|priority) fillorder_flow ;;
     balance|rebalance) run_changing balance_flow ;;
