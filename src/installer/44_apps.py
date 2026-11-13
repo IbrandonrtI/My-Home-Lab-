@@ -3,7 +3,12 @@ class NavidromeStack(StackStep):
     """Only on a machine that has a music folder (the folder Downtify saves into). A hand-built server is only looked at."""
 
     def applies(self):
-        return not Mode.existing and bool(music_folder())
+        # Navidrome plays songs, so it comes when there are songs (the first one Downtify saves is enough: the quiet schedule or the next
+        # `refresh` then installs it) or when it was set up before. A new machine's empty music folder does not bring it in.
+        if Mode.existing:
+            return False
+        folder = music_folder()
+        return bool(folder) and (music_has_songs(folder) or bool(State.data.get("navidrome_stack")) or "navidrome" in containers_all())
 
     def detail(self):
         return "music folder %s" % music_folder()

@@ -340,7 +340,7 @@ const ROLE_TEXT = { main: "Main", backup: "Backup", parity: "Parity", array: "Ar
 const STATE_TEXT = { connected: "Connected", "connected (used last)": "Connected", MISSING: "Missing", "NOT MOUNTED": "Not Mounted",
   "not connected to a pool": "Not in a Pool", "boot/system drive (never touched)": "Boot Drive" };      // (short words: they must fit in their column)
 const STATE_HINT = { "connected (used last)": "A backup copy on the boot drive. It is only used when the other backup drives are full.", "boot/system drive (never touched)": "The boot drive. The panel never changes it." };
-const JOB_TEXT = { add: "Adding the drive...", wipe: "Erasing the drive...", disconnect: "Taking the drive out of its pool...", move: "Moving the drive...", remount: "Fixing the drives. This can take a minute...", appsfix: "Fixing Immich and Nextcloud. Copying files back from the backup can take a long time...",
+const JOB_TEXT = { add: "Adding the drive...", wipe: "Erasing the drive...", disconnect: "Taking the drive out of its pool...", move: "Moving the drive...", remount: "Fixing the drives. This can take a minute...", moveboot: "Moving the files from the boot drive to the drive. This can take a while...", appsfix: "Fixing Immich and Nextcloud. Copying files back from the backup can take a long time...",
   setup: "Building the new setup. This can take a few minutes...", bootadd: "Setting aside part of the boot drive...", rename: "Saving the name...", sleep: "Telling the drive to sleep...", wake: "Waking the drive up..." };
 function humanBytes(n) {
   if (typeof n !== "number" || !(n >= 0)) return "-";
@@ -415,6 +415,12 @@ async function appsFresh() {
     ok: () => "Start on Empty Folders", danger: () => true });
   if (!r) return;
   startJob("appsfix", { mode: "fresh", typed: r.typed }, names + " started on empty folders.");
+}
+async function moveBootFiles() {      // the files saved on the boot drive while Main had no drive are copied to the Main pool and removed from the boot drive
+  const ok = await confirmBox("Move the Files to the Drive?",
+    "The files saved on the boot drive are copied to the Main pool and every file is checked. Only when all of them are on the pool are the old copies removed from the boot drive. A file that exists in both places with different content is never replaced, and its old copy stays on the boot drive. Your services stop for a moment while this runs.",
+    "Move the Files");
+  if (ok) startJob("moveboot", {}, "The files are on the Main pool now.");
 }
 function appsCard() {      // shown after Fix Drives, or whenever a drive was lost: the two apps are stopped on purpose
   const p = (DRapps && DRapps.problems) || [];
@@ -1166,7 +1172,7 @@ function drivesParts() {
     const lines = DRjob && DRjob.lines ? DRjob.lines.filter(l => !/\(typed in the panel\)|^Type /.test(l)).slice(-60) : [];
     const copying = !!DRjob && Object.values(DRjob.progress || {}).some(p => /^Copying files/.test(p.text || ""));      // (a new setup can be stopped only while the files are copied: before that it is erasing, after that it is checking and switching over)
     const stopping = !!(DRjob && DRjob.stopping), canStop = !!DRbusy && (/^(add|disconnect|move)$/.test(DRbusy) || ((DRbusy === "setup" || DRbusy === "appsfix") && copying));
-    const rp = DRbusy === "appsfix" && DRjob && DRjob.progress ? DRjob.progress.appsfix : null;      // the bar of the copy from the backup: "5.00 GB / 11.00 GB"
+    const rp = (DRbusy === "appsfix" || DRbusy === "moveboot") && DRjob && DRjob.progress ? DRjob.progress[DRbusy] : null;      // the bar of the copy from the backup: "5.00 GB / 11.00 GB"
     out.push(h("div", { class: "card working", role: "status" }, DRbusy ? (stopping ? "Stopping at the next safe moment..." : (JOB_TEXT[DRbusy] || "Working...")) : DRwait,
       canStop ? h("div", { class: "row tight" }, h("button", { class: "danger small", disabled: stopping, onclick: abortJob, title: "Stops what is not finished yet, and puts the drives that are done back" }, stopping ? "Stopping..." : (DRbusy === "appsfix" ? "Cancel" : "Abort")),
         stopping ? h("span", { class: "muted small" }, DRbusy === "appsfix" ? "The copy has been told to stop. The files copied so far are being removed again. This can take a minute or two." : DRbusy === "setup" ? "The copy has been told to stop. The drives still have to finish writing what they already received, and then the new setup is taken apart and the services start again. This can take a few minutes (longer the more was already copied). Your Main pool is not touched." : "A copy stops at once; a step that has started finishes first. Drives that are already done are put back. This can take a few minutes.") : null) : null,
@@ -1206,7 +1212,8 @@ function drivesParts() {
   if (st.boot_files_waiting && !DRbusy) {      // files saved on the boot drive lie hidden under the mounted Main pool
     out.push(h("div", { class: "card warncard", role: "status" }, h("h2", {}, "Files Are Waiting On The Boot Drive"),
       h("p", {}, "Some files were saved on the boot drive while Main had no drive. They are hidden while the Main pool is mounted."),
-      h("p", { class: "muted small" }, "Open the Terminal and run: sudo drives moveboot. It copies them onto the pool, checks them, and asks before it removes the old copies.")));
+      h("p", { class: "muted small" }, "This copies them onto the Main pool, checks every file, and only then removes the old copies from the boot drive. Photos, videos and documents are not involved: only the small files that kept your services running. Your services stop for a moment and start again."),
+      h("div", { class: "row tight" }, h("button", { class: "primary", onclick: moveBootFiles }, "Move the Files to the Drive"))));
   }
   const ac = appsCard();
   if (ac && !DRbusy) out.push(ac);

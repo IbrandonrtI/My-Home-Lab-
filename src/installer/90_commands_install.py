@@ -119,6 +119,31 @@ def is_ipv4(text):
     return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", text)) and all(int(x) <= 255 for x in text.split("."))
 
 
+def ask_tailscale_token(a):
+    """One optional question: the Tailscale access token for the Homepage Tailscale card. Enter skips it (it can be added later with `fill`)."""
+    if a.get("ts_token_asked") or Secrets.get("TAILSCALE_API_TOKEN") or Opt.yes or Opt.dry:
+        return
+    if FAKE:
+        if os.environ.get("HLS_ASK_TS") != "1":
+            return
+    elif not interactive():
+        return
+    out("")
+    say("The Tailscale card on your dashboard needs an access token. It takes a minute to make, and then the installer fills the card in by itself. "
+        "Open https://login.tailscale.com/admin/settings/keys, press Generate access token, copy it and paste it here. "
+        "Press Enter to skip: it is only for that one card, and you can add it later with:  sudo homelab-setup fill")
+    tok = ask_secret("Tailscale access token (starts with tskey-api-, Enter to skip)").strip()
+    a["ts_token_asked"] = "yes"
+    State.save()
+    if not tok:
+        return
+    if not re.fullmatch(r"tskey-[A-Za-z0-9_-]{10,}", tok):
+        warn("That does not look like a Tailscale access token (it starts with tskey-api-), so it was skipped. You can add it later with:  sudo homelab-setup fill")
+        return
+    Secrets.set("TAILSCALE_API_TOKEN", tok)
+    good("Saved. The Tailscale card is filled in after the machine has joined your Tailscale network.")
+
+
 def ask_answers():
     """Ask the first questions of an install: admin name, email, time zone, city, LAN address and the password."""
     a = State.data["answers"]
@@ -143,6 +168,7 @@ def ask_answers():
         a["adguard"] = "yes" if yesno("Install AdGuard Home?", True) else "no"
     State.save()
     Ctx.detect()
+    ask_tailscale_token(a)
     if not Runtime.password:
         password_warning()
         out("")
@@ -254,7 +280,7 @@ SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguar
 
 
 def navidrome_wanted():
-    """True when this machine is meant to run Navidrome (it has a music folder)."""
+    """True when this machine is meant to run Navidrome (it comes with the first song in the music folder)."""
     return BY_ID["stack-navidrome"].applies()
 
 

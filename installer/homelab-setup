@@ -16,6 +16,7 @@
 
 import atexit
 import base64
+import contextlib
 import getpass
 import fcntl
 import glob
@@ -73,12 +74,13 @@ STACKS = {
     "nextcloud": ("nextcloud.yaml", ["nextcloud", "nextcloud_db", "nextcloud_redis", "nextcloud_cron"]),
     "homepage": ("homepage.yaml", ["homepage"]),
     "beszel-agent": ("beszel-agent.yaml", ["beszel-agent"]),
+    "music-downloader": ("music-downloader.yaml", ["downtify", "metube"]),
     "navidrome": ("navidrome.yaml", ["navidrome"]),        # optional: only on a machine with a music folder (see NavidromeStack)
     "audiomuse": ("audiomuse.yaml", ["audiomuse-postgres", "audiomuse-flask", "audiomuse-worker"]),   # optional: `homelab-setup audiomuse` (see AudioMuseStack)
     "navilist": ("navilist.yaml", ["navilist"]),           # optional: `homelab-setup navilist` (see NaviListStack)
 }
 STACK_ORDER = ["adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
-               "immich", "nextcloud", "homepage", "beszel-agent"]
+               "immich", "nextcloud", "homepage", "beszel-agent", "music-downloader"]
 
 # local port of each service, and the HTTPS port Tailscale Serve uses for it
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,
@@ -103,6 +105,14 @@ OLD_TAILNET = OLD_FQDN.split(".", 1)[1] if "." in OLD_FQDN else ""
 
 class Abort(Exception):
     """A step that cannot continue. The message is shown to the person."""
+
+
+class NeedsPerson(Abort):
+    """A step that must wait for a person (the quiet schedule and the background job leave it for `sudo homelab-setup refresh`)."""
+
+
+class NeedsPassword(NeedsPerson):
+    """A step that needs the admin password while nobody is there to type it."""
 
 
 # ---------------------------------------------------------------- global switches
@@ -903,6 +913,7 @@ class Runtime:
     """Lives only in memory while the program runs. The typed password is never written to a file by the installer."""
     password = None
     background = False      # True in the job that finishes the install by itself: nobody is there to type
+    unattended = False      # True in the quiet scheduled run: a step that needs the password stays open, without a failure message
     hide = []          # other secret words that must never reach the log file
 
 
@@ -912,8 +923,8 @@ def need_password(why):
     (A typo here would quietly give some apps a different password than the others.)"""
     if Runtime.password:
         return Runtime.password
-    if Runtime.background:
-        raise Abort("This step needs the admin password, and the background job does not have it. Run `sudo homelab-setup finish` and type it there.")
+    if Runtime.background or Runtime.unattended:
+        raise NeedsPassword("This step needs the admin password, and the background job does not have it. Run `sudo homelab-setup finish` and type it there.")
     out("")
     say("This step needs the admin password (%s). It is used for this run only and is not saved." % why)
     for _ in range(3):
@@ -1209,6 +1220,17 @@ def music_folder():
         if os.path.isdir(P("/mnt/storage/" + name)):
             return "/mnt/storage/" + name
     return ""
+
+
+AUDIO_EXTENSIONS = (".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".alac", ".aiff")
+
+
+def music_has_songs(folder):
+    """True when the music folder holds at least one song (it stops at the first one, so a big library is not walked)."""
+    for _root, _dirs, files in os.walk(P(folder)):
+        if any(f.lower().endswith(AUDIO_EXTENSIONS) for f in files):
+            return True
+    return False
 
 
 def stack_env(name):
@@ -2478,6 +2500,7 @@ class Step:
     kind = "auto"            # auto: the installer does it.  manual: you do it.  ack: you confirm it, or it is detected
     needs = ()
     optional = False
+    tip = False              # an optional tip: shown at the end of the checklist, never counted, never "the next step"
 
     def applies(self):       # False = not part of this machine's list at all
         return True
@@ -2499,6 +2522,9 @@ class Step:
 
     def fill(self):
         return False         # interactive walk-through; True when something was done
+
+    def tip_text(self):
+        return self.help()
 
 
 STEPS = []
@@ -2592,8 +2618,9 @@ def _check_one(s, res):
 
 def counts(res):
     """(steps done, steps that apply) from a set of results."""
-    total = sum(1 for r in res.values() if r.state != "na")
-    done = sum(1 for r in res.values() if r.state in ("done", "skip"))
+    own = {k: r for k, r in res.items() if not (k in BY_ID and BY_ID[k].tip)}      # (tips are not part of "N of M")
+    total = sum(1 for r in own.values() if r.state != "na")
+    done = sum(1 for r in own.values() if r.state in ("done", "skip"))
     return done, total
 
 
@@ -2632,7 +2659,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
     nodrive = not Opt.dry and main_storage_missing()
     later = deferred_ids() if not Opt.dry and finish_running() else set()
     for g in GROUPS:
-        items = [s for s in STEPS if s.group == g and res[s.id].state != "na"]
+        items = [s for s in STEPS if s.group == g and res[s.id].state != "na" and not s.tip]
         if not items:
             continue
         gd = sum(1 for s in items if res[s.id].state in ("done", "skip"))
@@ -2676,6 +2703,12 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
     if waiting:
         out("  %sDimmed steps wait for the steps above them.%s" % (D, N))
         out("")
+    for s in STEPS:      # optional tips: never counted, never the next step
+        if s.tip and res[s.id].state in ("todo", "failed", "blocked"):
+            out("  %sOptional:%s %s" % (B, N, s.title))
+            for l in wrap(s.tip_text(), 4):
+                out(l)
+            out("")
     if done >= total:
         out("  %s%s All steps are complete.%s" % (G, S_OK, N))
     elif not show_help:
@@ -2685,7 +2718,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
 
 def pick_next(res):
     "The step to do next: the first one in dependency order that is not done."
-    return next((s for s in topo() if res[s.id].state in ("todo", "failed")), None)
+    return next((s for s in topo() if res[s.id].state in ("todo", "failed") and not s.tip), None)
 
 
 def unblock(res, dry=False):
@@ -2726,6 +2759,15 @@ def run_pass(res, selected=None, skip=None):
             s.run()
             State.note("err:" + s.id, "")
             now = "done" if Opt.dry else s.probe()
+        except NeedsPerson as e:
+            Live.end()
+            if not Runtime.unattended:
+                msg = str(e)
+                State.note("err:" + s.id, msg[:300])
+                bad("%s: %s" % (s.title, msg))
+                log("FAILED %s: %s" % (s.id, msg))
+                res[s.id] = Result("failed", msg[:300])
+            continue      # (the quiet schedule leaves it open: the person finishes it with `sudo homelab-setup refresh`)
         except Abort as e:
             Live.end()
             msg = str(e)
@@ -3190,6 +3232,7 @@ def folder_plan():
     """The folders the lab needs, as (path, owner id, group id) tuples."""
     h = Ctx.home
     u, g = Ctx.uid, Ctx.gid
+    extra = [] if Mode.existing else [("/mnt/storage/music", u, g), ("/mnt/storage/videos", u, g)]      # (for Downtify and MeTube; a machine built by hand is only read)
     return [
         ("/mnt/storage", 0, 0), ("/mnt/backup", 0, 0), ("/mnt/storage/immich", u, g),
         ("/mnt/storage/nextcloud", 33, 33),
@@ -3197,7 +3240,7 @@ def folder_plan():
         (h + "/immich", u, g), (h + "/immich/postgres", 0, 0),
         (h + "/speedtest-tracker", u, g), (h + "/homepage-config", u, g), (h + "/homepage-config/images", u, g), (boot_share_dir(), u, g),
         ("/opt/adguard-docker", 0, 0), ("/opt/adguard-docker/conf", 0, 0), ("/opt/adguard-docker/work", 0, 0),
-    ]
+    ] + extra
 
 
 @step
@@ -4118,7 +4161,12 @@ class NavidromeStack(StackStep):
     """Only on a machine that has a music folder (the folder Downtify saves into). A hand-built server is only looked at."""
 
     def applies(self):
-        return not Mode.existing and bool(music_folder())
+        # Navidrome plays songs, so it comes when there are songs (the first one Downtify saves is enough: the quiet schedule or the next
+        # `refresh` then installs it) or when it was set up before. A new machine's empty music folder does not bring it in.
+        if Mode.existing:
+            return False
+        folder = music_folder()
+        return bool(folder) and (music_has_songs(folder) or bool(State.data.get("navidrome_stack")) or "navidrome" in containers_all())
 
     def detail(self):
         return "music folder %s" % music_folder()
@@ -4793,6 +4841,142 @@ class BeszelAgentKey(Step):
             raise Abort("The Beszel hub did not give an agent token (HTTP %s)." % st)
         Secrets.set("BESZEL_KEY", key)
         Secrets.set("BESZEL_TOKEN", token)
+# ================================================================ Downtify and MeTube (the music-downloader stack)
+# On a new machine the two containers are started from a Portainer stack. On a machine where they were started by hand (docker compose in a
+# terminal), Portainer shows them as "created outside of Portainer" with limited control. Then the same containers are moved into a Portainer
+# stack: their settings are read from the machine, the old containers are removed (the folders and everything in them stay) and Portainer
+# starts them again with those same settings.
+MD_BACKUP = SECRET_DIR + "/music-downloader-before.yaml"       # the old settings, kept in case the move has to be undone
+MD_NAMES = ("downtify", "metube")
+
+
+def md_old_containers():
+    """The Downtify and MeTube containers that exist right now (hand-made: the stack is not in Portainer yet), as {name: inspect data}."""
+    found = {}
+    for n in MD_NAMES:
+        rc, txt = docker("inspect", n, timeout=30)
+        if rc != 0:
+            continue
+        try:
+            data = json.loads(txt)
+        except ValueError:
+            continue
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            found[n] = data[0]
+    return found
+
+
+def md_compose_from_files(old):
+    """The settings of the old compose project, read with `docker compose config` from the file it was started from ('' when that is not possible)."""
+    for c in old.values():
+        lab = (c.get("Config") or {}).get("Labels") or {}
+        project = lab.get("com.docker.compose.project", "")
+        files = [f for f in (lab.get("com.docker.compose.project.config_files", "")).split(",") if f and os.path.isfile(P(f))]
+        if not project or not files:
+            continue
+        args = ["compose", "-p", project]
+        if lab.get("com.docker.compose.project.working_dir"):
+            args += ["--project-directory", lab["com.docker.compose.project.working_dir"]]
+        for f in files:
+            args += ["-f", f]
+        rc, txt = docker(*args, "config", timeout=60)
+        text = txt if rc == 0 else ""
+        if "services:" in text and "build:" not in text and all(("container_name: " + n) in text for n in old):
+            return re.sub(r"(?m)^name:.*\n", "", text, count=1)      # (Portainer gives the project its name: the stack's)
+    return ""
+
+
+def md_compose_from_inspect(old):
+    """A compose file written from what the running containers were started with (image, ports, folders, settings, user)."""
+    lines = ["services:"]
+    for n, c in old.items():
+        cfg, host = c.get("Config") or {}, c.get("HostConfig") or {}
+        image = cfg.get("Image") or ""
+        if not image:
+            return ""
+        lines += ["  %s:" % n, "    image: %s" % image, "    container_name: %s" % n]
+        policy = (host.get("RestartPolicy") or {}).get("Name") or ""
+        lines.append("    restart: %s" % (policy if policy and policy != "no" else "unless-stopped"))
+        if cfg.get("User"):
+            lines.append("    user: \"%s\"" % cfg["User"])
+        ports = []
+        for cport, binds in (host.get("PortBindings") or {}).items():
+            for b in binds or []:
+                ports.append("%s:%s" % (b.get("HostPort", ""), cport.split("/")[0]) + ("/udp" if cport.endswith("/udp") else ""))
+        if ports:
+            lines.append("    ports:")
+            lines += ['      - "%s"' % p for p in ports]
+        binds = [b for b in (host.get("Binds") or []) if b]
+        if binds:
+            lines.append("    volumes:")
+            lines += ["      - %s" % b for b in binds]
+        rc, imgenv = docker("image", "inspect", "-f", "{{range .Config.Env}}{{println .}}{{end}}", image, timeout=30)
+        default = set(imgenv.splitlines()) if rc == 0 else set()
+        env = [e for e in (cfg.get("Env") or []) if "=" in e and e not in default]
+        if env:
+            lines.append("    environment:")
+            for e in env:
+                k, v = e.split("=", 1)
+                lines.append("      %s: %s" % (k, json.dumps(v)))
+    return "\n".join(lines) + "\n"
+
+
+class MusicDownloaderStack(StackStep):
+    """Downtify (songs) and MeTube (videos) as one Portainer stack called music-downloader."""
+
+    def applies(self):
+        return not Mode.existing
+
+    def detail(self):
+        return "Downtify and MeTube run in the Portainer stack"
+
+    def probe(self):
+        if not stack_up(self.name):
+            return "todo"
+        if not Portainer.alive() or not Portainer.endpoint_id():
+            return "done"      # Portainer cannot be asked right now: the running containers are left alone
+        return "done" if Portainer.stack_named(self.name) else "todo"
+
+    def run(self):
+        if not Opt.dry:
+            unlock_storage_folders()
+            for p in ("/mnt/storage/music", "/mnt/storage/videos"):
+                if not os.path.isdir(P(p)):
+                    os.makedirs(P(p), exist_ok=True)
+                    chown(P(p), Ctx.uid, Ctx.gid)
+        old = {} if Opt.dry else md_old_containers()
+        if not old:
+            return StackStep.run(self)
+        # Downtify or MeTube is running already, but not as a Portainer stack: move it, with its own settings.
+        if Runtime.unattended:
+            raise NeedsPerson("Moving the running Downtify and MeTube into Portainer restarts them, so it waits for `sudo homelab-setup refresh`.")
+        text = md_compose_from_files(old) or md_compose_from_inspect(old)
+        if not text:
+            raise Abort("Downtify and MeTube were started by hand and their settings could not be read, so nothing was changed. "
+                        "In Portainer, Stacks > Add stack, name it music-downloader and paste the compose file you used.")
+        missing = [n for n in MD_NAMES if n not in old]
+        if missing:       # only one of the two exists: the other one comes from the repository's file, with its default folders
+            ours = stack_text(self.name)
+            part = re.search(r"(?ms)^  %s:\n.*?(?=^  \w|\Z)" % missing[0], ours)
+            if part:
+                text = text.rstrip("\n") + "\n" + part.group(0).rstrip("\n") + "\n"
+        prepull(images_in(text))
+        os.makedirs(SECRET_DIR, exist_ok=True)
+        write_file(MD_BACKUP, text, 0o600)
+        log("music-downloader: moving %s into a Portainer stack" % ", ".join(old))
+        rc, txt = docker("rm", "-f", *old.keys(), timeout=120)
+        if rc != 0:
+            raise Abort("The old containers could not be removed (%s), so nothing was changed." % txt.strip()[-160:])
+        try:
+            Portainer.deploy(self.name, text, [])
+            wait_for(lambda: stack_up(self.name), "the music-downloader containers to start", self.wait)
+        except Abort as e:
+            docker("compose", "-p", self.name, "-f", MD_BACKUP, "up", "-d", timeout=300)      # put them back the way they were
+            raise Abort("Moving Downtify and MeTube into Portainer did not work (%s). They were started again the way they were." % str(e)[:200]) from None
+        good("Downtify and MeTube are now a Portainer stack (their folders and settings are unchanged)")
+
+
+register(MusicDownloaderStack("music-downloader", ("portainer-env", "folders"), "Downtify and MeTube stack (music and video downloads)"))
 # ================================================================ Homepage widgets: create the key, TEST it, then write it
 def basic(user, pw):
     """Basic-authentication header for a user name and password."""
@@ -5122,8 +5306,32 @@ def auto_nextcloud():
     return {"key": tok}
 
 
+TS_KEY_NAME = "TAILSCALE_API_" + "TOKEN"      # (the name of the saved secret)
+
+
+def auto_tailscale():
+    """The widget's values from the access token that was typed at the start of the install (the machine ID is found by itself)."""
+    tok = Secrets.get(TS_KEY_NAME)
+    Ctx.refresh_tailscale()
+    v = {"deviceid": Ctx.ts_id, "key": tok}
+    if v_tailscale(v) is False:
+        Secrets.vals.pop(TS_KEY_NAME, None)
+        Secrets.save()
+        raise Abort("Tailscale did not accept the access token typed at the start of the install (it may have been copied incompletely, or it has expired). "
+                    "Create a new one at https://login.tailscale.com/admin/settings/keys, then run `sudo homelab-setup fill`.")
+    return v
+
+
 class TailscaleWidget(WidgetStep):
-    """The Homepage Tailscale widget, which needs a key made by hand."""
+    """The Homepage Tailscale widget, which needs a key made by hand: the person pastes it when the install asks, or later with `fill`."""
+    @property
+    def kind(self):      # the installer fills this widget by itself as soon as it has the token
+        return "auto" if Secrets.get(TS_KEY_NAME) else "manual"
+
+    @kind.setter
+    def kind(self, value):
+        pass
+
     def prefill(self):
         Ctx.refresh_tailscale()
         return {"deviceid": Ctx.ts_id}
@@ -5136,7 +5344,7 @@ def _register_widgets():
         mk("w-adguard", "adguard-card", "AdGuard Home widget login", ("adguard-setup",), ["username", "password"],
            v_adguard, auto_adguard, [("username", "AdGuard username", False), ("password", "AdGuard password", True)]),
         TailscaleWidget("w-tailscale", "tailscale-card", "Tailscale widget (machine ID and API access token)",
-                        ("tailscale-login",), ["deviceid", "key"], v_tailscale, None,
+                        ("tailscale-login",), ["deviceid", "key"], v_tailscale, auto_tailscale,
                         [("key", "Tailscale API access token (starts with tskey-api-)", True)], kind="manual",
                         help_text="Create an API access token at https://login.tailscale.com/admin/settings/keys (Generate access token), then start the walk-through and paste it:\n$ sudo homelab-setup fill\nThe machine ID is filled in automatically.",
                         fill_text="Create an API access token at https://login.tailscale.com/admin/settings/keys (Generate access token), then paste it below. The machine ID is filled in automatically."),
@@ -5445,11 +5653,11 @@ class LoginHook(Step):
 
 
 # ================================================================ things only you can do
-EXPECTED_CONTAINERS = 16
+EXPECTED_CONTAINERS = 18
 
 
 def expected_containers():
-    """How many containers a finished install runs: 16, or one fewer without AdGuard Home."""
+    """How many containers a finished install runs: 18, or one fewer without AdGuard Home."""
     return EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
 WEATHER_DEFAULTS = ((40.7128, -74.0060), (40.7143, -74.0060))    # the coordinates the shipped widgets.yaml has had (New York)
 
@@ -5528,6 +5736,54 @@ def chk_speedtest():
     return st == 200
 
 
+@step
+class SpeedtestFirst(Step):
+    """The first speed test runs by itself (the Homepage card has nothing to show until one result exists)."""
+    id, group, title = "speedtest-first", "Your devices and drives", "Speedtest Tracker has run its first speed test"
+    needs = ("w-speedtest",)
+
+    def applies(self):
+        return not Mode.existing
+
+    def probe(self):
+        return "done" if chk_speedtest() else "todo"
+
+    @staticmethod
+    def php(lines):
+        """Run a few PHP lines inside the Speedtest Tracker container with its first user as $u. Returns the output."""
+        code = ("<?php\nchdir('/app/www');\nrequire '/app/www/vendor/autoload.php';\n"
+                "$app = require '/app/www/bootstrap/app.php';\n"
+                "$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();\n"
+                "$u = App\\Models\\User::first();\n"
+                "if (!$u) { echo \"HLS_ERROR no user exists yet\\n\"; exit(1); }\n" + "\n".join(lines) + "\n")
+        return run(["docker", "exec", "-u", "abc", "-i", "speedtest-tracker", "php"], input_text=code, timeout=120)[1]
+
+    def run(self):
+        # A short-lived token that may only start a test is made inside the container, used once and deleted again: the widget's own token
+        # (Read Results) stays as it is, and no password is needed.
+        if Opt.dry:
+            out("      would start the first speed test in Speedtest Tracker")
+            return
+        drop = "$u->tokens()->where('name', 'homelab-first-test')->delete();"
+        txt = self.php([drop, "echo 'HLS_RUN=' . $u->createToken('homelab-first-test', ['speedtests:run'])->plainTextToken . \"\\n\";"])
+        m = re.search(r"HLS_RUN=(\S+)", txt)
+        if not m:
+            raise Abort("Could not get permission to start the first speed test (%s). Open %s and click Speedtest." % (txt.strip()[-120:], url("speedtest")))
+        try:
+            st = http("POST", url("speedtest", "/api/v1/speedtests/run"), headers={"Authorization": "Bearer " + m.group(1), "Accept": "application/json"}, timeout=30)[0]
+        finally:
+            self.php([drop])
+        if st not in (200, 201, 202):
+            raise Abort("Speedtest Tracker did not start the first speed test (answer %s). Open %s and click Speedtest." % (st, url("speedtest")))
+        for _ in range(1 if FAKE else 30):      # a real test takes up to a minute or two
+            if chk_speedtest():
+                return
+            time.sleep(0 if FAKE else 5)
+
+    def help(self):
+        return "Open Speedtest Tracker (port 8088) and click Speedtest. The Homepage card fills in afterwards."
+
+
 def chk_reboot():
     """All containers are up and the machine has restarted since the lab was first seen running."""
     n = len([l for l in run(["docker", "ps", "-q"])[1].split("\n") if l.strip()])
@@ -5545,8 +5801,9 @@ class AckStep(Step):
     kind = "ack"
     group = "Your devices and drives"
 
-    def __init__(self, sid, title, text, optional=False, needs=(), auto=None, wants=None):
+    def __init__(self, sid, title, text, optional=False, needs=(), auto=None, wants=None, tip=False):
         self.id, self.title, self.text, self.optional, self.needs = sid, title, text, optional, tuple(needs)
+        self.tip = tip
         self.auto = auto
         self.wants = wants       # a function: False means this step is not part of this machine's list
 
@@ -5566,6 +5823,9 @@ class AckStep(Step):
 
     def detail(self):
         return "detected automatically" if self.auto else ""
+
+    def tip_text(self):
+        return self.text
 
     def help(self):
         if self.auto:
@@ -5588,15 +5848,14 @@ def _register_acks():
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
                 needs=("adguard-setup",), auto=chk_devices_dns, wants=adguard_wanted),
-        AckStep("speedtest-first", "Speedtest Tracker has run its first speed test",
-                "Open Speedtest Tracker (port 8088), log in with your email address and the admin password, and click Speedtest. The Homepage card fills in afterwards. If the login fails, the application's default login is admin@example.com / password: log in with it and change it immediately.",
-                needs=("w-speedtest",), auto=chk_speedtest),
         AckStep("weather", "Homepage weather location set",
                 "The weather city is asked during install. If it was not set (the city lookup was unavailable), edit ~/homepage-config/widgets.yaml and change latitude and longitude under openmeteo "
                 "(the default is New York).\n$ nano ~/homepage-config/widgets.yaml",
                 optional=True, needs=("homepage-files",), auto=chk_weather),
-        AckStep("reboot-test", "Rebooted once and everything came back",
-                "Reboot once and confirm that everything comes back: after about two minutes, log in again. The login screen should show all containers running, and `docker ps` should list them.\n$ sudo reboot", needs=("stack-homepage",), auto=chk_reboot),
+        AckStep("reboot-test", "Reboot once to check that everything comes back by itself",
+                "When it suits you, restart the machine once (`sudo reboot`) and log in again after about two minutes: the login screen should show all containers running. "
+                "Nothing here waits for it, and it is ticked off by itself afterwards.",
+                optional=True, needs=("stack-homepage",), auto=chk_reboot, tip=True),
     ]
     for s in items:
         register(s)
@@ -5665,7 +5924,7 @@ PANEL_SHIPPED_FILES = [("shipped-services.yaml", "services.yaml"), ("shipped-sta
 PANEL_SUDOERS = "/etc/sudoers.d/homelab-panel"
 # the only commands the panel's user may run as root without a password (the Drives tab); `drives panel` checks every word again, and the
 # ones that erase or move drives (add, wipe, disconnect, move, setup, bootadd) also ask for the typed confirmations inside the drives tool and refuse while a backup runs
-PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", "setups", "apps"]
+PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", "setups", "apps", "moveboot"]
 PANEL_SUDO_WITH_WORDS = ["setups", "rename", "sleep", "wake", "add", "wipe", "disconnect", "move", "setup", "bootadd", "appsfix"]
 PANEL_SUDO_BACKUP_EXACT = ["state", "save", "sshkey", "cloud-add"]      # `homelab-backup-tasks panel ...` (the Backups section)
 PANEL_SUDO_BACKUP_WORDS = ["versions", "browse", "run", "dry", "restore", "delete", "toggle", "sshtest", "stream"]
@@ -6361,6 +6620,31 @@ def is_ipv4(text):
     return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", text)) and all(int(x) <= 255 for x in text.split("."))
 
 
+def ask_tailscale_token(a):
+    """One optional question: the Tailscale access token for the Homepage Tailscale card. Enter skips it (it can be added later with `fill`)."""
+    if a.get("ts_token_asked") or Secrets.get("TAILSCALE_API_TOKEN") or Opt.yes or Opt.dry:
+        return
+    if FAKE:
+        if os.environ.get("HLS_ASK_TS") != "1":
+            return
+    elif not interactive():
+        return
+    out("")
+    say("The Tailscale card on your dashboard needs an access token. It takes a minute to make, and then the installer fills the card in by itself. "
+        "Open https://login.tailscale.com/admin/settings/keys, press Generate access token, copy it and paste it here. "
+        "Press Enter to skip: it is only for that one card, and you can add it later with:  sudo homelab-setup fill")
+    tok = ask_secret("Tailscale access token (starts with tskey-api-, Enter to skip)").strip()
+    a["ts_token_asked"] = "yes"
+    State.save()
+    if not tok:
+        return
+    if not re.fullmatch(r"tskey-[A-Za-z0-9_-]{10,}", tok):
+        warn("That does not look like a Tailscale access token (it starts with tskey-api-), so it was skipped. You can add it later with:  sudo homelab-setup fill")
+        return
+    Secrets.set("TAILSCALE_API_TOKEN", tok)
+    good("Saved. The Tailscale card is filled in after the machine has joined your Tailscale network.")
+
+
 def ask_answers():
     """Ask the first questions of an install: admin name, email, time zone, city, LAN address and the password."""
     a = State.data["answers"]
@@ -6385,6 +6669,7 @@ def ask_answers():
         a["adguard"] = "yes" if yesno("Install AdGuard Home?", True) else "no"
     State.save()
     Ctx.detect()
+    ask_tailscale_token(a)
     if not Runtime.password:
         password_warning()
         out("")
@@ -6496,7 +6781,7 @@ SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguar
 
 
 def navidrome_wanted():
-    """True when this machine is meant to run Navidrome (it has a music folder)."""
+    """True when this machine is meant to run Navidrome (it comes with the first song in the music folder)."""
     return BY_ID["stack-navidrome"].applies()
 
 
@@ -7189,7 +7474,7 @@ def cmd_audiomuse(rest):
     if rest:
         raise Abort("Unknown word '%s'. Use: homelab-setup audiomuse   or   audiomuse memory | pause | resume | status | remove" % word)
     if not navidrome_wanted():
-        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome (it needs a music folder). Nothing was changed.")
+        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome yet (it comes with the first song in the music folder). Nothing was changed.")
     other = "" if State.data.get("audiomuse") else port_taken_by(PORTS["audiomuse"])
     if other:
         raise Abort("Port %d is already used by the container %s, and AudioMuse-AI needs it for its web page. Nothing was changed." % (PORTS["audiomuse"], other))
@@ -7254,7 +7539,7 @@ def cmd_navilist(rest):
     if rest:
         raise Abort("Unknown word '%s'. Use: homelab-setup navilist   or   navilist subscribe | status | remove" % word)
     if not navidrome_wanted():
-        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome (it needs a music folder). Nothing was changed.")
+        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome yet (it comes with the first song in the music folder). Nothing was changed.")
     other = "" if State.data.get("navilist") else port_taken_by(PORTS["navilist"], mine=("navilist",))
     if other:
         raise Abort("Port %d is already used by the container %s, and naviList needs it for its web page. Nothing was changed." % (PORTS["navilist"], other))
@@ -7649,19 +7934,70 @@ def drop_progress_line():
         run(["crontab", "-"], input_text="\n".join(kept) + "\n")
 
 
+AUTO_EVERY = 20 * 60        # the quiet schedule looks at the checklist at most this often
+AUTO_RETRY = 3 * 3600       # a step that failed in a quiet run is tried again after this long
+
+
+def another_setup_running():
+    """True when a person (or the background job) is running the installer right now: the quiet schedule then keeps out of the way."""
+    me = os.getpid()
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            if int(os.path.basename(d)) == me:
+                continue
+            words = read_file(d + "/cmdline").split("\0")
+        except (OSError, ValueError):
+            continue
+        if any(w.endswith("homelab-setup") for w in words[:3]) and any(w in ("install", "refresh", "finish", "upgrade", "uninstall", "fill", "growdisk") for w in words[1:5]):
+            return True
+    return False
+
+
+def auto_continue(res):
+    """The quiet schedule: do the steps that became possible by themselves (for example after MagicDNS was turned on), so nobody has to run
+    `sudo homelab-setup refresh`. Steps that need the admin password stay open (the person does them with refresh), and a failed step is
+    tried again only every few hours. Returns the new results."""
+    if Mode.existing or State.readonly or not State.exists() or finish_running() or another_setup_running():
+        return res
+    tried = State.data.setdefault("auto_tried", {})
+    now = int(time.time())
+    skip = {s.id for s in STEPS if res[s.id].state == "failed" and now - int(tried.get(s.id, 0)) < AUTO_RETRY}
+    ready = [s for s in STEPS if s.kind == "auto" and res[s.id].state in ("todo", "failed") and s.id not in skip]
+    if not ready or not Finish.take_lock():
+        return res
+    Runtime.unattended = True
+    try:
+        for s in ready:
+            tried[s.id] = now
+        State.save()
+        with open(os.devnull, "w") as quiet_out, contextlib.redirect_stdout(quiet_out):      # (nobody reads it; the log file keeps the details)
+            run_pass(res, skip=skip)
+        res = evaluate()
+        for s in STEPS:
+            if res[s.id].state == "done":
+                tried.pop(s.id, None)
+        State.save()
+    finally:
+        Runtime.unattended = False
+        if Finish.lock_fd is not None:
+            os.close(Finish.lock_fd)
+            Finish.lock_fd = None
+    return res
+
+
 def cmd_progress():
     """`progress`: write the progress counts for the login screen.
 
     Run by the schedule it stays light: nothing in the first 10 minutes after a boot (apps are still
     starting, and a full check of every step would only slow the machine down), nothing while the saved
-    counts are less than 50 minutes old, and once setup is finished the schedule line removes itself.
+    counts are less than 20 minutes old, and once setup is finished the schedule line removes itself.
     """
     quiet = len(sys.argv) > 2 and sys.argv[2] == "--quiet"
     if quiet or started_by_cron():
         if uptime_seconds() < BOOT_GRACE:
             return
         try:
-            if time.time() - os.path.getmtime(PROGRESS_FILE) < 50 * 60:
+            if time.time() - os.path.getmtime(PROGRESS_FILE) < AUTO_EVERY:
                 return
         except OSError:
             pass            # no counts saved: either never written, or setup is finished; one check tells which
@@ -7672,6 +8008,9 @@ def cmd_progress():
         quiet = True
     load_all()
     res = evaluate()
+    if quiet:
+        Live.enabled = False
+        res = auto_continue(res)
     write_progress(res)
     done, total = counts(res)
     if quiet:
@@ -7703,7 +8042,7 @@ Commands:
   lastfm                   save your free Last.fm key so Navidrome can suggest similar songs; also: lastfm remove
   audiomuse                set up AudioMuse-AI (Navidrome suggests songs that sound alike); also: audiomuse memory | pause | resume | status | remove
   navilist                 set up naviList (Navidrome playlists from your ListenBrainz and Last.fm listening); also: navilist subscribe | status | remove
-  uninstall                take HomeLab off this machine; asks whether to keep or wipe the apps' data and the drives (Tailscale, Docker and the drive programs stay); add --dry-run to look first
+  uninstall                take HomeLab off this machine; asks whether to keep or wipe the apps' data and the drives (Tailscale, Docker and the drive programs stay); wiping also deletes the downloaded repository folder; add --dry-run to look first
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help
@@ -7724,8 +8063,9 @@ COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_i
 # the Tailscale addresses, the pool settings) and leaves what other things may use: Tailscale itself (still logged in), Docker, and the drive and
 # helper programs (mergerfs, SnapRAID, mdadm, ZFS, smartmontools ...). Two questions decide what happens to your things:
 #   1. the apps' own data (photos, Nextcloud files, databases, settings): keep it, or wipe it
-#   2. the drives of the pools: keep every file on them (the pools are only taken apart), or erase them (each one needs typed words)
-# Nothing is changed before a last "UNINSTALL" is typed. `--dry-run` shows everything and changes nothing.
+#   2. the drives of the pools: keep every file on them (the pools are only taken apart), or erase them
+# Nothing is changed before a last numbered question (1 = yes, 2 = no; "Are you sure?" when something is wiped). `--dry-run` shows everything and changes nothing.
+# Wiping the app data also deletes the downloaded copy of the repository (the folder the installer was started from).
 
 UN_UNITS = [("homelab-terminal", TERMINAL_UNIT), ("homelab-panel", PANEL_UNIT), ("homelab-storage-guard", GUARD_UNIT)]
 
@@ -7931,7 +8271,7 @@ def un_show_plan(f):
         say("  - these containers are not HomeLab's, so they stay (and so do their images): %s" % ", ".join(f["own"]))
     say("  - mergerfs, SnapRAID, mdadm, ZFS, smartmontools and the other helper programs")
     say("  - your music files%s" % (" in %s" % f["music"] if f["music"] else ""))
-    say("  - the downloaded copy of this repository (%s)" % Ctx.repo)
+    say("  - the downloaded copy of this repository (%s)%s" % (Ctx.repo, "; it is deleted only if you choose to WIPE the data of the apps" if un_repo_path() else ""))
     if f["array"]:
         out("")
         warn("The Main pool is a %s array. An array cannot be taken apart without erasing it, so it is LEFT AS IT IS, with all its files. "
@@ -7962,7 +8302,7 @@ def un_ask_choices(f):
         else:
             a = un_menu("What should happen to the drives of the pools?",
                         ["KEEP the files. The pools are taken apart (HomeLab's mount settings are removed) but every file stays on the drives, and each drive can be read normally. (Recommended)",
-                         "WIPE the drives. Every drive is erased after the pools are taken apart. You will be asked to type the name of each drive and ERASE before it is erased."])
+                         "WIPE the drives. Every drive is erased after the pools are taken apart. You are asked once more, \"Are you sure?\", before anything is changed."])
             wipe_drives = a == "2"
         if wipe_drives and not wipe_data and not Opt.yes and (f["data"] or f["containers"]):
             out("")
@@ -7973,18 +8313,47 @@ def un_ask_choices(f):
     return wipe_data, wipe_drives
 
 
-def un_confirm(wipe_data, wipe_drives):
-    """The last stop. Nothing has been changed before this."""
+def un_confirm(wipe_data, wipe_drives, f=None):
+    """The last stop. Nothing has been changed before this. One question with numbers (no words to type): 1 = yes, 2 = no (the default)."""
     out("")
     if wipe_data:
         warn("The data of the apps will be DELETED and cannot be brought back.")
+        if un_repo_path():
+            warn("The downloaded copy of this repository (%s) will be deleted too." % Ctx.repo)
     if wipe_drives:
-        warn("The drives of the pools will be ERASED (each one asks for its own typed words first).")
+        names = ", ".join(n for n, _, _ in (f or {}).get("drives", [])) or "every drive of the pools"
+        warn("The drives of the pools will be ERASED for good: %s." % names)
     if Opt.yes or Opt.dry:
         return True
-    if ask("Type UNINSTALL (capitals) to start, or press Enter to cancel").strip() != "UNINSTALL":
+    if wipe_data or wipe_drives:
+        a = un_menu("Are you sure? This cannot be undone.", ["Yes, wipe it", "No, cancel (Recommended)"], default="2")
+    else:
+        a = un_menu("Start the uninstall? The apps are removed; your data and drives are kept.", ["Yes, start", "No, cancel"], default="2")
+    return a == "1"
+
+
+def un_repo_path():
+    """The folder of the downloaded repository, when it is safe to delete it (it looks like this project, and is not the home folder or the root)."""
+    p = os.path.realpath(Ctx.repo or "")
+    if not p or p in ("/", os.path.realpath(P(Ctx.home or "/root"))) or not os.path.isdir(p):
+        return None
+    if FAKE and not p.startswith(ROOT + "/"):
+        return None          # a test run never deletes a real folder
+    if not (os.path.exists(os.path.join(p, "installer", "homelab-setup")) and os.path.isdir(os.path.join(p, "src"))):
+        return None
+    return p
+
+
+def un_remove_repo():
+    """Delete the downloaded copy of the repository (only when the app data is wiped). True when it is gone."""
+    p = un_repo_path()
+    if not p:
         return False
-    if wipe_data and ask("The data of the apps will be deleted for good. Type DELETE (capitals) to confirm, or press Enter to cancel").strip() != "DELETE":
+    try:
+        os.chdir("/")
+        shutil.rmtree(p)
+    except OSError as e:
+        warn("The folder %s could not be deleted (%s). Delete it yourself." % (p, e))
         return False
     return True
 
@@ -8117,13 +8486,7 @@ def un_release_drives(f, wipe_drives):
             ok = False
             continue
         out("")
-        warn("ERASE %s (%s, %s). Everything on this drive will be deleted for good." % (name, dev, pretty_size(int(size)) if size else "?"))
-        if ask("Type the drive name (%s) to erase it, or press Enter to keep it" % dev).strip() != dev:
-            say("%s was kept." % name)
-            continue
-        if ask("Type ERASE (capitals) to confirm").strip() != "ERASE":
-            say("%s was kept." % name)
-            continue
+        warn("Erasing %s (%s, %s) ..." % (name, dev, pretty_size(int(size)) if size else "?"))      # already confirmed with 'Are you sure?'
         rc, txt = un_run_drives("panel", "wipe", info["id"], "empty", dev, "ERASE", quiet=True)
         if rc == 0:
             good("%s is erased" % name)
@@ -8247,7 +8610,7 @@ def cmd_uninstall():
     wipe_data, wipe_drives = un_ask_choices(f)
     out("")
     say("Your choices:  app data = %s;  drives = %s." % ("WIPE" if wipe_data else "keep", "ERASE" if wipe_drives else "keep every file"))
-    if not un_confirm(wipe_data, wipe_drives):
+    if not un_confirm(wipe_data, wipe_drives, f):
         say("Cancelled. Nothing was changed.")
         return 0
     if Opt.dry:
@@ -8291,7 +8654,16 @@ def cmd_uninstall():
     un_rm(LOG_FILE[len(ROOT):])
     rule("HomeLab is uninstalled")
     good("Everything HomeLab installed is removed.")
-    say("Still here: Tailscale, Docker and the drive programs. The downloaded copy of the repository is in %s; delete that folder yourself if you do not need it." % Ctx.repo)
+    repo_gone = False
+    if wipe_data:
+        repo = un_repo_path()
+        repo_gone = un_remove_repo()
+        if repo_gone:
+            good("The downloaded copy of the repository (%s) is deleted. If your terminal was inside it, type:  cd ~" % repo)
+    if repo_gone:
+        say("Still here: Tailscale, Docker and the drive programs.")
+    else:
+        say("Still here: Tailscale, Docker and the drive programs. The downloaded copy of the repository is in %s; delete that folder yourself if you do not need it." % Ctx.repo)
     if not wipe_data:
         say("The data of the apps was kept (folders %s and the Docker volumes). The saved passwords are in %s; keep that folder if you want to install again and open the old data." %
             (", ".join(d for d, _ in f["data"][:4]) + (" ..." if len(f["data"]) > 4 else ""), SECRET_DIR))

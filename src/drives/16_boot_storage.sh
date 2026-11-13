@@ -106,7 +106,8 @@ moveboot_core() {   # moveboot_core: the containers are stopped. Copies what lie
     return 1
   fi
   say "Copying $(human "${bytes:-0}") from the boot drive to the Main pool ..."
-  if ! rsync -aH --numeric-ids --ignore-existing --exclude=/lost+found "$src/" "$MAIN_POOL/"; then
+  progress 0 "Copying files"
+  if ! rsync_bytes_run "${bytes:-0}" "Copying files" -aH --numeric-ids --ignore-existing --exclude=/lost+found "$src/" "$MAIN_POOL/"; then
     warn "Copying failed. Nothing was removed from the boot drive."
     return 1
   fi
@@ -117,7 +118,8 @@ moveboot_core() {   # moveboot_core: the containers are stopped. Copies what lie
     return 1
   fi
   say "Every file is on the pool now."
-  if [ "$PANEL_MODE" != 1 ] && yn "Remove the old copies from the boot drive now (they only use up space there)?"; then
+  # (the terminal asks; the panel's "Move the files" button was the person's yes, and every file was just checked)
+  if [ "${PANEL_MOVEBOOT:-0}" = 1 ] || { [ "$PANEL_MODE" != 1 ] && yn "Remove the old copies from the boot drive now (they only use up space there)?"; }; then
     find "$src" -mindepth 1 ! -type d ! -name .immich -delete 2>/dev/null
     find "$src" -mindepth 1 -depth -type d -empty -delete 2>/dev/null
     rm -f "$(boot_kept_flag)" "$(main_boot_flag)"
@@ -163,6 +165,15 @@ moveboot_flow() {
   moveboot_core || rc=$?
   boot_view_close
   start_containers
+  return $rc
+}
+
+panel_moveboot_flow() {   # the Drives tab's "Move the files to the drive" button: copy, check every file, remove the old copies, start the services again
+  PANEL_MOVEBOOT=1
+  progress 0 "Looking at the files"
+  moveboot_flow
+  local rc=$?
+  progress 100 "Done"
   return $rc
 }
 

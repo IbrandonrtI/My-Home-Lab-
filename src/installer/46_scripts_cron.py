@@ -284,11 +284,11 @@ class LoginHook(Step):
 
 
 # ================================================================ things only you can do
-EXPECTED_CONTAINERS = 16
+EXPECTED_CONTAINERS = 18
 
 
 def expected_containers():
-    """How many containers a finished install runs: 16, or one fewer without AdGuard Home."""
+    """How many containers a finished install runs: 18, or one fewer without AdGuard Home."""
     return EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
 WEATHER_DEFAULTS = ((40.7128, -74.0060), (40.7143, -74.0060))    # the coordinates the shipped widgets.yaml has had (New York)
 
@@ -367,6 +367,54 @@ def chk_speedtest():
     return st == 200
 
 
+@step
+class SpeedtestFirst(Step):
+    """The first speed test runs by itself (the Homepage card has nothing to show until one result exists)."""
+    id, group, title = "speedtest-first", "Your devices and drives", "Speedtest Tracker has run its first speed test"
+    needs = ("w-speedtest",)
+
+    def applies(self):
+        return not Mode.existing
+
+    def probe(self):
+        return "done" if chk_speedtest() else "todo"
+
+    @staticmethod
+    def php(lines):
+        """Run a few PHP lines inside the Speedtest Tracker container with its first user as $u. Returns the output."""
+        code = ("<?php\nchdir('/app/www');\nrequire '/app/www/vendor/autoload.php';\n"
+                "$app = require '/app/www/bootstrap/app.php';\n"
+                "$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();\n"
+                "$u = App\\Models\\User::first();\n"
+                "if (!$u) { echo \"HLS_ERROR no user exists yet\\n\"; exit(1); }\n" + "\n".join(lines) + "\n")
+        return run(["docker", "exec", "-u", "abc", "-i", "speedtest-tracker", "php"], input_text=code, timeout=120)[1]
+
+    def run(self):
+        # A short-lived token that may only start a test is made inside the container, used once and deleted again: the widget's own token
+        # (Read Results) stays as it is, and no password is needed.
+        if Opt.dry:
+            out("      would start the first speed test in Speedtest Tracker")
+            return
+        drop = "$u->tokens()->where('name', 'homelab-first-test')->delete();"
+        txt = self.php([drop, "echo 'HLS_RUN=' . $u->createToken('homelab-first-test', ['speedtests:run'])->plainTextToken . \"\\n\";"])
+        m = re.search(r"HLS_RUN=(\S+)", txt)
+        if not m:
+            raise Abort("Could not get permission to start the first speed test (%s). Open %s and click Speedtest." % (txt.strip()[-120:], url("speedtest")))
+        try:
+            st = http("POST", url("speedtest", "/api/v1/speedtests/run"), headers={"Authorization": "Bearer " + m.group(1), "Accept": "application/json"}, timeout=30)[0]
+        finally:
+            self.php([drop])
+        if st not in (200, 201, 202):
+            raise Abort("Speedtest Tracker did not start the first speed test (answer %s). Open %s and click Speedtest." % (st, url("speedtest")))
+        for _ in range(1 if FAKE else 30):      # a real test takes up to a minute or two
+            if chk_speedtest():
+                return
+            time.sleep(0 if FAKE else 5)
+
+    def help(self):
+        return "Open Speedtest Tracker (port 8088) and click Speedtest. The Homepage card fills in afterwards."
+
+
 def chk_reboot():
     """All containers are up and the machine has restarted since the lab was first seen running."""
     n = len([l for l in run(["docker", "ps", "-q"])[1].split("\n") if l.strip()])
@@ -384,8 +432,9 @@ class AckStep(Step):
     kind = "ack"
     group = "Your devices and drives"
 
-    def __init__(self, sid, title, text, optional=False, needs=(), auto=None, wants=None):
+    def __init__(self, sid, title, text, optional=False, needs=(), auto=None, wants=None, tip=False):
         self.id, self.title, self.text, self.optional, self.needs = sid, title, text, optional, tuple(needs)
+        self.tip = tip
         self.auto = auto
         self.wants = wants       # a function: False means this step is not part of this machine's list
 
@@ -405,6 +454,9 @@ class AckStep(Step):
 
     def detail(self):
         return "detected automatically" if self.auto else ""
+
+    def tip_text(self):
+        return self.text
 
     def help(self):
         if self.auto:
@@ -427,15 +479,14 @@ def _register_acks():
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
                 needs=("adguard-setup",), auto=chk_devices_dns, wants=adguard_wanted),
-        AckStep("speedtest-first", "Speedtest Tracker has run its first speed test",
-                "Open Speedtest Tracker (port 8088), log in with your email address and the admin password, and click Speedtest. The Homepage card fills in afterwards. If the login fails, the application's default login is admin@example.com / password: log in with it and change it immediately.",
-                needs=("w-speedtest",), auto=chk_speedtest),
         AckStep("weather", "Homepage weather location set",
                 "The weather city is asked during install. If it was not set (the city lookup was unavailable), edit ~/homepage-config/widgets.yaml and change latitude and longitude under openmeteo "
                 "(the default is New York).\n$ nano ~/homepage-config/widgets.yaml",
                 optional=True, needs=("homepage-files",), auto=chk_weather),
-        AckStep("reboot-test", "Rebooted once and everything came back",
-                "Reboot once and confirm that everything comes back: after about two minutes, log in again. The login screen should show all containers running, and `docker ps` should list them.\n$ sudo reboot", needs=("stack-homepage",), auto=chk_reboot),
+        AckStep("reboot-test", "Reboot once to check that everything comes back by itself",
+                "When it suits you, restart the machine once (`sudo reboot`) and log in again after about two minutes: the login screen should show all containers running. "
+                "Nothing here waits for it, and it is ticked off by itself afterwards.",
+                optional=True, needs=("stack-homepage",), auto=chk_reboot, tip=True),
     ]
     for s in items:
         register(s)

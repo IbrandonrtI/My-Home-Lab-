@@ -327,8 +327,32 @@ def auto_nextcloud():
     return {"key": tok}
 
 
+TS_KEY_NAME = "TAILSCALE_API_" + "TOKEN"      # (the name of the saved secret)
+
+
+def auto_tailscale():
+    """The widget's values from the access token that was typed at the start of the install (the machine ID is found by itself)."""
+    tok = Secrets.get(TS_KEY_NAME)
+    Ctx.refresh_tailscale()
+    v = {"deviceid": Ctx.ts_id, "key": tok}
+    if v_tailscale(v) is False:
+        Secrets.vals.pop(TS_KEY_NAME, None)
+        Secrets.save()
+        raise Abort("Tailscale did not accept the access token typed at the start of the install (it may have been copied incompletely, or it has expired). "
+                    "Create a new one at https://login.tailscale.com/admin/settings/keys, then run `sudo homelab-setup fill`.")
+    return v
+
+
 class TailscaleWidget(WidgetStep):
-    """The Homepage Tailscale widget, which needs a key made by hand."""
+    """The Homepage Tailscale widget, which needs a key made by hand: the person pastes it when the install asks, or later with `fill`."""
+    @property
+    def kind(self):      # the installer fills this widget by itself as soon as it has the token
+        return "auto" if Secrets.get(TS_KEY_NAME) else "manual"
+
+    @kind.setter
+    def kind(self, value):
+        pass
+
     def prefill(self):
         Ctx.refresh_tailscale()
         return {"deviceid": Ctx.ts_id}
@@ -341,7 +365,7 @@ def _register_widgets():
         mk("w-adguard", "adguard-card", "AdGuard Home widget login", ("adguard-setup",), ["username", "password"],
            v_adguard, auto_adguard, [("username", "AdGuard username", False), ("password", "AdGuard password", True)]),
         TailscaleWidget("w-tailscale", "tailscale-card", "Tailscale widget (machine ID and API access token)",
-                        ("tailscale-login",), ["deviceid", "key"], v_tailscale, None,
+                        ("tailscale-login",), ["deviceid", "key"], v_tailscale, auto_tailscale,
                         [("key", "Tailscale API access token (starts with tskey-api-)", True)], kind="manual",
                         help_text="Create an API access token at https://login.tailscale.com/admin/settings/keys (Generate access token), then start the walk-through and paste it:\n$ sudo homelab-setup fill\nThe machine ID is filled in automatically.",
                         fill_text="Create an API access token at https://login.tailscale.com/admin/settings/keys (Generate access token), then paste it below. The machine ID is filled in automatically."),

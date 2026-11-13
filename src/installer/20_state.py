@@ -84,6 +84,7 @@ class Runtime:
     """Lives only in memory while the program runs. The typed password is never written to a file by the installer."""
     password = None
     background = False      # True in the job that finishes the install by itself: nobody is there to type
+    unattended = False      # True in the quiet scheduled run: a step that needs the password stays open, without a failure message
     hide = []          # other secret words that must never reach the log file
 
 
@@ -93,8 +94,8 @@ def need_password(why):
     (A typo here would quietly give some apps a different password than the others.)"""
     if Runtime.password:
         return Runtime.password
-    if Runtime.background:
-        raise Abort("This step needs the admin password, and the background job does not have it. Run `sudo homelab-setup finish` and type it there.")
+    if Runtime.background or Runtime.unattended:
+        raise NeedsPassword("This step needs the admin password, and the background job does not have it. Run `sudo homelab-setup finish` and type it there.")
     out("")
     say("This step needs the admin password (%s). It is used for this run only and is not saved." % why)
     for _ in range(3):

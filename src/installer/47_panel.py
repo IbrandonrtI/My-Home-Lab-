@@ -11,7 +11,7 @@ PANEL_SHIPPED_FILES = [("shipped-services.yaml", "services.yaml"), ("shipped-sta
 PANEL_SUDOERS = "/etc/sudoers.d/homelab-panel"
 # the only commands the panel's user may run as root without a password (the Drives tab); `drives panel` checks every word again, and the
 # ones that erase or move drives (add, wipe, disconnect, move, setup, bootadd) also ask for the typed confirmations inside the drives tool and refuse while a backup runs
-PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", "setups", "apps"]
+PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", "setups", "apps", "moveboot"]
 PANEL_SUDO_WITH_WORDS = ["setups", "rename", "sleep", "wake", "add", "wipe", "disconnect", "move", "setup", "bootadd", "appsfix"]
 PANEL_SUDO_BACKUP_EXACT = ["state", "save", "sshkey", "cloud-add"]      # `homelab-backup-tasks panel ...` (the Backups section)
 PANEL_SUDO_BACKUP_WORDS = ["versions", "browse", "run", "dry", "restore", "delete", "toggle", "sshtest", "stream"]

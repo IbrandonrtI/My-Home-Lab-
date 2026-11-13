@@ -268,6 +268,17 @@ def music_folder():
     return ""
 
 
+AUDIO_EXTENSIONS = (".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".alac", ".aiff")
+
+
+def music_has_songs(folder):
+    """True when the music folder holds at least one song (it stops at the first one, so a big library is not walked)."""
+    for _root, _dirs, files in os.walk(P(folder)):
+        if any(f.lower().endswith(AUDIO_EXTENSIONS) for f in files):
+            return True
+    return False
+
+
 def stack_env(name):
     """The variables Portainer needs for the stack, as (name, value) pairs."""
     if name == "immich":

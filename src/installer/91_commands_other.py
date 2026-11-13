@@ -261,7 +261,7 @@ def cmd_audiomuse(rest):
     if rest:
         raise Abort("Unknown word '%s'. Use: homelab-setup audiomuse   or   audiomuse memory | pause | resume | status | remove" % word)
     if not navidrome_wanted():
-        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome (it needs a music folder). Nothing was changed.")
+        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome yet (it comes with the first song in the music folder). Nothing was changed.")
     other = "" if State.data.get("audiomuse") else port_taken_by(PORTS["audiomuse"])
     if other:
         raise Abort("Port %d is already used by the container %s, and AudioMuse-AI needs it for its web page. Nothing was changed." % (PORTS["audiomuse"], other))
@@ -326,7 +326,7 @@ def cmd_navilist(rest):
     if rest:
         raise Abort("Unknown word '%s'. Use: homelab-setup navilist   or   navilist subscribe | status | remove" % word)
     if not navidrome_wanted():
-        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome (it needs a music folder). Nothing was changed.")
+        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome yet (it comes with the first song in the music folder). Nothing was changed.")
     other = "" if State.data.get("navilist") else port_taken_by(PORTS["navilist"], mine=("navilist",))
     if other:
         raise Abort("Port %d is already used by the container %s, and naviList needs it for its web page. Nothing was changed." % (PORTS["navilist"], other))
@@ -721,19 +721,70 @@ def drop_progress_line():
         run(["crontab", "-"], input_text="\n".join(kept) + "\n")
 
 
+AUTO_EVERY = 20 * 60        # the quiet schedule looks at the checklist at most this often
+AUTO_RETRY = 3 * 3600       # a step that failed in a quiet run is tried again after this long
+
+
+def another_setup_running():
+    """True when a person (or the background job) is running the installer right now: the quiet schedule then keeps out of the way."""
+    me = os.getpid()
+    for d in glob.glob("/proc/[0-9]*"):
+        try:
+            if int(os.path.basename(d)) == me:
+                continue
+            words = read_file(d + "/cmdline").split("\0")
+        except (OSError, ValueError):
+            continue
+        if any(w.endswith("homelab-setup") for w in words[:3]) and any(w in ("install", "refresh", "finish", "upgrade", "uninstall", "fill", "growdisk") for w in words[1:5]):
+            return True
+    return False
+
+
+def auto_continue(res):
+    """The quiet schedule: do the steps that became possible by themselves (for example after MagicDNS was turned on), so nobody has to run
+    `sudo homelab-setup refresh`. Steps that need the admin password stay open (the person does them with refresh), and a failed step is
+    tried again only every few hours. Returns the new results."""
+    if Mode.existing or State.readonly or not State.exists() or finish_running() or another_setup_running():
+        return res
+    tried = State.data.setdefault("auto_tried", {})
+    now = int(time.time())
+    skip = {s.id for s in STEPS if res[s.id].state == "failed" and now - int(tried.get(s.id, 0)) < AUTO_RETRY}
+    ready = [s for s in STEPS if s.kind == "auto" and res[s.id].state in ("todo", "failed") and s.id not in skip]
+    if not ready or not Finish.take_lock():
+        return res
+    Runtime.unattended = True
+    try:
+        for s in ready:
+            tried[s.id] = now
+        State.save()
+        with open(os.devnull, "w") as quiet_out, contextlib.redirect_stdout(quiet_out):      # (nobody reads it; the log file keeps the details)
+            run_pass(res, skip=skip)
+        res = evaluate()
+        for s in STEPS:
+            if res[s.id].state == "done":
+                tried.pop(s.id, None)
+        State.save()
+    finally:
+        Runtime.unattended = False
+        if Finish.lock_fd is not None:
+            os.close(Finish.lock_fd)
+            Finish.lock_fd = None
+    return res
+
+
 def cmd_progress():
     """`progress`: write the progress counts for the login screen.
 
     Run by the schedule it stays light: nothing in the first 10 minutes after a boot (apps are still
     starting, and a full check of every step would only slow the machine down), nothing while the saved
-    counts are less than 50 minutes old, and once setup is finished the schedule line removes itself.
+    counts are less than 20 minutes old, and once setup is finished the schedule line removes itself.
     """
     quiet = len(sys.argv) > 2 and sys.argv[2] == "--quiet"
     if quiet or started_by_cron():
         if uptime_seconds() < BOOT_GRACE:
             return
         try:
-            if time.time() - os.path.getmtime(PROGRESS_FILE) < 50 * 60:
+            if time.time() - os.path.getmtime(PROGRESS_FILE) < AUTO_EVERY:
                 return
         except OSError:
             pass            # no counts saved: either never written, or setup is finished; one check tells which
@@ -744,6 +795,9 @@ def cmd_progress():
         quiet = True
     load_all()
     res = evaluate()
+    if quiet:
+        Live.enabled = False
+        res = auto_continue(res)
     write_progress(res)
     done, total = counts(res)
     if quiet:
@@ -775,7 +829,7 @@ Commands:
   lastfm                   save your free Last.fm key so Navidrome can suggest similar songs; also: lastfm remove
   audiomuse                set up AudioMuse-AI (Navidrome suggests songs that sound alike); also: audiomuse memory | pause | resume | status | remove
   navilist                 set up naviList (Navidrome playlists from your ListenBrainz and Last.fm listening); also: navilist subscribe | status | remove
-  uninstall                take HomeLab off this machine; asks whether to keep or wipe the apps' data and the drives (Tailscale, Docker and the drive programs stay); add --dry-run to look first
+  uninstall                take HomeLab off this machine; asks whether to keep or wipe the apps' data and the drives (Tailscale, Docker and the drive programs stay); wiping also deletes the downloaded repository folder; add --dry-run to look first
   done STEP | skip STEP    mark a manual step as done, or as not wanted
   secrets                  show the generated passwords and keys
   progress | version | help

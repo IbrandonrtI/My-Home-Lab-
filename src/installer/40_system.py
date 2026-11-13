@@ -427,6 +427,7 @@ def folder_plan():
     """The folders the lab needs, as (path, owner id, group id) tuples."""
     h = Ctx.home
     u, g = Ctx.uid, Ctx.gid
+    extra = [] if Mode.existing else [("/mnt/storage/music", u, g), ("/mnt/storage/videos", u, g)]      # (for Downtify and MeTube; a machine built by hand is only read)
     return [
         ("/mnt/storage", 0, 0), ("/mnt/backup", 0, 0), ("/mnt/storage/immich", u, g),
         ("/mnt/storage/nextcloud", 33, 33),
@@ -434,7 +435,7 @@ def folder_plan():
         (h + "/immich", u, g), (h + "/immich/postgres", 0, 0),
         (h + "/speedtest-tracker", u, g), (h + "/homepage-config", u, g), (h + "/homepage-config/images", u, g), (boot_share_dir(), u, g),
         ("/opt/adguard-docker", 0, 0), ("/opt/adguard-docker/conf", 0, 0), ("/opt/adguard-docker/work", 0, 0),
-    ]
+    ] + extra
 
 
 @step

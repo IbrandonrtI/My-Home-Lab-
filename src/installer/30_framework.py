@@ -14,6 +14,7 @@ class Step:
     kind = "auto"            # auto: the installer does it.  manual: you do it.  ack: you confirm it, or it is detected
     needs = ()
     optional = False
+    tip = False              # an optional tip: shown at the end of the checklist, never counted, never "the next step"
 
     def applies(self):       # False = not part of this machine's list at all
         return True
@@ -35,6 +36,9 @@ class Step:
 
     def fill(self):
         return False         # interactive walk-through; True when something was done
+
+    def tip_text(self):
+        return self.help()
 
 
 STEPS = []
@@ -128,8 +132,9 @@ def _check_one(s, res):
 
 def counts(res):
     """(steps done, steps that apply) from a set of results."""
-    total = sum(1 for r in res.values() if r.state != "na")
-    done = sum(1 for r in res.values() if r.state in ("done", "skip"))
+    own = {k: r for k, r in res.items() if not (k in BY_ID and BY_ID[k].tip)}      # (tips are not part of "N of M")
+    total = sum(1 for r in own.values() if r.state != "na")
+    done = sum(1 for r in own.values() if r.state in ("done", "skip"))
     return done, total
 
 
@@ -168,7 +173,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
     nodrive = not Opt.dry and main_storage_missing()
     later = deferred_ids() if not Opt.dry and finish_running() else set()
     for g in GROUPS:
-        items = [s for s in STEPS if s.group == g and res[s.id].state != "na"]
+        items = [s for s in STEPS if s.group == g and res[s.id].state != "na" and not s.tip]
         if not items:
             continue
         gd = sum(1 for s in items if res[s.id].state in ("done", "skip"))
@@ -212,6 +217,12 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
     if waiting:
         out("  %sDimmed steps wait for the steps above them.%s" % (D, N))
         out("")
+    for s in STEPS:      # optional tips: never counted, never the next step
+        if s.tip and res[s.id].state in ("todo", "failed", "blocked"):
+            out("  %sOptional:%s %s" % (B, N, s.title))
+            for l in wrap(s.tip_text(), 4):
+                out(l)
+            out("")
     if done >= total:
         out("  %s%s All steps are complete.%s" % (G, S_OK, N))
     elif not show_help:
@@ -221,7 +232,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
 
 def pick_next(res):
     "The step to do next: the first one in dependency order that is not done."
-    return next((s for s in topo() if res[s.id].state in ("todo", "failed")), None)
+    return next((s for s in topo() if res[s.id].state in ("todo", "failed") and not s.tip), None)
 
 
 def unblock(res, dry=False):
@@ -262,6 +273,15 @@ def run_pass(res, selected=None, skip=None):
             s.run()
             State.note("err:" + s.id, "")
             now = "done" if Opt.dry else s.probe()
+        except NeedsPerson as e:
+            Live.end()
+            if not Runtime.unattended:
+                msg = str(e)
+                State.note("err:" + s.id, msg[:300])
+                bad("%s: %s" % (s.title, msg))
+                log("FAILED %s: %s" % (s.id, msg))
+                res[s.id] = Result("failed", msg[:300])
+            continue      # (the quiet schedule leaves it open: the person finishes it with `sudo homelab-setup refresh`)
         except Abort as e:
             Live.end()
             msg = str(e)

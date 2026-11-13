@@ -3,8 +3,9 @@
 # the Tailscale addresses, the pool settings) and leaves what other things may use: Tailscale itself (still logged in), Docker, and the drive and
 # helper programs (mergerfs, SnapRAID, mdadm, ZFS, smartmontools ...). Two questions decide what happens to your things:
 #   1. the apps' own data (photos, Nextcloud files, databases, settings): keep it, or wipe it
-#   2. the drives of the pools: keep every file on them (the pools are only taken apart), or erase them (each one needs typed words)
-# Nothing is changed before a last "UNINSTALL" is typed. `--dry-run` shows everything and changes nothing.
+#   2. the drives of the pools: keep every file on them (the pools are only taken apart), or erase them
+# Nothing is changed before a last numbered question (1 = yes, 2 = no; "Are you sure?" when something is wiped). `--dry-run` shows everything and changes nothing.
+# Wiping the app data also deletes the downloaded copy of the repository (the folder the installer was started from).
 
 UN_UNITS = [("homelab-terminal", TERMINAL_UNIT), ("homelab-panel", PANEL_UNIT), ("homelab-storage-guard", GUARD_UNIT)]
 
@@ -210,7 +211,7 @@ def un_show_plan(f):
         say("  - these containers are not HomeLab's, so they stay (and so do their images): %s" % ", ".join(f["own"]))
     say("  - mergerfs, SnapRAID, mdadm, ZFS, smartmontools and the other helper programs")
     say("  - your music files%s" % (" in %s" % f["music"] if f["music"] else ""))
-    say("  - the downloaded copy of this repository (%s)" % Ctx.repo)
+    say("  - the downloaded copy of this repository (%s)%s" % (Ctx.repo, "; it is deleted only if you choose to WIPE the data of the apps" if un_repo_path() else ""))
     if f["array"]:
         out("")
         warn("The Main pool is a %s array. An array cannot be taken apart without erasing it, so it is LEFT AS IT IS, with all its files. "
@@ -241,7 +242,7 @@ def un_ask_choices(f):
         else:
             a = un_menu("What should happen to the drives of the pools?",
                         ["KEEP the files. The pools are taken apart (HomeLab's mount settings are removed) but every file stays on the drives, and each drive can be read normally. (Recommended)",
-                         "WIPE the drives. Every drive is erased after the pools are taken apart. You will be asked to type the name of each drive and ERASE before it is erased."])
+                         "WIPE the drives. Every drive is erased after the pools are taken apart. You are asked once more, \"Are you sure?\", before anything is changed."])
             wipe_drives = a == "2"
         if wipe_drives and not wipe_data and not Opt.yes and (f["data"] or f["containers"]):
             out("")
@@ -252,18 +253,47 @@ def un_ask_choices(f):
     return wipe_data, wipe_drives
 
 
-def un_confirm(wipe_data, wipe_drives):
-    """The last stop. Nothing has been changed before this."""
+def un_confirm(wipe_data, wipe_drives, f=None):
+    """The last stop. Nothing has been changed before this. One question with numbers (no words to type): 1 = yes, 2 = no (the default)."""
     out("")
     if wipe_data:
         warn("The data of the apps will be DELETED and cannot be brought back.")
+        if un_repo_path():
+            warn("The downloaded copy of this repository (%s) will be deleted too." % Ctx.repo)
     if wipe_drives:
-        warn("The drives of the pools will be ERASED (each one asks for its own typed words first).")
+        names = ", ".join(n for n, _, _ in (f or {}).get("drives", [])) or "every drive of the pools"
+        warn("The drives of the pools will be ERASED for good: %s." % names)
     if Opt.yes or Opt.dry:
         return True
-    if ask("Type UNINSTALL (capitals) to start, or press Enter to cancel").strip() != "UNINSTALL":
+    if wipe_data or wipe_drives:
+        a = un_menu("Are you sure? This cannot be undone.", ["Yes, wipe it", "No, cancel (Recommended)"], default="2")
+    else:
+        a = un_menu("Start the uninstall? The apps are removed; your data and drives are kept.", ["Yes, start", "No, cancel"], default="2")
+    return a == "1"
+
+
+def un_repo_path():
+    """The folder of the downloaded repository, when it is safe to delete it (it looks like this project, and is not the home folder or the root)."""
+    p = os.path.realpath(Ctx.repo or "")
+    if not p or p in ("/", os.path.realpath(P(Ctx.home or "/root"))) or not os.path.isdir(p):
+        return None
+    if FAKE and not p.startswith(ROOT + "/"):
+        return None          # a test run never deletes a real folder
+    if not (os.path.exists(os.path.join(p, "installer", "homelab-setup")) and os.path.isdir(os.path.join(p, "src"))):
+        return None
+    return p
+
+
+def un_remove_repo():
+    """Delete the downloaded copy of the repository (only when the app data is wiped). True when it is gone."""
+    p = un_repo_path()
+    if not p:
         return False
-    if wipe_data and ask("The data of the apps will be deleted for good. Type DELETE (capitals) to confirm, or press Enter to cancel").strip() != "DELETE":
+    try:
+        os.chdir("/")
+        shutil.rmtree(p)
+    except OSError as e:
+        warn("The folder %s could not be deleted (%s). Delete it yourself." % (p, e))
         return False
     return True
 
@@ -396,13 +426,7 @@ def un_release_drives(f, wipe_drives):
             ok = False
             continue
         out("")
-        warn("ERASE %s (%s, %s). Everything on this drive will be deleted for good." % (name, dev, pretty_size(int(size)) if size else "?"))
-        if ask("Type the drive name (%s) to erase it, or press Enter to keep it" % dev).strip() != dev:
-            say("%s was kept." % name)
-            continue
-        if ask("Type ERASE (capitals) to confirm").strip() != "ERASE":
-            say("%s was kept." % name)
-            continue
+        warn("Erasing %s (%s, %s) ..." % (name, dev, pretty_size(int(size)) if size else "?"))      # already confirmed with 'Are you sure?'
         rc, txt = un_run_drives("panel", "wipe", info["id"], "empty", dev, "ERASE", quiet=True)
         if rc == 0:
             good("%s is erased" % name)
@@ -526,7 +550,7 @@ def cmd_uninstall():
     wipe_data, wipe_drives = un_ask_choices(f)
     out("")
     say("Your choices:  app data = %s;  drives = %s." % ("WIPE" if wipe_data else "keep", "ERASE" if wipe_drives else "keep every file"))
-    if not un_confirm(wipe_data, wipe_drives):
+    if not un_confirm(wipe_data, wipe_drives, f):
         say("Cancelled. Nothing was changed.")
         return 0
     if Opt.dry:
@@ -570,7 +594,16 @@ def cmd_uninstall():
     un_rm(LOG_FILE[len(ROOT):])
     rule("HomeLab is uninstalled")
     good("Everything HomeLab installed is removed.")
-    say("Still here: Tailscale, Docker and the drive programs. The downloaded copy of the repository is in %s; delete that folder yourself if you do not need it." % Ctx.repo)
+    repo_gone = False
+    if wipe_data:
+        repo = un_repo_path()
+        repo_gone = un_remove_repo()
+        if repo_gone:
+            good("The downloaded copy of the repository (%s) is deleted. If your terminal was inside it, type:  cd ~" % repo)
+    if repo_gone:
+        say("Still here: Tailscale, Docker and the drive programs.")
+    else:
+        say("Still here: Tailscale, Docker and the drive programs. The downloaded copy of the repository is in %s; delete that folder yourself if you do not need it." % Ctx.repo)
     if not wipe_data:
         say("The data of the apps was kept (folders %s and the Docker volumes). The saved passwords are in %s; keep that folder if you want to install again and open the old data." %
             (", ".join(d for d, _ in f["data"][:4]) + (" ..." if len(f["data"]) > 4 else ""), SECRET_DIR))

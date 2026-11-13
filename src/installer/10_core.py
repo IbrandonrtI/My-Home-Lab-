@@ -16,6 +16,7 @@
 
 import atexit
 import base64
+import contextlib
 import getpass
 import fcntl
 import glob
@@ -73,12 +74,13 @@ STACKS = {
     "nextcloud": ("nextcloud.yaml", ["nextcloud", "nextcloud_db", "nextcloud_redis", "nextcloud_cron"]),
     "homepage": ("homepage.yaml", ["homepage"]),
     "beszel-agent": ("beszel-agent.yaml", ["beszel-agent"]),
+    "music-downloader": ("music-downloader.yaml", ["downtify", "metube"]),
     "navidrome": ("navidrome.yaml", ["navidrome"]),        # optional: only on a machine with a music folder (see NavidromeStack)
     "audiomuse": ("audiomuse.yaml", ["audiomuse-postgres", "audiomuse-flask", "audiomuse-worker"]),   # optional: `homelab-setup audiomuse` (see AudioMuseStack)
     "navilist": ("navilist.yaml", ["navilist"]),           # optional: `homelab-setup navilist` (see NaviListStack)
 }
 STACK_ORDER = ["adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
-               "immich", "nextcloud", "homepage", "beszel-agent"]
+               "immich", "nextcloud", "homepage", "beszel-agent", "music-downloader"]
 
 # local port of each service, and the HTTPS port Tailscale Serve uses for it
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,
@@ -103,6 +105,14 @@ OLD_TAILNET = OLD_FQDN.split(".", 1)[1] if "." in OLD_FQDN else ""
 
 class Abort(Exception):
     """A step that cannot continue. The message is shown to the person."""
+
+
+class NeedsPerson(Abort):
+    """A step that must wait for a person (the quiet schedule and the background job leave it for `sudo homelab-setup refresh`)."""
+
+
+class NeedsPassword(NeedsPerson):
+    """A step that needs the admin password while nobody is there to type it."""
 
 
 # ---------------------------------------------------------------- global switches
