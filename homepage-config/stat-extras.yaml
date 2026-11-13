@@ -1,8 +1,4 @@
-# More single-number cards for the STATS tab. They are not on the dashboard until you pick them: Customize > Cards > Add From HomeLab's List.
-# Every number comes from the same stats.json file as the other STATS cards (homelab-stats rewrites it every 15 minutes).
-# The installer keeps a copy of this file next to the panel; the panel reads it when you open that list. The addresses are filled in for this machine.
-
-- At a Glance:
+- Preview:
 
     - Photos:
         id: stat-photos
