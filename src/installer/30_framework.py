@@ -166,6 +166,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
     rule("%s %s %s %s %d of %d steps done" % (title, S_DOT, Ctx.hostname, S_DOT, done, total))
     waiting = False
     nodrive = not Opt.dry and main_storage_missing()
+    later = deferred_ids() if not Opt.dry and finish_running() else set()
     for g in GROUPS:
         items = [s for s in STEPS if s.group == g and res[s.id].state != "na"]
         if not items:
@@ -184,6 +185,9 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
                 if r.detail:
                     line += "  %s%s%s" % (D, r.detail, N)
                 out(line)
+                continue
+            if s.id in later and r.state in ("todo", "blocked"):
+                out("   %s%s %s   (finishing in the background)%s" % (D, S_WAIT, s.title, N))
                 continue
             if r.state == "blocked":
                 waiting = True
@@ -231,8 +235,14 @@ def unblock(res, dry=False):
             res[t.id] = Result("done", t.detail()) if st == "done" else Result("na") if st == "na" else Result("todo", "")
 
 
-def run_pass(res, selected=None):
-    """Run every automatic step that is ready. Returns the number of steps that became done."""
+class Hook:
+    """The background job listens to the steps here (to keep its status file up to date)."""
+    step = None             # called as step(step_or_None, res) before a step starts (None: between steps) and after it ended
+
+
+def run_pass(res, selected=None, skip=None):
+    """Run every automatic step that is ready. Returns the number of steps that became done.
+    `skip` holds the ids of steps that are left for later (the ones that finish in the background)."""
     gained = 0
     for s in topo():
         r = res[s.id]
@@ -240,6 +250,10 @@ def run_pass(res, selected=None):
             continue
         if selected and s.id not in selected:
             continue
+        if skip and s.id in skip:
+            continue
+        if Hook.step:
+            Hook.step(s, res)
         if Opt.dry or not Live.enabled:
             out("  %s %s%s" % (S_DOT, s.title, ("  %s(step %d of %d)%s" % (D, min(Live.done + 1, Live.total), Live.total, N)) if Live.total else ""))
         if not Opt.dry:
@@ -279,5 +293,7 @@ def run_pass(res, selected=None):
             bad("%s: the step ran, but its check still reports it as not done." % s.title)
         # steps that were waiting may be ready now
         unblock(res)
+    if Hook.step:
+        Hook.step(None, res)
     Live.close()
     return gained

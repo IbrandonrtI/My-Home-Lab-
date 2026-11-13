@@ -251,10 +251,78 @@ class PortainerEnv(Step):
 
 
 # ================================================================ the nine stacks
+class Prefetch:
+    """Downloads the images of every stack in the background while the earlier steps run, one thread per registry (ghcr.io throttles
+    parallel pulls from the SAME registry, but not pulls from different ones). `prepull` waits for an image that is on its way."""
+    threads = []
+    pending = {}            # image -> Event, set when its download ended (successfully or not)
+    lock = threading.Lock()
+
+    @classmethod
+    def host(cls, image):
+        first = image.split("/")[0]
+        return first if "/" in image and ("." in first or ":" in first) else "docker.io"
+
+    @classmethod
+    def wanted(cls):
+        """All images of the stacks this install will deploy, the big ones (Immich, Nextcloud) first."""
+        order = {"immich": 0, "nextcloud": 1}
+        stacks = sorted((s for s in STEPS if isinstance(s, StackStep) and s.applies()), key=lambda s: order.get(s.name, 5))
+        imgs = []
+        for s in stacks:
+            for i in images_in(read_file(repo_file("stacks", STACKS[s.name][0])) or ""):      # the raw file: reading it must not create any secret
+                if i not in imgs:
+                    imgs.append(i)
+        return imgs
+
+    @classmethod
+    def start(cls):
+        if Opt.dry or (FAKE and os.environ.get("HLS_PREFETCH") != "1") or cls.threads or not have("docker"):
+            return
+        try:
+            todo = [i for i in cls.wanted() if docker("image", "inspect", i)[0] != 0]
+        except Exception:
+            return
+        groups = {}
+        for i in todo:
+            cls.pending[i] = threading.Event()
+            groups.setdefault(cls.host(i), []).append(i)
+        for imgs in groups.values():
+            t = threading.Thread(target=cls.work, args=(imgs,), daemon=True)
+            t.start()
+            cls.threads.append(t)
+        if todo:
+            log("downloading %d images in the background (%s)" % (len(todo), ", ".join(sorted(groups))))
+
+    @classmethod
+    def work(cls, imgs):
+        for img in imgs:
+            try:
+                subprocess.run(["docker", "pull", "-q", img], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3600, check=False)
+            except Exception:
+                pass        # the step that needs the image downloads it again, and reports a real failure
+            finally:
+                cls.pending[img].set()
+
+    @classmethod
+    def wait(cls, img):
+        """True when `img` was being downloaded in the background and that download has ended."""
+        ev = cls.pending.get(img)
+        if ev is None:
+            return False
+        ev.wait()
+        return True
+
+
 def prepull(images):
-    """Pull the images one at a time (ghcr.io throttles parallel pulls)."""
+    """Pull the images one at a time (ghcr.io throttles parallel pulls); the ones the background download is busy with are waited for."""
     todo = [i for i in images if docker("image", "inspect", i)[0] != 0]
     for n, img in enumerate(todo, 1):
+        if Prefetch.pending.get(img) is not None and not Prefetch.pending[img].is_set():
+            Live.set_note("downloading %d of %d: %s (already on its way)" % (n, len(todo), img.split("/")[-1].split(":")[0]))
+            Prefetch.wait(img)
+            if docker("image", "inspect", img)[0] == 0:
+                continue
         Live.set_note("downloading %d of %d: %s" % (n, len(todo), img.split("/")[-1].split(":")[0]))
         for attempt in range(1, 5):
             rc, txt = act(["docker", "pull", img], timeout=1800)

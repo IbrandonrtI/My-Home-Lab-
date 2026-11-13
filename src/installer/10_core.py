@@ -17,6 +17,7 @@
 import atexit
 import base64
 import getpass
+import fcntl
 import glob
 import gzip
 import hashlib
@@ -111,6 +112,7 @@ class Opt:
     yes = False
     backup = None
     no_restore = False
+    no_background = False    # install: do every step before it ends (no background job)
     force_existing = False
     all = False
     wipe_data = False        # uninstall --yes: wipe the apps' data (without --yes the person is asked)

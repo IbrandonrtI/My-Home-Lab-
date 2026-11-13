@@ -1,7 +1,7 @@
 screen() {   # the whole screen, checked live. "login" leaves out the suggested commands and puts the hint under the browser addresses
   local login="${1:-}"
   BUFFERING=1; status; BUFFERING=0
-  header; summary_line; setup_line
+  header; summary_line; setup_line; finish_line
   rule "Status"; printf '%s\n' "$STATUS_BUF"
   open_section "$login"
   if [ -n "$login" ]; then login_hint; else suggestions; hint_line; fi

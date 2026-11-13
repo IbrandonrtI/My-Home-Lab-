@@ -210,6 +210,24 @@ setup_line() {   # shown only while homelab-setup still has steps left (it remov
   suggest 2 "sudo homelab-setup" "see the checklist and the next step"
 }
 
+finish_line() {   # the last steps of the install finish in the background (written by `homelab-setup finish`); shown while it runs or after failures
+  local f="$STATE_DIR/finish-status" txt st d t u
+  [ -r "$f" ] || return 0
+  txt=$(cat "$f" 2>/dev/null)
+  st=$(sed -n 's/.*"state": "\([a-z]*\)".*/\1/p' <<<"$txt")
+  d=$(sed -n 's/.*"done": \([0-9]*\).*/\1/p' <<<"$txt")
+  t=$(sed -n 's/.*"total": \([0-9]*\).*/\1/p' <<<"$txt")
+  u=$(sed -n 's/.*"updated": \([0-9]*\).*/\1/p' <<<"$txt")
+  [[ "$d" =~ ^[0-9]+$ && "$t" =~ ^[0-9]+$ && "$u" =~ ^[0-9]+$ ]] || return 0
+  if [ "$st" = running ] && [ $(( $(date +%s) - u )) -lt 3600 ]; then
+    printf '   %s%s%s  The last steps of the install are finishing in the background: %d of %d done.\n' "$Y" "$S_WARN" "$N" "$d" "$t"
+    printf '       How far it is: run  %ssudo homelab-setup status%s\n' "$B" "$N"
+  elif [ "$st" = failed ]; then
+    printf '   %s%s%s  Some of the last install steps failed. See which:  %ssudo homelab-setup status%s\n' "$Y" "$S_WARN" "$N" "$B" "$N"
+    suggest 2 "sudo homelab-setup finish" "try the failed last steps again"
+  fi
+}
+
 hint_line() {
   printf '  %sType%s %shomelab commands%s %sto see every command.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N"
 }
@@ -1796,7 +1814,7 @@ LIST
 screen() {   # the whole screen, checked live. "login" leaves out the suggested commands and puts the hint under the browser addresses
   local login="${1:-}"
   BUFFERING=1; status; BUFFERING=0
-  header; summary_line; setup_line
+  header; summary_line; setup_line; finish_line
   rule "Status"; printf '%s\n' "$STATUS_BUF"
   open_section "$login"
   if [ -n "$login" ]; then login_hint; else suggestions; hint_line; fi
