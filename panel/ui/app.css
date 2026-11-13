@@ -1,4 +1,3 @@
-/* The control panel: calm dark glass, big targets, plain words. The page colours come from the look you choose (--accent). */
 :root {
   --accent: 138, 180, 255;
   --bg: #0a0f19;
@@ -9,8 +8,8 @@
   --muted: #a9b4c7;
   --bad: #ff8d8d;
   --good: #7fe3b0;
-  --field: #0d1422;            /* the inside of a text box (a theme can change it) */
-  --pblur: 0px;                /* how much a card blurs what is behind it (only a glass theme sets this) */
+  --field: #0d1422;            
+  --pblur: 0px;                
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -159,8 +158,6 @@ dialog .actions { display: flex; gap: 10px; justify-content: flex-end; flex-wrap
   .grp input.icon-in { width: 120px; }
 }
 @media (prefers-reduced-motion: reduce) { #toast { transition: none; } }
-
-/* ---- Look: the preview sits next to the sliders and stays in view while you move them */
 .lookrow { align-items: start; }
 .lookrow .sticky { position: sticky; top: 8px; }
 .chip[aria-pressed="true"] { border-color: rgb(var(--accent)); background: rgba(var(--accent), 0.16); color: rgb(var(--accent)); font-weight: 650; }
@@ -181,7 +178,7 @@ details.card > summary b { font-size: 17px; }
 .row.bulk { margin: 8px 0 12px; padding: 8px 10px; border-radius: 12px; background: var(--panel2); }
 .row.bulk .lab { font-weight: 600; font-size: 14px; }
 
-/* ---- Samples of the label icon styles */
+/*Samples of the label icon styles */
 .lis { display: inline-grid; place-items: center; width: 22px; height: 22px; box-sizing: content-box; }
 .lis img { width: 20px; height: 20px; }
 .lis-circle { padding: 6px; border-radius: 50%; background: rgba(var(--accent), 0.22); }
@@ -193,7 +190,7 @@ dialog.wide { width: min(720px, calc(100vw - 24px)); }
 .picker img { width: 34px; height: 34px; filter: none; object-fit: contain; }
 .picker img.mdi { filter: invert(1) opacity(0.9); }
 
-/* the ready-made logos */
+/*logos */
 .logo-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(56px, 1fr)); gap: 8px; }
 .logo-tile { display: flex; align-items: center; justify-content: center; padding: 8px; border-radius: 12px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.04); cursor: pointer; }
 .logo-tile:hover { background: rgba(255, 255, 255, 0.09); }
@@ -211,7 +208,7 @@ dialog.wide { width: min(720px, calc(100vw - 24px)); }
 .logo-state { align-items: center; margin-bottom: 12px; }
 #mock { min-height: 250px; }
 
-/* ---- Drives */
+/*Drives */
 .usebar { height: 8px; border-radius: 6px; background: rgba(255, 255, 255, 0.09); overflow: hidden; margin: 6px 0 2px; max-width: 420px; }
 .usebar i { display: block; height: 100%; border-radius: 6px; background: rgb(var(--accent)); }
 .usebar i.high { background: #ffd78a; }
@@ -254,7 +251,7 @@ svg.ring { flex: none; }
 svg.ring.high .ring-fg { stroke: #ffd78a; }
 svg.ring.full .ring-fg { stroke: var(--bad); }
 .ring-t { fill: var(--text); font-size: 15px; font-weight: 650; }
-/* the Drives screen: a box for the loose drives and a box per pool; a drive is a tile */
+
 .pools { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
 @media (max-width: 900px) { .pools { grid-template-columns: 1fr; } }
 .dzone { border: 2px dashed transparent; transition: border-color 0.12s, background 0.12s; margin-bottom: 14px; padding: 14px 16px; }
@@ -321,7 +318,7 @@ details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-siz
 .cfg .cfgsel { max-width: 100%; min-width: 0; flex: 1 1 260px; }
 .cfg .row.tight { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
-/* number field in the drive dialogs (for example the size of a boot drive section) */
+/* number field in the drive dialogs*/
 .dfield { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0; flex-wrap: wrap; }
 .dfield small { display: block; color: var(--muted); font-weight: 400; }
 .dfield input { width: 7.5em; min-height: 44px; font: inherit; padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--bg); color: inherit; }
@@ -329,7 +326,7 @@ details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-siz
 .card.failcard .joblog { max-height: 50vh; overflow: auto; }
 .card.warncard { border-color: rgba(255, 193, 7, 0.75); }
 
-/* Configure Drives: tick the spare drives to use, take the tick off to leave one out */
+/* Configure Drives*/
 .cfgpick { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; padding: 8px 12px; display: grid; gap: 6px; }
 .cfgpick legend { font-weight: 600; padding: 0 6px; }
 .cfgpick label { display: flex; align-items: center; gap: 8px; min-height: 32px; overflow-wrap: anywhere; }
@@ -338,7 +335,7 @@ details.joblogbox summary { cursor: pointer; color: rgb(var(--accent)); font-siz
 .row.check { gap: 10px; align-items: center; margin: 10px 0 4px; font-weight: 600; cursor: pointer; }
 .row.check input { width: 18px; height: 18px; accent-color: rgb(var(--accent)); }
 
-/* Backups: a task is a box in the last card of the Drives tab */
+/* Backups*/
 .bk .card { margin-top: 14px; }
 .bkl { display: grid; gap: 12px; margin-top: 12px; }
 .bkt { background: var(--panel2); border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; }
@@ -370,7 +367,7 @@ dialog.bkdlg { width: min(680px, calc(100vw - 24px)); }
 .bklist { max-height: 300px; overflow: auto; border: 1px solid var(--line); border-radius: 12px; padding: 4px 10px; margin-bottom: 12px; }
 button.link { background: none; border: 0; padding: 2px 4px; min-height: 0; color: rgb(var(--accent)); text-decoration: underline; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
 
-/* Upload: two boxes side by side (one under the other on a phone) */
+/* Upload*/
 .up .card { margin-top: 14px; }
 .upgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; align-items: start; }
 @media (max-width: 900px) { .upgrid { grid-template-columns: 1fr; } }
