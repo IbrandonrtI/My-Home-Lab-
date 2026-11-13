@@ -16,12 +16,15 @@ class State:
         cls.data.setdefault("skip", {})
         cls.data.setdefault("notes", {})
 
+    lock = threading.RLock()        # (stacks are deployed at the same time, and each one may save its note)
+
     @classmethod
     def save(cls):
         if Opt.dry or cls.readonly:
             return
-        os.makedirs(STATE_DIR, exist_ok=True)
-        write_file(STATE_FILE, json.dumps(cls.data, indent=1, sort_keys=True) + "\n", 0o600)
+        with cls.lock:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            write_file(STATE_FILE, json.dumps(cls.data, indent=1, sort_keys=True) + "\n", 0o600)
 
     @classmethod
     def exists(cls):

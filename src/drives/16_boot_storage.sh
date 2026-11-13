@@ -119,7 +119,7 @@ moveboot_core() {   # moveboot_core: the containers are stopped. Copies what lie
   fi
   say "Every file is on the pool now."
   # (the terminal asks; the panel's "Move the files" button was the person's yes, and every file was just checked)
-  if [ "${PANEL_MOVEBOOT:-0}" = 1 ] || { [ "$PANEL_MODE" != 1 ] && yn "Remove the old copies from the boot drive now (they only use up space there)?"; }; then
+  if [ "${PANEL_MOVEBOOT:-0}" = 1 ] || { [ "$PANEL_MODE" != 1 ] && yn_yes "Remove the old copies from the boot drive now (they only use up space there)?"; }; then
     find "$src" -mindepth 1 ! -type d ! -name .immich -delete 2>/dev/null
     find "$src" -mindepth 1 -depth -type d -empty -delete 2>/dev/null
     rm -f "$(boot_kept_flag)" "$(main_boot_flag)"

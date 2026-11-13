@@ -83,7 +83,7 @@ wizard_flow() {
         say "Drive $(disk_summary "$d")"
         say "  on it: $(disk_files_text "$d")"
         if keepable_disk "$d"; then
-          idx=$(choose "What should I do with this drive? " \
+          idx=$(CHOOSE_DEFAULT=1 choose "What should I do with this drive? " \
             "Keep its files and use the drive as it is (nothing on it is deleted)" \
             "Erase everything on it and use it as a new, empty drive" \
             "Leave it alone (do not use it)") || idx=2
@@ -150,7 +150,7 @@ wizard_flow() {
   items+=("Show me every setup and let me pick one myself")
   if [ "$ASSUME_YES" = 1 ]; then idx=0; note "(--yes) taking the first suggestion: $(preset_title "$first")"
   else
-    idx=$(choose "Which one do you want? " "${items[@]}") || {
+    idx=$(CHOOSE_DEFAULT=1 choose "Which one do you want? " "${items[@]}") || {
       [ "$DRY_RUN" = 1 ] || { mkdir -p "$STATE_DIR" && printf '%s|not-now\n' "$(date +%F)" >"$WIZARD_FILE"; }
       say "Okay, nothing was changed. You can do this any time:  sudo drives wizard"
       return 0

@@ -70,7 +70,7 @@ commands() {
   cmd "homelab calendar list"          "your online calendars (also: remove N, sync)"
   cmd "homelab event add DATE \"text\" [yearly]" "your own event in the calendar"
   cmd "homelab event list"             "your events, numbered (remove: event remove NUMBER)"
-  cmd "homelab panel password"         "set the password of Customize and Terminal"
+  cmd "homelab panel password"         "change the Customize password (admin one at first)"
   cmd "homelab panel status"           "is the panel password set?"
   cmd "homelab simple on|off"          "hide the small text under card names (default: off)"
   cmd "homelab theme"                  "show the look and how to change it (no sudo)"

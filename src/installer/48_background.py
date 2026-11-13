@@ -1,12 +1,12 @@
 # ================================================================ the last steps finish in the background
-# The slow end of the install (Nextcloud's first start, the Immich admin account, the Beszel and widget keys) does not need anyone at the
+# The slow end of the install (Immich and Nextcloud with their big downloads and first start, the Beszel and widget keys, the system upgrade) does not need anyone at the
 # terminal. After the other steps are done the install ends, and these steps go on in a systemd unit (`homelab-finish`) that survives closing
 # the terminal. `sudo homelab-setup status` shows how far it is; a failed step is listed there and tried again by `sudo homelab-setup finish`.
 FINISH_UNIT = "homelab-finish"
 FINISH_STATUS = PROGRESS_DIR + "/finish-status"          # JSON, readable by everyone (the login screen and the panel show it)
 FINISH_LOCK = STATE_DIR + "/finish.lock"                 # held (flock) by the running job
 FINISH_PW = P("/run/homelab-finish.pw")                  # the admin password on its way to the job: tmpfs, root only, removed the moment it is read
-FINISH_SEEDS = ("nextcloud-ready", "nextcloud-restore-db", "immich-admin", "beszel-user", "beszel-agent-key")
+FINISH_SEEDS = ("stack-immich", "stack-nextcloud", "nextcloud-ready", "nextcloud-restore-db", "immich-admin", "beszel-user", "beszel-agent-key", "apt-upgrade")
 
 
 def background_mode():
@@ -99,14 +99,18 @@ class Finish:
 
 
 def finish_passes(res, ids):
-    """Run the deferred steps (up to four passes, like the install): a step that fails does not stop the others. Returns the new results."""
+    """Run the deferred steps (up to four passes, like the install): a step that fails does not stop the others. The system upgrade comes last.
+    Returns the new results."""
     Hook.step = lambda s, r: Finish.update(s, r, ids)
     try:
         for _ in range(4):
-            gained = run_pass(res, selected=ids)
+            gained = run_pass(res, selected=ids, skip={"apt-upgrade"})
             res = evaluate()
             if not gained:
                 break
+        if "apt-upgrade" in ids and res["apt-upgrade"].state in ("todo", "failed"):
+            run_pass(res, selected={"apt-upgrade"})
+            res = evaluate()
     finally:
         Hook.step = None
     return res
@@ -216,6 +220,7 @@ def cmd_finish():
         return
     Live.begin_run(len(todo))
     Finish.begin(res, ids)
+    Prefetch.start()        # Immich and Nextcloud download here, several images at a time
     rule("Finishing the install")
     try:
         res = finish_passes(res, ids)

@@ -8,7 +8,8 @@ screen() {   # the whole screen, checked live. "login" leaves out the suggested 
 }
 
 login_hint() {
-  printf '\n  %sType%s %shomelab%s %sfor the full status, or%s %shomelab commands%s%s.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N" "$B" "$N" "$D" "$N"
+  printf '\n  %sType%s %shomelab%s %sfor the full status, or%s %shomelab commands%s%s.%s\n' "$D" "$N" "$B" "$N" "$D" "$N" "$B" "$N" "$D" "$N"
+  secrets_hint
 }
 
 uptime_secs() {

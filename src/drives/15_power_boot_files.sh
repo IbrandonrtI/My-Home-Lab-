@@ -55,7 +55,7 @@ absorb_plain_pool() {   # absorb_plain_pool main|backup /mnt/disks/MAIN1  (the d
     warn "Not every file reached the new drive. Nothing was removed from the boot drive."
     return 1
   fi
-  if [ "$role" = main ] && [ "$real" = 1 ] && ! { [ "$PANEL_MODE" != 1 ] && yn "Everything is on the new drive. Remove the old copies from the boot drive now?"; }; then
+  if [ "$role" = main ] && [ "$real" = 1 ] && ! { [ "$PANEL_MODE" != 1 ] && yn_yes "Everything is on the new drive. Remove the old copies from the boot drive now?"; }; then
     # (the control panel cannot ask, so it keeps them). They lie hidden under the pool; `sudo drives moveboot` removes them later.
     mkdir -p "$STATE_DIR" 2>/dev/null; date '+%F %T' >"$(boot_kept_flag)" 2>/dev/null
     say "The old copies stay on the boot drive for now. Remove them later with:  sudo drives moveboot"

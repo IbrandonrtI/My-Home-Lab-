@@ -574,7 +574,7 @@ preset_flow() {   # preset_flow ID
     if [ "$kept_n" -eq 1 ]; then say "The files on this drive are KEPT as they are (nothing on it is deleted):"; else say "The files on these $kept_n drives are KEPT as they are (nothing on them is deleted):"; fi
     for d in "${devs[@]}"; do in_list "$d" "$WIZARD_KEEP" && say "  - $d  ($(disk_base_name "$d"))   $(disk_files_text "$d")"; done
   fi
-  typed "$id" "Type the name of the setup ($id) to continue: " || { say "Cancelled. Nothing was changed."; return 1; }
+  typed_enter "$id" "Press Enter to continue with this setup (or type its name)" || { say "Cancelled. Nothing was changed."; return 1; }
   [ ${#erase_list[@]} -eq 0 ] || typed "ERASE" "Type ERASE (capitals) to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
   if preset_is_array "$id"; then
     pre_change "Erase the ${#erase_list[@]} drives and build the $(preset_title "$id") array on them." \

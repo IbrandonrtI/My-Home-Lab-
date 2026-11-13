@@ -251,68 +251,96 @@ class Hook:
     step = None             # called as step(step_or_None, res) before a step starts (None: between steps) and after it ended
 
 
-def run_pass(res, selected=None, skip=None):
-    """Run every automatic step that is ready. Returns the number of steps that became done.
-    `skip` holds the ids of steps that are left for later (the ones that finish in the background)."""
-    gained = 0
-    for s in topo():
-        r = res[s.id]
-        if r.state not in ("todo", "failed") or s.kind != "auto":
-            continue
-        if selected and s.id not in selected:
-            continue
-        if skip and s.id in skip:
-            continue
-        if Hook.step:
-            Hook.step(s, res)
-        if Opt.dry or not Live.enabled:
-            out("  %s %s%s" % (S_DOT, s.title, ("  %s(step %d of %d)%s" % (D, min(Live.done + 1, Live.total), Live.total, N)) if Live.total else ""))
-        if not Opt.dry:
-            Live.begin(s.title)
-        try:
-            s.run()
-            State.note("err:" + s.id, "")
-            now = "done" if Opt.dry else s.probe()
-        except NeedsPerson as e:
-            Live.end()
-            if not Runtime.unattended:
-                msg = str(e)
-                State.note("err:" + s.id, msg[:300])
-                bad("%s: %s" % (s.title, msg))
-                log("FAILED %s: %s" % (s.id, msg))
-                res[s.id] = Result("failed", msg[:300])
-            continue      # (the quiet schedule leaves it open: the person finishes it with `sudo homelab-setup refresh`)
-        except Abort as e:
-            Live.end()
-            msg = str(e)
-            State.note("err:" + s.id, msg.splitlines()[0][:300] if msg else "failed")
-            bad("%s: %s" % (s.title, msg))
-            log("FAILED %s: %s" % (s.id, msg))
-            res[s.id] = Result("failed", msg.splitlines()[0][:300])
-            continue
-        except Exception as e:
-            Live.end()
-            State.note("err:" + s.id, "unexpected error: %r" % (e,))
-            bad("%s: unexpected error: %r" % (s.title, e))
-            log("CRASH %s: %r" % (s.id, e))
-            res[s.id] = Result("failed", "unexpected error")
-            continue
-        secs = Live.end()
+def run_step(s):
+    """Run one step. Returns the exception it raised, or None."""
+    try:
+        s.run()
+        return None
+    except Exception as e:
+        return e
+
+
+def run_parallel(batch):
+    """Run the steps of the batch at the same time (the stacks: each one only waits for Portainer and Docker). Returns {id: exception or None}."""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(batch), 4)) as pool:
+        futs = {s.id: pool.submit(run_step, s) for s in batch}
+        return {sid: f.result() for sid, f in futs.items()}
+
+
+def settle(s, exc, res, secs):
+    """What a step's ending means: record success or the reason it failed. Returns 1 when the step became done."""
+    if exc is None:
+        State.note("err:" + s.id, "")
         Live.advance()
         if Opt.dry:
             res[s.id] = Result("done", "(dry run)")
             unblock(res, dry=True)
-            continue
+            return 0
+        now = s.probe()
         if now in ("done", "na"):
             res[s.id] = Result("done", s.detail())
-            gained += 1
             good("%s%s" % (s.title, ("  %s(%s)%s" % (D, fmt_time(secs), N)) if secs >= 5 else ""))
-        else:
-            State.note("err:" + s.id, "The step ran, but its check still reports it as not done")
-            res[s.id] = Result("failed", "The step ran, but its check still reports it as not done")
-            bad("%s: the step ran, but its check still reports it as not done." % s.title)
-        # steps that were waiting may be ready now
+            unblock(res)
+            return 1
+        State.note("err:" + s.id, "The step ran, but its check still reports it as not done")
+        res[s.id] = Result("failed", "The step ran, but its check still reports it as not done")
+        bad("%s: the step ran, but its check still reports it as not done." % s.title)
         unblock(res)
+        return 0
+    if isinstance(exc, NeedsPerson):
+        if not Runtime.unattended:
+            msg = str(exc)
+            State.note("err:" + s.id, msg[:300])
+            bad("%s: %s" % (s.title, msg))
+            log("FAILED %s: %s" % (s.id, msg))
+            res[s.id] = Result("failed", msg[:300])
+        return 0      # (the quiet schedule leaves it open: the person finishes it with `sudo homelab-setup refresh`)
+    if isinstance(exc, Abort):
+        msg = str(exc)
+        State.note("err:" + s.id, msg.splitlines()[0][:300] if msg else "failed")
+        bad("%s: %s" % (s.title, msg))
+        log("FAILED %s: %s" % (s.id, msg))
+        res[s.id] = Result("failed", msg.splitlines()[0][:300])
+        return 0
+    State.note("err:" + s.id, "unexpected error: %r" % (exc,))
+    bad("%s: unexpected error: %r" % (s.title, exc))
+    log("CRASH %s: %r" % (s.id, exc))
+    res[s.id] = Result("failed", "unexpected error")
+    return 0
+
+
+def ready(res, s, selected, skip):
+    """True when the automatic step `s` can run in this pass."""
+    return (res[s.id].state in ("todo", "failed") and s.kind == "auto" and not (selected and s.id not in selected) and not (skip and s.id in skip))
+
+
+def run_pass(res, selected=None, skip=None):
+    """Run every automatic step that is ready. Returns the number of steps that became done.
+    `skip` holds the ids of steps that are left for later (the ones that finish in the background).
+    The stacks (steps with `parallel` set) that are ready are started together: each one only waits for Portainer and Docker."""
+    gained = 0
+    for s in topo():
+        if not ready(res, s, selected, skip):
+            continue
+        batch = [s]
+        if getattr(s, "parallel", False) and not Opt.dry:
+            batch += [t for t in STEPS if t is not s and getattr(t, "parallel", False) and ready(res, t, selected, skip)]
+        for t in batch:
+            if Hook.step:
+                Hook.step(t, res)
+        if Opt.dry or not Live.enabled:
+            for t in batch:
+                out("  %s %s%s" % (S_DOT, t.title, ("  %s(step %d of %d)%s" % (D, min(Live.done + 1, Live.total), Live.total, N)) if Live.total else ""))
+        if not Opt.dry:
+            Live.begin(s.title if len(batch) == 1 else "Starting %d stacks at the same time (%s)" % (len(batch), ", ".join(t.name for t in batch)))
+        if len(batch) == 1:
+            outcomes = {s.id: run_step(s)}
+        else:
+            outcomes = run_parallel(batch)
+        secs = Live.end()
+        for t in batch:
+            gained += settle(t, outcomes[t.id], res, secs)
     if Hook.step:
         Hook.step(None, res)
     Live.close()

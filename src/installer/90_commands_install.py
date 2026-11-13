@@ -26,33 +26,24 @@ def password_warning():
          "manager." % ("AdGuard Home, " if adguard_wanted() else ""))
 
 
-def ask_weather(a):
-    """Ask for a city, look up its coordinates and keep them for the Homepage weather card.
-    If the lookup is not possible the card keeps the repository default and the weather step stays on the list."""
-    if a.get("weather"):
+def auto_location(a):
+    """Time zone and weather city are found by themselves, from this connection's public IP address (nothing to type).
+    When no service answers, the machine's own time zone is used and the weather card keeps New York. The Look tab of Customize changes both later."""
+    if a.get("tz") and a.get("weather"):
         return
-    default = WEATHER_CITY_DEFAULT
-    for _ in range(3):
-        q = ask("City for the Homepage weather card", default)
-        found = geocode_city(q)
-        if found is None:
-            warn("The city lookup (geocoding-api.open-meteo.com) did not answer. The weather card keeps its default "
-                 "location (New York). It can be changed later in ~/homepage-config/widgets.yaml.")
-            return
-        if not found:
-            warn("No city named '%s' was found. Try the name alone, without a state or country." % q)
-            continue
-        pick = found[0]
-        if len(found) > 1:
-            out("")
-            for i, f in enumerate(found, 1):
-                out("   %d  %s" % (i, ", ".join(x for x in (f["name"], f["region"], f["country"]) if x)))
-            n = ask("Which one? Enter its number", "1")
-            pick = found[int(n) - 1] if n.isdigit() and 1 <= int(n) <= len(found) else found[0]
-        a["weather"] = pick
-        good("Weather location: %s" % ", ".join(x for x in (pick["name"], pick["region"], pick["country"]) if x))
-        return
-    warn("No weather city was chosen. The card keeps its default location (New York).")
+    found = ip_location()
+    if found:
+        if not a.get("tz") and found["tz"]:
+            a["tz"] = found["tz"]
+            a["tz_found"] = found["tz"]
+        if not a.get("weather"):
+            a["weather"] = {k: found[k] for k in ("name", "region", "country", "lat", "lon")}
+        good("Found by itself: %s, time zone %s (change it any time on the Look tab of Customize)" % (
+            ", ".join(x for x in (found["name"], found["region"], found["country"]) if x), a.get("tz") or Ctx.tz))
+    else:
+        a.setdefault("tz", Ctx.tz)
+        warn("The location lookup did not answer, so the machine's time zone (%s) is used and the weather card shows New York. "
+             "Change both on the Look tab of Customize." % a["tz"])
 
 
 LVM_EXPLAIN = ("Ubuntu Server's installer makes the system volume small (about 100 GB) and leaves the rest of the drive unused. "
@@ -145,7 +136,7 @@ def ask_tailscale_token(a):
 
 
 def ask_answers():
-    """Ask the first questions of an install: admin name, email, time zone, city, LAN address and the password."""
+    """Ask the first questions of an install: admin name, email, LAN address and the password (time zone and city are found by themselves)."""
     a = State.data["answers"]
     out("")
     say("A few answers are needed first. They stay on this machine and only fill in its configuration files.")
@@ -154,8 +145,7 @@ def ask_answers():
     a["email"] = ask("Email address (login for Immich, Beszel and Speedtest Tracker)", a.get("email", ""))
     while not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", a["email"]):
         a["email"] = ask("That is not a valid email address. Enter it again", "")
-    a["tz"] = ask("Time zone", a.get("tz") or Ctx.tz)
-    ask_weather(a)
+    auto_location(a)
     a["lan"] = ask("This machine's LAN address (reserve it in your router so it does not change)", a.get("lan") or Ctx.lan)
     while not is_ipv4(a["lan"].strip()):
         a["lan"] = ask("That is not an address like 192.168.1.20. Enter it again", "")
@@ -218,7 +208,7 @@ def show_secret_values():
 
 
 def final_report(res, background=False):
-    """End of install: how it went, the generated passwords (then wait for Enter), the checklist, the next step.
+    """End of install: how it went, where the generated passwords are, the checklist, the next step.
     `background` is True when the last steps were handed to the background job."""
     Live.close()
     done, total = counts(res)
@@ -233,23 +223,8 @@ def final_report(res, background=False):
     if 0 < http("GET", url("homepage"), timeout=10)[0] < 500:
         good("Your lab is running. Open Homepage: %s" % mark(url("homepage")))
     Secrets.load()
-    keys = list(Secrets.vals)
-    if keys and not State.data.get("secrets_announced"):
-        State.data["secrets_announced"] = time.strftime("%F %T")
-        State.save()
-        rule("Generated passwords and keys")
-        say("Stored in %s (root only). Copy them into your password manager now. "
-            "This file stays on this machine and is never part of the repository." % SECRET_FILE.replace(ROOT, ""))
-        show_secret_values()
-        say("Show them again at any time:\n$ sudo homelab-setup secrets")
-        say("The admin password you chose is not stored anywhere. Keep it in your password manager.")
-        out("")
-        if interactive() and not Opt.yes:
-            ask("Press Enter when they are saved to see what is left")
-            State.data["secrets_shown"] = time.strftime("%F %T")        # ticks "passwords copied into your password manager"
-            State.save()
-            res = evaluate()
-            write_progress(res)
+    if Secrets.vals:
+        say("Generated passwords and keys are kept in %s (root only). Show them any time with:  sudo homelab-setup secrets" % SECRET_FILE.replace(ROOT, ""))
     offer_drive_wizard()
     show_checklist(res, "Setup")
     next_step_section(res)
@@ -280,7 +255,7 @@ SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguar
 
 
 def navidrome_wanted():
-    """True when this machine is meant to run Navidrome (it comes with the first song in the music folder)."""
+    """True when this machine is meant to run Navidrome (every new install has it)."""
     return BY_ID["stack-navidrome"].applies()
 
 
@@ -493,8 +468,6 @@ def by_hand_tag(s):
     """When the person will be asked to do this step."""
     if s.id in DURING_INSTALL:
         return "during the install"
-    if s.id == "secrets-saved":
-        return "at the end of the install, when you press Enter after copying them"
     if getattr(s, "auto", None):
         return "afterwards, detected automatically once done"
     return "afterwards"
@@ -595,12 +568,13 @@ def cmd_install():
 
 
 def run_install(res, later=None):
-    """Run the install: the early system steps, then the two steps a person must do, then up to four more passes.
-    `later` holds the ids of the steps that finish in the background after the install."""
-    early = {"os", "apt-upgrade", "packages", "docker", "docker-group", "tailscale-install"}
+    """Run the install: Docker first, then the downloads of every image start in the background, then the other early steps and the two steps
+    a person must do, then up to four more passes. `later` holds the ids of the steps that finish in the background after the install.
+    The system upgrade is not on the way: it runs after everything else (in the background job when there is one)."""
     rule("Installing")
-    run_pass(res, early)
-    Prefetch.start()        # the images of every stack download in the background while the next steps run
+    run_pass(res, {"os", "apt-update", "packages", "docker", "docker-group"})
+    Prefetch.start()        # the images of every stack download in the background (several at a time) while the next steps run
+    run_pass(res, {"tailscale-install"})
     # the two things only a person can do: log in to Tailscale and switch HTTPS on
     for sid in ("tailscale-login", "tailscale-https"):
         s = BY_ID[sid]
@@ -614,12 +588,15 @@ def run_install(res, later=None):
                     unblock(res, dry=Opt.dry)
             except Abort as e:
                 bad(str(e))
+    held = set(later or ()) | {"apt-upgrade"}
     for _ in range(4):
-        gained = run_pass(res, skip=later)
+        gained = run_pass(res, skip=held)
         if not Opt.dry:
             res.update(evaluate())
         if not gained:
             break
+    if "apt-upgrade" not in (later or ()):
+        run_pass(res, {"apt-upgrade"})      # (no background job: the upgrade is the last thing)
 
 
 def wait_for_apps():

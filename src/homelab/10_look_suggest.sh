@@ -59,9 +59,6 @@ suggestions() {
   suggest 7 "docker ps" "what is running right now"
   suggest 7 "sudo homelab-selftest" "check everything and look for problems or leftovers"
   suggest 8 "sudo drives" "menu: connect or remove drives, or use part of the boot drive for a pool"
-  if command -v homelab-panel >/dev/null 2>&1 && [ ! -f "$HOME/.config/homelab-panel/password" ]; then
-    suggest 3 "homelab panel password" "choose the password of the Customize tab and the Terminal card"
-  fi
   if [ -d "$HOMEPAGE_DIR" ]; then
     suggest 8 "homelab theme" "change the dashboard's background and card colours"
     suggest 8 "homelab bookmark add NAME URL" "add a bookmark to the dashboard, with its logo"
@@ -174,7 +171,15 @@ finish_line() {   # the last steps of the install finish in the background (writ
   fi
 }
 
+secrets_hint() {   # the passwords and keys the installer made: one line under the commands hint, then the blank line
+  if command -v homelab-setup >/dev/null 2>&1; then
+    printf '  %sPasswords and keys:%s %ssudo homelab-setup secrets%s\n' "$D" "$N" "$B" "$N"
+  fi
+  printf '\n'
+}
+
 hint_line() {
-  printf '  %sType%s %shomelab commands%s %sto see every command.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N"
+  printf '  %sType%s %shomelab commands%s %sto see every command.%s\n' "$D" "$N" "$B" "$N" "$D" "$N"
+  secrets_hint
 }
 

@@ -12,6 +12,15 @@ yn()   {
   if [ "$ASSUME_YES" = 1 ]; then note "$1 [y/N]: y   (--yes)"; return 0; fi
   case "$(ask "$1 [y/N]: ")" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
+yn_yes() {   # a yes/no question where Enter means yes (only for questions whose answer is safe, for example removing copies that were just checked)
+  if [ "$ASSUME_YES" = 1 ]; then note "$1 [Y/n]: y   (--yes)"; return 0; fi
+  case "$(ask "$1 [Y/n]: ")" in n|N|no|NO|No) return 1 ;; *) return 0 ;; esac
+}
+typed_enter() {   # typed_enter WORD "Prompt": like `typed`, but Enter alone also counts (the word is shown as the default). Never for erasing: that stays `typed ERASE`.
+  if [ "$PANEL_MODE" = 1 ] || [ "$CONFIRM_ERASE" = 1 ] || [ "$DRY_RUN" = 1 ]; then typed "$1" "$2: "; return; fi
+  local v; v=$(ask "$2 [$1]: ")
+  [ -z "$v" ] || [ "$v" = "$1" ]
+}
 typed() {   # typed WORD "Prompt: ": the person must type WORD. --confirm-erase types it for a script; a dry run changes nothing, so it needs no typing
   if [ "$PANEL_MODE" = 1 ]; then      # the control panel passes what the person typed; it counts only when it is exactly the word asked for
     local w
@@ -25,13 +34,15 @@ typed() {   # typed WORD "Prompt: ": the person must type WORD. --confirm-erase 
   [ "$(ask "$2")" = "$1" ]
 }
 
-choose() {   # choose "Prompt: " item1 item2 ... -> prints 0-based index
+choose() {   # choose "Prompt: " item1 item2 ... -> prints 0-based index. CHOOSE_DEFAULT=N makes Enter pick item N (only set for choices that are safe)
   local prompt=$1; shift
-  local n=$# i=1 a
+  local n=$# i=1 a def=${CHOOSE_DEFAULT:-}
   for a in "$@"; do printf '  %d) %s\n' "$i" "$a" >&2; i=$((i + 1)); done
   printf '  0) Cancel\n' >&2
+  [ -z "$def" ] || prompt="${prompt%: }  [$def]: "
   while :; do
     a=$(ask "$prompt")
+    [ -n "$a" ] || a=$def
     case "$a" in 0|"") note "Cancelled."; return 1 ;; esac
     if [[ "$a" =~ ^[0-9]+$ ]] && [ "$a" -ge 1 ] && [ "$a" -le "$n" ]; then
       echo $((a - 1)); return 0

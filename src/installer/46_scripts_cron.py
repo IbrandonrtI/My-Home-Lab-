@@ -284,7 +284,7 @@ class LoginHook(Step):
 
 
 # ================================================================ things only you can do
-EXPECTED_CONTAINERS = 18
+EXPECTED_CONTAINERS = 19
 
 
 def expected_containers():
@@ -377,7 +377,7 @@ class SpeedtestFirst(Step):
         return not Mode.existing
 
     def probe(self):
-        return "done" if chk_speedtest() else "todo"
+        return "done" if State.ran("speedtest-first") or chk_speedtest() else "todo"
 
     @staticmethod
     def php(lines):
@@ -408,8 +408,9 @@ class SpeedtestFirst(Step):
             raise Abort("Speedtest Tracker did not start the first speed test (answer %s). Open %s and click Speedtest." % (st, url("speedtest")))
         for _ in range(1 if FAKE else 30):      # a real test takes up to a minute or two
             if chk_speedtest():
-                return
+                break
             time.sleep(0 if FAKE else 5)
+        State.mark("speedtest-first")            # started once: a later silent moment of the service does not start another test
 
     def help(self):
         return "Open Speedtest Tracker (port 8088) and click Speedtest. The Homepage card fills in afterwards."
@@ -473,9 +474,6 @@ class AckStep(Step):
 def _register_acks():
     """Create the checklist steps that only a person can confirm."""
     items = [
-        AckStep("secrets-saved", "Generated passwords copied into your password manager",
-                "Show the generated passwords and keys, copy them into your password manager, and store the admin password you chose there as well. They are kept in /root/.homelab-setup/secrets.env (root only). The step is marked done once this command has been run; the installer cannot check that the passwords were saved.\n$ sudo homelab-setup secrets",
-                auto=lambda: bool(State.data.get("secrets_shown"))),
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
                 needs=("adguard-setup",), auto=chk_devices_dns, wants=adguard_wanted),

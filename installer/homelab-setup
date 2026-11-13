@@ -79,8 +79,8 @@ STACKS = {
     "audiomuse": ("audiomuse.yaml", ["audiomuse-postgres", "audiomuse-flask", "audiomuse-worker"]),   # optional: `homelab-setup audiomuse` (see AudioMuseStack)
     "navilist": ("navilist.yaml", ["navilist"]),           # optional: `homelab-setup navilist` (see NaviListStack)
 }
-STACK_ORDER = ["adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
-               "immich", "nextcloud", "homepage", "beszel-agent", "music-downloader"]
+STACK_ORDER = ["homepage", "adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
+               "immich", "nextcloud", "beszel-agent", "music-downloader"]
 
 # local port of each service, and the HTTPS port Tailscale Serve uses for it
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,
@@ -845,12 +845,15 @@ class State:
         cls.data.setdefault("skip", {})
         cls.data.setdefault("notes", {})
 
+    lock = threading.RLock()        # (stacks are deployed at the same time, and each one may save its note)
+
     @classmethod
     def save(cls):
         if Opt.dry or cls.readonly:
             return
-        os.makedirs(STATE_DIR, exist_ok=True)
-        write_file(STATE_FILE, json.dumps(cls.data, indent=1, sort_keys=True) + "\n", 0o600)
+        with cls.lock:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            write_file(STATE_FILE, json.dumps(cls.data, indent=1, sort_keys=True) + "\n", 0o600)
 
     @classmethod
     def exists(cls):
@@ -1056,9 +1059,6 @@ def detect_tz():
     return read_file(P("/etc/timezone")).strip() or "UTC"
 
 
-WEATHER_CITY_DEFAULT = "New York"
-
-
 def geocode_city(query):
     """Look a city up with Open-Meteo's free geocoding service (no key needed).
     Returns a list of {name, region, country, lat, lon} (empty = no such city), or None when the service cannot be reached."""
@@ -1076,6 +1076,23 @@ def geocode_city(query):
     return found
 
 
+def ip_location():
+    """Where this internet connection is, found from its public IP address with a free service that needs no account (ipwho.is, then ipapi.co).
+    Returns {tz, name, region, country, lat, lon}, or None when no service answers. The service sees this machine's public IP, nothing else is sent."""
+    override = os.environ.get("HLS_IP_API")
+    for base, kind in ([(override, "ipwho")] if override else [("https://ipwho.is", "ipwho"), ("https://ipapi.co", "ipapi")]):
+        st, js, _ = http("GET", base + ("/" if kind == "ipwho" else "/json/"), timeout=8)
+        if st != 200 or not isinstance(js, dict) or js.get("success") is False or js.get("error"):
+            continue
+        try:
+            tz = js["timezone"]["id"] if isinstance(js.get("timezone"), dict) else str(js.get("timezone") or "")
+            return {"tz": tz, "name": str(js["city"]), "region": str(js.get("region") or ""), "country": str(js.get("country") or js.get("country_name") or ""),
+                    "lat": float(js["latitude"]), "lon": float(js["longitude"])}
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
 def weather_apply(text, w):
     """Put a chosen city (name, lat, lon) into the openmeteo block of widgets.yaml. Returns the new text, or None if the block is missing."""
     m = re.search(r"(openmeteo:)(.*?)(\n- |\Z)", text, re.S)
@@ -1086,6 +1103,23 @@ def weather_apply(text, w):
     block = re.sub(r"(\n\s+label:).*", lambda x: '%s "%s"' % (x.group(1), label), block, count=1)
     block = re.sub(r"(\n\s+latitude:).*", lambda x: "%s %.4f" % (x.group(1), w["lat"]), block, count=1)
     block = re.sub(r"(\n\s+longitude:).*", lambda x: "%s %.4f" % (x.group(1), w["lon"]), block, count=1)
+    return text[:m.start(2)] + block + text[m.end(2):]
+
+
+def clock_apply(text, tz):
+    """Put a time zone (like America/New_York) into the dashboard clock's format in widgets.yaml. Returns the new text, or None if the clock is missing."""
+    m = re.search(r"(- datetime:)(.*?)(\n- |\Z)", text, re.S)
+    if not m or not re.fullmatch(r"[A-Za-z0-9_+/-]{1,60}", tz or ""):
+        return None
+    block = m.group(2)
+    if re.search(r"\n\s+timeZone:", block):
+        block = re.sub(r"(\n\s+timeZone:).*", lambda x: "%s %s" % (x.group(1), tz), block, count=1)
+    else:
+        f = re.search(r"\n(\s+)format:[^\n]*", block)
+        if f:
+            block = block[:f.end()] + "\n%s  timeZone: %s" % (f.group(1), tz) + block[f.end():]
+        else:
+            block = block.rstrip("\n") + "\n    format:\n      timeZone: %s\n" % tz
     return text[:m.start(2)] + block + text[m.end(2):]
 
 
@@ -1221,16 +1255,6 @@ def music_folder():
             return "/mnt/storage/" + name
     return ""
 
-
-AUDIO_EXTENSIONS = (".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".alac", ".aiff")
-
-
-def music_has_songs(folder):
-    """True when the music folder holds at least one song (it stops at the first one, so a big library is not walked)."""
-    for _root, _dirs, files in os.walk(P(folder)):
-        if any(f.lower().endswith(AUDIO_EXTENSIONS) for f in files):
-            return True
-    return False
 
 
 def stack_env(name):
@@ -2737,68 +2761,96 @@ class Hook:
     step = None             # called as step(step_or_None, res) before a step starts (None: between steps) and after it ended
 
 
-def run_pass(res, selected=None, skip=None):
-    """Run every automatic step that is ready. Returns the number of steps that became done.
-    `skip` holds the ids of steps that are left for later (the ones that finish in the background)."""
-    gained = 0
-    for s in topo():
-        r = res[s.id]
-        if r.state not in ("todo", "failed") or s.kind != "auto":
-            continue
-        if selected and s.id not in selected:
-            continue
-        if skip and s.id in skip:
-            continue
-        if Hook.step:
-            Hook.step(s, res)
-        if Opt.dry or not Live.enabled:
-            out("  %s %s%s" % (S_DOT, s.title, ("  %s(step %d of %d)%s" % (D, min(Live.done + 1, Live.total), Live.total, N)) if Live.total else ""))
-        if not Opt.dry:
-            Live.begin(s.title)
-        try:
-            s.run()
-            State.note("err:" + s.id, "")
-            now = "done" if Opt.dry else s.probe()
-        except NeedsPerson as e:
-            Live.end()
-            if not Runtime.unattended:
-                msg = str(e)
-                State.note("err:" + s.id, msg[:300])
-                bad("%s: %s" % (s.title, msg))
-                log("FAILED %s: %s" % (s.id, msg))
-                res[s.id] = Result("failed", msg[:300])
-            continue      # (the quiet schedule leaves it open: the person finishes it with `sudo homelab-setup refresh`)
-        except Abort as e:
-            Live.end()
-            msg = str(e)
-            State.note("err:" + s.id, msg.splitlines()[0][:300] if msg else "failed")
-            bad("%s: %s" % (s.title, msg))
-            log("FAILED %s: %s" % (s.id, msg))
-            res[s.id] = Result("failed", msg.splitlines()[0][:300])
-            continue
-        except Exception as e:
-            Live.end()
-            State.note("err:" + s.id, "unexpected error: %r" % (e,))
-            bad("%s: unexpected error: %r" % (s.title, e))
-            log("CRASH %s: %r" % (s.id, e))
-            res[s.id] = Result("failed", "unexpected error")
-            continue
-        secs = Live.end()
+def run_step(s):
+    """Run one step. Returns the exception it raised, or None."""
+    try:
+        s.run()
+        return None
+    except Exception as e:
+        return e
+
+
+def run_parallel(batch):
+    """Run the steps of the batch at the same time (the stacks: each one only waits for Portainer and Docker). Returns {id: exception or None}."""
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=min(len(batch), 4)) as pool:
+        futs = {s.id: pool.submit(run_step, s) for s in batch}
+        return {sid: f.result() for sid, f in futs.items()}
+
+
+def settle(s, exc, res, secs):
+    """What a step's ending means: record success or the reason it failed. Returns 1 when the step became done."""
+    if exc is None:
+        State.note("err:" + s.id, "")
         Live.advance()
         if Opt.dry:
             res[s.id] = Result("done", "(dry run)")
             unblock(res, dry=True)
-            continue
+            return 0
+        now = s.probe()
         if now in ("done", "na"):
             res[s.id] = Result("done", s.detail())
-            gained += 1
             good("%s%s" % (s.title, ("  %s(%s)%s" % (D, fmt_time(secs), N)) if secs >= 5 else ""))
-        else:
-            State.note("err:" + s.id, "The step ran, but its check still reports it as not done")
-            res[s.id] = Result("failed", "The step ran, but its check still reports it as not done")
-            bad("%s: the step ran, but its check still reports it as not done." % s.title)
-        # steps that were waiting may be ready now
+            unblock(res)
+            return 1
+        State.note("err:" + s.id, "The step ran, but its check still reports it as not done")
+        res[s.id] = Result("failed", "The step ran, but its check still reports it as not done")
+        bad("%s: the step ran, but its check still reports it as not done." % s.title)
         unblock(res)
+        return 0
+    if isinstance(exc, NeedsPerson):
+        if not Runtime.unattended:
+            msg = str(exc)
+            State.note("err:" + s.id, msg[:300])
+            bad("%s: %s" % (s.title, msg))
+            log("FAILED %s: %s" % (s.id, msg))
+            res[s.id] = Result("failed", msg[:300])
+        return 0      # (the quiet schedule leaves it open: the person finishes it with `sudo homelab-setup refresh`)
+    if isinstance(exc, Abort):
+        msg = str(exc)
+        State.note("err:" + s.id, msg.splitlines()[0][:300] if msg else "failed")
+        bad("%s: %s" % (s.title, msg))
+        log("FAILED %s: %s" % (s.id, msg))
+        res[s.id] = Result("failed", msg.splitlines()[0][:300])
+        return 0
+    State.note("err:" + s.id, "unexpected error: %r" % (exc,))
+    bad("%s: unexpected error: %r" % (s.title, exc))
+    log("CRASH %s: %r" % (s.id, exc))
+    res[s.id] = Result("failed", "unexpected error")
+    return 0
+
+
+def ready(res, s, selected, skip):
+    """True when the automatic step `s` can run in this pass."""
+    return (res[s.id].state in ("todo", "failed") and s.kind == "auto" and not (selected and s.id not in selected) and not (skip and s.id in skip))
+
+
+def run_pass(res, selected=None, skip=None):
+    """Run every automatic step that is ready. Returns the number of steps that became done.
+    `skip` holds the ids of steps that are left for later (the ones that finish in the background).
+    The stacks (steps with `parallel` set) that are ready are started together: each one only waits for Portainer and Docker."""
+    gained = 0
+    for s in topo():
+        if not ready(res, s, selected, skip):
+            continue
+        batch = [s]
+        if getattr(s, "parallel", False) and not Opt.dry:
+            batch += [t for t in STEPS if t is not s and getattr(t, "parallel", False) and ready(res, t, selected, skip)]
+        for t in batch:
+            if Hook.step:
+                Hook.step(t, res)
+        if Opt.dry or not Live.enabled:
+            for t in batch:
+                out("  %s %s%s" % (S_DOT, t.title, ("  %s(step %d of %d)%s" % (D, min(Live.done + 1, Live.total), Live.total, N)) if Live.total else ""))
+        if not Opt.dry:
+            Live.begin(s.title if len(batch) == 1 else "Starting %d stacks at the same time (%s)" % (len(batch), ", ".join(t.name for t in batch)))
+        if len(batch) == 1:
+            outcomes = {s.id: run_step(s)}
+        else:
+            outcomes = run_parallel(batch)
+        secs = Live.end()
+        for t in batch:
+            gained += settle(t, outcomes[t.id], res, secs)
     if Hook.step:
         Hook.step(None, res)
     Live.close()
@@ -2869,8 +2921,25 @@ class OsSupported(Step):
 
 
 @step
+class AptUpdate(Step):
+    id, group, title = "apt-update", "System", "Package lists refreshed"
+
+    def probe(self):
+        if State.ran("apt-update"):
+            return "done"
+        return "na" if Mode.existing else "todo"
+
+    def run(self):
+        act(["apt-get", "-oDPkg::Lock::Timeout=600", "update", "-q"], env=apt_env(), check=True, timeout=900)
+        if not Opt.dry:
+            State.mark("apt-update")
+
+
+@step
 class AptUpgrade(Step):
-    id, group, title = "apt-upgrade", "System", "System packages updated and upgraded"
+    """The system upgrade is not needed for the lab to run, so it is the last thing the install does (in the background job when there is one)."""
+    id, group, title = "apt-upgrade", "System", "System packages upgraded"
+    needs = ("apt-update",)
 
     def probe(self):
         if State.ran("apt-upgrade"):
@@ -2881,7 +2950,6 @@ class AptUpgrade(Step):
         return State.data["ran"].get("apt-upgrade", "")
 
     def run(self):
-        act(["apt-get", "-oDPkg::Lock::Timeout=600", "update", "-q"], env=apt_env(), check=True, timeout=900)
         act(["apt-get", "-oDPkg::Lock::Timeout=600", "upgrade", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"], env=apt_env(), check=True, timeout=3600)
         if not Opt.dry:
             State.mark("apt-upgrade")
@@ -2894,6 +2962,7 @@ OPTIONAL_PKGS = ["mergerfs", "parted", "mdadm", "snapraid", "zfsutils-linux"]   
 @step
 class Packages(Step):
     id, group, title = "packages", "System", "Helper programs installed (rsync, cron, smartmontools, mergerfs, ...)"
+    needs = ("apt-update",)
 
     def probe(self):
         missing = [p for p in REQUIRED_PKGS + OPTIONAL_PKGS if not pkg_installed(p)]
@@ -3614,11 +3683,19 @@ class PortainerEnv(Step):
 
 # ================================================================ the nine stacks
 class Prefetch:
-    """Downloads the images of every stack in the background while the earlier steps run, one thread per registry (ghcr.io throttles
-    parallel pulls from the SAME registry, but not pulls from different ones). `prepull` waits for an image that is on its way."""
+    """Downloads the images of every stack in the background, as soon as Docker is installed and while the next steps run. Several downloads run at
+    the same time (a few per registry, since a registry throttles too many at once), the small stacks first (Homepage before everything else) and
+    the big ones (Immich, Nextcloud) last, so the dashboard and the small services are not held up behind several GB of photo software.
+    `prepull` waits for an image that is on its way."""
     threads = []
     pending = {}            # image -> Event, set when its download ended (successfully or not)
-    lock = threading.Lock()
+    queue = []              # the images still to start, in order
+    busy = {}               # registry -> downloads running now
+    cv = threading.Condition()
+    WORKERS = 5
+    PER_REGISTRY = {"docker.io": 3, "ghcr.io": 2, "lscr.io": 2}
+    ORDER = {"homepage": 0, "adguard": 1, "beszel": 2, "netdata": 2, "speedtest-tracker": 2, "filebrowser": 2, "navidrome": 3,
+             "music-downloader": 3, "beszel-agent": 3, "immich": 8, "nextcloud": 9}
 
     @classmethod
     def host(cls, image):
@@ -3627,9 +3704,8 @@ class Prefetch:
 
     @classmethod
     def wanted(cls):
-        """All images of the stacks this install will deploy, the big ones (Immich, Nextcloud) first."""
-        order = {"immich": 0, "nextcloud": 1}
-        stacks = sorted((s for s in STEPS if isinstance(s, StackStep) and s.applies()), key=lambda s: order.get(s.name, 5))
+        """All images of the stacks this install will deploy: Homepage first, the big ones (Immich, Nextcloud) last."""
+        stacks = sorted((s for s in STEPS if isinstance(s, StackStep) and s.applies()), key=lambda s: cls.ORDER.get(s.name, 5))
         imgs = []
         for s in stacks:
             for i in images_in(read_file(repo_file("stacks", STACKS[s.name][0])) or ""):      # the raw file: reading it must not create any secret
@@ -3645,25 +3721,44 @@ class Prefetch:
             todo = [i for i in cls.wanted() if docker("image", "inspect", i)[0] != 0]
         except Exception:
             return
-        groups = {}
         for i in todo:
             cls.pending[i] = threading.Event()
-            groups.setdefault(cls.host(i), []).append(i)
-        for imgs in groups.values():
-            t = threading.Thread(target=cls.work, args=(imgs,), daemon=True)
+        cls.queue = list(todo)
+        for _ in range(min(cls.WORKERS, len(todo))):
+            t = threading.Thread(target=cls.work, daemon=True)
             t.start()
             cls.threads.append(t)
         if todo:
-            log("downloading %d images in the background (%s)" % (len(todo), ", ".join(sorted(groups))))
+            log("downloading %d images in the background (%d at a time)" % (len(todo), min(cls.WORKERS, len(todo))))
 
     @classmethod
-    def work(cls, imgs):
-        for img in imgs:
+    def take(cls):
+        """The next image to download that its registry allows right now, or None when the queue is empty."""
+        with cls.cv:
+            while cls.queue:
+                for img in cls.queue:
+                    h = cls.host(img)
+                    if cls.busy.get(h, 0) < cls.PER_REGISTRY.get(h, 2):
+                        cls.queue.remove(img)
+                        cls.busy[h] = cls.busy.get(h, 0) + 1
+                        return img
+                cls.cv.wait(2)
+        return None
+
+    @classmethod
+    def work(cls):
+        while True:
+            img = cls.take()
+            if img is None:
+                return
             try:
                 subprocess.run(["docker", "pull", "-q", img], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3600, check=False)
             except Exception:
                 pass        # the step that needs the image downloads it again, and reports a real failure
             finally:
+                with cls.cv:
+                    cls.busy[cls.host(img)] -= 1
+                    cls.cv.notify_all()
                 cls.pending[img].set()
 
     @classmethod
@@ -3701,6 +3796,7 @@ def prepull(images):
 
 class StackStep(Step):
     group = "Services"
+    parallel = True         # the stacks that are ready are started together (see run_pass)
 
     def __init__(self, name, needs, title, wait=300):
         self.name, self.needs, self.title, self.wait = name, tuple(needs), title, wait
@@ -3733,6 +3829,7 @@ def _register_stacks():
     """Create one checklist step per Portainer stack."""
     base = ("portainer-env", "folders")
     spec = [
+        ("homepage", base + ("tailscale-login", "homepage-files"), "Homepage stack (the dashboard)"),
         ("adguard", base + ("port53", "restore-configs"), "AdGuard Home stack (DNS ad blocking)"),
         ("beszel", base, "Beszel stack (server health)"),
         ("netdata", base, "Netdata stack (live metrics)"),
@@ -3740,7 +3837,6 @@ def _register_stacks():
         ("filebrowser", base, "FileBrowser stack"),
         ("immich", base + ("secrets", "restore-data"), "Immich stack (photos)"),
         ("nextcloud", base + ("secrets", "tailscale-login", "restore-configs", "restore-data"), "Nextcloud stack (files)"),
-        ("homepage", base + ("tailscale-login", "homepage-files"), "Homepage stack (the dashboard)"),
         ("beszel-agent", base + ("beszel-agent-key",), "Beszel agent stack"),
     ]
     for name, needs, title in spec:
@@ -3889,6 +3985,14 @@ class RestoreConfigs(Step):
         State.mark("restore-configs")
 
 
+def has_user_files(folder):
+    """True when the folder holds any file besides Immich's empty `.immich` marker files (the installer makes those itself when no drive is mounted)."""
+    for _dir, _subs, files in os.walk(folder):
+        if any(f != ".immich" for f in files):
+            return True
+    return False
+
+
 @step
 class RestoreData(Step):
     id, group, title = "restore-data", "Platform", "Photos and files copied back from your backup"
@@ -3905,7 +4009,7 @@ class RestoreData(Step):
         dest = P("/mnt/storage/")
         for sub in ("immich", "nextcloud"):
             d = dest + sub
-            if os.path.isdir(d) and any(os.scandir(d)):
+            if has_user_files(d):
                 raise Abort("%s already contains files and will not be overwritten. Move them away or skip the restore." % d.replace(ROOT, ""))
         size = dir_size_gb(path)
         free = shutil.disk_usage(dest).free / 1073741824.0
@@ -3940,6 +4044,9 @@ def widgets_for_machine(body):
             body = new
             State.data["weather_set"] = w["name"]
             State.save()
+    tz = State.data["answers"].get("tz_found")      # the dashboard's clock follows the time zone found from the connection (the Look tab can change it)
+    if tz:
+        body = clock_apply(body, tz) or body
     return body
 
 
@@ -4082,7 +4189,7 @@ class HomepageTabs(Step):
         if STATS_BEGIN in svc:
             out("      The Stats tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
         if CUSTOM_BEGIN in svc:
-            out("      The Customize tab is the control panel: change the look, the layout, the cards and the links by clicking. Choose its password with:  homelab panel password")
+            out("      The Customize tab is the control panel: change the look, the layout, the cards and the links by clicking. Its password is the admin password; change it with:  homelab panel password")
         if CAL_BEGIN in svc:
             out("      The Calendar is at the bottom of the Home tab, under the service cards. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
 
@@ -4158,18 +4265,15 @@ def run_as_root_stats(stats_file):
     run([P("/usr/local/sbin/homelab-stats"), "quick"], env=dict(os.environ, HOMELAB_STATS_OUT=stats_file), timeout=180)
 # ================================================================ Navidrome (plays the songs Downtify saved)
 class NavidromeStack(StackStep):
-    """Only on a machine that has a music folder (the folder Downtify saves into). A hand-built server is only looked at."""
+    """On every new machine (its music folder is the one Downtify saves into). A hand-built server is only looked at."""
 
     def applies(self):
-        # Navidrome plays songs, so it comes when there are songs (the first one Downtify saves is enough: the quiet schedule or the next
-        # `refresh` then installs it) or when it was set up before. A new machine's empty music folder does not bring it in.
-        if Mode.existing:
-            return False
-        folder = music_folder()
-        return bool(folder) and (music_has_songs(folder) or bool(State.data.get("navidrome_stack")) or "navidrome" in containers_all())
+        # Every new machine gets Navidrome (and its dashboard card) from the start, even while the music folder is still empty: Downtify fills it.
+        # A hand-built server is only looked at.
+        return not Mode.existing
 
     def detail(self):
-        return "music folder %s" % music_folder()
+        return "music folder %s" % (music_folder() or "/mnt/storage/music")
 
     def stamp(self):
         env = "".join(v for _, v in stack_env("navidrome"))        # new Last.fm keys, or AudioMuse-AI first in the agents, deploy Navidrome once more
@@ -4190,14 +4294,14 @@ class NavidromeStack(StackStep):
             State.save()
 
 
-register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome music server (plays the songs Downtify saved)"))
+register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome music server (plays the songs in the music folder)"))
 
 
 @step
 class NavidromeCard(Step):
     id, group = "navidrome-card", "Homepage"
     title = "Navidrome login and its dashboard card (first in its group) with Navidrome's own player inside"
-    needs = ("stack-navidrome", "homepage-files")
+    needs = ("stack-navidrome", "homepage-files", "scripts")
 
     def applies(self):
         return BY_ID["stack-navidrome"].applies()
@@ -4230,10 +4334,8 @@ class NavidromeCard(Step):
             if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
                 run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)        # makes the card (and its Tailscale address) now
             old = read_file(hp_path("services.yaml"))
-            if card_widget_type(old, "navidrome-card") is None:
-                warn("The dashboard has no Navidrome card yet. homelab-cards makes it within 5 minutes; run `sudo homelab-setup upgrade` after that "
-                     "to put the player in it.")
-                return
+            if card_widget_type(old, "navidrome-card") is None:      # homelab-cards could not make it (it only runs when Docker answers): the installer writes the card itself
+                old = navidrome_card_added(old, svc_host())
         new = services_without_card(old, PLAYER_ID)
         new = services_with_iframe_widget(new, "navidrome-card", Ctx.lan or svc_host())
         new = card_to_top(new, "navidrome-card")
@@ -4244,6 +4346,16 @@ class NavidromeCard(Step):
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
             out("      The Navidrome card is first in its group, called Navidrome (\"Music Streaming Server\"), and has Navidrome's own player inside "
                 "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
+
+
+def navidrome_card_added(text, host):
+    """services.yaml with a Navidrome card in the Media & Entertainment group (made when the group is missing). Only used when homelab-cards did not make it."""
+    card = ("    - Navidrome:\n        id: navidrome-card\n        href: http://%s:%d\n        siteMonitor: http://%s:%d\n"
+            "        icon: navidrome.svg\n        description: Music Streaming Server\n") % (host, PORTS["navidrome"], host, PORTS["navidrome"])
+    m = re.search(r"(?m)^- Media & Entertainment:\s*\n", text)
+    if m:
+        return text[:m.end()] + card + "\n" + text[m.end():]
+    return text.rstrip("\n") + "\n\n- Media & Entertainment:\n\n" + card
 
 
 # ================================================================ AudioMuse-AI (similar songs for Navidrome; only after `homelab-setup audiomuse`)
@@ -4923,6 +5035,7 @@ def md_compose_from_inspect(old):
 
 class MusicDownloaderStack(StackStep):
     """Downtify (songs) and MeTube (videos) as one Portainer stack called music-downloader."""
+    parallel = False        # (it may move hand-made containers and needs the screen to itself)
 
     def applies(self):
         return not Mode.existing
@@ -5653,7 +5766,7 @@ class LoginHook(Step):
 
 
 # ================================================================ things only you can do
-EXPECTED_CONTAINERS = 18
+EXPECTED_CONTAINERS = 19
 
 
 def expected_containers():
@@ -5746,7 +5859,7 @@ class SpeedtestFirst(Step):
         return not Mode.existing
 
     def probe(self):
-        return "done" if chk_speedtest() else "todo"
+        return "done" if State.ran("speedtest-first") or chk_speedtest() else "todo"
 
     @staticmethod
     def php(lines):
@@ -5777,8 +5890,9 @@ class SpeedtestFirst(Step):
             raise Abort("Speedtest Tracker did not start the first speed test (answer %s). Open %s and click Speedtest." % (st, url("speedtest")))
         for _ in range(1 if FAKE else 30):      # a real test takes up to a minute or two
             if chk_speedtest():
-                return
+                break
             time.sleep(0 if FAKE else 5)
+        State.mark("speedtest-first")            # started once: a later silent moment of the service does not start another test
 
     def help(self):
         return "Open Speedtest Tracker (port 8088) and click Speedtest. The Homepage card fills in afterwards."
@@ -5842,9 +5956,6 @@ class AckStep(Step):
 def _register_acks():
     """Create the checklist steps that only a person can confirm."""
     items = [
-        AckStep("secrets-saved", "Generated passwords copied into your password manager",
-                "Show the generated passwords and keys, copy them into your password manager, and store the admin password you chose there as well. They are kept in /root/.homelab-setup/secrets.env (root only). The step is marked done once this command has been run; the installer cannot check that the passwords were saved.\n$ sudo homelab-setup secrets",
-                auto=lambda: bool(State.data.get("secrets_shown"))),
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
                 needs=("adguard-setup",), auto=chk_devices_dns, wants=adguard_wanted),
@@ -6040,30 +6151,6 @@ def panel_set_password(pw):
                 chown(p, Ctx.uid, Ctx.gid)
 
 
-def panel_ask_password():
-    """Ask for the panel's password (twice). Returns True when it was saved."""
-    if Opt.dry:
-        out("      would ask for a password for the control panel and save it (hashed) in %s" % panel_password_file().replace(ROOT, ""))
-        return True
-    say("Choose a password for the control panel (the Customize tab). It is only for the panel: your other logins stay as they are.")
-    for _ in range(3):
-        pw = ask_secret("Panel password (at least 10 characters)")
-        if len(pw) < 10:
-            warn("The password needs at least 10 characters.")
-            continue
-        if pw != pw.strip():
-            warn("The password cannot start or end with a space.")
-            continue
-        if ask_secret("Type it again") != pw:
-            warn("The two entries did not match.")
-            continue
-        panel_set_password(pw)
-        good("The control panel password is saved.")
-        return True
-    warn("No password was saved. Choose one later with:  homelab panel password")
-    return False
-
-
 @step
 class PanelFiles(Step):
     id, group = "panel-files", "Homepage"
@@ -6095,9 +6182,6 @@ class PanelFiles(Step):
         act(["systemctl", "enable", "--now", "homelab-panel"])
         if changed and not Opt.dry and run(["systemctl", "is-active", "homelab-panel"])[1].strip() == "active":
             act(["systemctl", "restart", "homelab-panel"])         # new page files or a new unit: start the service again
-        if interactive() and not Opt.yes and not os.path.exists(panel_password_file()):
-            out("")
-            panel_ask_password()
 
 
 @step
@@ -6121,10 +6205,9 @@ class PanelServe(Step):
 
 @step
 class PanelPassword(Step):
+    """The panel uses the admin password chosen at the start of the install (nothing more to type). `homelab panel password` changes it later."""
     id, group = "panel-password", "Homepage"
-    title = "The control panel has its own password"
-    kind = "manual"
-    optional = True
+    title = "The control panel uses the admin password"
     needs = ("panel-files",)
 
     def applies(self):
@@ -6133,15 +6216,12 @@ class PanelPassword(Step):
     def probe(self):
         return "done" if os.path.exists(panel_password_file()) else "todo"
 
-    def help(self):
-        return ("Choose the password for the Customize tab (it is only for the panel). Run this as yourself, without sudo:\n$ homelab panel password\n"
-                "or let the walk-through ask you:\n$ sudo homelab-setup fill")
-
-    def fill_help(self):
-        return "Choose a password for the control panel. It is saved hashed, in your own folder, and used only by the Customize tab."
-
-    def fill(self):
-        return panel_ask_password()
+    def run(self):
+        if Opt.dry:
+            out("      would save the admin password (hashed) as the control panel's password in %s" % panel_password_file().replace(ROOT, ""))
+            return
+        panel_set_password(need_password("it is also the control panel's password"))
+        good("The control panel uses the admin password (change it later with:  homelab panel password)")
 
 
 # ================================================================ the web terminal (the Terminal card of the Links tab)
@@ -6238,14 +6318,14 @@ class MusicFolderAccess(Step):
         if not Opt.dry and not music_writable():
             warn("The music folder %s still cannot be written by %s. The Upload card cannot add songs until it can." % (folder, Ctx.user))
 # ================================================================ the last steps finish in the background
-# The slow end of the install (Nextcloud's first start, the Immich admin account, the Beszel and widget keys) does not need anyone at the
+# The slow end of the install (Immich and Nextcloud with their big downloads and first start, the Beszel and widget keys, the system upgrade) does not need anyone at the
 # terminal. After the other steps are done the install ends, and these steps go on in a systemd unit (`homelab-finish`) that survives closing
 # the terminal. `sudo homelab-setup status` shows how far it is; a failed step is listed there and tried again by `sudo homelab-setup finish`.
 FINISH_UNIT = "homelab-finish"
 FINISH_STATUS = PROGRESS_DIR + "/finish-status"          # JSON, readable by everyone (the login screen and the panel show it)
 FINISH_LOCK = STATE_DIR + "/finish.lock"                 # held (flock) by the running job
 FINISH_PW = P("/run/homelab-finish.pw")                  # the admin password on its way to the job: tmpfs, root only, removed the moment it is read
-FINISH_SEEDS = ("nextcloud-ready", "nextcloud-restore-db", "immich-admin", "beszel-user", "beszel-agent-key")
+FINISH_SEEDS = ("stack-immich", "stack-nextcloud", "nextcloud-ready", "nextcloud-restore-db", "immich-admin", "beszel-user", "beszel-agent-key", "apt-upgrade")
 
 
 def background_mode():
@@ -6338,14 +6418,18 @@ class Finish:
 
 
 def finish_passes(res, ids):
-    """Run the deferred steps (up to four passes, like the install): a step that fails does not stop the others. Returns the new results."""
+    """Run the deferred steps (up to four passes, like the install): a step that fails does not stop the others. The system upgrade comes last.
+    Returns the new results."""
     Hook.step = lambda s, r: Finish.update(s, r, ids)
     try:
         for _ in range(4):
-            gained = run_pass(res, selected=ids)
+            gained = run_pass(res, selected=ids, skip={"apt-upgrade"})
             res = evaluate()
             if not gained:
                 break
+        if "apt-upgrade" in ids and res["apt-upgrade"].state in ("todo", "failed"):
+            run_pass(res, selected={"apt-upgrade"})
+            res = evaluate()
     finally:
         Hook.step = None
     return res
@@ -6455,6 +6539,7 @@ def cmd_finish():
         return
     Live.begin_run(len(todo))
     Finish.begin(res, ids)
+    Prefetch.start()        # Immich and Nextcloud download here, several images at a time
     rule("Finishing the install")
     try:
         res = finish_passes(res, ids)
@@ -6527,33 +6612,24 @@ def password_warning():
          "manager." % ("AdGuard Home, " if adguard_wanted() else ""))
 
 
-def ask_weather(a):
-    """Ask for a city, look up its coordinates and keep them for the Homepage weather card.
-    If the lookup is not possible the card keeps the repository default and the weather step stays on the list."""
-    if a.get("weather"):
+def auto_location(a):
+    """Time zone and weather city are found by themselves, from this connection's public IP address (nothing to type).
+    When no service answers, the machine's own time zone is used and the weather card keeps New York. The Look tab of Customize changes both later."""
+    if a.get("tz") and a.get("weather"):
         return
-    default = WEATHER_CITY_DEFAULT
-    for _ in range(3):
-        q = ask("City for the Homepage weather card", default)
-        found = geocode_city(q)
-        if found is None:
-            warn("The city lookup (geocoding-api.open-meteo.com) did not answer. The weather card keeps its default "
-                 "location (New York). It can be changed later in ~/homepage-config/widgets.yaml.")
-            return
-        if not found:
-            warn("No city named '%s' was found. Try the name alone, without a state or country." % q)
-            continue
-        pick = found[0]
-        if len(found) > 1:
-            out("")
-            for i, f in enumerate(found, 1):
-                out("   %d  %s" % (i, ", ".join(x for x in (f["name"], f["region"], f["country"]) if x)))
-            n = ask("Which one? Enter its number", "1")
-            pick = found[int(n) - 1] if n.isdigit() and 1 <= int(n) <= len(found) else found[0]
-        a["weather"] = pick
-        good("Weather location: %s" % ", ".join(x for x in (pick["name"], pick["region"], pick["country"]) if x))
-        return
-    warn("No weather city was chosen. The card keeps its default location (New York).")
+    found = ip_location()
+    if found:
+        if not a.get("tz") and found["tz"]:
+            a["tz"] = found["tz"]
+            a["tz_found"] = found["tz"]
+        if not a.get("weather"):
+            a["weather"] = {k: found[k] for k in ("name", "region", "country", "lat", "lon")}
+        good("Found by itself: %s, time zone %s (change it any time on the Look tab of Customize)" % (
+            ", ".join(x for x in (found["name"], found["region"], found["country"]) if x), a.get("tz") or Ctx.tz))
+    else:
+        a.setdefault("tz", Ctx.tz)
+        warn("The location lookup did not answer, so the machine's time zone (%s) is used and the weather card shows New York. "
+             "Change both on the Look tab of Customize." % a["tz"])
 
 
 LVM_EXPLAIN = ("Ubuntu Server's installer makes the system volume small (about 100 GB) and leaves the rest of the drive unused. "
@@ -6646,7 +6722,7 @@ def ask_tailscale_token(a):
 
 
 def ask_answers():
-    """Ask the first questions of an install: admin name, email, time zone, city, LAN address and the password."""
+    """Ask the first questions of an install: admin name, email, LAN address and the password (time zone and city are found by themselves)."""
     a = State.data["answers"]
     out("")
     say("A few answers are needed first. They stay on this machine and only fill in its configuration files.")
@@ -6655,8 +6731,7 @@ def ask_answers():
     a["email"] = ask("Email address (login for Immich, Beszel and Speedtest Tracker)", a.get("email", ""))
     while not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", a["email"]):
         a["email"] = ask("That is not a valid email address. Enter it again", "")
-    a["tz"] = ask("Time zone", a.get("tz") or Ctx.tz)
-    ask_weather(a)
+    auto_location(a)
     a["lan"] = ask("This machine's LAN address (reserve it in your router so it does not change)", a.get("lan") or Ctx.lan)
     while not is_ipv4(a["lan"].strip()):
         a["lan"] = ask("That is not an address like 192.168.1.20. Enter it again", "")
@@ -6719,7 +6794,7 @@ def show_secret_values():
 
 
 def final_report(res, background=False):
-    """End of install: how it went, the generated passwords (then wait for Enter), the checklist, the next step.
+    """End of install: how it went, where the generated passwords are, the checklist, the next step.
     `background` is True when the last steps were handed to the background job."""
     Live.close()
     done, total = counts(res)
@@ -6734,23 +6809,8 @@ def final_report(res, background=False):
     if 0 < http("GET", url("homepage"), timeout=10)[0] < 500:
         good("Your lab is running. Open Homepage: %s" % mark(url("homepage")))
     Secrets.load()
-    keys = list(Secrets.vals)
-    if keys and not State.data.get("secrets_announced"):
-        State.data["secrets_announced"] = time.strftime("%F %T")
-        State.save()
-        rule("Generated passwords and keys")
-        say("Stored in %s (root only). Copy them into your password manager now. "
-            "This file stays on this machine and is never part of the repository." % SECRET_FILE.replace(ROOT, ""))
-        show_secret_values()
-        say("Show them again at any time:\n$ sudo homelab-setup secrets")
-        say("The admin password you chose is not stored anywhere. Keep it in your password manager.")
-        out("")
-        if interactive() and not Opt.yes:
-            ask("Press Enter when they are saved to see what is left")
-            State.data["secrets_shown"] = time.strftime("%F %T")        # ticks "passwords copied into your password manager"
-            State.save()
-            res = evaluate()
-            write_progress(res)
+    if Secrets.vals:
+        say("Generated passwords and keys are kept in %s (root only). Show them any time with:  sudo homelab-setup secrets" % SECRET_FILE.replace(ROOT, ""))
     offer_drive_wizard()
     show_checklist(res, "Setup")
     next_step_section(res)
@@ -6781,7 +6841,7 @@ SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguar
 
 
 def navidrome_wanted():
-    """True when this machine is meant to run Navidrome (it comes with the first song in the music folder)."""
+    """True when this machine is meant to run Navidrome (every new install has it)."""
     return BY_ID["stack-navidrome"].applies()
 
 
@@ -6994,8 +7054,6 @@ def by_hand_tag(s):
     """When the person will be asked to do this step."""
     if s.id in DURING_INSTALL:
         return "during the install"
-    if s.id == "secrets-saved":
-        return "at the end of the install, when you press Enter after copying them"
     if getattr(s, "auto", None):
         return "afterwards, detected automatically once done"
     return "afterwards"
@@ -7096,12 +7154,13 @@ def cmd_install():
 
 
 def run_install(res, later=None):
-    """Run the install: the early system steps, then the two steps a person must do, then up to four more passes.
-    `later` holds the ids of the steps that finish in the background after the install."""
-    early = {"os", "apt-upgrade", "packages", "docker", "docker-group", "tailscale-install"}
+    """Run the install: Docker first, then the downloads of every image start in the background, then the other early steps and the two steps
+    a person must do, then up to four more passes. `later` holds the ids of the steps that finish in the background after the install.
+    The system upgrade is not on the way: it runs after everything else (in the background job when there is one)."""
     rule("Installing")
-    run_pass(res, early)
-    Prefetch.start()        # the images of every stack download in the background while the next steps run
+    run_pass(res, {"os", "apt-update", "packages", "docker", "docker-group"})
+    Prefetch.start()        # the images of every stack download in the background (several at a time) while the next steps run
+    run_pass(res, {"tailscale-install"})
     # the two things only a person can do: log in to Tailscale and switch HTTPS on
     for sid in ("tailscale-login", "tailscale-https"):
         s = BY_ID[sid]
@@ -7115,12 +7174,15 @@ def run_install(res, later=None):
                     unblock(res, dry=Opt.dry)
             except Abort as e:
                 bad(str(e))
+    held = set(later or ()) | {"apt-upgrade"}
     for _ in range(4):
-        gained = run_pass(res, skip=later)
+        gained = run_pass(res, skip=held)
         if not Opt.dry:
             res.update(evaluate())
         if not gained:
             break
+    if "apt-upgrade" not in (later or ()):
+        run_pass(res, {"apt-upgrade"})      # (no background job: the upgrade is the last thing)
 
 
 def wait_for_apps():
@@ -7474,7 +7536,7 @@ def cmd_audiomuse(rest):
     if rest:
         raise Abort("Unknown word '%s'. Use: homelab-setup audiomuse   or   audiomuse memory | pause | resume | status | remove" % word)
     if not navidrome_wanted():
-        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome yet (it comes with the first song in the music folder). Nothing was changed.")
+        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome yet (it is installed with the lab; run `sudo homelab-setup refresh`). Nothing was changed.")
     other = "" if State.data.get("audiomuse") else port_taken_by(PORTS["audiomuse"])
     if other:
         raise Abort("Port %d is already used by the container %s, and AudioMuse-AI needs it for its web page. Nothing was changed." % (PORTS["audiomuse"], other))
@@ -7539,7 +7601,7 @@ def cmd_navilist(rest):
     if rest:
         raise Abort("Unknown word '%s'. Use: homelab-setup navilist   or   navilist subscribe | status | remove" % word)
     if not navidrome_wanted():
-        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome yet (it comes with the first song in the music folder). Nothing was changed.")
+        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome yet (it is installed with the lab; run `sudo homelab-setup refresh`). Nothing was changed.")
     other = "" if State.data.get("navilist") else port_taken_by(PORTS["navilist"], mine=("navilist",))
     if other:
         raise Abort("Port %d is already used by the container %s, and naviList needs it for its web page. Nothing was changed." % (PORTS["navilist"], other))
@@ -7902,10 +7964,6 @@ def cmd_secrets():
     say("Saved in %s (root only):" % SECRET_FILE.replace(ROOT, ""))
     show_secret_values()
     say("The admin password you chose is not stored. Keep it in your password manager.")
-    if not State.readonly:
-        State.data["secrets_shown"] = State.data.get("secrets_shown") or time.strftime("%F %T")
-        State.save()
-        write_progress(evaluate())
 
 
 def uptime_seconds():

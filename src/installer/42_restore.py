@@ -102,6 +102,14 @@ class RestoreConfigs(Step):
         State.mark("restore-configs")
 
 
+def has_user_files(folder):
+    """True when the folder holds any file besides Immich's empty `.immich` marker files (the installer makes those itself when no drive is mounted)."""
+    for _dir, _subs, files in os.walk(folder):
+        if any(f != ".immich" for f in files):
+            return True
+    return False
+
+
 @step
 class RestoreData(Step):
     id, group, title = "restore-data", "Platform", "Photos and files copied back from your backup"
@@ -118,7 +126,7 @@ class RestoreData(Step):
         dest = P("/mnt/storage/")
         for sub in ("immich", "nextcloud"):
             d = dest + sub
-            if os.path.isdir(d) and any(os.scandir(d)):
+            if has_user_files(d):
                 raise Abort("%s already contains files and will not be overwritten. Move them away or skip the restore." % d.replace(ROOT, ""))
         size = dir_size_gb(path)
         free = shutil.disk_usage(dest).free / 1073741824.0

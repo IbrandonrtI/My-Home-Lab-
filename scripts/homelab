@@ -113,9 +113,6 @@ suggestions() {
   suggest 7 "docker ps" "what is running right now"
   suggest 7 "sudo homelab-selftest" "check everything and look for problems or leftovers"
   suggest 8 "sudo drives" "menu: connect or remove drives, or use part of the boot drive for a pool"
-  if command -v homelab-panel >/dev/null 2>&1 && [ ! -f "$HOME/.config/homelab-panel/password" ]; then
-    suggest 3 "homelab panel password" "choose the password of the Customize tab and the Terminal card"
-  fi
   if [ -d "$HOMEPAGE_DIR" ]; then
     suggest 8 "homelab theme" "change the dashboard's background and card colours"
     suggest 8 "homelab bookmark add NAME URL" "add a bookmark to the dashboard, with its logo"
@@ -228,8 +225,16 @@ finish_line() {   # the last steps of the install finish in the background (writ
   fi
 }
 
+secrets_hint() {   # the passwords and keys the installer made: one line under the commands hint, then the blank line
+  if command -v homelab-setup >/dev/null 2>&1; then
+    printf '  %sPasswords and keys:%s %ssudo homelab-setup secrets%s\n' "$D" "$N" "$B" "$N"
+  fi
+  printf '\n'
+}
+
 hint_line() {
-  printf '  %sType%s %shomelab commands%s %sto see every command.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N"
+  printf '  %sType%s %shomelab commands%s %sto see every command.%s\n' "$D" "$N" "$B" "$N" "$D" "$N"
+  secrets_hint
 }
 
 commands() {
@@ -304,7 +309,7 @@ commands() {
   cmd "homelab calendar list"          "your online calendars (also: remove N, sync)"
   cmd "homelab event add DATE \"text\" [yearly]" "your own event in the calendar"
   cmd "homelab event list"             "your events, numbered (remove: event remove NUMBER)"
-  cmd "homelab panel password"         "set the password of Customize and Terminal"
+  cmd "homelab panel password"         "change the Customize password (admin one at first)"
   cmd "homelab panel status"           "is the panel password set?"
   cmd "homelab simple on|off"          "hide the small text under card names (default: off)"
   cmd "homelab theme"                  "show the look and how to change it (no sudo)"
@@ -1821,7 +1826,8 @@ screen() {   # the whole screen, checked live. "login" leaves out the suggested 
 }
 
 login_hint() {
-  printf '\n  %sType%s %shomelab%s %sfor the full status, or%s %shomelab commands%s%s.%s\n\n' "$D" "$N" "$B" "$N" "$D" "$N" "$B" "$N" "$D" "$N"
+  printf '\n  %sType%s %shomelab%s %sfor the full status, or%s %shomelab commands%s%s.%s\n' "$D" "$N" "$B" "$N" "$D" "$N" "$B" "$N" "$D" "$N"
+  secrets_hint
 }
 
 uptime_secs() {

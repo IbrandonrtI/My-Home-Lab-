@@ -1,17 +1,14 @@
 # ================================================================ Navidrome (plays the songs Downtify saved)
 class NavidromeStack(StackStep):
-    """Only on a machine that has a music folder (the folder Downtify saves into). A hand-built server is only looked at."""
+    """On every new machine (its music folder is the one Downtify saves into). A hand-built server is only looked at."""
 
     def applies(self):
-        # Navidrome plays songs, so it comes when there are songs (the first one Downtify saves is enough: the quiet schedule or the next
-        # `refresh` then installs it) or when it was set up before. A new machine's empty music folder does not bring it in.
-        if Mode.existing:
-            return False
-        folder = music_folder()
-        return bool(folder) and (music_has_songs(folder) or bool(State.data.get("navidrome_stack")) or "navidrome" in containers_all())
+        # Every new machine gets Navidrome (and its dashboard card) from the start, even while the music folder is still empty: Downtify fills it.
+        # A hand-built server is only looked at.
+        return not Mode.existing
 
     def detail(self):
-        return "music folder %s" % music_folder()
+        return "music folder %s" % (music_folder() or "/mnt/storage/music")
 
     def stamp(self):
         env = "".join(v for _, v in stack_env("navidrome"))        # new Last.fm keys, or AudioMuse-AI first in the agents, deploy Navidrome once more
@@ -32,14 +29,14 @@ class NavidromeStack(StackStep):
             State.save()
 
 
-register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome music server (plays the songs Downtify saved)"))
+register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome music server (plays the songs in the music folder)"))
 
 
 @step
 class NavidromeCard(Step):
     id, group = "navidrome-card", "Homepage"
     title = "Navidrome login and its dashboard card (first in its group) with Navidrome's own player inside"
-    needs = ("stack-navidrome", "homepage-files")
+    needs = ("stack-navidrome", "homepage-files", "scripts")
 
     def applies(self):
         return BY_ID["stack-navidrome"].applies()
@@ -72,10 +69,8 @@ class NavidromeCard(Step):
             if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
                 run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)        # makes the card (and its Tailscale address) now
             old = read_file(hp_path("services.yaml"))
-            if card_widget_type(old, "navidrome-card") is None:
-                warn("The dashboard has no Navidrome card yet. homelab-cards makes it within 5 minutes; run `sudo homelab-setup upgrade` after that "
-                     "to put the player in it.")
-                return
+            if card_widget_type(old, "navidrome-card") is None:      # homelab-cards could not make it (it only runs when Docker answers): the installer writes the card itself
+                old = navidrome_card_added(old, svc_host())
         new = services_without_card(old, PLAYER_ID)
         new = services_with_iframe_widget(new, "navidrome-card", Ctx.lan or svc_host())
         new = card_to_top(new, "navidrome-card")
@@ -86,6 +81,16 @@ class NavidromeCard(Step):
             write_file(hp_path("services.yaml"), new, 0o644, (Ctx.uid, Ctx.gid))
             out("      The Navidrome card is first in its group, called Navidrome (\"Music Streaming Server\"), and has Navidrome's own player inside "
                 "(previous, next, shuffle, repeat). Clicking its title opens the full Navidrome page.")
+
+
+def navidrome_card_added(text, host):
+    """services.yaml with a Navidrome card in the Media & Entertainment group (made when the group is missing). Only used when homelab-cards did not make it."""
+    card = ("    - Navidrome:\n        id: navidrome-card\n        href: http://%s:%d\n        siteMonitor: http://%s:%d\n"
+            "        icon: navidrome.svg\n        description: Music Streaming Server\n") % (host, PORTS["navidrome"], host, PORTS["navidrome"])
+    m = re.search(r"(?m)^- Media & Entertainment:\s*\n", text)
+    if m:
+        return text[:m.end()] + card + "\n" + text[m.end():]
+    return text.rstrip("\n") + "\n\n- Media & Entertainment:\n\n" + card
 
 
 # ================================================================ AudioMuse-AI (similar songs for Navidrome; only after `homelab-setup audiomuse`)

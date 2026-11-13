@@ -42,6 +42,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zoneinfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
@@ -73,6 +74,7 @@ SETTINGS = os.path.join(HP, "settings.yaml")
 SERVICES = os.path.join(HP, "services.yaml")
 BOOKMARKS = os.path.join(HP, "bookmarks.yaml")
 CSS = os.path.join(HP, "custom.css")
+WIDGETS = os.path.join(HP, "widgets.yaml")
 IMAGES = os.path.join(HP, "images")
 HISTORY = os.path.join(HP, ".panel-history")
 PASSFILE = os.path.join(STATE_DIR, "password")
@@ -2275,10 +2277,101 @@ def icon_index():
 
 
 # ================================================================ the state the page shows
+# ================================================================ time zone and city (the clock and the weather card of the dashboard)
+GEOCODE_API = os.environ.get("HLP_GEOCODE_API") or "https://geocoding-api.open-meteo.com"
+ZONE_NAME = re.compile(r"[A-Za-z0-9_+/-]{1,60}\Z")
+
+
+def widget_block(text, key):
+    """(start, end) of the text of one widget in widgets.yaml (from the word after its dash up to the next widget), or None."""
+    m = re.search(r"(- %s:)(.*?)(\n- |\Z)" % key, text, re.S)
+    return (m.start(2), m.end(2)) if m else None
+
+
+def location_state():
+    text = read(WIDGETS)
+    out = {"timeZone": "", "city": "", "lat": None, "lon": None, "zones": sorted(zoneinfo.available_timezones())}
+    b = widget_block(text, "datetime")
+    if b:
+        m = re.search(r"\n\s+timeZone:\s*(\S+)", text[b[0]:b[1]])
+        out["timeZone"] = m.group(1).strip("\"'") if m else ""
+    b = widget_block(text, "openmeteo")
+    if b:
+        blk = text[b[0]:b[1]]
+        m = re.search(r"\n\s+label:\s*(.*)", blk)
+        out["city"] = m.group(1).strip().strip("\"'") if m else ""
+        for key, k in (("lat", "latitude"), ("lon", "longitude")):
+            m = re.search(r"\n\s+%s:\s*(-?[0-9.]+)" % k, blk)
+            out[key] = float(m.group(1)) if m else None
+    return out
+
+
+def api_location_search(body):
+    """Cities with that name (Open-Meteo's free search, no key): the page shows them and the person picks one."""
+    q = str(body.get("q") or "").strip()[:60]
+    if not q:
+        raise Fail("Type the name of a city first.")
+    try:
+        req = urllib.request.Request(GEOCODE_API + "/v1/search?count=6&language=en&format=json&name=" + urllib.parse.quote(q), headers={"User-Agent": "homelab-panel"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            js = json.loads(r.read().decode("utf-8", "replace"))
+    except (OSError, ValueError):
+        raise Fail("The city search did not answer. Check that the server is online, and try again.") from None
+    found = []
+    for r in js.get("results") or []:
+        try:
+            found.append({"name": str(r["name"]), "region": str(r.get("admin1") or ""), "country": str(r.get("country") or ""),
+                          "lat": float(r["latitude"]), "lon": float(r["longitude"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return {"places": found}
+
+
+def api_location_save(body):
+    tz = str(body.get("timeZone") or "").strip()
+    place = body.get("place")
+    tx = Tx("Time zone and city changed")
+    text = tx.get(WIDGETS)
+    if tz:
+        if not ZONE_NAME.match(tz) or tz not in zoneinfo.available_timezones():
+            raise Fail("That is not a time zone name. Pick one from the list, like America/New_York.")
+        b = widget_block(text, "datetime")
+        if not b:
+            raise Fail("The dashboard has no clock widget in widgets.yaml, so there is nothing to set.")
+        blk = text[b[0]:b[1]]
+        if re.search(r"\n\s+timeZone:", blk):
+            blk = re.sub(r"(\n\s+timeZone:).*", lambda m: "%s %s" % (m.group(1), tz), blk, count=1)
+        else:
+            f = re.search(r"\n(\s+)format:[^\n]*", blk)
+            blk = (blk[:f.end()] + "\n%s  timeZone: %s" % (f.group(1), tz) + blk[f.end():]) if f else blk.rstrip("\n") + "\n    format:\n      timeZone: %s\n" % tz
+        text = text[:b[0]] + blk + text[b[1]:]
+    if place:
+        try:
+            name, lat, lon = str(place["name"]).strip(), float(place["lat"]), float(place["lon"])
+        except (KeyError, TypeError, ValueError):
+            raise Fail("The city is not understood. Search for it again and pick one from the list.") from None
+        if not name or len(name) > 60 or not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            raise Fail("The city is not understood. Search for it again and pick one from the list.")
+        b = widget_block(text, "openmeteo")
+        if not b:
+            raise Fail("The dashboard has no weather widget in widgets.yaml, so there is nothing to set.")
+        blk = text[b[0]:b[1]]
+        label = name.replace("\\", "").replace('"', "")
+        blk = re.sub(r"(\n\s+label:).*", lambda m: '%s "%s"' % (m.group(1), label), blk, count=1)
+        blk = re.sub(r"(\n\s+latitude:).*", lambda m: "%s %.4f" % (m.group(1), lat), blk, count=1)
+        blk = re.sub(r"(\n\s+longitude:).*", lambda m: "%s %.4f" % (m.group(1), lon), blk, count=1)
+        text = text[:b[0]] + blk + text[b[1]:]
+    if not tz and not place:
+        raise Fail("Nothing to save.")
+    tx.put(WIDGETS, text)
+    tx.commit()
+    return {}
+
+
 def full_state():
     h = history_last()
     return {"version": VERSION, "look": look_state(), "background": bg_state(), "layout": layout_state(), "services": services_state(), "hlcards": hl_state(), "mythemes": mythemes_state(),
-            "links": marks_state(), "paint": paint_state(), "undo": (h[1]["label"] if h else ""), "automatic": sorted(AUTOMATIC), "protected": sorted(PROTECTED)}
+            "links": marks_state(), "location": location_state(), "paint": paint_state(), "undo": (h[1]["label"] if h else ""), "automatic": sorted(AUTOMATIC), "protected": sorted(PROTECTED)}
 
 
 # ================================================================ the Drives tab
@@ -3681,7 +3774,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, api_drives_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/drives/job
             if path in ("/api/drives/rename", "/api/drives/sleep", "/api/drives/wake", "/api/drives/remount"):
                 return self.send(200, dict(api_drives_do(path.rsplit("/", 1)[1], body), ok=True))      # not under LOCK: a remount takes a while
-            routes = {"/api/look": api_look_save, "/api/look/css": api_look_css, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
+            if path == "/api/location/search":
+                return self.send(200, dict(api_location_search(body), ok=True))      # (the internet is asked: not under LOCK)
+            routes = {"/api/location": api_location_save, "/api/look": api_look_save, "/api/look/css": api_look_css, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
                       "/api/layout": api_layout_save, "/api/card": api_card, "/api/hlcards/restore": api_hl_restore, "/api/mytheme": api_mytheme, "/api/link": api_link, "/api/group": api_group,
                       "/api/undo": lambda b: {"undone": undo()}}
             fn = routes.get(path)

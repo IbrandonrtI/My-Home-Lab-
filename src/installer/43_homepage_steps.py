@@ -13,6 +13,9 @@ def widgets_for_machine(body):
             body = new
             State.data["weather_set"] = w["name"]
             State.save()
+    tz = State.data["answers"].get("tz_found")      # the dashboard's clock follows the time zone found from the connection (the Look tab can change it)
+    if tz:
+        body = clock_apply(body, tz) or body
     return body
 
 
@@ -155,7 +158,7 @@ class HomepageTabs(Step):
         if STATS_BEGIN in svc:
             out("      The Stats tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
         if CUSTOM_BEGIN in svc:
-            out("      The Customize tab is the control panel: change the look, the layout, the cards and the links by clicking. Choose its password with:  homelab panel password")
+            out("      The Customize tab is the control panel: change the look, the layout, the cards and the links by clicking. Its password is the admin password; change it with:  homelab panel password")
         if CAL_BEGIN in svc:
             out("      The Calendar is at the bottom of the Home tab, under the service cards. Add your own events with:  homelab event add 2026-12-25 \"Family dinner\"")
 

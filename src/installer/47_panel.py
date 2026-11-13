@@ -127,30 +127,6 @@ def panel_set_password(pw):
                 chown(p, Ctx.uid, Ctx.gid)
 
 
-def panel_ask_password():
-    """Ask for the panel's password (twice). Returns True when it was saved."""
-    if Opt.dry:
-        out("      would ask for a password for the control panel and save it (hashed) in %s" % panel_password_file().replace(ROOT, ""))
-        return True
-    say("Choose a password for the control panel (the Customize tab). It is only for the panel: your other logins stay as they are.")
-    for _ in range(3):
-        pw = ask_secret("Panel password (at least 10 characters)")
-        if len(pw) < 10:
-            warn("The password needs at least 10 characters.")
-            continue
-        if pw != pw.strip():
-            warn("The password cannot start or end with a space.")
-            continue
-        if ask_secret("Type it again") != pw:
-            warn("The two entries did not match.")
-            continue
-        panel_set_password(pw)
-        good("The control panel password is saved.")
-        return True
-    warn("No password was saved. Choose one later with:  homelab panel password")
-    return False
-
-
 @step
 class PanelFiles(Step):
     id, group = "panel-files", "Homepage"
@@ -182,9 +158,6 @@ class PanelFiles(Step):
         act(["systemctl", "enable", "--now", "homelab-panel"])
         if changed and not Opt.dry and run(["systemctl", "is-active", "homelab-panel"])[1].strip() == "active":
             act(["systemctl", "restart", "homelab-panel"])         # new page files or a new unit: start the service again
-        if interactive() and not Opt.yes and not os.path.exists(panel_password_file()):
-            out("")
-            panel_ask_password()
 
 
 @step
@@ -208,10 +181,9 @@ class PanelServe(Step):
 
 @step
 class PanelPassword(Step):
+    """The panel uses the admin password chosen at the start of the install (nothing more to type). `homelab panel password` changes it later."""
     id, group = "panel-password", "Homepage"
-    title = "The control panel has its own password"
-    kind = "manual"
-    optional = True
+    title = "The control panel uses the admin password"
     needs = ("panel-files",)
 
     def applies(self):
@@ -220,15 +192,12 @@ class PanelPassword(Step):
     def probe(self):
         return "done" if os.path.exists(panel_password_file()) else "todo"
 
-    def help(self):
-        return ("Choose the password for the Customize tab (it is only for the panel). Run this as yourself, without sudo:\n$ homelab panel password\n"
-                "or let the walk-through ask you:\n$ sudo homelab-setup fill")
-
-    def fill_help(self):
-        return "Choose a password for the control panel. It is saved hashed, in your own folder, and used only by the Customize tab."
-
-    def fill(self):
-        return panel_ask_password()
+    def run(self):
+        if Opt.dry:
+            out("      would save the admin password (hashed) as the control panel's password in %s" % panel_password_file().replace(ROOT, ""))
+            return
+        panel_set_password(need_password("it is also the control panel's password"))
+        good("The control panel uses the admin password (change it later with:  homelab panel password)")
 
 
 # ================================================================ the web terminal (the Terminal card of the Links tab)

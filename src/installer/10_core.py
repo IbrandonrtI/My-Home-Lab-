@@ -79,8 +79,8 @@ STACKS = {
     "audiomuse": ("audiomuse.yaml", ["audiomuse-postgres", "audiomuse-flask", "audiomuse-worker"]),   # optional: `homelab-setup audiomuse` (see AudioMuseStack)
     "navilist": ("navilist.yaml", ["navilist"]),           # optional: `homelab-setup navilist` (see NaviListStack)
 }
-STACK_ORDER = ["adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
-               "immich", "nextcloud", "homepage", "beszel-agent", "music-downloader"]
+STACK_ORDER = ["homepage", "adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
+               "immich", "nextcloud", "beszel-agent", "music-downloader"]
 
 # local port of each service, and the HTTPS port Tailscale Serve uses for it
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,

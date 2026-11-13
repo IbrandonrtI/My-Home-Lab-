@@ -102,9 +102,6 @@ def detect_tz():
     return read_file(P("/etc/timezone")).strip() or "UTC"
 
 
-WEATHER_CITY_DEFAULT = "New York"
-
-
 def geocode_city(query):
     """Look a city up with Open-Meteo's free geocoding service (no key needed).
     Returns a list of {name, region, country, lat, lon} (empty = no such city), or None when the service cannot be reached."""
@@ -122,6 +119,23 @@ def geocode_city(query):
     return found
 
 
+def ip_location():
+    """Where this internet connection is, found from its public IP address with a free service that needs no account (ipwho.is, then ipapi.co).
+    Returns {tz, name, region, country, lat, lon}, or None when no service answers. The service sees this machine's public IP, nothing else is sent."""
+    override = os.environ.get("HLS_IP_API")
+    for base, kind in ([(override, "ipwho")] if override else [("https://ipwho.is", "ipwho"), ("https://ipapi.co", "ipapi")]):
+        st, js, _ = http("GET", base + ("/" if kind == "ipwho" else "/json/"), timeout=8)
+        if st != 200 or not isinstance(js, dict) or js.get("success") is False or js.get("error"):
+            continue
+        try:
+            tz = js["timezone"]["id"] if isinstance(js.get("timezone"), dict) else str(js.get("timezone") or "")
+            return {"tz": tz, "name": str(js["city"]), "region": str(js.get("region") or ""), "country": str(js.get("country") or js.get("country_name") or ""),
+                    "lat": float(js["latitude"]), "lon": float(js["longitude"])}
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
+
+
 def weather_apply(text, w):
     """Put a chosen city (name, lat, lon) into the openmeteo block of widgets.yaml. Returns the new text, or None if the block is missing."""
     m = re.search(r"(openmeteo:)(.*?)(\n- |\Z)", text, re.S)
@@ -132,6 +146,23 @@ def weather_apply(text, w):
     block = re.sub(r"(\n\s+label:).*", lambda x: '%s "%s"' % (x.group(1), label), block, count=1)
     block = re.sub(r"(\n\s+latitude:).*", lambda x: "%s %.4f" % (x.group(1), w["lat"]), block, count=1)
     block = re.sub(r"(\n\s+longitude:).*", lambda x: "%s %.4f" % (x.group(1), w["lon"]), block, count=1)
+    return text[:m.start(2)] + block + text[m.end(2):]
+
+
+def clock_apply(text, tz):
+    """Put a time zone (like America/New_York) into the dashboard clock's format in widgets.yaml. Returns the new text, or None if the clock is missing."""
+    m = re.search(r"(- datetime:)(.*?)(\n- |\Z)", text, re.S)
+    if not m or not re.fullmatch(r"[A-Za-z0-9_+/-]{1,60}", tz or ""):
+        return None
+    block = m.group(2)
+    if re.search(r"\n\s+timeZone:", block):
+        block = re.sub(r"(\n\s+timeZone:).*", lambda x: "%s %s" % (x.group(1), tz), block, count=1)
+    else:
+        f = re.search(r"\n(\s+)format:[^\n]*", block)
+        if f:
+            block = block[:f.end()] + "\n%s  timeZone: %s" % (f.group(1), tz) + block[f.end():]
+        else:
+            block = block.rstrip("\n") + "\n    format:\n      timeZone: %s\n" % tz
     return text[:m.start(2)] + block + text[m.end(2):]
 
 
@@ -267,16 +298,6 @@ def music_folder():
             return "/mnt/storage/" + name
     return ""
 
-
-AUDIO_EXTENSIONS = (".mp3", ".flac", ".ogg", ".opus", ".m4a", ".aac", ".wav", ".wma", ".alac", ".aiff")
-
-
-def music_has_songs(folder):
-    """True when the music folder holds at least one song (it stops at the first one, so a big library is not walked)."""
-    for _root, _dirs, files in os.walk(P(folder)):
-        if any(f.lower().endswith(AUDIO_EXTENSIONS) for f in files):
-            return True
-    return False
 
 
 def stack_env(name):

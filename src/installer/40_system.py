@@ -64,8 +64,25 @@ class OsSupported(Step):
 
 
 @step
+class AptUpdate(Step):
+    id, group, title = "apt-update", "System", "Package lists refreshed"
+
+    def probe(self):
+        if State.ran("apt-update"):
+            return "done"
+        return "na" if Mode.existing else "todo"
+
+    def run(self):
+        act(["apt-get", "-oDPkg::Lock::Timeout=600", "update", "-q"], env=apt_env(), check=True, timeout=900)
+        if not Opt.dry:
+            State.mark("apt-update")
+
+
+@step
 class AptUpgrade(Step):
-    id, group, title = "apt-upgrade", "System", "System packages updated and upgraded"
+    """The system upgrade is not needed for the lab to run, so it is the last thing the install does (in the background job when there is one)."""
+    id, group, title = "apt-upgrade", "System", "System packages upgraded"
+    needs = ("apt-update",)
 
     def probe(self):
         if State.ran("apt-upgrade"):
@@ -76,7 +93,6 @@ class AptUpgrade(Step):
         return State.data["ran"].get("apt-upgrade", "")
 
     def run(self):
-        act(["apt-get", "-oDPkg::Lock::Timeout=600", "update", "-q"], env=apt_env(), check=True, timeout=900)
         act(["apt-get", "-oDPkg::Lock::Timeout=600", "upgrade", "-y", "-q", "-o", "Dpkg::Options::=--force-confold"], env=apt_env(), check=True, timeout=3600)
         if not Opt.dry:
             State.mark("apt-upgrade")
@@ -89,6 +105,7 @@ OPTIONAL_PKGS = ["mergerfs", "parted", "mdadm", "snapraid", "zfsutils-linux"]   
 @step
 class Packages(Step):
     id, group, title = "packages", "System", "Helper programs installed (rsync, cron, smartmontools, mergerfs, ...)"
+    needs = ("apt-update",)
 
     def probe(self):
         missing = [p for p in REQUIRED_PKGS + OPTIONAL_PKGS if not pkg_installed(p)]

@@ -261,7 +261,7 @@ def cmd_audiomuse(rest):
     if rest:
         raise Abort("Unknown word '%s'. Use: homelab-setup audiomuse   or   audiomuse memory | pause | resume | status | remove" % word)
     if not navidrome_wanted():
-        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome yet (it comes with the first song in the music folder). Nothing was changed.")
+        raise Abort("AudioMuse-AI works together with Navidrome, and this machine has no Navidrome yet (it is installed with the lab; run `sudo homelab-setup refresh`). Nothing was changed.")
     other = "" if State.data.get("audiomuse") else port_taken_by(PORTS["audiomuse"])
     if other:
         raise Abort("Port %d is already used by the container %s, and AudioMuse-AI needs it for its web page. Nothing was changed." % (PORTS["audiomuse"], other))
@@ -326,7 +326,7 @@ def cmd_navilist(rest):
     if rest:
         raise Abort("Unknown word '%s'. Use: homelab-setup navilist   or   navilist subscribe | status | remove" % word)
     if not navidrome_wanted():
-        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome yet (it comes with the first song in the music folder). Nothing was changed.")
+        raise Abort("naviList works together with Navidrome, and this machine has no Navidrome yet (it is installed with the lab; run `sudo homelab-setup refresh`). Nothing was changed.")
     other = "" if State.data.get("navilist") else port_taken_by(PORTS["navilist"], mine=("navilist",))
     if other:
         raise Abort("Port %d is already used by the container %s, and naviList needs it for its web page. Nothing was changed." % (PORTS["navilist"], other))
@@ -689,10 +689,6 @@ def cmd_secrets():
     say("Saved in %s (root only):" % SECRET_FILE.replace(ROOT, ""))
     show_secret_values()
     say("The admin password you chose is not stored. Keep it in your password manager.")
-    if not State.readonly:
-        State.data["secrets_shown"] = State.data.get("secrets_shown") or time.strftime("%F %T")
-        State.save()
-        write_progress(evaluate())
 
 
 def uptime_seconds():

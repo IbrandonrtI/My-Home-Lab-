@@ -233,7 +233,7 @@ function showLogin(passwordSet = true, msg = "") {
   pw.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
   put(root, h("div", { class: "login card" },
     h("h1", {}, "Customize Your Dashboard"),
-    h("p", { class: "muted" }, "Type the control panel password. It is its own password (not the one for your other apps)."),
+    h("p", { class: "muted" }, "Type the control panel password. At first it is the admin password you chose at the start of the install."),
     passwordSet ? [pw, err, h("button", { class: "primary", onclick: go }, "Log In")] :
       h("p", {}, "No password is set yet. On the server, open a terminal and run: ", h("b", {}, "homelab panel password")),
     framed ? h("p", { class: "muted small" }, "If the login does not stay, your browser may block it inside the dashboard. ", h("a", { href: location.href, target: "_blank", rel: "noopener" }, "Open the panel in its own tab"), ".") : null));
@@ -2085,6 +2085,50 @@ function namesCard() {
     menu);
 }
 
+// ---- Time Zone and City (the clock and the weather card; saved on their own, not with the look)
+let locDraft = null;
+function locationCard() {
+  const Lc = S.location || { timeZone: "", city: "", zones: [] };
+  if (!locDraft) locDraft = { timeZone: Lc.timeZone, place: null };
+  const D = locDraft;
+  const zoneList = h("datalist", { id: "zone-list" }, (Lc.zones || []).map(z => h("option", { value: z })));
+  const zone = h("input", { type: "text", list: "zone-list", value: D.timeZone, placeholder: "America/New_York", maxlength: 60, "aria-label": "Time zone",
+    oninput: ev => { D.timeZone = ev.target.value.trim(); refreshBtn(); } });
+  const q = h("input", { type: "text", placeholder: "Type a city, like Chicago", maxlength: 60, "aria-label": "City for the weather card",
+    onkeydown: ev => { if (ev.key === "Enter") search(); } });
+  const results = h("div", { class: "row", style: { flexWrap: "wrap", gap: "6px", marginTop: "8px" } });
+  const now = h("div", { class: "hint" });
+  const btn = h("button", { class: "primary", onclick: async () => {
+    try {
+      await api("POST", "/api/location", { timeZone: D.timeZone && D.timeZone !== Lc.timeZone ? D.timeZone : undefined, place: D.place || undefined });
+      locDraft = null; toast("Saved. Reload the dashboard to see the new time and weather."); await afterChange(true);
+    } catch (e) { fail(e); }
+  } }, "Save Time Zone and City");
+  function refreshBtn() {
+    const changed = (D.timeZone && D.timeZone !== Lc.timeZone) || !!D.place;
+    btn.disabled = !changed;
+    put(now, h("span", {}, "Now: " + (Lc.city || "no city set") + (Lc.timeZone ? ", time zone " + Lc.timeZone : ", the clock uses the time zone of the browser"),
+      D.place ? "  →  " + D.place.name + (D.place.region ? ", " + D.place.region : "") : ""));
+  }
+  async function search() {
+    const text = q.value.trim();
+    if (!text) return toast("Type the name of a city first.", true);
+    try {
+      const r = await api("POST", "/api/location/search", { q: text });
+      put(results, r.places.length ? r.places.map(p => h("button", { class: "chip", onclick: () => { D.place = p; refreshBtn(); put(results, h("span", { class: "small muted" }, "Chosen: " + p.name + (p.region ? ", " + p.region : "") + (p.country ? ", " + p.country : "") + ". Press Save to keep it.")); } },
+        p.name + (p.region ? ", " + p.region : "") + (p.country ? ", " + p.country : ""))) : h("span", { class: "small muted" }, "No city with that name was found. Try the name alone, without a state or country."));
+    } catch (e) { fail(e); }
+  }
+  refreshBtn();
+  return h("details", { class: "card" }, h("summary", {}, h("b", {}, "Time Zone and City"), h("span", { class: "muted small" }, "The dashboard clock and the weather card")),
+    h("p", { class: "muted" }, "The install found these from your internet connection. Change them here if they are wrong or you moved. This only changes the dashboard's clock and its weather card."),
+    h("div", { class: "grid cols2" },
+      h("div", { class: "field" }, h("div", { class: "lab" }, "Time Zone"), zone, zoneList, h("div", { class: "hint" }, "Start typing a region or city, like America/Chicago or Europe/London, and pick one from the list.")),
+      h("div", { class: "field" }, h("div", { class: "lab" }, "City for the Weather Card"),
+        h("div", { class: "row" }, h("div", { class: "grow" }, q), h("button", { onclick: search }, "Search")), results)),
+    now, h("div", { class: "row" }, btn));
+}
+
 // ---- Themes (the first card of the Look screen)
 function themeColors(t) {            // the colors a theme gives to the cards, tiles and bookmarks: one color for each group, round and round
   const P = S.paint, out = { cards: {}, links: {}, paintAll: t.paintAll || "" };
@@ -2288,6 +2332,7 @@ h("div", { class: "card" }, h("h2", {}, "Color Strength"),
     strengthCard,
     backgroundCards(),
     namesCard(),
+    locationCard(),
     colorOptions(),
     lookBarEl);
 }

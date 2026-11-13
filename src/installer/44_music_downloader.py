@@ -80,6 +80,7 @@ def md_compose_from_inspect(old):
 
 class MusicDownloaderStack(StackStep):
     """Downtify (songs) and MeTube (videos) as one Portainer stack called music-downloader."""
+    parallel = False        # (it may move hand-made containers and needs the screen to itself)
 
     def applies(self):
         return not Mode.existing

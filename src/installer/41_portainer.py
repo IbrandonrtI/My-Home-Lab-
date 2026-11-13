@@ -252,11 +252,19 @@ class PortainerEnv(Step):
 
 # ================================================================ the nine stacks
 class Prefetch:
-    """Downloads the images of every stack in the background while the earlier steps run, one thread per registry (ghcr.io throttles
-    parallel pulls from the SAME registry, but not pulls from different ones). `prepull` waits for an image that is on its way."""
+    """Downloads the images of every stack in the background, as soon as Docker is installed and while the next steps run. Several downloads run at
+    the same time (a few per registry, since a registry throttles too many at once), the small stacks first (Homepage before everything else) and
+    the big ones (Immich, Nextcloud) last, so the dashboard and the small services are not held up behind several GB of photo software.
+    `prepull` waits for an image that is on its way."""
     threads = []
     pending = {}            # image -> Event, set when its download ended (successfully or not)
-    lock = threading.Lock()
+    queue = []              # the images still to start, in order
+    busy = {}               # registry -> downloads running now
+    cv = threading.Condition()
+    WORKERS = 5
+    PER_REGISTRY = {"docker.io": 3, "ghcr.io": 2, "lscr.io": 2}
+    ORDER = {"homepage": 0, "adguard": 1, "beszel": 2, "netdata": 2, "speedtest-tracker": 2, "filebrowser": 2, "navidrome": 3,
+             "music-downloader": 3, "beszel-agent": 3, "immich": 8, "nextcloud": 9}
 
     @classmethod
     def host(cls, image):
@@ -265,9 +273,8 @@ class Prefetch:
 
     @classmethod
     def wanted(cls):
-        """All images of the stacks this install will deploy, the big ones (Immich, Nextcloud) first."""
-        order = {"immich": 0, "nextcloud": 1}
-        stacks = sorted((s for s in STEPS if isinstance(s, StackStep) and s.applies()), key=lambda s: order.get(s.name, 5))
+        """All images of the stacks this install will deploy: Homepage first, the big ones (Immich, Nextcloud) last."""
+        stacks = sorted((s for s in STEPS if isinstance(s, StackStep) and s.applies()), key=lambda s: cls.ORDER.get(s.name, 5))
         imgs = []
         for s in stacks:
             for i in images_in(read_file(repo_file("stacks", STACKS[s.name][0])) or ""):      # the raw file: reading it must not create any secret
@@ -283,25 +290,44 @@ class Prefetch:
             todo = [i for i in cls.wanted() if docker("image", "inspect", i)[0] != 0]
         except Exception:
             return
-        groups = {}
         for i in todo:
             cls.pending[i] = threading.Event()
-            groups.setdefault(cls.host(i), []).append(i)
-        for imgs in groups.values():
-            t = threading.Thread(target=cls.work, args=(imgs,), daemon=True)
+        cls.queue = list(todo)
+        for _ in range(min(cls.WORKERS, len(todo))):
+            t = threading.Thread(target=cls.work, daemon=True)
             t.start()
             cls.threads.append(t)
         if todo:
-            log("downloading %d images in the background (%s)" % (len(todo), ", ".join(sorted(groups))))
+            log("downloading %d images in the background (%d at a time)" % (len(todo), min(cls.WORKERS, len(todo))))
 
     @classmethod
-    def work(cls, imgs):
-        for img in imgs:
+    def take(cls):
+        """The next image to download that its registry allows right now, or None when the queue is empty."""
+        with cls.cv:
+            while cls.queue:
+                for img in cls.queue:
+                    h = cls.host(img)
+                    if cls.busy.get(h, 0) < cls.PER_REGISTRY.get(h, 2):
+                        cls.queue.remove(img)
+                        cls.busy[h] = cls.busy.get(h, 0) + 1
+                        return img
+                cls.cv.wait(2)
+        return None
+
+    @classmethod
+    def work(cls):
+        while True:
+            img = cls.take()
+            if img is None:
+                return
             try:
                 subprocess.run(["docker", "pull", "-q", img], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3600, check=False)
             except Exception:
                 pass        # the step that needs the image downloads it again, and reports a real failure
             finally:
+                with cls.cv:
+                    cls.busy[cls.host(img)] -= 1
+                    cls.cv.notify_all()
                 cls.pending[img].set()
 
     @classmethod
@@ -339,6 +365,7 @@ def prepull(images):
 
 class StackStep(Step):
     group = "Services"
+    parallel = True         # the stacks that are ready are started together (see run_pass)
 
     def __init__(self, name, needs, title, wait=300):
         self.name, self.needs, self.title, self.wait = name, tuple(needs), title, wait
@@ -371,6 +398,7 @@ def _register_stacks():
     """Create one checklist step per Portainer stack."""
     base = ("portainer-env", "folders")
     spec = [
+        ("homepage", base + ("tailscale-login", "homepage-files"), "Homepage stack (the dashboard)"),
         ("adguard", base + ("port53", "restore-configs"), "AdGuard Home stack (DNS ad blocking)"),
         ("beszel", base, "Beszel stack (server health)"),
         ("netdata", base, "Netdata stack (live metrics)"),
@@ -378,7 +406,6 @@ def _register_stacks():
         ("filebrowser", base, "FileBrowser stack"),
         ("immich", base + ("secrets", "restore-data"), "Immich stack (photos)"),
         ("nextcloud", base + ("secrets", "tailscale-login", "restore-configs", "restore-data"), "Nextcloud stack (files)"),
-        ("homepage", base + ("tailscale-login", "homepage-files"), "Homepage stack (the dashboard)"),
         ("beszel-agent", base + ("beszel-agent-key",), "Beszel agent stack"),
     ]
     for name, needs, title in spec:
