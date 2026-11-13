@@ -1,19 +1,3 @@
-/* Homepage custom.css: frosted-glass cards, per-service accent colours and responsive scaling.
-   Tested with Homepage 2.6. Many rules use !important and match Homepage's internal class names
-   ([class*=...] and :has()), so a Homepage update can change the look. If that happens, rename this file to
-   custom.css.off and restart Homepage to get the default look back.
-
-   How this file is organised: every setting lives in ONE place. To change something, change the number or the
-   line where it is set; do not add a second rule further down to override it.
-     1. Settings         the numbers you are most likely to change
-     2. Cards            the service cards: glass, accent colours, text
-     3. Top pills        the row of pills (Server, pools, Network, date, weather) and the search bar
-     4. Screen sizes     zoom steps for big screens, and the phone / small window layout
-   The theme command of the server (type: homelab, then see its commands list) changes the accent colour lines in
-   section 2 and writes its own marked block at the very end of the file. */
-
-
-/* ================================================================ 1. Settings */
 :root {
 
   --d-pill-height: 80px;
@@ -69,7 +53,6 @@ div[id$="-card"] > div {
   .service-card { transition: none; }
 }
 
-/* Content sits above the accent layers */
 .service-card > div { position: relative; z-index: 1; }
 
 /* accent colors (R, G, B) */
@@ -110,7 +93,6 @@ div[id$="-card"] > div {
   background: rgb(var(--accent));
 }
 
-/*Text*/
 .service-name {
   color: #f4f6fa !important;
   font-weight: 600 !important;
@@ -128,7 +110,6 @@ div[id$="-card"] > div {
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.55);
 }
 
-/* Stat boxes inside service widgets */
 .service-block {
   background: rgba(255, 255, 255, 0.06) !important;
   border-radius: 10px !important;
@@ -168,13 +149,13 @@ div[id$="-card"] > div {
   border-radius: 10px !important;
 }
 
-/* Icon colours. First pill (the server): CPU / RAM / Temp / Uptime */
+/* Icon colours.CPU / RAM / Temp / Uptime */
 .widget-container:has(.information-widget-resource):not(.widget-container:has(.information-widget-resource) ~ .widget-container) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; } /* CPU */
 .widget-container:has(.information-widget-resource):not(.widget-container:has(.information-widget-resource) ~ .widget-container) .information-widget-resource:nth-of-type(2) svg { color: #22d3ee !important; } /* RAM */
 .widget-container:has(.information-widget-resource):not(.widget-container:has(.information-widget-resource) ~ .widget-container) .information-widget-resource:nth-of-type(3) svg { color: #ef4444 !important; } /* Temp */
 .widget-container:has(.information-widget-resource):not(.widget-container:has(.information-widget-resource) ~ .widget-container) .information-widget-resource:nth-of-type(4) svg { color: #3b82f6 !important; } /* Uptime */
 
-/* Icon colours. Every later pill (the pools, the network): first and second icon green, third blue */
+/* Icon colours first and second icon green, third blue */
 .widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource) .information-widget-resource:nth-of-type(1) svg { color: #4ade80 !important; } /* Disk 1 */
 .widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource) .information-widget-resource:nth-of-type(2) svg { color: #4ade80 !important; } /* Disk 2 */
 .widget-container:has(.information-widget-resource) ~ .widget-container:has(.information-widget-resource) .information-widget-resource:nth-of-type(3) svg { color: #3b82f6 !important; } /* Network */
@@ -254,8 +235,7 @@ div[id$="-card"] > div {
     padding: 8px 0 0 !important;
   }
 
-  /* Every pill: same shape, same space underneath */
-  #information-widgets .widget-container,
+   #information-widgets .widget-container,
   #information-widgets .information-widget-logo {
     box-sizing: border-box !important;
     justify-content: center !important;
@@ -291,8 +271,7 @@ div[id$="-card"] > div {
     text-align: center !important;
   }
 
-  /* Home Lab pill: text and icon on one line, text first */
-  #information-widgets .information-widget-logo {
+   #information-widgets .information-widget-logo {
     flex-direction: row !important;
     flex-wrap: nowrap !important;
     gap: 10px !important;
@@ -319,7 +298,6 @@ div[id$="-card"] > div {
     object-fit: contain !important;
   }
 
-  /* Date and weather: two halves that look like one pill */
   #information-widgets [class*="information-widget-datetime"],
   #information-widgets [class*="information-widget-openmeteo"],
   #information-widgets div:has(> .information-widget-search) > :first-child,
@@ -347,15 +325,13 @@ div[id$="-card"] > div {
     border-left: 1px solid rgba(255, 255, 255, 0.14) !important;
   }
 
-  /* The date normally uses extra-large text; shrink it to fit the pill */
   #information-widgets [class*="information-widget-datetime"] *,
   #information-widgets div:has(> .information-widget-search) > :first-child * {
     font-size: 15px !important;
     line-height: 1.2 !important;
   }
 
-  /* Search bar: its own row, spacing controlled by the knobs at the top */
-  #information-widgets .information-widget-search {
+   #information-widgets .information-widget-search {
     position: relative !important;
     top: auto !important;
     left: auto !important;
@@ -370,32 +346,24 @@ div[id$="-card"] > div {
   }
 }
 
-
-/* >>> homelab tabs >>> managed by the installer: an upgrade replaces everything between this line and the closing marker,
-   so put your own rules above it. This block is THE LOOK of the dashboard (calm dark glass): the top bar, the tabs, the cards, the music
-   player panel, the Stats tab, the bookmarks and the phone layout. It sits after the rules above, so it wins over them; every rule starts with
-   #inner_wrapper to make sure of that. The few numbers you may want to change are the --lk- lines right below.
-   The colour of a single card is still set with the theme command (type: homelab) and so is a bookmark group's colour;
-   both only add a faint tint now, because the page uses ONE accent colour. */
 #inner_wrapper {
-  --lk-accent: 138, 180, 255;          /* the one accent colour (R, G, B): the active tab, bars, icons, the edge of a card you point at */
-  --lk-glass: 13, 18, 30;              /* the colour of the glass (R, G, B) */
-  --lk-glass-a: 0.56;                  /* how solid the glass is: 0 = clear, 1 = solid */
-  --lk-line: rgba(255, 255, 255, 0.075);    /* the thin edge of every card */
-  --lk-radius: 16px;                   /* how round the cards are */
-  /* (--lk-blur and --lk-sat, how much the glass blurs and boosts the picture behind it, are not set here: only a theme of the control panel sets them) */
+  --lk-accent: 138, 180, 255;          
+  --lk-glass: 13, 18, 30;              
+  --lk-glass-a: 0.56;                  
+  --lk-line: rgba(255, 255, 255, 0.075);   
+  --lk-radius: 16px;                  
   --lk-text: #eef2f9;
   --lk-muted: #a9b4c7;
-  --lk-side: 70px;                     /* space left and right of the page (smaller windows and phones: see below) */
-  --lk-player-h: 600px;                /* height of the Navidrome player panel */
+  --lk-side: 70px;                    
+  --lk-player-h: 600px;                
   position: relative;
 }
-@media (max-width: 1400px) { #inner_wrapper { --lk-side: 28px; } }          /* smaller windows: less space at the sides */
+@media (max-width: 1400px) { #inner_wrapper { --lk-side: 28px; } }          
 
-/* ---- The page: a little narrower on big screens, a darker and softer picture behind it */
-#inner_wrapper > .container { max-width: 1480px; z-index: auto !important; }      /* no own layer: the music player (custom.js) must lie above the cards but under the search dialog */
+
+#inner_wrapper > .container { max-width: 1480px; z-index: auto !important; }     
 #background { filter: blur(5px) saturate(0.85); transform: scale(1.04); }
-html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is set to "none" (custom.js): no extra blur either */
+html.hl-sharp #background { filter: saturate(0.85); }          
 #background::after {
   content: "";
   position: absolute;
@@ -403,7 +371,6 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   background: radial-gradient(1100px 520px at 50% -8%, rgba(var(--lk-accent, 138, 180, 255), 0.07), transparent 65%), linear-gradient(rgba(4, 7, 14, 0.30), rgba(4, 7, 14, 0.50));
 }
 
-/* ---- The top bar: the server, the pools and the network as calm glass tiles, the date and the weather on the right, the search under them */
 #inner_wrapper #information-widgets {
   zoom: 1 !important;
   position: static !important;
@@ -431,7 +398,6 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   backdrop-filter: blur(var(--lk-blur, 14px)) saturate(var(--lk-sat, 125%));
 }
 #inner_wrapper .widget-container:has(.information-widget-resource) { flex-direction: column !important; justify-content: center !important; gap: 3px !important; }
-/* the logo (made by custom.js when you give one in the control panel): the first thing in the server tile. On a wide screen it stands at the left of the numbers; on a phone it is above them, in the middle. */
 #inner_wrapper #hl-logo { display: flex; align-items: center; justify-content: center; flex: 0 0 auto; padding: 0 4px; text-decoration: none; }
 #inner_wrapper #hl-logo img { display: block; width: auto; height: 48px; max-width: min(260px, 45vw); object-fit: contain; border-radius: 6px; }
 @media (min-width: 701px) {
@@ -439,7 +405,7 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
   #inner_wrapper .widget-container.hl-has-logo > #hl-logo { grid-column: 1; grid-row: 1 / span 2; margin-left: 4px; }
   #inner_wrapper .widget-container.hl-has-logo > div { grid-column: 2; }
 }
-#inner_wrapper #widgets-wrap > .widget-container:first-of-type { flex: 1 1 auto !important; }      /* the server tile takes the free space */
+#inner_wrapper #widgets-wrap > .widget-container:first-of-type { flex: 1 1 auto !important; }      
 #inner_wrapper .widget-container:has(.information-widget-resource) > div:last-child {
   margin: 0 !important;
   padding: 0 !important;
@@ -476,7 +442,6 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
 }
 #inner_wrapper [class*="information-widget-openmeteo"] { order: 19 !important; }
 
-/* ---- Tabs: one segmented switch in the middle */
 #inner_wrapper #tabs { margin: 22px var(--lk-side) 6px !important; display: flex; justify-content: center; }
 #inner_wrapper #myTab {
   display: flex !important;
@@ -514,7 +479,6 @@ html.hl-sharp #background { filter: saturate(0.85); }          /* the picture is
 }
 #inner_wrapper button[id$="-tab"]:focus-visible { outline: 2px solid rgba(var(--lk-accent), 0.8); outline-offset: 2px; }
 
-/* ---- Groups: a quiet title above each row of cards */
 #inner_wrapper #layout-groups { margin: 10px calc(var(--lk-side) - 4px) 0 !important; row-gap: 6px; }
 #inner_wrapper .service-group-name, #inner_wrapper .bookmark-group-name {
   color: var(--lk-text) !important;
@@ -527,9 +491,7 @@ body { --icon-color: #c9d6f2; }
 .service-group-icon > div, .bookmark-group-icon > div,
 .service-icon > div[style*="mask"], .bookmark-icon > div[style*="mask"] { background: var(--icon-color) !important; }
 
-/* ---- Cards: calm glass, a thin edge, the accent colour only when you point at one */
-#inner_wrapper .service-card, #inner_wrapper .bookmark > a { text-shadow: var(--lk-tshadow, none); }      /* (only a look with no tint sets this) */
-/* the glass colour is set with a LOW weight on purpose: the colour command of the dashboard theme writes its own rule after this block and must win */
+#inner_wrapper .service-card, #inner_wrapper .bookmark > a { text-shadow: var(--lk-tshadow, none); }     
 .service-card, .bookmark > a { background: rgba(var(--lk-glass), var(--lk-glass-a)) !important; }
 #inner_wrapper .service-card,
 #inner_wrapper .bookmark > a {
@@ -542,7 +504,6 @@ body { --icon-color: #c9d6f2; }
 }
 #inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { border-color: rgba(var(--lk-accent), 0.40) !important; }
 #inner_wrapper .service-card:focus-within, #inner_wrapper .bookmark > a:focus-visible { border-color: rgba(var(--lk-accent), 0.75) !important; }
-/* a faint tint in the corner (the colour of the card, or the accent) instead of the strong glow, and no coloured rail */
 #inner_wrapper [id$="-card"]::before, #inner_wrapper li[id^="stat-"]::before, #inner_wrapper li[id^="cal-"]::before {
   content: "";
   position: absolute;
@@ -556,7 +517,7 @@ body { --icon-color: #c9d6f2; }
 #inner_wrapper [id$="-card"]::after, #inner_wrapper li[id^="stat-"]::after, #inner_wrapper li[id^="cal-"]::after { display: none !important; }
 #inner_wrapper [id$="-card"] { position: relative !important; background-color: transparent !important; }
 #inner_wrapper .service-name { color: var(--lk-text) !important; font-size: 0.93rem !important; font-weight: 600 !important; letter-spacing: -0.01em; }
-#inner_wrapper .service-description { color: color-mix(in srgb, var(--lk-muted) 82%, white) !important; font-size: 0.8125rem !important; }      /* 13 px, a little brighter: easy to read */
+#inner_wrapper .service-description { color: color-mix(in srgb, var(--lk-muted) 82%, white) !important; font-size: 0.8125rem !important; }      
 #inner_wrapper .service-block { background: rgba(255, 255, 255, 0.045) !important; border-radius: 10px !important; }
 #inner_wrapper .service-block-value { font-weight: 600; }
 #inner_wrapper .service-block-label { color: var(--lk-muted); letter-spacing: 0.04em; }
@@ -564,11 +525,9 @@ body { --icon-color: #c9d6f2; }
   #inner_wrapper .service-card, #inner_wrapper .bookmark > a, #inner_wrapper button[id$="-tab"] { transition: none; }
 }
 
-/* ---- The music panel: when the Navidrome card is there, its group goes on top over the full width. The player takes the whole width, and the other
-   music apps (Downtify, Metube, AudioMuse-AI, naviList ...) are one row of cards under it. The other groups follow in three columns. */
 #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { order: -1; flex: 0 0 100%; max-width: 100%; }
 #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)):not(:has(li[id^="cal-"])) { flex: 1 1 0; min-width: 300px; }
-#inner_wrapper #layout-groups > .services-group:has(li[id^="cal-"]) { flex: 0 0 100%; max-width: 100%; order: 3; }      /* the Calendar: a row of its own, last */
+#inner_wrapper #layout-groups > .services-group:has(li[id^="cal-"]) { flex: 0 0 100%; max-width: 100%; order: 3; }      
 #inner_wrapper .services-group:has(#navidrome-card) .services-list {
   display: flex !important;
   flex-flow: row wrap !important;
@@ -576,13 +535,11 @@ body { --icon-color: #c9d6f2; }
   column-gap: 12px;
   row-gap: 0;
 }
-#inner_wrapper .services-group:has(#navidrome-card) .services-list > li { flex: 1 1 230px; min-width: 0; margin: 0 !important; }      /* the row shares the width evenly, and wraps on a narrow window */
+#inner_wrapper .services-group:has(#navidrome-card) .services-list > li { flex: 1 1 230px; min-width: 0; margin: 0 !important; }     
 #inner_wrapper .services-group:has(#navidrome-card) .services-list > #navidrome-card { flex: 0 0 100%; }
 #inner_wrapper #navidrome-card .service-card { height: calc(100% - 0.5rem) !important; }
 #inner_wrapper #navidrome-card div:has(> iframe) { overflow: hidden !important; border-radius: 10px; }
 #inner_wrapper #navidrome-card iframe { width: calc(100% + 32px) !important; max-width: none !important; border: 0 !important; height: var(--lk-player-h) !important; }
-
-/* ---- Bookmarks (the Links tab): the same glass. The group's colour is only a faint tint. */
 .bookmark-group { --accent: 148, 163, 184; }
 .bookmark-group[data-group="entertainment"]   { --accent: 147, 51,  234; }   /* purple */
 .bookmark-group[data-group="online-shopping"] { --accent: 214, 90,  22;  }   /* orange */
@@ -611,8 +568,6 @@ body { --icon-color: #c9d6f2; }
 .bookmark-icon { background: rgba(255, 255, 255, 0.04) !important; border-radius: 0 !important; }
 #inner_wrapper .bookmark-name { color: var(--lk-text) !important; font-weight: 600 !important; letter-spacing: -0.01em; }
 #inner_wrapper .bookmark-description { color: var(--lk-muted) !important; }
-
-/* ---- STATS tab cards (ids that start with stat-) and the Calendar cards (cal-): the same glass. Each card has a faint colour of its own. */
 li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-color: transparent !important; --accent: 148, 163, 184; }
 #stat-library, #stat-immich { --accent: 209, 18, 18; }          /* photos: red */
 #stat-storage, #stat-mainpool { --accent: 107, 97, 223; }       /* storage: violet */
@@ -624,18 +579,13 @@ li[id^="stat-"], li[id^="cal-"] { position: relative !important; background-colo
 #stat-temps { --accent: 245, 158, 11; }                         /* temperatures: amber */
 #cal-month { --accent: 36, 140, 255; }                          /* calendar: blue */
 #cal-agenda { --accent: 147, 51, 234; }                         /* coming up: purple */
-.services-group:has(li[id^="stat-"]), .services-group:has(li[id^="cal-"]) { padding-bottom: 1.1rem !important; }      /* air between the rows */
+.services-group:has(li[id^="stat-"]), .services-group:has(li[id^="cal-"]) { padding-bottom: 1.1rem !important; }      
 li[id^="stat-"] .service-block-value { font-size: 1rem !important; font-weight: 600 !important; color: var(--lk-text); }
 li[id^="stat-"] .service-block-label { opacity: 0.7; }
-
-/* ---- A card whose service does not answer gets a red edge (custom.js marks it) */
 #inner_wrapper .service.hl-down .service-card { border-color: rgba(248, 113, 113, 0.55) !important; }
-/* the "Service Unavailable" button Homepage shows under such a card: light text on a dark red, so it can be read */
 #inner_wrapper .service details > summary { color: #fff !important; background: rgba(127, 29, 29, 0.85) !important; border: 1px solid rgba(248, 113, 113, 0.45); }
 #inner_wrapper .service details > summary:hover { background: rgba(153, 27, 27, 0.95) !important; }
 #inner_wrapper .service details > summary * { color: #fff !important; }
-
-/* ---- Shrink button on the music player (made by custom.js) and the folded state */
 #inner_wrapper .hl-shrink {
   position: absolute;
   top: 8px; right: 38px;
@@ -659,7 +609,6 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
   transition: transform 0.25s ease;
 }
 #inner_wrapper .hl-shrink:hover, #inner_wrapper .hl-shrink:focus-visible { background: rgba(255, 255, 255, 0.08); color: #fff; outline: none; }
-/* the height button next to it, and the small box with the slider */
 #inner_wrapper .hl-height {
   position: absolute;
   top: 8px; right: 70px;
@@ -685,7 +634,7 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
 #inner_wrapper .hl-height:hover, #inner_wrapper .hl-height:focus-visible, #inner_wrapper .hl-height[aria-expanded="true"] { background: rgba(255, 255, 255, 0.08); color: #fff; outline: none; }
 #inner_wrapper .hl-height-pop {
   position: absolute;
-  top: 7px; right: 106px;                   /* in the title bar, left of the buttons: the player frame lies over everything below the bar */
+  top: 7px; right: 106px;                   
   z-index: 40;
   width: min(340px, calc(100% - 330px));
   min-width: 230px;
@@ -706,20 +655,16 @@ li[id^="stat-"] .service-block-label { opacity: 0.7; }
 #inner_wrapper .hl-height-pop[hidden] { display: none; }
 #inner_wrapper .hl-height-pop input { flex: 1 1 auto; min-width: 60px; accent-color: rgb(var(--lk-accent)); }
 #inner_wrapper .hl-height-pop button { flex: none; padding: 2px 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, 0.16); background: rgba(255, 255, 255, 0.06); color: inherit; cursor: pointer; }
-/* the same button and slider on the Customize and Terminal groups: in the group's title bar, left of the fold button */
 #inner_wrapper .hl-gheight { top: 6px; right: 40px; width: 26px; height: 26px; opacity: 0.55; }
 #inner_wrapper .hl-gheight:hover, #inner_wrapper .hl-gheight:focus-visible, #inner_wrapper .hl-gheight[aria-expanded="true"] { opacity: 1; }
 #inner_wrapper .hl-gheight::before { top: 4px; } #inner_wrapper .hl-gheight::after { bottom: 4px; }
 #inner_wrapper .hl-gheight + .hl-height-pop { top: 3px; right: 74px; z-index: 40; width: min(360px, calc(100% - 130px)); min-width: 0; }
 @media (max-width: 520px) { #inner_wrapper .hl-gheight + .hl-height-pop { right: 8px; top: 38px; width: calc(100% - 16px); } }
-/* (while the pointer is over a framed page - music player, Customize, terminal - custom.js holds the scrolling box still, so the page behind does not scroll along at the top or bottom of the framed page) */
 html.hl-player-min #inner_wrapper .hl-shrink::before { transform: translate(-50%, -25%) rotate(-135deg); }
 #inner_wrapper #navidrome-card div:has(> iframe) { max-height: calc(var(--lk-player-h) + 8px); transition: max-height 0.35s ease, opacity 0.25s ease 0.05s; }
 html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height: 0 !important; opacity: 0; transition: max-height 0.35s ease, opacity 0.2s ease; }
 #inner_wrapper #navidrome-card .service-card { transition: border-color 0.2s ease; }
 @media (prefers-reduced-motion: reduce) { #inner_wrapper #navidrome-card div:has(> iframe) { transition: none !important; } }
-
-/* ---- Groups: a count behind the name, a thin line after it and a fold button (made by custom.js) */
 #inner_wrapper .services-group, #inner_wrapper .bookmark-group { position: relative; }
 #inner_wrapper .service-group-name::after, #inner_wrapper .bookmark-group-name::after {
   content: attr(data-count);
@@ -770,14 +715,12 @@ html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height
 #inner_wrapper .hl-folded > div:not(:first-child) {
   max-height: 0 !important; min-height: 0 !important; margin-top: 0 !important; margin-bottom: 0 !important;
   opacity: 0; visibility: hidden; pointer-events: none;
-  transition: max-height 0.35s ease, opacity 0.2s ease, margin 0.35s ease, visibility 0s linear 0.35s;      /* (not display:none: Homepage's own rule says display:block!important and wins) */
+  transition: max-height 0.35s ease, opacity 0.2s ease, margin 0.35s ease, visibility 0s linear 0.35s;     
 }
 #inner_wrapper .hl-folded { padding-bottom: 4px !important; }
 @media (prefers-reduced-motion: reduce) { #inner_wrapper .services-group > div:not(:first-child), #inner_wrapper .bookmark-group > div:not(:first-child) { transition: none !important; } }
-
-/* ---- Cards come up one after the other when a tab opens, and lift a little when you point at one (not the music player: the frame lies over it) */
 @keyframes hl-rise { from { opacity: 0; transform: translateY(8px); } }
-#inner_wrapper .services-list > li:not(#navidrome-card), #inner_wrapper .bookmarks-list > li, #inner_wrapper .bookmark-list > li { animation: hl-rise 0.45s ease backwards; }      /* (backwards, not both: a finished animation that keeps its last frame turns the card into a layer of its own, and the glass behind it can then show as clear) */
+#inner_wrapper .services-list > li:not(#navidrome-card), #inner_wrapper .bookmarks-list > li, #inner_wrapper .bookmark-list > li { animation: hl-rise 0.45s ease backwards; }     
 #inner_wrapper .services-list > li:nth-child(2), #inner_wrapper .bookmark-list > li:nth-child(2) { animation-delay: 0.04s; }
 #inner_wrapper .services-list > li:nth-child(3), #inner_wrapper .bookmark-list > li:nth-child(3) { animation-delay: 0.08s; }
 #inner_wrapper .services-list > li:nth-child(4), #inner_wrapper .bookmark-list > li:nth-child(4) { animation-delay: 0.12s; }
@@ -786,7 +729,6 @@ html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height
 #inner_wrapper .service-card, #inner_wrapper .bookmark > a { transition: border-color 0.2s ease, transform 0.2s ease; }
 #inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { transform: translateY(-2px); }
 #inner_wrapper #navidrome-card .service-card:hover { transform: none; }
-/* the framed pages (Customize, the link editor, the terminal) do not lift, do not rise in and have no blur layer behind them: any of these turns the page inside into a moving layer, and its text turns soft while the pointer is over it */
 #inner_wrapper .services-list > li#customize-card, #inner_wrapper .services-list > li#linkedit-card, #inner_wrapper .services-list > li#terminal-card { animation: none !important; }
 #inner_wrapper #customize-card .service-card, #inner_wrapper #linkedit-card .service-card, #inner_wrapper #terminal-card .service-card,
 #inner_wrapper #customize-card .service-card:hover, #inner_wrapper #linkedit-card .service-card:hover, #inner_wrapper #terminal-card .service-card:hover {
@@ -796,8 +738,6 @@ html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height
   #inner_wrapper .services-list > li, #inner_wrapper .bookmark-list > li { animation: none !important; }
   #inner_wrapper .service-card:hover, #inner_wrapper .bookmark > a:hover { transform: none; }
 }
-
-/* ---- Icons sit on a soft rounded backing, so logos of every shape look even */
 #inner_wrapper .service-icon { position: relative; }
 #inner_wrapper .service-icon::before {
   content: "";
@@ -810,12 +750,8 @@ html.hl-player-min #inner_wrapper #navidrome-card div:has(> iframe) { max-height
   z-index: -1;
 }
 #inner_wrapper #navidrome-card .service-icon::before { display: none; }
-
-/* ---- Each tab gives the page its own accent colour (custom.js writes the tab name on the page) */
 html[data-tab="Stats"] #inner_wrapper { --lk-accent: 94, 214, 164; }
 html[data-tab="Links"] #inner_wrapper { --lk-accent: 190, 160, 255; }
-
-/* ---- Stats: a percentage gets a bar under it (custom.js marks the block); amber from 85 %, red from 95 % */
 li[id^="stat-"] .service-block.hl-bar { position: relative; overflow: hidden; }
 li[id^="stat-"] .service-block.hl-bar::after {
   content: "";
@@ -832,10 +768,7 @@ li[id^="stat-"] .service-block.hl-bar.hl-red::after { background: linear-gradien
 li[id^="stat-"] .service-block.hl-bar.hl-amber .service-block-value, li[id^="stat-"] .service-block.hl-bar.hl-amber .font-thin { color: #fbbf24 !important; }
 li[id^="stat-"] .service-block.hl-bar.hl-red .service-block-value, li[id^="stat-"] .service-block.hl-bar.hl-red .font-thin { color: #fca5a5 !important; }
 
-/* ---- Late at night the picture gets a little darker (custom.js sets --hl-night from 0 by day to 1 at night) */
 #background::after { background: radial-gradient(1100px 520px at 50% -8%, rgba(var(--lk-accent, 138, 180, 255), 0.07), transparent 65%), linear-gradient(rgba(4, 7, 14, calc(0.30 + var(--hl-night, 0) * 0.18)), rgba(4, 7, 14, calc(0.50 + var(--hl-night, 0) * 0.2))); }
-
-/* ---- Scrollbar like Spotify's: slim and rounded, faint all the time, brighter when you point at the page, brighter again when you point at the bar */
 html #inner_wrapper::-webkit-scrollbar { display: block !important; width: 14px !important; height: 14px !important; background: transparent; }
 html #inner_wrapper::-webkit-scrollbar-track { background: transparent; }
 html #inner_wrapper::-webkit-scrollbar-corner { background: transparent; }
@@ -843,8 +776,6 @@ html #inner_wrapper::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 
 html #inner_wrapper:hover::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, 0.34); }
 html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, 0.55); }
 @supports not selector(::-webkit-scrollbar) { #inner_wrapper { scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, 0.3) transparent; } }
-
-/* ---- Narrow windows and phones: the older small-screen rules above make long pills; here they become the same calm tiles (the extra ids beat them) */
 @media (max-width: 1000px) {
   #inner_wrapper #widgets-wrap > .widget-container,
   #inner_wrapper #information-widgets-right > * {
@@ -864,11 +795,9 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper #information-widgets-right [class*="information-widget-datetime"] *,
   #inner_wrapper #information-widgets-right > :first-child * { font-size: 15px !important; }
 }
-
-/* ---- Phones and narrow windows: a small tile grid on top, then one column of cards */
 @media (max-width: 700px) {
   #inner_wrapper { --lk-player-h: 560px; }
-  html body #inner_wrapper { --lk-side: 14px !important; }           /* (on a phone the side space is always small) */
+  html body #inner_wrapper { --lk-side: 14px !important; }           
   #inner_wrapper #information-widgets { margin-top: 12px !important; }
   #inner_wrapper #widgets-wrap { display: grid !important; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px !important; }
   #inner_wrapper .widget-container,
@@ -896,7 +825,6 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper .services-group:has(#navidrome-card) .services-list > li { flex-basis: 100%; }
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:not(:has(#navidrome-card)):not(:has(li[id^="cal-"])) { flex: 1 1 100%; }
 }
-/* ---- Phone: the three tabs sit in a bar at the bottom of the screen (thumb reach), the search opens from a button next to the weather */
 #hl-search-btn { display: none; }
 @media (max-width: 700px) {
   #inner_wrapper #tabs {
@@ -906,7 +834,7 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
     z-index: 30;
     margin-top: 12px !important;
     margin-bottom: 0 !important;
-    margin-left: 0 !important;      /* the bar is as wide as the screen; the space at the sides is its own padding */
+    margin-left: 0 !important;      
     margin-right: 0 !important;
     padding: 10px var(--lk-side) calc(10px + env(safe-area-inset-bottom, 0px));
     background: linear-gradient(rgba(6, 9, 18, 0), rgba(6, 9, 18, 0.88) 38%);
@@ -937,13 +865,11 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   html.hl-search-open #hl-search-btn { border-color: rgba(var(--lk-accent), 0.5); }
   #inner_wrapper .hl-gfold { opacity: 0.8; }
 }
-/* ---- The Customize tab: the control panel (a page of its own, shown in an iframe) fills one big card */
 #inner_wrapper #customize-card .service-title, #inner_wrapper #linkedit-card .service-title, #inner_wrapper #terminal-card .service-title { display: none !important; }
 #inner_wrapper #customize-card div:has(> iframe), #inner_wrapper #linkedit-card div:has(> iframe), #inner_wrapper #terminal-card div:has(> iframe) { margin: 0 !important; width: 100%; max-width: none !important; background: transparent !important; overflow: hidden; border-radius: calc(var(--lk-radius) - 2px); }
 #inner_wrapper #customize-card iframe, #inner_wrapper #linkedit-card iframe, #inner_wrapper #terminal-card iframe { display: block; width: 100% !important; max-width: none !important; height: var(--hl-h-customize, min(calc(88 * var(--hl-vh, 1vh)), 1200px)) !important; min-height: 520px; border: 0 !important; border-radius: 0 !important; background: #0a0f19; }
 #inner_wrapper #linkedit-card iframe { height: var(--hl-h-linkedit, min(calc(78 * var(--hl-vh, 1vh)), 900px)) !important; min-height: 420px; }          /* the link editor: the Links tab, a drop-down card above the bookmarks */
 #inner_wrapper #terminal-card iframe { height: var(--hl-h-terminal, min(calc(70 * var(--hl-vh, 1vh)), 720px)) !important; min-height: 240px; background: #0a0f19 !important; }          /* the web terminal: a drop-down card on the Links tab */
-/* ---- Wide screens (1080p and bigger): the page uses the whole width, a little smaller, and the groups sit side by side */
 @media (min-width: 1500px) {
   #inner_wrapper { --lk-player-h: clamp(420px, calc(54 * var(--hl-vh, 1vh)), 680px); }
   #inner_wrapper > .container { max-width: 2400px; }
@@ -951,27 +877,22 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
   #inner_wrapper #myTab { width: min(100%, 460px); }
   #inner_wrapper button[id$="-tab"] { padding: 7px 10px !important; font-size: 15px !important; letter-spacing: 0.05em; }
   #inner_wrapper .service-group-name, #inner_wrapper .bookmark-group-name { font-size: 0.92rem !important; }
-  /* Home: the music group on the left, the other groups on the right beside it, the Calendar across the bottom */
   #inner_wrapper #layout-groups:has(#navidrome-card) { display: grid !important; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); column-gap: 18px; row-gap: 8px; align-items: start; }
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group { grid-column: 2; min-width: 0 !important; max-width: none !important; width: auto !important; }
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(#navidrome-card) { grid-column: 1; grid-row: 1 / span 3; }
   #inner_wrapper #layout-groups:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { grid-column: 1 / -1; grid-row: auto; }
-  /* Links: two columns in rows, so groups side by side start on the same line (the script gives the groups their order); the link editor runs across both. Stats stays one section per row. */
   #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) { display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 18px; row-gap: 8px; align-items: start; }
   #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) > .services-group,
   #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) > .bookmark-group { width: 100% !important; max-width: none !important; min-width: 0 !important; margin-bottom: 0; }
   #inner_wrapper #layout-groups:not(:has(#navidrome-card)):not(:has(#customize-card)):not(:has(li[id^="stat-"])) > :has(#linkedit-card) { grid-column: 1 / -1; order: -1; }
-  /* Stats: more room for the tiles */
   #inner_wrapper li[id^="stat-"] .service-block { padding: 10px 6px !important; min-width: 0; }
   #inner_wrapper li[id^="stat-"] .service-block-label { overflow-wrap: break-word; line-height: 1.25; }
   #inner_wrapper li[id^="stat-"] .service-block-value { font-size: 1.08rem !important; }
-  /* the Calendar fills the room under the music group (the script sets the class and the height): A = month and Coming Up side by side, B = only the month there, Coming Up across the bottom */
   #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { grid-column: 1; grid-row: 1 / span 3; align-self: end; }
   #inner_wrapper #layout-groups.hl-cal-a:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) .services-list { grid-template-rows: minmax(0, var(--hl-cal-h)); }
   #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) { display: contents !important; }
   #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) > :not([id^="headlessui-disclosure-panel"]) { display: none !important; }
   #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) .services-list { display: contents !important; }
-  /* (the fold panel has Tailwind's "block!", an important rule inside a layer, which only an important rule in an earlier layer can beat) */
   @layer theme { #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) > .services-group:has(li[id^="cal-"]) > [id^="headlessui-disclosure-panel"] { display: contents !important; } }
   #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) li#cal-month { grid-column: 1; grid-row: 1 / span 3; align-self: end; height: var(--hl-cal-h); margin: 0 !important; }
   #inner_wrapper #layout-groups.hl-cal-b:has(#navidrome-card) li#cal-agenda { grid-column: 1 / -1; grid-row: 4; margin: 0 !important; }
@@ -983,19 +904,13 @@ html #inner_wrapper::-webkit-scrollbar-thumb:hover { background-color: rgba(255,
 @media (min-width: 2200px) {
   #inner_wrapper #layout-groups:has(#navidrome-card) { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
 }
-/* ---- Screen fit: custom.js shows the page a little smaller on a 1080p screen (like 90% browser zoom) and a little bigger on a 1440p screen (like 110%), by the real size
-   of the window in screen pixels, whatever the Windows scale and the browser zoom are. It sets data-hl-fit and --hl-vh on the page (--hl-vh makes the "percent of the screen
-   height" sizes above come out right). Under it the page lays out as wide as at that browser zoom, so the top row of tiles gets the size that width would get. */
-html[data-hl-fit="1080"] #information-widgets { zoom: 0.70; }   /* the page then lays out about 1707 wide */
-html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wide */
-/* Stats on a phone: the folder sizes (four values) go two to a row instead of running off the card; temperatures list one under the other */
+html[data-hl-fit="1080"] #information-widgets { zoom: 0.70; }   
+html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   
 @media (max-width: 520px) {
   #inner_wrapper li#stat-folders .service-container { flex-wrap: wrap !important; }
   #inner_wrapper li#stat-folders .service-container > .service-block { flex: 1 1 calc(50% - 8px) !important; min-width: 0 !important; }
   #inner_wrapper li[id^="stat-"] .service-block-value { overflow-wrap: anywhere; }
 }
-/* ---- The bell next to the tabs: a small switch of the same shape and glass as the tab bar, a count in the color of the worst thing waiting, and a drop-down list.
-   It takes the accent color of the look like the tabs do. The list comes from images/alerts.json (see custom.js, "the bell"). */
 #inner_wrapper #tabs { gap: 8px; }
 #hl-bell {
   position: relative;
@@ -1057,8 +972,6 @@ html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wi
   overflow: auto;
   padding: 6px;
   border-radius: 14px;
-  /* The list is always a dark, solid panel tinted with the theme's accent, with its own fixed light text. The glass of a theme can be light and its text white
-     (Frosted Glass, Liquid Glass), so the list must not take either from the theme: then it is readable in every theme and with any colors the panel sets. */
   --hl-pop-bg: color-mix(in srgb, rgb(var(--lk-accent)) 11%, #0b101c);
   --hl-pop-text: #f3f6fb;
   --hl-pop-muted: #bcc6d6;
@@ -1071,9 +984,8 @@ html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wi
   color: var(--hl-pop-text);
 }
 #hl-bell.hl-open .hl-bellpop { display: block; }
-@media (min-width: 701px) {      /* the tab bar and its list lie above the cards (on a phone the bar is sticky with its own layer already) */
+@media (min-width: 701px) {      
   #inner_wrapper #tabs { position: relative; z-index: 30; }
-  /* while the search box is in use, it and its list of suggestions lie above the tab bar (the list drops down over the tabs) */
   #information-widgets .information-widget-search:focus-within,
   #information-widgets .information-widget-search:has(ul, [role="listbox"], [role="menu"]) { z-index: 45 !important; }
 }
@@ -1106,4 +1018,3 @@ html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }   /* about 1862 wi
   #hl-bell { pointer-events: auto; box-shadow: 0 -8px 28px -10px rgba(0, 0, 0, 0.7); }
   #hl-bell .hl-bellpop { top: auto; bottom: calc(100% + 10px); }
 }
-/* <<< homelab tabs <<< */
