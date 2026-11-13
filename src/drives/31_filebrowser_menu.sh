@@ -4,6 +4,7 @@
 sync_filebrowser() {
   [ "$TEST_MODE" = 1 ] && return 0
   [ "$DRY_RUN" = 1 ] && return 0
+  [ "${DRIVES_SKIP_SYNC:-}" = 1 ] && return 0      # the uninstall takes the pools apart and removes the dashboard itself
   # the Homepage drive pills ("Main Pool" / "Connect Backup Drive" ...) follow the pools
   command -v homelab-sample >/dev/null 2>&1 && { homelab-sample widgets 9>&- >/dev/null 2>&1 || true; }
   # the Stats tab and the drive temperatures are only redone every 15 minutes: after a change of the drives they are redone now (in the background, it takes a little while)

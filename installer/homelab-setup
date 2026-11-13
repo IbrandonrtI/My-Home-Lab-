@@ -7771,7 +7771,10 @@ def un_serve_ports():
             continue
         port = int(m.group(1))
         prox = ((v.get("Handlers") or {}).get("/") or {}).get("Proxy", "")
-        if port in extra or (port in ours and re.search(r":%d/?$" % ours[port], prox)):
+        # also an address from the card range (1009 to 1099) that points at a port of THIS machine: homelab-cards hands those out, and its list can be
+        # missing (after an earlier uninstall test, say), which used to leave them behind
+        card_range = 1009 <= port < 1100 and re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)[^/]*:\d+/?$", prox)
+        if port in extra or card_range or (port in ours and re.search(r":%d/?$" % ours[port], prox)):
             found.append(port)
     return sorted(found)
 
@@ -7806,9 +7809,10 @@ def un_run_drives(*args, quiet=False):
     tool = un_drives_tool()
     if not tool:
         return 127, ""
+    env = dict(os.environ, DRIVES_SKIP_SYNC="1")      # the drives tool must not try to refresh FileBrowser and Homepage: they are being removed
     if quiet:
-        return run([tool] + list(args), timeout=120)
-    return subprocess.call([tool] + list(args)), ""
+        return run([tool] + list(args), timeout=120, env=env)
+    return subprocess.call([tool] + list(args), env=env), ""
 
 
 def un_disk_of(dev):
@@ -7875,6 +7879,7 @@ def un_facts():
     f["boot_sections"] = sorted(glob.glob(P("/var/lib/homelab-boot-sections") + "/*.img"))
     f["music"] = music_folder()
     f["adguard"] = "adguardhome" in f["containers"]
+    f["own"] = [n for n in containers_all() if n not in f["containers"]] if have("docker") else []      # containers that are not HomeLab's: they stay
     return f
 
 
@@ -7922,6 +7927,8 @@ def un_show_plan(f):
     say("These STAY on the machine:")
     say("  - Tailscale (still logged in; only HomeLab's addresses are removed)")
     say("  - Docker (only HomeLab's containers, images and networks go; any container of your own stays)")
+    if f.get("own"):
+        say("  - these containers are not HomeLab's, so they stay (and so do their images): %s" % ", ".join(f["own"]))
     say("  - mergerfs, SnapRAID, mdadm, ZFS, smartmontools and the other helper programs")
     say("  - your music files%s" % (" in %s" % f["music"] if f["music"] else ""))
     say("  - the downloaded copy of this repository (%s)" % Ctx.repo)
@@ -8288,6 +8295,9 @@ def cmd_uninstall():
     if not wipe_data:
         say("The data of the apps was kept (folders %s and the Docker volumes). The saved passwords are in %s; keep that folder if you want to install again and open the old data." %
             (", ".join(d for d, _ in f["data"][:4]) + (" ..." if len(f["data"]) > 4 else ""), SECRET_DIR))
+    own = [n for n in containers_all() if n not in f["containers"]] if have("docker") else []
+    if own:
+        say("Containers that are not HomeLab's were left alone: %s. To remove them too:  docker rm -f %s  (their images:  docker image prune -a)" % (", ".join(own), " ".join(own)))
     if f["array"]:
         say("The %s array was left as it is. Manage it with `sudo drives`." % {"zfs": "ZFS", "md": "RAID"}[f["array"]])
     say("To install the lab again later:  git clone https://github.com/IbrandonrtI/My-Home-Lab-.git  and  sudo bash setup.sh install  inside it.")
