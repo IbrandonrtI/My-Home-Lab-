@@ -1,8 +1,3 @@
-# Homepage settings. Tested with Homepage 2.6.
-# The background picture below starts as a web address. The installer saves a copy in the images/ folder of this folder and
-# changes the line to  image: /images/background.jpg  so the dashboard loads fast and works offline. To use another picture:
-#   homelab theme background URL-or-FILE
-# (the homepage stack mounts that folder at /app/public/images, and Homepage must be restarted after a new picture)
 title: Home Lab
 headerStyle: boxedWidgets
 theme: dark
@@ -20,16 +15,12 @@ background:
   brightness: 42
   opacity: 80
 
-# Quick Launch: start typing anywhere on the page to jump to a card, search the web or open an address.
 quicklaunch:
   searchDescriptions: true
   hideInternetSearch: false
   showSearchSuggestions: true
   provider: google
 
-# Tabs and group icons. Each group is listed once; "tab:" puts it on a tab and "icon:" is the small picture next to its title.
-# A group that is not listed here is shown on every tab. To rename a tab, change its name on every line that uses it.
-# To go back to one page without tabs, delete everything from the line "layout:" down (the installer does not add it again).
 layout:
   Network & DNS:
     tab: Home
