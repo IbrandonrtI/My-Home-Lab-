@@ -285,6 +285,8 @@ def un_remove_cron():
 
 
 def un_stop_services():
+    if run(["systemctl", "is-active", FINISH_UNIT])[1].strip() in ("active", "activating"):
+        act(["systemctl", "stop", FINISH_UNIT])         # the job that finishes the install (its status and lock files go with the folders below)
     for unit, path in UN_UNITS:
         if os.path.exists(P(path)) or run(["systemctl", "is-active", unit])[1].strip() == "active":
             act(["systemctl", "stop", unit])

@@ -191,13 +191,16 @@ def show_secret_values():
     out("")
 
 
-def final_report(res):
-    """End of install: how it went, the generated passwords (then wait for Enter), the checklist, the next step."""
+def final_report(res, background=False):
+    """End of install: how it went, the generated passwords (then wait for Enter), the checklist, the next step.
+    `background` is True when the last steps were handed to the background job."""
     Live.close()
     done, total = counts(res)
     failed = [s for s in STEPS if res[s.id].state == "failed"]
     rule("Install finished")
     good("Finished in %s. %d of %d steps are done." % (fmt_time(Live.elapsed_total()), done, total))
+    if background:
+        say_background_start(res)
     if failed:
         bad("%d step(s) failed: %s. `sudo homelab-setup refresh` tries them again." % (
             len(failed), "; ".join(s.title for s in failed[:3]) + (" ..." if len(failed) > 3 else "")))
@@ -480,6 +483,12 @@ def show_plan(todo, later, by_hand):
         n = len([s for s in todo if s.group == g])
         if n:
             out("   %s%-22s%s %2d  %s%s%s" % (B, g, N, n, D, GROUP_BLURB.get(g, ""), N))
+    if background_mode():
+        slow = [s for s in todo + later if s.id in deferred_ids()]
+        if slow:
+            out("")
+            say("%d of these (Nextcloud and Immich first logins, Beszel and the widget keys) finish in the background after the install is done, "
+                "so you do not have to wait for them. `sudo homelab-setup status` shows how far they are." % len(slow))
     if later:
         out("")
         say("%d more %s by itself once the steps that need you are done: %s" % (
@@ -502,6 +511,7 @@ def cmd_install():
         res = evaluate()
         show_checklist(res)
         return
+    refuse_while_finishing()
     rule("Home lab installer %s %s" % (S_DOT, "dry run - nothing will be changed" if Opt.dry else "v" + VERSION))
     if not State.ran("install-started"):
         welcome()
@@ -546,22 +556,25 @@ def cmd_install():
         State.mark("install-started")
         if State.data["answers"].get("lvm_grow") == "yes":
             grow_boot_volume()
-    Live.begin_run(len(todo) + len(during))
-    run_install(res)
+    later_ids = deferred_ids() if background_mode() else set()
+    Live.begin_run(len([s for s in todo if s.id not in later_ids]) + len(during))
+    run_install(res, later_ids)
     res = evaluate()
     write_progress(res)
     if not Opt.dry:
-        final_report(res)
+        final_report(res, start_finish_job(res))
     else:
         out("")
         say("This was a dry run. Nothing was changed.")
 
 
-def run_install(res):
-    """Run the install: the early system steps, then the two steps a person must do, then up to four more passes."""
+def run_install(res, later=None):
+    """Run the install: the early system steps, then the two steps a person must do, then up to four more passes.
+    `later` holds the ids of the steps that finish in the background after the install."""
     early = {"os", "apt-upgrade", "packages", "docker", "docker-group", "tailscale-install"}
     rule("Installing")
     run_pass(res, early)
+    Prefetch.start()        # the images of every stack download in the background while the next steps run
     # the two things only a person can do: log in to Tailscale and switch HTTPS on
     for sid in ("tailscale-login", "tailscale-https"):
         s = BY_ID[sid]
@@ -576,7 +589,7 @@ def run_install(res):
             except Abort as e:
                 bad(str(e))
     for _ in range(4):
-        gained = run_pass(res)
+        gained = run_pass(res, skip=later)
         if not Opt.dry:
             res.update(evaluate())
         if not gained:
@@ -655,6 +668,7 @@ def cmd_refresh():
         return
     if not State.exists():
         raise Abort("The installer has not run on this machine yet. Run `sudo homelab-setup install`.")
+    refuse_while_finishing()
     wait_for_apps()
     res = evaluate()
     Live.begin_run(len([s for s in STEPS if s.kind == "auto" and res[s.id].state in ("todo", "failed", "blocked")]))

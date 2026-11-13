@@ -17,6 +17,8 @@ def main(argv):
             Opt.yes = True
         elif a == "--no-restore":
             Opt.no_restore = True
+        elif a == "--no-background":
+            Opt.no_background = True
         elif a == "--force-existing":
             Opt.force_existing = True
         elif a == "--backup" and i + 1 < len(args):
@@ -31,7 +33,7 @@ def main(argv):
         elif a in ("--version", "version"):
             out("homelab-setup " + VERSION)
             return 0
-        elif a == "--quiet":
+        elif a in ("--quiet", "--background"):
             pass
         elif a == "--wipe-data":
             Opt.wipe_data = True

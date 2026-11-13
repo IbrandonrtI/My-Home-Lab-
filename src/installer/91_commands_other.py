@@ -762,6 +762,8 @@ Commands:
   install                  set everything up (asks first; safe to run again)
   install --dry-run        show the plan and change nothing
   refresh                  re-check and continue every step that is now possible
+  status                   how far the last steps are that finish in the background after the install
+  finish                   run those last steps again in this window (a failed one is listed by `status`)
   upgrade                  download the newest files from GitHub and put the new scripts on this machine (one step)
   growdisk                 give the unused space of the drive to the system volume (LVM, Ubuntu Server); it asks first
   verify                   check that every container and service is up (also shown when all steps are done)
@@ -778,7 +780,7 @@ Commands:
   secrets                  show the generated passwords and keys
   progress | version | help
 
-Options for install:  --yes  --backup FOLDER  --no-restore  --repo FOLDER  --force-existing
+Options for install:  --yes  --backup FOLDER  --no-restore  --no-background  --repo FOLDER  --force-existing
 The installer never formats or erases a drive and never saves the admin password. The one change it can make to the drive layout
 is growing an LVM system volume into unused space of its drive, and only after you say yes.
 """
@@ -787,4 +789,5 @@ is growing an LVM system volume into unused space of its drive, and only after y
 # every command that needs no more than its name (done STEP and skip STEP also take the step)
 COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
             "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
-            "homepage": cmd_homepage, "adguard": cmd_adguard, "upgrade": cmd_upgrade, "growdisk": cmd_growdisk}
+            "homepage": cmd_homepage, "adguard": cmd_adguard, "upgrade": cmd_upgrade, "growdisk": cmd_growdisk,
+            "finish": cmd_finish, "status": cmd_status}
