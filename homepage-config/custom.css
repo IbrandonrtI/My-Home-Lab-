@@ -1039,6 +1039,17 @@ html[data-hl-fit="1440"] #information-widgets { zoom: 0.80; }
 #hl-install:not(.hl-warn) .hl-ring-arc { animation: hl-ring-pulse 2.4s ease-in-out infinite; }
 @keyframes hl-ring-pulse { 50% { opacity: 0.55; } }
 @media (prefers-reduced-motion: reduce) { #hl-install .hl-ring-arc { animation: none !important; transition: none; } }
+#hl-install.hl-spin .hl-ring-arc { transform-origin: 18px 18px; animation: hl-ring-spin 1.4s linear infinite; }
+@keyframes hl-ring-spin { from { transform: rotate(-90deg); } to { transform: rotate(270deg); } }
+@media (prefers-reduced-motion: reduce) { #hl-install.hl-spin .hl-ring-arc { animation: none !important; } }
+#hl-install .hl-job { padding: 8px 10px 10px; border-top: 1px solid var(--hl-pop-line); display: flex; flex-direction: column; gap: 4px; }
+#hl-install .hl-jobtitle { font-size: 14px; font-weight: 600; }
+#hl-install .hl-jobline { font-size: 13px; color: var(--hl-pop-text); }
+#hl-install .hl-jobstep { font-size: 12.5px; color: var(--hl-pop-muted); overflow-wrap: anywhere; }
+#hl-install .hl-jobbar { height: 6px; border-radius: 4px; background: rgba(255, 255, 255, 0.14); overflow: hidden; }
+#hl-install .hl-jobbar i { display: block; height: 100%; border-radius: 4px; background: rgb(var(--lk-accent)); transition: width 0.6s ease; }
+#hl-install .hl-jobbar.hl-jobwait i { opacity: 0.5; animation: hl-ring-pulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { #hl-install .hl-jobbar.hl-jobwait i, #hl-install .hl-jobbar i { animation: none; transition: none; } }
 #hl-install .hl-steplist { display: flex; flex-direction: column; padding: 0 4px 6px; }
 #hl-install .hl-steprow { display: flex; align-items: baseline; gap: 10px; padding: 5px 6px; font-size: 13.5px; border-top: 1px solid var(--hl-pop-line); }
 #hl-install .hl-stepmark { flex: 0 0 14px; text-align: center; color: var(--hl-pop-muted); }

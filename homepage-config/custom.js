@@ -629,13 +629,26 @@
   }
 
   var INSTALL = { data: null, at: 0, busy: false };
+  var JOBS = { list: [], at: 0, busy: false, seen: 0, seenAt: 0 };
   var INSTALL_STALE = 1200;
+  var JOBS_QUIET = 90000;
   function installLoad() {
     INSTALL.busy = true;
     fetch("/images/install-status.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error("no file"); return r.json(); })
       .then(function (j) { INSTALL.data = j && typeof j.total === "number" && typeof j.done === "number" ? j : null; })
       .catch(function () { INSTALL.data = null; })
       .then(function () { INSTALL.busy = false; INSTALL.at = Date.now(); installDraw(); });
+  }
+  function jobsLoad() {
+    JOBS.busy = true;
+    fetch("/images/job-status.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error("no file"); return r.json(); })
+      .then(function (j) {
+        var list = j && Array.isArray(j.jobs) ? j.jobs : [], up = j && j.updated || 0, now = Date.now();
+        if (up !== JOBS.seen) { JOBS.seen = up; JOBS.seenAt = now; }
+        JOBS.list = list.length && now / 1000 - up < INSTALL_STALE && now - JOBS.seenAt < JOBS_QUIET ? list : [];
+      })
+      .catch(function () { JOBS.list = []; })
+      .then(function () { JOBS.busy = false; JOBS.at = Date.now(); installDraw(); });
   }
   function installMode(d) {
     if (!d || d.state === "done" || !(d.total > 0)) return "hidden";
@@ -644,23 +657,30 @@
     if (Date.now() / 1000 - (d.updated || 0) > INSTALL_STALE) return "stale";
     return "running";
   }
+  function timeLeft(sec) {
+    if (typeof sec !== "number" || !(sec > 0)) return "";
+    if (sec < 120) return "about a minute left";
+    if (sec < 5400) return "about " + Math.round(sec / 60) + " minutes left";
+    if (sec < 129600) return "about " + Math.round(sec / 3600) + " hours left";
+    return "more than a day left";
+  }
   var STEP_MARK = { done: "✓", failed: "✗", now: "●", wait: "○" };
-  function installDraw() {
-    var box = document.getElementById("hl-install");
-    if (!box) return;
-    var d = INSTALL.data, mode = installMode(d);
-    box.hidden = mode === "hidden";
-    if (mode === "hidden") { box.classList.remove("hl-open"); return; }
-    var warn = mode !== "running";
-    box.classList.toggle("hl-warn", warn);
-    var frac = Math.min(1, Math.max(0, d.done / d.total));
-    var arc = box.querySelector(".hl-ring-arc");
-    arc.setAttribute("stroke-dasharray", (frac * 94.25).toFixed(2) + " 94.25");
-    box.querySelector(".hl-ring-n").textContent = d.done + "/" + d.total;
-    var btn = box.querySelector("button");
-    btn.setAttribute("aria-label", "Install progress: " + d.done + " of " + d.total + " steps done");
-    var pop = box.querySelector(".hl-bellpop");
-    while (pop.firstChild) pop.removeChild(pop.firstChild);
+  function jobBlock(pop, jb) {
+    var has = typeof jb.pct === "number", box = el("div", "hl-job");
+    box.appendChild(el("div", "hl-jobtitle", String(jb.title || "")));
+    var line = has ? jb.pct + "%" : "Working";
+    var left = timeLeft(jb.eta);
+    if (left) line += " \u00b7 " + left;
+    box.appendChild(el("div", "hl-jobline", line));
+    var bar = el("div", "hl-jobbar" + (has ? "" : " hl-jobwait"));
+    var fill = el("i", "");
+    fill.style.width = (has ? Math.min(100, Math.max(2, jb.pct)) : 100) + "%";
+    bar.appendChild(fill);
+    box.appendChild(bar);
+    if (jb.step) box.appendChild(el("div", "hl-jobstep", String(jb.step)));
+    pop.appendChild(box);
+  }
+  function installBlock(pop, d, mode) {
     var head = el("div", "hl-bellhead");
     head.appendChild(el("strong", "", mode === "running" ? "Finishing the install" : mode === "failed" ? "A step needs attention" : mode === "waiting" ? "Some steps are waiting" : "No recent progress"));
     head.appendChild(el("span", "hl-bellsub", d.done + " of " + d.total + " steps done"));
@@ -678,6 +698,32 @@
       list.appendChild(row);
     });
     pop.appendChild(list);
+  }
+  function installDraw() {
+    var box = document.getElementById("hl-install");
+    if (!box) return;
+    var d = INSTALL.data, mode = installMode(d), jobs = JOBS.list;
+    var showInstall = mode !== "hidden";
+    box.hidden = !showInstall && !jobs.length;
+    if (box.hidden) { box.classList.remove("hl-open"); return; }
+    var top = jobs.length ? jobs[0] : null;
+    var known = top && typeof top.pct === "number";
+    box.classList.toggle("hl-warn", !top && mode !== "running");
+    box.classList.toggle("hl-spin", !!top && !known);
+    var frac = top ? (known ? Math.min(1, Math.max(0, top.pct / 100)) : 0.25) : Math.min(1, Math.max(0, d.done / d.total));
+    box.querySelector(".hl-ring-arc").setAttribute("stroke-dasharray", (frac * 94.25).toFixed(2) + " 94.25");
+    box.querySelector(".hl-ring-n").textContent = top ? (known ? top.pct + "%" : "") : d.done + "/" + d.total;
+    box.querySelector("button").setAttribute("aria-label", top ? String(top.title) + (known ? ": " + top.pct + " percent" : "") : "Install progress: " + d.done + " of " + d.total + " steps done");
+    var pop = box.querySelector(".hl-bellpop");
+    while (pop.firstChild) pop.removeChild(pop.firstChild);
+    if (jobs.length) {
+      var head = el("div", "hl-bellhead");
+      head.appendChild(el("strong", "", "In progress"));
+      head.appendChild(el("span", "hl-bellsub", jobs.length === 1 ? "1 job" : jobs.length + " jobs"));
+      pop.appendChild(head);
+      jobs.forEach(function (jb) { jobBlock(pop, jb); });
+    }
+    if (showInstall) installBlock(pop, d, mode);
   }
   function installRing() {
     var tabs = document.getElementById("tabs"), bellBox = document.getElementById("hl-bell");
@@ -698,11 +744,12 @@
         box.classList.toggle("hl-open", open);
         btn.setAttribute("aria-expanded", String(open));
         if (open && !INSTALL.busy) installLoad();
+        if (open && !JOBS.busy) jobsLoad();
       };
       box.appendChild(btn);
       var pop = el("div", "hl-bellpop");
       pop.setAttribute("role", "region");
-      pop.setAttribute("aria-label", "Install progress");
+      pop.setAttribute("aria-label", "Progress");
       box.appendChild(pop);
       document.addEventListener("click", function (e) { var b = document.getElementById("hl-install"); if (b && !b.contains(e.target)) { b.classList.remove("hl-open"); b.querySelector("button").setAttribute("aria-expanded", "false"); } });
       document.addEventListener("keydown", function (e) { if (e.key === "Escape") { var b = document.getElementById("hl-install"); if (b) b.classList.remove("hl-open"); } });
@@ -710,6 +757,8 @@
     if (box.parentNode !== tabs || bellBox.nextSibling !== box) tabs.insertBefore(box, bellBox.nextSibling);
     var every = box.hidden ? 60000 : 10000;
     if (!INSTALL.busy && Date.now() - INSTALL.at > every) installLoad();
+    var jevery = JOBS.list.length ? 5000 : 20000;
+    if (!JOBS.busy && Date.now() - JOBS.at > jevery) jobsLoad();
   }
 
   function run() {

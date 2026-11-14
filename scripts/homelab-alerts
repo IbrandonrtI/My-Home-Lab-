@@ -6,12 +6,12 @@
   homelab-alerts help
 
 What it looks at: containers that are not running, container updates waiting (the list homelab-update saved), system updates and a needed
-restart, the drives and the backup (from stats.json), free space, Tailscale, and drive temperatures. Every kind can be missing (a tool that is not
+restart, the drives and the backup (from stats.json), free space, Tailscale, drive temperatures, and files being written to a storage pool (an upload or a setup). Every kind can be missing (a tool that is not
 installed, a file that is not there yet) and then it is skipped. It changes nothing on the machine and needs no internet.
 
 The file is images/alerts.json in the Homepage folder (the same place as stats.json). Each item has an id, a level (bad, warn or info), a title,
 a detail and an action the bell can offer ("update", "restart" or ""). Settings by environment (for tests): HOMELAB_STATE_DIR, HOMELAB_ALERTS_OUT,
-HOMELAB_STATS_IN, HOMELAB_DOCKER, HOMELAB_TAILSCALE, HOMELAB_APT_GET, HOMELAB_REBOOT_FILE, HOMELAB_ROOT_PATH, HOMELAB_TEMP_WARN, HOMELAB_TEMP_BAD."""
+HOMELAB_STATS_IN, HOMELAB_DOCKER, HOMELAB_TAILSCALE, HOMELAB_APT_GET, HOMELAB_REBOOT_FILE, HOMELAB_ROOT_PATH, HOMELAB_TEMP_WARN, HOMELAB_TEMP_BAD, HOMELAB_BUSY (none or any text), HOMELAB_POOL_DEVS, HOMELAB_SYS_BLOCK, HOMELAB_BUSY_SECS."""
 import json
 import os
 import re
@@ -215,7 +215,50 @@ def check_temps():
     return res
 
 
-CHECKS = (check_containers, check_updates, stats_items, check_space, check_tailscale, check_temps)
+def pool_devices():
+    """The whole disks behind the storage pools and backup drives, found the same way homelab-update finds them."""
+    forced = os.environ.get("HOMELAB_POOL_DEVS")
+    if forced is not None:
+        return forced.split()
+    rc, out = run(["findmnt", "-rn", "-o", "SOURCE,TARGET"], 10)
+    disks = set()
+    for line in out.splitlines():
+        f = line.split()
+        if len(f) == 2 and f[0].startswith("/dev/") and re.match(r"/mnt/(disks/|storage\Z|backup\Z)", f[1]):
+            rc2, name = run(["lsblk", "-no", "pkname", f[0]], 10)
+            if rc2 == 0 and name.strip():
+                disks.add(name.split()[0])
+    return sorted(disks)
+
+
+def sectors_written(devs):
+    total = 0
+    for d in devs:
+        f = read(os.path.join(os.environ.get("HOMELAB_SYS_BLOCK", "/sys/block"), d, "stat")).split()
+        if len(f) > 6 and f[6].isdigit():
+            total += int(f[6])
+    return total
+
+
+def check_busy():
+    """Files being written to a storage pool, such as an upload or a setup. Its size is not known, so the bell can say it is busy but not when it will end."""
+    forced = os.environ.get("HOMELAB_BUSY")
+    if forced is not None:
+        busy = forced not in ("", "none")
+    else:
+        devs = pool_devices()
+        if not devs:
+            return []
+        secs = float(os.environ.get("HOMELAB_BUSY_SECS", "5"))
+        a = sectors_written(devs)
+        time.sleep(secs)
+        busy = (sectors_written(devs) - a) * 512 / secs > 300000
+    if not busy:
+        return []
+    return [item("storage:busy", "info", "Files are being written to a storage pool", "Probably an upload or a setup. Its size is not known, so there is no finish time. Updates and drive changes wait until it stops.", "")]
+
+
+CHECKS = (check_containers, check_updates, stats_items, check_space, check_tailscale, check_temps, check_busy)
 
 
 def collect():

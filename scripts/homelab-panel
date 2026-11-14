@@ -3728,9 +3728,86 @@ def read_bytes(p):
         return None
 
 
+JOBSTATUS_FILE = os.path.join(IMAGES, "job-status.json")
+MDSTAT = os.environ.get("HLP_MDSTAT") or "/proc/mdstat"
+JOBSTATUS_SECS = float(os.environ.get("HLP_JOBSTATUS_SECS") or 5)
+DRIVE_TITLES = {"setup": "Building the new drive setup", "add": "Adding a drive", "move": "Moving a drive", "disconnect": "Taking a drive out of its pool", "wipe": "Erasing a drive",
+                "bootadd": "Reserving space on the boot drive", "moveboot": "Moving files from the boot drive", "appsfix": "Repairing Immich and Nextcloud", "remount": "Repairing the drives"}
+UPDATE_TITLES = {"check": "Looking for updates", "containers": "Updating the containers", "containers-now": "Updating the containers", "system": "Updating the system", "restart": "Restarting the machine"}
+MD_TITLES = {"resync": "Syncing drive array %s", "recovery": "Rebuilding drive array %s", "reshape": "Resizing drive array %s", "check": "Checking drive array %s"}
+
+
+def eta_from_pace(pct, started, now):
+    """Time left, from how long the job has taken so far. Given only when the percent is high enough for the pace to mean something."""
+    if pct is None or not started or pct < 15 or pct >= 99 or now - started < 45:
+        return None
+    return max(60, int((now - started) * (100 - pct) / pct))
+
+
+def md_jobs():
+    """Drive arrays that are building or checking their redundancy in the background, with the percent and the finish time the system itself reports."""
+    jobs, name = [], ""
+    for line in read_text(MDSTAT).splitlines():
+        m = re.match(r"(md\w+) :", line)
+        if m:
+            name = m.group(1)
+            continue
+        m = re.search(r"(resync|recovery|reshape|check)\s*=\s*([\d.]+)%", line)
+        if name and m:
+            f = re.search(r"finish=([\d.]+)min", line)
+            sp = re.search(r"speed=(\d+)K/sec", line)
+            jobs.append({"id": "md:" + name, "kind": "array", "title": MD_TITLES[m.group(1)] % name, "step": "Runs in the background. The drives can be used meanwhile." + (" About %d MB/s." % round(int(sp.group(1)) / 1024) if sp else ""),
+                         "pct": min(99, int(float(m.group(2)))), "eta": int(float(f.group(1)) * 60) if f else None, "started": 0})
+    return jobs
+
+
+def job_status_jobs():
+    now = int(time.time())
+    jobs = []
+    with UPJOB_LOCK:
+        if UPJOB["running"]:
+            pct = UPJOB["pct"]
+            jobs.append({"id": "update", "kind": "updates", "title": UPDATE_TITLES.get(UPJOB["action"], "Updating"), "step": UPJOB["stage"] or "Working...", "pct": pct, "eta": eta_from_pace(pct, UPJOB["started"], now), "started": UPJOB["started"]})
+    with JOB_LOCK:
+        if JOB["running"]:
+            vals = [JOB["progress"].get(i, {}).get("pct", 0) for i in JOB["items"]] or []
+            pct = min(99, int(sum(vals) / len(vals))) if vals and JOB["progress"] else None
+            cur = JOB["progress"].get(JOB["current"], {})
+            jobs.append({"id": "drives", "kind": "drives", "title": DRIVE_TITLES.get(JOB["action"], "Changing the drives"), "step": cur.get("text") or "Working...", "pct": pct, "eta": eta_from_pace(pct, JOB["started"], now), "started": JOB["started"]})
+    with BJOB_LOCK:
+        if BJOB["running"]:
+            pct = BJOB["pct"]
+            jobs.append({"id": "backup", "kind": "backup", "title": {"run": "Running a backup", "dry": "Previewing a backup", "restore": "Restoring files"}.get(BJOB["action"], "Backup"), "step": "Working...", "pct": pct, "eta": eta_from_pace(pct, BJOB["started"], now), "started": BJOB["started"]})
+    return jobs + md_jobs()
+
+
+def job_status_write(last):
+    """Write the running jobs for the dashboard's progress ring (images/job-status.json). `last` is True when the previous write held jobs. Returns True when this one does."""
+    jobs = job_status_jobs()
+    if not jobs and not last:
+        return False
+    if os.path.isdir(IMAGES):
+        try:
+            write_atomic(JOBSTATUS_FILE, json.dumps({"version": 1, "updated": int(time.time()), "jobs": jobs}), 0o644)
+        except OSError:
+            pass
+    return bool(jobs)
+
+
+def job_status_loop():
+    last = True
+    while True:
+        try:
+            last = job_status_write(last)
+        except Exception as e:
+            sys.stderr.write("job status: %r\n" % (e,))
+        time.sleep(JOBSTATUS_SECS)
+
+
 def cmd_serve():
     srv = ThreadingHTTPServer((BIND, PORT), Handler)
     srv.daemon_threads = True
+    threading.Thread(target=job_status_loop, daemon=True).start()
     sys.stderr.write("homelab-panel %s listening on http://%s:%d (files in %s)\n" % (VERSION, BIND, PORT, HP))
     try:
         srv.serve_forever()
