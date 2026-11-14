@@ -2902,12 +2902,13 @@ REBOOT_FILE = os.environ.get("HLP_REBOOT_FILE") or "/var/run/reboot-required"
 UPDATE_STEPS = {
     "check": [["sudo", "-n", "/usr/local/sbin/homelab-update", "check"]],
     "containers": [["sudo", "-n", "/usr/local/sbin/homelab-update", "--yes"]],
+    "containers-now": [["sudo", "-n", "/usr/local/sbin/homelab-update", "--yes", "--now"]],
     "system": [["sudo", "-n", "/usr/bin/apt-get", "update"], ["sudo", "-n", "/usr/bin/apt-get", "-y", "upgrade"]],
     "restart": [["sudo", "-n", "/usr/bin/systemctl", "reboot"]],
 }
 if os.environ.get("HLP_UPDATE_STEPS"):
     UPDATE_STEPS = json.loads(os.environ["HLP_UPDATE_STEPS"])
-UPJOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "pct": None, "stage": ""}
+UPJOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "pct": None, "stage": "", "held": ""}
 UPJOB_LOCK = threading.Lock()
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 
@@ -2978,7 +2979,7 @@ def upd_progress(action, st, line):
         if pct is not None:
             st["pct"] = pct
         return pct, text
-    if action == "containers":
+    if action in ("containers", "containers-now"):
         m = re.search(r"Step (\d) of 4", line)
         if m:
             st["step"] = int(m.group(1))
@@ -3063,6 +3064,20 @@ def upd_progress(action, st, line):
     return None
 
 
+def held_reason(lines):
+    """When the update tool holds the update back ("Not now: <reason>"), return (reason, message for the person); otherwise None."""
+    for line in lines:
+        m = re.search(r"Not now: (.+)", line)
+        if not m:
+            continue
+        early = "Stopped before" in m.group(1)
+        reason = re.split(r"\. Stopped before", m.group(1))[0].strip().rstrip(".")
+        if early:
+            return reason, "The update stopped early because %s. The services updated so far are done; the rest are still waiting. Try again when it has finished." % reason
+        return reason, "Nothing was updated because %s. Try again when it has finished, or choose Update Anyway." % reason
+    return None
+
+
 def updates_job_thread(action):
     """Run the steps of an update action in the background and keep their output for the Updates tab."""
     rc = 1
@@ -3108,7 +3123,11 @@ def updates_job_thread(action):
             UPJOB["rc"] = rc
             if rc == 0 and UPJOB["pct"] is not None:
                 UPJOB["pct"], UPJOB["stage"] = 100, "Done"
-            if rc == 0:
+            held = held_reason(UPJOB["lines"]) if action in ("containers", "containers-now") and rc == 0 else None
+            if held:
+                UPJOB["rc"], UPJOB["held"] = 75, held[0]
+                UPJOB["message"] = held[1]
+            elif rc == 0:
                 UPJOB["message"] = tail[-1] if tail else "Done."
             elif "a password is required" in text or "not allowed to execute" in text or "sudo:" in text:
                 UPJOB["message"] = "The panel does not have permission to run that yet. Run the installer's update (homelab-update) to add the permission."
@@ -3128,7 +3147,7 @@ def api_updates_start(body):
     with UPJOB_LOCK:
         if UPJOB["running"]:
             raise Fail("An update is already running. Wait until it has finished.", 409)
-        UPJOB.update(id=UPJOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), pct=None, stage="")
+        UPJOB.update(id=UPJOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), pct=None, stage="", held="")
         jid = UPJOB["id"]
     threading.Thread(target=updates_job_thread, args=(action,), daemon=True).start()
     return {"ok": True, "job": jid}

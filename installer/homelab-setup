@@ -5641,7 +5641,7 @@ PANEL_SUDO_EXACT = ["status", "health", "check", "actions", "remount", "abort", 
 PANEL_SUDO_WITH_WORDS = ["setups", "rename", "sleep", "wake", "add", "wipe", "disconnect", "move", "setup", "bootadd", "appsfix"]
 PANEL_SUDO_BACKUP_EXACT = ["state", "save", "sshkey", "cloud-add"]
 PANEL_SUDO_BACKUP_WORDS = ["versions", "browse", "run", "dry", "restore", "delete", "toggle", "sshtest", "stream"]
-PANEL_SUDO_UPDATE = ["/usr/local/sbin/homelab-update check", "/usr/local/sbin/homelab-update --yes", "/usr/bin/apt-get update", "/usr/bin/apt-get -y upgrade",
+PANEL_SUDO_UPDATE = ["/usr/local/sbin/homelab-update check", "/usr/local/sbin/homelab-update --yes", "/usr/local/sbin/homelab-update --yes --now", "/usr/bin/apt-get update", "/usr/bin/apt-get -y upgrade",
                      "/usr/bin/systemctl reboot"]
 
 
@@ -6415,11 +6415,9 @@ def show_dashboard_links():
     if Ctx.fqdn:
         out("  Homepage, over Tailscale:    %s" % mark("https://%s:%d" % (Ctx.fqdn, SERVE[0][0])))
         out("  %sThe Tailscale address works from your other devices, not from this machine itself.%s" % (D, N))
-        out("Homepage will take a while to completely install and add everything on the dashboard.")
     else:
         out("  Homepage, over Tailscale:    available once this machine has joined your Tailscale network")
     out("")
-        
 
 
 def offer_drive_wizard():

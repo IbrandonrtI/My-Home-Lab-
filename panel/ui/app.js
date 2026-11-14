@@ -1228,9 +1228,9 @@ function viewDrives() {
   return drivesBox;
 }
 
-let UPD = null, UPDerr = "", UPDtimer = 0, UPDjob = null, UPDwas = "";
+let UPD = null, UPDerr = "", UPDtimer = 0, UPDjob = null, UPDwas = "", UPDheld = "";
 const updBox = h("div", { class: "upd" });
-const UPD_WORKING = { check: "Looking for new versions...", containers: "Updating the containers...", system: "Updating the system...", restart: "Restarting the machine..." };
+const UPD_WORKING = { check: "Looking for new versions...", containers: "Updating the containers...", "containers-now": "Updating the containers...", system: "Updating the system...", restart: "Restarting the machine..." };
 
 function updAgo(then, now) {
   if (!then) return "never";
@@ -1251,6 +1251,7 @@ function followUpdates() {
     UPDjob = null;
     const said = UPDwas;
     UPDwas = "";
+    if (said === "containers" || said === "containers-now") UPDheld = j.held ? j.held : "";
     await loadUpdates();
     if (said) toast(j.message || "Done.", !!j.rc);
   };
@@ -1265,6 +1266,11 @@ async function updStart(what, extra) {
     drawUpdates();
     followUpdates();
   } catch (e) { fail(e); }
+}
+async function updAnyway() {
+  if (!(await confirmBox("Update anyway?", "The update is held back because " + UPDheld + ". Updating while that is going on can slow it down or interrupt it, and each service restarts for a short time. Update now?", "Update Anyway", true))) return;
+  UPDheld = "";
+  updStart("containers-now");
 }
 async function updRestart() {
   if (!(await confirmBox("Restart the machine?", "Every service stops for a minute or two and starts again automatically. Do not do this while a backup or an upload is running.", "Restart Now", true))) return;
@@ -1297,7 +1303,11 @@ function drawUpdates() {
         h("span", { class: "pill " + (n ? "warn" : "ok") }, n ? n + " waiting" : "Up to date"),
         h("div", { class: "pills" }, h("button", { class: "small", disabled: busy, onclick: () => updStart("check") }, "Check Now"),
           h("button", { class: "small primary", disabled: busy || !n, onclick: () => updStart("containers") }, "Update Containers")),
-        busy && (UPDjob.action === "containers" || UPDjob.action === "check") ? updBar(UPDjob) : null),
+        busy && ["containers", "containers-now", "check"].includes(UPDjob.action) ? updBar(UPDjob)
+          : UPDheld ? h("div", { class: "updheld", role: "status" },
+            h("span", { class: "badtext" }, "Nothing was updated: " + UPDheld + "."),
+            h("span", { class: "muted small" }, "Wait for it to finish and press Update Containers again, or update now."),
+            h("button", { class: "small", onclick: updAnyway }, "Update Anyway")) : null),
       updRow("System", UPD.system === null ? "Not checked yet. Press Update System to check and install." : UPD.system ? UPD.system + " package" + (UPD.system === 1 ? "" : "s") + " waiting (Ubuntu or Mint). Installing can take several minutes." : "Everything that can be installed is installed." + (UPD.kept_back ? " " + UPD.kept_back + " more " + (UPD.kept_back === 1 ? "package is" : "packages are") + " held back by Ubuntu: " + (UPD.kept_back === 1 ? "it needs" : "they need") + " other changes first, or " + (UPD.kept_back === 1 ? "is" : "are") + " being rolled out slowly. " + (UPD.kept_back === 1 ? "It installs" : "They install") + " automatically later. To see the list: apt list --upgradable" : ""),
         h("span", { class: "pill " + (UPD.system ? "warn" : UPD.system === null ? "dim" : "ok") }, UPD.system === null ? "Unknown" : UPD.system ? UPD.system + " waiting" : "Up to date"),
         h("div", { class: "pills" }, h("button", { class: "small primary", disabled: busy || UPD.system === 0, onclick: () => updStart("system") }, "Update System")),
