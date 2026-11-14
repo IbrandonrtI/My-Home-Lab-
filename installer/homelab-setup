@@ -3896,6 +3896,24 @@ def widgets_for_machine(body):
     return body
 
 
+# Homepage serves a file under /images only if the file already existed when Homepage started. The progress ring reads these two files,
+# so they are created empty before Homepage first starts (or, on a machine where Homepage already runs, once, with a restart of Homepage).
+DASH_PLACEHOLDERS = {"install-status.json": "{}\n", "job-status.json": '{"version": 1, "updated": 0, "jobs": []}\n'}
+
+
+def dashboard_placeholders():
+    """Create the empty status files the progress ring reads. Returns True when Homepage had to be restarted to serve them."""
+    made = False
+    for name, body in DASH_PLACEHOLDERS.items():
+        if not os.path.exists(hp_path("images/" + name)):
+            write_file(hp_path("images/" + name), body, 0o644, (Ctx.uid, Ctx.gid))
+            made = True
+    if made and not Opt.dry and "homepage" in containers_running():
+        docker("restart", "homepage", timeout=120)
+        return True
+    return False
+
+
 @step
 class HomepageFiles(Step):
     """Copy the shipped Homepage configuration files into the user's folder with this machine's addresses filled in. Existing files are only updated for addresses."""
@@ -3911,6 +3929,8 @@ class HomepageFiles(Step):
         if OLD_LAN and OLD_LAN in txt and OLD_LAN != Ctx.lan:
             return "todo"
         if OLD_FQDN and OLD_FQDN in txt and OLD_FQDN != Ctx.fqdn:
+            return "todo"
+        if not Mode.existing and any(not os.path.exists(hp_path("images/" + n)) for n in DASH_PLACEHOLDERS):
             return "todo"
         return "done"
 
@@ -3933,6 +3953,8 @@ class HomepageFiles(Step):
                 new = subst(old)
                 if new != old:
                     write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
+        if dashboard_placeholders():
+            out("      Homepage was restarted once so that it serves the progress ring's status files")
         if "navidrome" in adopted():
             # Navidrome's card is normally added together with its login; for the person's own copy it is a plain link.
             svc = read_file(hp_path("services.yaml"))
