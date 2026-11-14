@@ -755,7 +755,7 @@
       document.addEventListener("keydown", function (e) { if (e.key === "Escape") { var b = document.getElementById("hl-install"); if (b) b.classList.remove("hl-open"); } });
     }
     if (box.parentNode !== tabs || bellBox.nextSibling !== box) tabs.insertBefore(box, bellBox.nextSibling);
-    var every = box.hidden ? 60000 : 10000;
+    var every = box.hidden ? 15000 : 10000;
     if (!INSTALL.busy && Date.now() - INSTALL.at > every) installLoad();
     var jevery = JOBS.list.length ? 5000 : 20000;
     if (!JOBS.busy && Date.now() - JOBS.at > jevery) jobsLoad();

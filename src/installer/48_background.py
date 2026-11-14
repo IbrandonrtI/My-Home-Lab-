@@ -164,6 +164,9 @@ def start_finish_job(res):
             warn(str(e))
             return False
     me = os.path.realpath(sys.argv[0])
+    # The dashboard's progress ring reads this file, so it is written now, before the dashboard link is shown.
+    Finish.data = {}
+    Finish.begin(res, deferred_ids())
     handed = False
     try:
         handed = hand_over_password()
@@ -177,6 +180,11 @@ def start_finish_job(res):
     cmd += [sys.executable, me, "finish", "--background"]
     rc, txt = run(cmd)
     if rc != 0:
+        for f in (FINISH_STATUS, hp_path(DASHBOARD_STATUS)):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
         if handed:
             try:
                 os.remove(FINISH_PW)
