@@ -712,8 +712,8 @@
     box.classList.toggle("hl-spin", !!top && !known);
     var frac = top ? (known ? Math.min(1, Math.max(0, top.pct / 100)) : 0.25) : Math.min(1, Math.max(0, d.done / d.total));
     box.querySelector(".hl-ring-arc").setAttribute("stroke-dasharray", (frac * 94.25).toFixed(2) + " 94.25");
-    box.querySelector(".hl-ring-n").textContent = top ? (known ? top.pct + "%" : "") : d.done + "/" + d.total;
-    box.querySelector("button").setAttribute("aria-label", top ? String(top.title) + (known ? ": " + top.pct + " percent" : "") : "Install progress: " + d.done + " of " + d.total + " steps done");
+    box.querySelector(".hl-ring-n").textContent = top ? (known ? top.pct + "%" : "") : Math.ceil(d.done / d.total * 100) + "%";
+    box.querySelector("button").setAttribute("aria-label", top ? String(top.title) + (known ? ": " + top.pct + " percent" : "") : "Install progress: " + Math.ceil(d.done / d.total * 100) + " percent, " + d.done + " of " + d.total + " steps done");
     var pop = box.querySelector(".hl-bellpop");
     while (pop.firstChild) pop.removeChild(pop.firstChild);
     if (jobs.length) {
@@ -737,7 +737,7 @@
       btn.type = "button";
       btn.setAttribute("aria-haspopup", "true");
       btn.setAttribute("aria-expanded", "false");
-      btn.innerHTML = '<svg viewBox="0 0 36 36" width="30" height="30" aria-hidden="true"><circle class="hl-ring-track" cx="18" cy="18" r="15" fill="none" stroke-width="3"/><circle class="hl-ring-arc" cx="18" cy="18" r="15" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="0 94.25" transform="rotate(-90 18 18)"/></svg>';
+      btn.innerHTML = '<svg viewBox="0 0 36 36" width="40" height="40" aria-hidden="true"><circle class="hl-ring-track" cx="18" cy="18" r="15" fill="none" stroke-width="3"/><circle class="hl-ring-arc" cx="18" cy="18" r="15" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="0 94.25" transform="rotate(-90 18 18)"/></svg>';
       btn.appendChild(el("span", "hl-ring-n", ""));
       btn.onclick = function () {
         var open = !box.classList.contains("hl-open");
