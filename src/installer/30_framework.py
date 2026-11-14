@@ -1,25 +1,23 @@
-# ================================================================ steps and the checklist
 class Result:
-    """The state of one step: done, todo, blocked, skip or na, with a detail text."""
     def __init__(self, state, detail=""):
-        self.state = state       # done | todo | blocked | failed | na | skip
+        self.state = state
         self.detail = detail
 
 
 class Step:
-    """One checklist step: `probe()` says whether it is done, `run()` does it."""
+    """One checklist step. probe() reports whether it is done and run() does the work."""
     id = ""
     group = ""
     title = ""
-    kind = "auto"            # auto: the installer does it.  manual: you do it.  ack: you confirm it, or it is detected
+    kind = "auto"
     needs = ()
     optional = False
-    tip = False              # an optional tip: shown at the end of the checklist, never counted, never "the next step"
+    tip = False
 
-    def applies(self):       # False = not part of this machine's list at all
+    def applies(self):
         return True
 
-    def probe(self):         # -> "done" | "todo" | "na"
+    def probe(self):
         return "todo"
 
     def detail(self):
@@ -32,10 +30,10 @@ class Step:
         return ""
 
     def fill_help(self):
-        return self.help()   # the text shown at the start of this step inside `sudo homelab-setup fill`
+        return self.help()
 
     def fill(self):
-        return False         # interactive walk-through; True when something was done
+        return False
 
     def tip_text(self):
         return self.help()
@@ -46,13 +44,11 @@ BY_ID = {}
 
 
 def register(inst):
-    """Add a step (an instance) to the checklist."""
     STEPS.append(inst)
     BY_ID[inst.id] = inst
 
 
 def step(cls):
-    """Class decorator: register a checklist step."""
     register(cls())
     return cls
 
@@ -62,7 +58,7 @@ GROUPS = ["System", "Tailscale", "Network", "Platform", "Services", "Logins and 
 
 
 def topo():
-    """Steps in an order where every step comes after the steps it needs."""
+    """Order the steps so that every step comes after the steps it needs."""
     order, seen = [], set()
 
     def visit(s):
@@ -78,7 +74,7 @@ def topo():
 
 
 def safe_probe(s):
-    """What a step's check says ("done", "todo" or "na"). A check must never crash the checklist: an error means "todo"."""
+    """Run a step's check; an error counts as "todo" so a broken check never crashes the checklist."""
     try:
         return s.probe()
     except Abort:
@@ -89,8 +85,7 @@ def safe_probe(s):
 
 
 def evaluate():
-    """Check every step and return {step id: Result}, in dependency order.
-    With HLS_TIMING=1 in the environment the slowest checks are listed afterwards (to see where the time goes)."""
+    """Check every step in dependency order and return a result for each."""
     res = {}
     spent = {}
     for s in topo():
@@ -106,7 +101,6 @@ def evaluate():
 
 
 def _check_one(s, res):
-    """Check one step and put its result into res."""
     if not s.applies():
         res[s.id] = Result("na")
         return
@@ -131,15 +125,13 @@ def _check_one(s, res):
 
 
 def counts(res):
-    """(steps done, steps that apply) from a set of results."""
-    own = {k: r for k, r in res.items() if not (k in BY_ID and BY_ID[k].tip)}      # (tips are not part of "N of M")
+    own = {k: r for k, r in res.items() if not (k in BY_ID and BY_ID[k].tip)}
     total = sum(1 for r in own.values() if r.state != "na")
     done = sum(1 for r in own.values() if r.state in ("done", "skip"))
     return done, total
 
 
 def write_progress(res):
-    """Save the progress counts for the login screen (does nothing in a dry run)."""
     if Opt.dry:
         return
     done, total = counts(res)
@@ -150,21 +142,21 @@ def write_progress(res):
                 os.remove(PROGRESS_FILE)
         else:
             write_file(PROGRESS_FILE, "%d|%d|%d\n" % (done, total, int(time.time())), 0o644)
-        # tells the login screen that having no data drive is expected here (it then shows a grey note, not a red error)
         marker = PROGRESS_DIR + "/no-data-drive"
         dd = res.get("data-drive")
         if State.readonly:
-            pass        # the existing server is only looked at, never changed
+            pass
         elif dd is not None and dd.state in ("todo", "skip"):
             write_file(marker, "no data drive set up\n", 0o644)
         elif os.path.exists(marker):
             os.remove(marker)
     except OSError:
         pass
+    sync_dashboard_status(res)
 
 
 def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
-    """Compact by default: one line per step. `--details` adds the full instructions of every open step."""
+    """Print the checklist: one line per step, and with --details the full instructions of every open step."""
     if show_help is None:
         show_help = Opt.details
     done, total = counts(res)
@@ -217,7 +209,7 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
     if waiting:
         out("  %sDimmed steps wait for the steps above them.%s" % (D, N))
         out("")
-    for s in STEPS:      # optional tips: never counted, never the next step
+    for s in STEPS:
         if s.tip and res[s.id].state in ("todo", "failed", "blocked"):
             out("  %sOptional:%s %s" % (B, N, s.title))
             for l in wrap(s.tip_text(), 4):
@@ -231,12 +223,11 @@ def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
 
 
 def pick_next(res):
-    "The step to do next: the first one in dependency order that is not done."
     return next((s for s in topo() if res[s.id].state in ("todo", "failed") and not s.tip), None)
 
 
 def unblock(res, dry=False):
-    """Turn steps that were blocked into 'todo' once the steps they need are done."""
+    """Turn blocked steps into "todo" once the steps they need are done."""
     for t in STEPS:
         if res[t.id].state == "blocked" and all(res[n].state in ("done", "na", "skip") for n in t.needs):
             if dry:
@@ -247,12 +238,10 @@ def unblock(res, dry=False):
 
 
 class Hook:
-    """The background job listens to the steps here (to keep its status file up to date)."""
-    step = None             # called as step(step_or_None, res) before a step starts (None: between steps) and after it ended
+    step = None
 
 
 def run_step(s):
-    """Run one step. Returns the exception it raised, or None."""
     try:
         s.run()
         return None
@@ -261,7 +250,6 @@ def run_step(s):
 
 
 def run_parallel(batch):
-    """Run the steps of the batch at the same time (the stacks: each one only waits for Portainer and Docker). Returns {id: exception or None}."""
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=min(len(batch), 4)) as pool:
         futs = {s.id: pool.submit(run_step, s) for s in batch}
@@ -269,7 +257,7 @@ def run_parallel(batch):
 
 
 def settle(s, exc, res, secs):
-    """What a step's ending means: record success or the reason it failed. Returns 1 when the step became done."""
+    """Record how a step ended: success, or the reason it failed. Returns 1 when the step became done."""
     if exc is None:
         State.note("err:" + s.id, "")
         Live.advance()
@@ -295,7 +283,7 @@ def settle(s, exc, res, secs):
             bad("%s: %s" % (s.title, msg))
             log("FAILED %s: %s" % (s.id, msg))
             res[s.id] = Result("failed", msg[:300])
-        return 0      # (the quiet schedule leaves it open: the person finishes it with `sudo homelab-setup refresh`)
+        return 0
     if isinstance(exc, Abort):
         msg = str(exc)
         State.note("err:" + s.id, msg.splitlines()[0][:300] if msg else "failed")
@@ -311,14 +299,11 @@ def settle(s, exc, res, secs):
 
 
 def ready(res, s, selected, skip):
-    """True when the automatic step `s` can run in this pass."""
     return (res[s.id].state in ("todo", "failed") and s.kind == "auto" and not (selected and s.id not in selected) and not (skip and s.id in skip))
 
 
 def run_pass(res, selected=None, skip=None):
-    """Run every automatic step that is ready. Returns the number of steps that became done.
-    `skip` holds the ids of steps that are left for later (the ones that finish in the background).
-    The stacks (steps with `parallel` set) that are ready are started together: each one only waits for Portainer and Docker."""
+    """Run every automatic step that is ready and return how many became done. Stack steps marked parallel run at the same time."""
     gained = 0
     for s in topo():
         if not ready(res, s, selected, skip):

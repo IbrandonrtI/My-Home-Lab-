@@ -2430,6 +2430,7 @@ def write_progress(res):
             os.remove(marker)
     except OSError:
         pass
+    sync_dashboard_status(res)
 
 
 def show_checklist(res, title="Home lab setup", show_help=None, show_all=False):
@@ -5906,6 +5907,7 @@ class MusicFolderAccess(Step):
 FINISH_UNIT = "homelab-finish"
 FINISH_STATUS = PROGRESS_DIR + "/finish-status"
 FINISH_LOCK = STATE_DIR + "/finish.lock"
+DASHBOARD_STATUS = "images/install-status.json"
 FINISH_PW = P("/run/homelab-finish.pw")
 FINISH_SEEDS = ("stack-immich", "stack-nextcloud", "nextcloud-ready", "nextcloud-restore-db", "immich-admin", "beszel-user", "beszel-agent-key", "apt-upgrade")
 
@@ -5949,6 +5951,7 @@ class Finish:
     """Status and lock of the background job that finishes the deferred steps. The lock lets only one run at a time."""
     lock_fd = None
     data = {}
+    active = set()
 
     @classmethod
     def take_lock(cls):
@@ -5968,6 +5971,9 @@ class Finish:
         try:
             os.makedirs(PROGRESS_DIR, exist_ok=True)
             write_file(FINISH_STATUS, json.dumps(cls.data), 0o644)
+            if os.path.isdir(hp_path("images")):
+                keep = ("state", "started", "updated", "finished", "total", "done", "now", "steps")
+                write_file(hp_path(DASHBOARD_STATUS), json.dumps({k: cls.data[k] for k in keep if k in cls.data}), 0o644, (Ctx.uid, Ctx.gid))
         except OSError:
             pass
 
@@ -5978,11 +5984,19 @@ class Finish:
         cls.update(None, res, ids)
 
     @classmethod
+    def step_state(cls, x, res):
+        """One word for the dashboard list: done, failed, now (running) or wait."""
+        st = res[x.id].state
+        return "done" if st in ("done", "skip") else "failed" if st == "failed" else "now" if x.id in cls.active else "wait"
+
+    @classmethod
     def update(cls, s, res, ids):
         mine = [x for x in STEPS if x.id in ids and res[x.id].state != "na"]
         cls.data["total"] = len(mine)
         cls.data["done"] = sum(1 for x in mine if res[x.id].state in ("done", "skip"))
         cls.data["now"] = s.title if s is not None else ""
+        cls.active = cls.active | {s.id} if s is not None else set()
+        cls.data["steps"] = [{"t": x.title.split(" (")[0], "s": cls.step_state(x, res)} for x in mine]
         cls.data["failed"] = [{"id": x.id, "title": x.title, "why": res[x.id].detail} for x in mine if res[x.id].state == "failed"]
         cls.save()
 
@@ -5994,6 +6008,24 @@ class Finish:
         cls.data["state"] = "failed" if cls.data["failed"] else "waiting" if cls.data["waiting"] else "done"
         cls.data["finished"] = int(time.time())
         cls.save()
+
+
+def sync_dashboard_status(res):
+    """After a manual refresh or fill, bring the dashboard's install status in line with the real steps (so a fixed step clears the warning)."""
+    if Opt.dry or State.readonly or finish_running():
+        return
+    try:
+        d = json.loads(read_file(FINISH_STATUS) or "{}")
+    except (OSError, ValueError):
+        return
+    if not d:
+        return
+    was = (d.get("state"), d.get("done"), d.get("finished"))
+    Finish.data, Finish.active = d, set()
+    Finish.end(res, deferred_ids())
+    if was[2] and (Finish.data.get("state"), Finish.data.get("done")) == was[:2]:
+        Finish.data["finished"] = was[2]
+        Finish.save()
 
 
 def finish_passes(res, ids):
@@ -6126,6 +6158,7 @@ def cmd_finish():
             len(Finish.data["failed"]), "; ".join(f["title"] for f in Finish.data["failed"][:3])))
     else:
         good("%d of %d last steps are done." % (done, total))
+        show_dashboard_links()
 
 
 def cmd_status():
@@ -6147,6 +6180,7 @@ def cmd_status():
         say("Continue with:\n$ sudo homelab-setup finish")
     elif d.get("state") == "done":
         good("The last steps are done (%d of %d, took %s)." % (d.get("done", 0), d.get("total", 0), el))
+        show_dashboard_links()
     else:
         say("The background job ended after %s: %d of %d steps done." % (el, d.get("done", 0), d.get("total", 0)))
     for f in d.get("failed", []):
@@ -6364,14 +6398,26 @@ def final_report(res, background=False):
     if failed:
         bad("%d step(s) failed: %s. `sudo homelab-setup refresh` tries them again." % (
             len(failed), "; ".join(s.title for s in failed[:3]) + (" ..." if len(failed) > 3 else "")))
-    if 0 < http("GET", url("homepage"), timeout=10)[0] < 500:
-        good("Your lab is running. Open Homepage: %s" % mark(url("homepage")))
     Secrets.load()
     if Secrets.vals:
         say("Generated passwords and keys are kept in %s (root only). Show them any time with:  sudo homelab-setup secrets" % SECRET_FILE.replace(ROOT, ""))
     offer_drive_wizard()
     show_checklist(res, "Setup")
     next_step_section(res)
+    show_dashboard_links()
+
+
+def show_dashboard_links():
+    """Print where to open the dashboard (Homepage): the address on this network and the one over Tailscale."""
+    Ctx.refresh_tailscale()
+    rule("Open the dashboard")
+    out("  Homepage, on this network:   %s" % mark(url("homepage")))
+    if Ctx.fqdn:
+        out("  Homepage, over Tailscale:    %s" % mark("https://%s:%d" % (Ctx.fqdn, SERVE[0][0])))
+        out("  %sThe Tailscale address works from your other devices, not from this machine itself.%s" % (D, N))
+    else:
+        out("  Homepage, over Tailscale:    available once this machine has joined your Tailscale network")
+    out("")
 
 
 def offer_drive_wizard():
@@ -6383,8 +6429,8 @@ def offer_drive_wizard():
     State.data["wizard_offered"] = time.strftime("%F %T")
     State.save()
     rule("Your drives")
-    say("Next, the drive wizard inspects the connected drives and can suggest a ready-made setup. "
-        "Nothing is changed unless a setup is chosen, its plan is reviewed and ERASE is typed. The wizard can be run again at any time:\n$ sudo drives wizard")
+    say("Next, the drive wizard inspects the connected drives and suggests a setup. "
+        "An empty drive is formatted only after a yes. A drive that holds files is changed only after its plan is shown and ERASE is typed. The wizard can be run again at any time:\n$ sudo drives wizard")
     try:
         subprocess.call([drives, "wizard", "--first-run"])
     except OSError as e:

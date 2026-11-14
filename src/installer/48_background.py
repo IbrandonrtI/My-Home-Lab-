@@ -1,6 +1,7 @@
 FINISH_UNIT = "homelab-finish"
 FINISH_STATUS = PROGRESS_DIR + "/finish-status"
 FINISH_LOCK = STATE_DIR + "/finish.lock"
+DASHBOARD_STATUS = "images/install-status.json"
 FINISH_PW = P("/run/homelab-finish.pw")
 FINISH_SEEDS = ("stack-immich", "stack-nextcloud", "nextcloud-ready", "nextcloud-restore-db", "immich-admin", "beszel-user", "beszel-agent-key", "apt-upgrade")
 
@@ -44,6 +45,7 @@ class Finish:
     """Status and lock of the background job that finishes the deferred steps. The lock lets only one run at a time."""
     lock_fd = None
     data = {}
+    active = set()
 
     @classmethod
     def take_lock(cls):
@@ -63,6 +65,9 @@ class Finish:
         try:
             os.makedirs(PROGRESS_DIR, exist_ok=True)
             write_file(FINISH_STATUS, json.dumps(cls.data), 0o644)
+            if os.path.isdir(hp_path("images")):
+                keep = ("state", "started", "updated", "finished", "total", "done", "now", "steps")
+                write_file(hp_path(DASHBOARD_STATUS), json.dumps({k: cls.data[k] for k in keep if k in cls.data}), 0o644, (Ctx.uid, Ctx.gid))
         except OSError:
             pass
 
@@ -73,11 +78,19 @@ class Finish:
         cls.update(None, res, ids)
 
     @classmethod
+    def step_state(cls, x, res):
+        """One word for the dashboard list: done, failed, now (running) or wait."""
+        st = res[x.id].state
+        return "done" if st in ("done", "skip") else "failed" if st == "failed" else "now" if x.id in cls.active else "wait"
+
+    @classmethod
     def update(cls, s, res, ids):
         mine = [x for x in STEPS if x.id in ids and res[x.id].state != "na"]
         cls.data["total"] = len(mine)
         cls.data["done"] = sum(1 for x in mine if res[x.id].state in ("done", "skip"))
         cls.data["now"] = s.title if s is not None else ""
+        cls.active = cls.active | {s.id} if s is not None else set()
+        cls.data["steps"] = [{"t": x.title.split(" (")[0], "s": cls.step_state(x, res)} for x in mine]
         cls.data["failed"] = [{"id": x.id, "title": x.title, "why": res[x.id].detail} for x in mine if res[x.id].state == "failed"]
         cls.save()
 
@@ -89,6 +102,24 @@ class Finish:
         cls.data["state"] = "failed" if cls.data["failed"] else "waiting" if cls.data["waiting"] else "done"
         cls.data["finished"] = int(time.time())
         cls.save()
+
+
+def sync_dashboard_status(res):
+    """After a manual refresh or fill, bring the dashboard's install status in line with the real steps (so a fixed step clears the warning)."""
+    if Opt.dry or State.readonly or finish_running():
+        return
+    try:
+        d = json.loads(read_file(FINISH_STATUS) or "{}")
+    except (OSError, ValueError):
+        return
+    if not d:
+        return
+    was = (d.get("state"), d.get("done"), d.get("finished"))
+    Finish.data, Finish.active = d, set()
+    Finish.end(res, deferred_ids())
+    if was[2] and (Finish.data.get("state"), Finish.data.get("done")) == was[:2]:
+        Finish.data["finished"] = was[2]
+        Finish.save()
 
 
 def finish_passes(res, ids):
@@ -221,6 +252,7 @@ def cmd_finish():
             len(Finish.data["failed"]), "; ".join(f["title"] for f in Finish.data["failed"][:3])))
     else:
         good("%d of %d last steps are done." % (done, total))
+        show_dashboard_links()
 
 
 def cmd_status():
@@ -242,6 +274,7 @@ def cmd_status():
         say("Continue with:\n$ sudo homelab-setup finish")
     elif d.get("state") == "done":
         good("The last steps are done (%d of %d, took %s)." % (d.get("done", 0), d.get("total", 0), el))
+        show_dashboard_links()
     else:
         say("The background job ended after %s: %d of %d steps done." % (el, d.get("done", 0), d.get("total", 0)))
     for f in d.get("failed", []):

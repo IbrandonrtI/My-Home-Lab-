@@ -628,9 +628,93 @@
     if (!BELL.busy && Date.now() - BELL.at > 60000) bellLoad();
   }
 
+  var INSTALL = { data: null, at: 0, busy: false };
+  var INSTALL_STALE = 1200;
+  function installLoad() {
+    INSTALL.busy = true;
+    fetch("/images/install-status.json?t=" + Date.now(), { cache: "no-store" }).then(function (r) { if (!r.ok) throw new Error("no file"); return r.json(); })
+      .then(function (j) { INSTALL.data = j && typeof j.total === "number" && typeof j.done === "number" ? j : null; })
+      .catch(function () { INSTALL.data = null; })
+      .then(function () { INSTALL.busy = false; INSTALL.at = Date.now(); installDraw(); });
+  }
+  function installMode(d) {
+    if (!d || d.state === "done" || !(d.total > 0)) return "hidden";
+    if (d.state === "failed") return "failed";
+    if (d.state === "waiting") return "waiting";
+    if (Date.now() / 1000 - (d.updated || 0) > INSTALL_STALE) return "stale";
+    return "running";
+  }
+  var STEP_MARK = { done: "✓", failed: "✗", now: "●", wait: "○" };
+  function installDraw() {
+    var box = document.getElementById("hl-install");
+    if (!box) return;
+    var d = INSTALL.data, mode = installMode(d);
+    box.hidden = mode === "hidden";
+    if (mode === "hidden") { box.classList.remove("hl-open"); return; }
+    var warn = mode !== "running";
+    box.classList.toggle("hl-warn", warn);
+    var frac = Math.min(1, Math.max(0, d.done / d.total));
+    var arc = box.querySelector(".hl-ring-arc");
+    arc.setAttribute("stroke-dasharray", (frac * 94.25).toFixed(2) + " 94.25");
+    box.querySelector(".hl-ring-n").textContent = d.done + "/" + d.total;
+    var btn = box.querySelector("button");
+    btn.setAttribute("aria-label", "Install progress: " + d.done + " of " + d.total + " steps done");
+    var pop = box.querySelector(".hl-bellpop");
+    while (pop.firstChild) pop.removeChild(pop.firstChild);
+    var head = el("div", "hl-bellhead");
+    head.appendChild(el("strong", "", mode === "running" ? "Finishing the install" : mode === "failed" ? "A step needs attention" : mode === "waiting" ? "Some steps are waiting" : "No recent progress"));
+    head.appendChild(el("span", "hl-bellsub", d.done + " of " + d.total + " steps done"));
+    pop.appendChild(head);
+    var note = mode === "running" ? "These steps run in the background. The terminal can be closed."
+      : mode === "stale" ? "The status has not changed for a while. Check it with: sudo homelab-setup status"
+      : "Check what is left with: sudo homelab-setup status";
+    pop.appendChild(el("p", "hl-bellempty", note));
+    var list = el("div", "hl-steplist");
+    (Array.isArray(d.steps) ? d.steps : []).forEach(function (st) {
+      var k = st && STEP_MARK[st.s] ? st.s : "wait";
+      var row = el("div", "hl-steprow hl-st-" + k);
+      row.appendChild(el("span", "hl-stepmark", STEP_MARK[k]));
+      row.appendChild(el("span", "hl-steptxt", String(st && st.t || "")));
+      list.appendChild(row);
+    });
+    pop.appendChild(list);
+  }
+  function installRing() {
+    var tabs = document.getElementById("tabs"), bellBox = document.getElementById("hl-bell");
+    if (!tabs || !bellBox) return;
+    var box = document.getElementById("hl-install");
+    if (!box) {
+      box = el("div", "hl-bellwrap");
+      box.id = "hl-install";
+      box.hidden = true;
+      var btn = el("button", "hl-bellbtn-main");
+      btn.type = "button";
+      btn.setAttribute("aria-haspopup", "true");
+      btn.setAttribute("aria-expanded", "false");
+      btn.innerHTML = '<svg viewBox="0 0 36 36" width="30" height="30" aria-hidden="true"><circle class="hl-ring-track" cx="18" cy="18" r="15" fill="none" stroke-width="3"/><circle class="hl-ring-arc" cx="18" cy="18" r="15" fill="none" stroke-width="3" stroke-linecap="round" stroke-dasharray="0 94.25" transform="rotate(-90 18 18)"/></svg>';
+      btn.appendChild(el("span", "hl-ring-n", ""));
+      btn.onclick = function () {
+        var open = !box.classList.contains("hl-open");
+        box.classList.toggle("hl-open", open);
+        btn.setAttribute("aria-expanded", String(open));
+        if (open && !INSTALL.busy) installLoad();
+      };
+      box.appendChild(btn);
+      var pop = el("div", "hl-bellpop");
+      pop.setAttribute("role", "region");
+      pop.setAttribute("aria-label", "Install progress");
+      box.appendChild(pop);
+      document.addEventListener("click", function (e) { var b = document.getElementById("hl-install"); if (b && !b.contains(e.target)) { b.classList.remove("hl-open"); b.querySelector("button").setAttribute("aria-expanded", "false"); } });
+      document.addEventListener("keydown", function (e) { if (e.key === "Escape") { var b = document.getElementById("hl-install"); if (b) b.classList.remove("hl-open"); } });
+    }
+    if (box.parentNode !== tabs || bellBox.nextSibling !== box) tabs.insertBefore(box, bellBox.nextSibling);
+    var every = box.hidden ? 60000 : 10000;
+    if (!INSTALL.busy && Date.now() - INSTALL.at > every) installLoad();
+  }
+
   function run() {
     queued = false;
-    wording(); health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); linkRows(); searchButton(); tabName(); bars(); sharp(); bell();
+    wording(); health(); shrinkButton(); heightButton(); playerHeight(); frameHeights(); rename(); logo(); groups(); calendar(); linkRows(); searchButton(); tabName(); bars(); sharp(); bell(); installRing();
   }
   function soon() { if (!queued) { queued = true; window.requestAnimationFrame(run); } }
   night(); soon();

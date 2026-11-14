@@ -356,6 +356,7 @@ rest_drives() {
 preset_flow() {
   local id d i n=0 usable total=0 mp label par s hint smallest biggest enc=0 spare_dev="" cache_dev="" key_path="" bk_dev="" used_b kept_n=0 force migrate=0 main_used=0 main_need=0
   local -a devs=() sizes=() order=() main_devs=() par_devs=() ids=() rest=() erase_list=()
+  local quick=0
   id=$(preset_alias "${1:-}")
   if ! preset_known "$id"; then
     note "There is no setup called '${1:-}'. The setups are: $PRESET_IDS"
@@ -563,7 +564,12 @@ preset_flow() {
       esac ;;
   esac
   say ""
-  if [ ${#erase_list[@]} -gt 0 ]; then
+  quick=0
+  [ "${WIZARD_QUICK:-0}" = 1 ] && [ -z "$WIZARD_KEEP" ] && [ -z "$WIZARD_ERASE" ] && quick=1
+  if [ "$quick" = 1 ]; then
+    say "Empty $([ ${#erase_list[@]} -eq 1 ] && echo drive || echo drives) to format:"
+    for d in "${erase_list[@]}"; do say "  - $d  ($(disk_base_name "$d"))"; done
+  elif [ ${#erase_list[@]} -gt 0 ]; then
     say "Warning: data will be erased"
     if [ ${#erase_list[@]} -eq 1 ]; then say "Everything on this drive will be permanently deleted:"; else say "Everything on these ${#erase_list[@]} drives will be permanently deleted:"; fi
     for d in "${erase_list[@]}"; do say "  - $d  ($(disk_base_name "$d"))$(in_list "$d" "$WIZARD_ERASE" && echo "   <- it has files: $(disk_files_text "$d")")"; done
@@ -572,8 +578,10 @@ preset_flow() {
     if [ "$kept_n" -eq 1 ]; then say "The files on this drive are kept as they are. Nothing on it is deleted:"; else say "The files on these $kept_n drives are kept as they are. Nothing on them is deleted:"; fi
     for d in "${devs[@]}"; do in_list "$d" "$WIZARD_KEEP" && say "  - $d  ($(disk_base_name "$d"))   $(disk_files_text "$d")"; done
   fi
-  typed_enter "$id" "Press Enter to continue with this setup, or type another setup name" || { say "Cancelled. Nothing was changed."; return 1; }
-  [ ${#erase_list[@]} -eq 0 ] || typed "ERASE" "Type ERASE in capital letters to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+  if [ "$quick" != 1 ]; then
+    typed_enter "$id" "Press Enter to continue with this setup, or type another setup name" || { say "Cancelled. Nothing was changed."; return 1; }
+    [ ${#erase_list[@]} -eq 0 ] || typed "ERASE" "Type ERASE in capital letters to confirm: " || { say "Cancelled. Nothing was changed."; return 1; }
+  fi
   if preset_is_array "$id"; then
     pre_change "Erase the ${#erase_list[@]} drives and build the $(preset_title "$id") array on them." \
                "$([ "$migrate" = 1 ] && echo "Stop the containers that use the Main pool while its files are copied into the new array, check the copy, then let the array take over $MAIN_POOL and release the old Main drives (their files stay)." || echo "Stop the containers that use the Main pool for a minute.")" \

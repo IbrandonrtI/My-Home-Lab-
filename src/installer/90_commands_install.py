@@ -205,14 +205,26 @@ def final_report(res, background=False):
     if failed:
         bad("%d step(s) failed: %s. `sudo homelab-setup refresh` tries them again." % (
             len(failed), "; ".join(s.title for s in failed[:3]) + (" ..." if len(failed) > 3 else "")))
-    if 0 < http("GET", url("homepage"), timeout=10)[0] < 500:
-        good("Your lab is running. Open Homepage: %s" % mark(url("homepage")))
     Secrets.load()
     if Secrets.vals:
         say("Generated passwords and keys are kept in %s (root only). Show them any time with:  sudo homelab-setup secrets" % SECRET_FILE.replace(ROOT, ""))
     offer_drive_wizard()
     show_checklist(res, "Setup")
     next_step_section(res)
+    show_dashboard_links()
+
+
+def show_dashboard_links():
+    """Print where to open the dashboard (Homepage): the address on this network and the one over Tailscale."""
+    Ctx.refresh_tailscale()
+    rule("Open the dashboard")
+    out("  Homepage, on this network:   %s" % mark(url("homepage")))
+    if Ctx.fqdn:
+        out("  Homepage, over Tailscale:    %s" % mark("https://%s:%d" % (Ctx.fqdn, SERVE[0][0])))
+        out("  %sThe Tailscale address works from your other devices, not from this machine itself.%s" % (D, N))
+    else:
+        out("  Homepage, over Tailscale:    available once this machine has joined your Tailscale network")
+    out("")
 
 
 def offer_drive_wizard():
@@ -224,8 +236,8 @@ def offer_drive_wizard():
     State.data["wizard_offered"] = time.strftime("%F %T")
     State.save()
     rule("Your drives")
-    say("Next, the drive wizard inspects the connected drives and can suggest a ready-made setup. "
-        "Nothing is changed unless a setup is chosen, its plan is reviewed and ERASE is typed. The wizard can be run again at any time:\n$ sudo drives wizard")
+    say("Next, the drive wizard inspects the connected drives and suggests a setup. "
+        "An empty drive is formatted only after a yes. A drive that holds files is changed only after its plan is shown and ERASE is typed. The wizard can be run again at any time:\n$ sudo drives wizard")
     try:
         subprocess.call([drives, "wizard", "--first-run"])
     except OSError as e:

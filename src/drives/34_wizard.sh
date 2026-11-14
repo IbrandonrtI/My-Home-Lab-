@@ -114,6 +114,24 @@ wizard_flow() {
     sizes+=("$s"); total=$((total + s)); n=$((n + 1))
   done
 
+  if [ "$WANT_FIRST" = 1 ] && [ "$ASSUME_YES" != 1 ] && [ ${#acts[@]} -eq 0 ]; then
+    local qcap; qcap=$(preset_capacity pool "${sizes[@]}")
+    say ""
+    say "Suggested setup: $(preset_title pool)"
+    say "$(preset_blurb pool)"
+    say "Usable space: $(pretty_size "${qcap:-0}")."
+    say "$([ "$n" -eq 1 ] && echo "This drive is empty" || echo "These drives are empty"), so nothing on $([ "$n" -eq 1 ] && echo it || echo them) is lost. Other setups (mirror, RAID) are available later with:  sudo drives wizard"
+    if yn_yes "Format $([ "$n" -eq 1 ] && echo "this drive" || echo "these $n drives") and set up the plain pool now?"; then
+      [ "$DRY_RUN" = 1 ] || { mkdir -p "$STATE_DIR" && printf '%s|pool\n' "$(date +%F)" >"$WIZARD_FILE"; }
+      WIZARD_DEVS=$(printf '%s\n' "${all[@]}"); WIZARD_QUICK=1
+      preset_flow pool; local qrc=$?
+      WIZARD_DEVS=""; WIZARD_KEEP=""; WIZARD_ERASE=""; WIZARD_QUICK=0
+      return $qrc
+    fi
+    [ "$DRY_RUN" = 1 ] || { mkdir -p "$STATE_DIR" && printf '%s|not-now\n' "$(date +%F)" >"$WIZARD_FILE"; }
+    say "Nothing was changed. The install continues without a data drive. To set up the drives later, run:  sudo drives wizard"
+    return 0
+  fi
   if [ "$kept_n" -gt 0 ]; then
     read -r first second < <(wizard_suggest_keep "$n" "$kept_n")
     if [ "$first" = mirror ]; then
