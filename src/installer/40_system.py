@@ -375,8 +375,9 @@ class Port53(Step):
                         (Ctx.user, Ctx.lan))
         gw = Ctx.gateway or "1.1.1.1"
         out("")
-        say("AdGuard Home needs port 53, which the built-in DNS resolver (systemd-resolved) currently holds. The resolver will be stopped and disabled. This machine will then ask your router (%s) for names. AdGuard Home runs on this machine, and you point each device at it by hand." % gw)
-        if not Opt.dry and not Opt.yes and not yesno("Free port 53 now?", False):
+        agreed = State.data["answers"].get("adguard") == "yes" and not Mode.existing
+        say("AdGuard Home needs port 53, which the built-in DNS resolver (systemd-resolved) currently holds. The resolver %s stopped and disabled. This machine will then ask your router (%s) for names. AdGuard Home runs on this machine, and you point each device at it by hand." % ("is now" if agreed else "will be", gw))
+        if not agreed and not Opt.dry and not Opt.yes and not yesno("Free port 53 now?", False):
             raise Abort("Port 53 was left unchanged. Run `sudo homelab-setup refresh` when you are ready.")
         act(["docker", "pull", "adguard/adguardhome:v0.107.79"], timeout=900)
         act(["systemctl", "disable", "systemd-resolved"])

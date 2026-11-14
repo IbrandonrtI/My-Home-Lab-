@@ -532,9 +532,6 @@ def cmd_install():
     show_plan(todo, later, by_hand)
     during = [s for s in by_hand if s.id in DURING_INSTALL]
     out("")
-    if not Opt.dry and not Opt.yes:
-        if not typed("yes", "Type yes to start (nothing has been changed yet)"):
-            raise Abort("Stopped. Nothing was changed.")
     if not Opt.dry:
         State.mark("install-started")
         if State.data["answers"].get("lvm_grow") == "yes":
