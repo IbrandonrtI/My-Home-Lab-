@@ -1,24 +1,18 @@
-# ================================================================ system, Tailscale, network and folders
 class Mode:
-    """How the machine was classified: new, or an existing lab."""
-    existing = False          # this machine already runs the lab (built by hand)
+    existing = False
 
 
 def adguard_wanted():
-    """True when AdGuard Home is part of this machine's setup. It is optional: the install asks at the start (the default is yes).
-    A machine that already runs the lab keeps it, and so does an install that began before the question existed."""
     if Mode.existing:
         return True
     return State.data["answers"].get("adguard", "yes") != "no"
 
 
 def serve_items():
-    """The Tailscale Serve ports to set up: all of them, except AdGuard Home's when it is not installed."""
     return [(p, s) for p, s in SERVE if s != "adguard" or adguard_wanted()]
 
 
 def fetch_bytes(u, timeout=60):
-    """Download a file and return its bytes."""
     if FAKE:
         if os.environ.get("HLS_FETCH_FAIL"):
             raise OSError("simulated download failure")
@@ -29,13 +23,11 @@ def fetch_bytes(u, timeout=60):
 
 
 def pkg_installed(name):
-    """True when the apt package is installed."""
     rc, txt = run(["dpkg-query", "-W", "-f=${Status}", name])
     return rc == 0 and "install ok installed" in txt
 
 
 def ssh_peers_over_tailscale():
-    """True if someone is connected to this machine's SSH through Tailscale (a step that restarts Tailscale would drop them)."""
     rc, txt = run(["ss", "-H", "-tn", "state", "established", "( sport = :22 )"])
     for line in txt.splitlines():
         for tok in line.split():
@@ -45,7 +37,6 @@ def ssh_peers_over_tailscale():
     return False
 
 
-# ---------------------------------------------------------------- System
 @step
 class OsSupported(Step):
     id, group, title = "os", "System", "Operating system is supported"
@@ -80,7 +71,7 @@ class AptUpdate(Step):
 
 @step
 class AptUpgrade(Step):
-    """The system upgrade is not needed for the lab to run, so it is the last thing the install does (in the background job when there is one)."""
+    """The system upgrade is not required for the lab to run, so it is the last step (it runs in the background job when there is one)."""
     id, group, title = "apt-upgrade", "System", "System packages upgraded"
     needs = ("apt-update",)
 
@@ -99,7 +90,7 @@ class AptUpgrade(Step):
 
 
 REQUIRED_PKGS = ["curl", "ca-certificates", "gnupg", "rsync", "cron", "python3-yaml", "smartmontools", "hdparm"]
-OPTIONAL_PKGS = ["mergerfs", "parted", "mdadm", "snapraid", "zfsutils-linux"]      # (mdadm, snapraid and zfsutils-linux are for the ready-made RAID, SnapRAID and ZFS setups of the Drives tab)
+OPTIONAL_PKGS = ["mergerfs", "parted", "mdadm", "snapraid", "zfsutils-linux"]
 
 
 @step
@@ -176,7 +167,6 @@ class DockerGroup(Step):
         act(["usermod", "-aG", "docker", Ctx.user], check=True)
 
 
-# ---------------------------------------------------------------- Tailscale
 @step
 class TailscaleInstalled(Step):
     id, group, title = "tailscale-install", "Tailscale", "Tailscale installed"
@@ -209,7 +199,7 @@ class TailscaleInstalled(Step):
 
 
 def do_tailscale_login():
-    """Interactive: show the login link and wait. Uses TS_AUTHKEY if it is set in the environment."""
+    """Show the Tailscale login link and wait for the user to sign in; uses TS_AUTHKEY when it is set."""
     Ctx.refresh_tailscale()
     if Ctx.fqdn:
         return True
@@ -219,8 +209,6 @@ def do_tailscale_login():
     if not have("tailscale"):
         raise Abort("Tailscale is not installed yet.")
     key = os.environ.get("TS_AUTHKEY", "")
-    # --accept-dns=false is repeated on purpose: once it is set, `tailscale up` refuses to run (and a login after the
-    # machine was removed from the admin page or its key expired would fail) unless every non-default setting is named.
     args = ["tailscale", "up", "--hostname=" + Ctx.hostname.lower(), "--accept-dns=false"]
     if key:
         args.append("--auth-key=" + key)
@@ -319,6 +307,7 @@ class TailscaleHttps(Step):
 
 @step
 class ServeMappings(Step):
+    """Map ports 1000 to 1008 to the local services with Tailscale Serve, giving each service its own HTTPS address."""
     id, group, title = "tailscale-serve", "Tailscale", "Tailscale Serve addresses (ports 1000-1008) set"
     needs = ("tailscale-login", "tailscale-https")
 
@@ -350,9 +339,7 @@ class ServeMappings(Step):
                     raise Abort("tailscale serve for port %d failed: %s" % (p, txt.strip()[-300:]))
 
 
-# ---------------------------------------------------------------- Network: port 53
 def set_resolv_conf(text):
-    """Replace /etc/resolv.conf (it may be a link to the resolver's file, so it is removed first)."""
     try:
         os.remove(P("/etc/resolv.conf"))
     except OSError:
@@ -361,7 +348,6 @@ def set_resolv_conf(text):
 
 
 def port53_listeners():
-    """Names of the processes that listen on port 53."""
     rc, txt = run(["ss", "-H", "-tulpn", "sport = :53"])
     procs = []
     for line in txt.splitlines():
@@ -372,6 +358,7 @@ def port53_listeners():
 
 @step
 class Port53(Step):
+    """Free port 53 for AdGuard Home by stopping the system's built-in DNS resolver. Refuses to run over a Tailscale SSH session because it restarts Tailscale."""
     id, group, title = "port53", "Network", "Port 53 is free for AdGuard Home"
     needs = ("docker",)
 
@@ -391,13 +378,10 @@ class Port53(Step):
         say("AdGuard Home needs port 53, which the built-in DNS resolver (systemd-resolved) currently holds. The resolver will be stopped and disabled. This machine will then ask your router (%s) for names. AdGuard Home runs on this machine, and you point each device at it by hand." % gw)
         if not Opt.dry and not Opt.yes and not yesno("Free port 53 now?", False):
             raise Abort("Port 53 was left unchanged. Run `sudo homelab-setup refresh` when you are ready.")
-        # pull the image first, while DNS still works
         act(["docker", "pull", "adguard/adguardhome:v0.107.79"], timeout=900)
         act(["systemctl", "disable", "systemd-resolved"])
         act(["systemctl", "stop", "systemd-resolved"])
         if have("tailscale"):
-            # Tailscale must not take /etc/resolv.conf over: with systemd-resolved off, its own resolver (100.100.100.100)
-            # can lose its upstream servers after a reboot or an update, and the machine then cannot look up names.
             act(["tailscale", "set", "--accept-dns=false"])
         if not Opt.dry:
             set_resolv_conf("nameserver %s\n" % gw)
@@ -412,6 +396,7 @@ class Port53(Step):
 
 @step
 class DnsStable(Step):
+    """Keep DNS working after a reboot by turning off Tailscale's DNS management and restoring a normal resolv.conf."""
     id, group, title = "dns-stable", "Network", "DNS keeps working after a reboot (Tailscale does not manage DNS)"
     needs = ("tailscale-install", "port53")
 
@@ -439,12 +424,10 @@ class DnsStable(Step):
                 raise Abort("Name resolution still fails. Check `cat /etc/resolv.conf` (it should list your router) and the network connection.") from None
 
 
-# ---------------------------------------------------------------- Platform
 def folder_plan():
-    """The folders the lab needs, as (path, owner id, group id) tuples."""
     h = Ctx.home
     u, g = Ctx.uid, Ctx.gid
-    extra = [] if Mode.existing else [("/mnt/storage/music", u, g), ("/mnt/storage/videos", u, g)]      # (for Downtify and MeTube; a machine built by hand is only read)
+    extra = [] if Mode.existing else [("/mnt/storage/music", u, g), ("/mnt/storage/videos", u, g)]
     return [
         ("/mnt/storage", 0, 0), ("/mnt/backup", 0, 0), ("/mnt/storage/immich", u, g),
         ("/mnt/storage/nextcloud", 33, 33),
@@ -457,6 +440,7 @@ def folder_plan():
 
 @step
 class Folders(Step):
+    """Create the folders the services need with the right owners."""
     id, group, title = "folders", "Platform", "Folders for the services exist"
     needs = ("os",)
 
@@ -477,16 +461,12 @@ IMMICH_FOLDERS = ("upload", "library", "thumbs", "encoded-video", "profile", "ba
 
 
 def unlock_storage_folders():
-    """/mnt/storage and /mnt/backup have no drive mounted: older versions of the drives tool locked such a folder (so nothing was written onto the boot
-    drive). Now the boot drive IS the storage until a drive is connected, so the lock is taken off and the services can use the folder."""
     for root in ("/mnt/storage", "/mnt/backup"):
         if locked_mountpoint(root):
             act(["chattr", "-i", P(root)])
 
 
 def prepare_boot_storage():
-    """With no drive mounted at /mnt/storage the boot drive is the storage: Immich gets its folders, each with the `.immich` marker file it looks for
-    (without the markers Immich refuses to start when it finds its folders half-made). A mounted drive is left alone: it has its own."""
     if Opt.dry or os.path.ismount(P("/mnt/storage")):
         return
     for name in IMMICH_FOLDERS:
@@ -498,8 +478,6 @@ def prepare_boot_storage():
 
 
 def locked_mountpoint(path):
-    """True when `path` is the folder of a drive that is not mounted right now AND is locked (the drives tool sets the 'immutable' flag on such a folder
-    on purpose, so nothing is written onto the boot drive while the drive is away)."""
     if os.path.ismount(P(path)) or not os.path.isdir(P(path)):
         return False
     rc, text = run(["lsattr", "-d", P(path)])
@@ -507,13 +485,10 @@ def locked_mountpoint(path):
 
 
 def main_storage_missing():
-    """Always False now: when Main has no drive (or its drive is away) the boot drive is the storage, so nothing waits for a drive any more.
-    (A locked folder left by an older drives tool is unlocked by the 'Folders for the services exist' step.)"""
     return False
 
 
 def waits_for_folders(step, _seen=None):
-    """True when the step (directly or through the steps it needs) waits for the 'Folders for the services exist' step."""
     for n in step.needs:
         if n == "folders" or waits_for_folders(BY_ID[n]):
             return True
@@ -521,7 +496,6 @@ def waits_for_folders(step, _seen=None):
 
 
 def folder_problem(path, err):
-    """The plain-words message for a folder that could not be made: a locked, unmounted drive folder is the usual reason."""
     for root in ("/mnt/storage", "/mnt/backup"):
         if (path == root or path.startswith(root + "/")) and locked_mountpoint(root):
             return ("%s is not mounted right now, so the folders cannot be made in it (its folder is locked on purpose while the drive is away, so nothing is written onto the boot drive by mistake).\n"
@@ -533,9 +507,6 @@ def folder_problem(path, err):
 
 
 def restored_nc_password():
-    """The database password from a restored Nextcloud config.php, but only if it belongs to the database user our stack
-    creates ('nextcloud'). Nextcloud makes its own extra database user (oc_...) with a random password on a first install;
-    that one is not ours to reuse."""
     cfg = read_file(P(Ctx.home + "/nextcloud/html/config/config.php"))
     user = re.search(r"'dbuser'\s*=>\s*'([^']*)'", cfg)
     pw = re.search(r"'dbpassword'\s*=>\s*'([^']*)'", cfg)
@@ -555,7 +526,7 @@ class SecretsFile(Step):
             return "na" if Mode.existing else "todo"
         old = restored_nc_password()
         if old and old != Secrets.get("NC_DB_PASSWORD") and not Mode.existing:
-            return "todo"            # a restored Nextcloud brought its own database password
+            return "todo"
         return "done"
 
     def detail(self):
@@ -567,7 +538,6 @@ class SecretsFile(Step):
                      ("APP_KEY", rand_app_key)):
             if not Secrets.get(k):
                 Secrets.vals[k] = f()
-        # a restored Nextcloud keeps its old database password
         old = restored_nc_password()
         if old:
             Secrets.vals["NC_DB_PASSWORD"] = old

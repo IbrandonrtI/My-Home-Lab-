@@ -1,35 +1,27 @@
-# ================================================================ Homepage widgets: create the key, TEST it, then write it
 def basic(user, pw):
-    """Basic-authentication header for a user name and password."""
     return {"Authorization": "Basic " + base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()}
 
 
 def judge(st):
-    """For an answer that was not a success: None when the service did not really answer (no connection, too slow, or an error
-    of its own: it may be busy or restarting, so nothing can be said about the key), False when it answered and said no."""
     return None if st == 0 or st >= 500 else False
 
 
 def verdict(st):
-    """The result of a test whose success is HTTP 200: True, or what judge() says about any other answer."""
     return True if st == 200 else judge(st)
 
 
 def v_adguard(v):
-    """Test the AdGuard Home login with a live request. True, False (rejected) or None (no answer)."""
     st, _, _ = http("GET", url("adguard", "/control/status"), headers=basic(v["username"], v["password"]), timeout=10)
     return verdict(st)
 
 
 def v_tailscale(v):
-    """Test the Tailscale API key with a live request."""
     base = os.environ.get("HLS_TS_API", "https://api.tailscale.com")
     st, _, _ = http("GET", "%s/api/v2/device/%s" % (base, v["deviceid"]), headers=basic(v["key"], ""), timeout=20)
     return verdict(st)
 
 
 def v_beszel(v):
-    """Test the Beszel login with a live request."""
     silent = False
     for path in ("/api/collections/_superusers/auth-with-password", "/api/admins/auth-with-password"):
         st, js, _ = http("POST", url("beszel", path), body={"identity": v["username"], "password": v["password"]}, timeout=15)
@@ -40,13 +32,11 @@ def v_beszel(v):
 
 
 def v_netdata(v):
-    """Test that Netdata answers."""
     st = http("GET", url("netdata", "/api/v1/info"), timeout=10)[0]
     return verdict(st)
 
 
 def v_speedtest(v):
-    """Test the Speedtest Tracker token with a live request."""
     st, _, _ = http("GET", url("speedtest", "/api/v1/results/latest"),
                     headers={"Authorization": "Bearer " + v["key"], "Accept": "application/json"}, timeout=30)
     if st in (401, 403):
@@ -55,7 +45,6 @@ def v_speedtest(v):
 
 
 def v_portainer(v):
-    """Test the Portainer key with a live request."""
     st, _, _ = http("GET", url("portainer", "/api/users/me"), headers={"X-API-Key": v["key"]}, timeout=10)
     if st != 200:
         return judge(st)
@@ -64,19 +53,16 @@ def v_portainer(v):
 
 
 def v_filebrowser(v):
-    """Test the FileBrowser login with a live request."""
     st, _, _ = http("POST", url("filebrowser", "/api/login"), body={"username": v["username"], "password": v["password"]}, timeout=10)
     return verdict(st)
 
 
 def v_immich(v):
-    """Test the Immich key with a live request."""
     st, _, _ = http("GET", url("immich", "/api/server/statistics"), headers={"x-api-key": v["key"]}, timeout=15)
     return verdict(st)
 
 
 def v_nextcloud(v):
-    """Test the Nextcloud token with a live request."""
     st, js, _ = http("GET", url("nextcloud", "/ocs/v2.php/apps/serverinfo/api/v1/info?format=json"),
                      headers={"NC-Token": v["key"], "OCS-APIRequest": "true", "Accept": "application/json"}, timeout=30)
     if st == 200:
@@ -85,8 +71,9 @@ def v_nextcloud(v):
 
 
 class WidgetStep(Step):
+    """One Homepage widget: obtain the key or login for a service, test it against the service and write it into the card in services.yaml."""
     group = "Homepage"
-    unsure = False          # the last test got no answer from the service (the saved key was kept)
+    unsure = False
 
     def applies(self):
         return self.card != "adguard-card" or adguard_wanted()
@@ -116,11 +103,9 @@ class WidgetStep(Step):
         key = "vf:" + self.id
         last = State.note(key)
         if last and time.time() - float(last) < 600 and not os.environ.get("HLS_NO_THROTTLE"):
-            return "todo"           # tested and failed a few minutes ago: do not hammer the service
+            return "todo"
         ok = self.verify(v)
         if ok is None:
-            # The service did not answer (busy, restarting). That says nothing about the key, so the step is NOT redone:
-            # a login or key that is in the Homepage config stays as it is, and it is tested again next time.
             self.unsure = True
             return "done"
         self.unsure = False
@@ -136,11 +121,10 @@ class WidgetStep(Step):
 
     @property
     def service_name(self):
-        """The title without the part in brackets: 'AdGuard Home widget login'."""
         return self.title.split(" (")[0]
 
     def tested(self, v, patient=True):
-        """True or False from the service. If it does not answer, wait for it (up to 2 minutes); if it still does not, stop."""
+        """Ask the service whether the values work; wait up to two minutes for it to answer before giving up."""
         ok = self.verify(v)
         if ok is None and patient and not Opt.dry:
             def answer():
@@ -156,7 +140,6 @@ class WidgetStep(Step):
         return ok
 
     def wait_alive(self):
-        """Before asking for a password or changing anything: wait until the service answers at all (up to 2 minutes)."""
         svc = self.card[:-5]
         if svc not in PORTS or Opt.dry:
             return
@@ -177,14 +160,13 @@ class WidgetStep(Step):
         return self.fill_text or "Paste the value below, or skip it and run `sudo homelab-setup refresh` to let the installer try again."
 
     def prefill(self):
-        """Values the person is not asked for in `fill` (a widget with such values overrides this)."""
         return {}
 
     def _write(self, v):
         if not self.tested(v):
             raise Abort("The new login or key failed its test against the service, so it was not written to the Homepage configuration.")
         hp_set_widget(self.card, v)
-        State.note("vf:" + self.id, "")        # it just passed: never let an older failed test hide that
+        State.note("vf:" + self.id, "")
 
     def run(self):
         if self.auto is None:
@@ -216,12 +198,10 @@ class WidgetStep(Step):
 
 
 def auto_adguard():
-    """Values for the AdGuard Home widget."""
     return {"username": Ctx.admin, "password": need_password("for the AdGuard Home widget")}
 
 
 def auto_beszel():
-    """Create the Beszel superuser and return the values for its widget."""
     pw = need_password("to create the Beszel superuser (the Homepage widget needs one)")
     rc, txt = docker("exec", "beszel", "/beszel", "superuser", "upsert", Ctx.email, pw, timeout=60)
     if rc != 0:
@@ -230,10 +210,9 @@ def auto_beszel():
 
 
 def auto_speedtest():
-    """Create the Speedtest Tracker login and token and return the values for its widget."""
+    """Create the Speedtest Tracker login and API token and return the values for its widget."""
     pw = need_password("to set the Speedtest Tracker login")
     esc = lambda s: s.replace("\\", "\\\\").replace("'", "\\'")
-    # The container has no "tinker" command, so start the Laravel app from a small PHP script read from stdin.
     code = ("<?php\nchdir('/app/www');\nrequire '/app/www/vendor/autoload.php';\n"
             "$app = require '/app/www/bootstrap/app.php';\n"
             "$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();\n"
@@ -253,7 +232,6 @@ def auto_speedtest():
 
 
 def auto_portainer():
-    """Create a Portainer token and return the values for its widget."""
     pw = need_password("to create the Portainer token for Homepage")
     if not Portainer.login(pw):
         raise Abort("Portainer rejected the login for %s." % Ctx.admin)
@@ -267,12 +245,11 @@ def auto_portainer():
 
 
 def auto_filebrowser():
-    """Set the FileBrowser login and return the values for its widget."""
     pw = need_password("to set the FileBrowser login")
     api = lambda p: url("filebrowser", p)
     st, tok, _ = http("POST", api("/api/login"), body={"username": Ctx.admin, "password": pw}, timeout=10)
     if st == 200:
-        return {"username": Ctx.admin, "password": pw}          # already set
+        return {"username": Ctx.admin, "password": pw}
     rc, logs = docker("logs", "filebrowser-filebrowser-1")
     m = re.findall(r"randomly generated password:\s*(\S+)", logs) or re.findall(r"password:\s*(\S+)", logs)
     if not m:
@@ -293,7 +270,6 @@ def auto_filebrowser():
 
 
 def auto_immich():
-    """Create an Immich API key and return the values for its widget."""
     if immich_restored():
         raise Abort("Immich was restored from a backup, so the key must be created manually: Immich > Account Settings > API Keys (permission server.statistics). Then run `sudo homelab-setup fill`.")
     pw = need_password("to log in to Immich and create the Homepage key")
@@ -309,17 +285,14 @@ def auto_immich():
 
 
 def auto_nextcloud():
-    """Create a Nextcloud token and return the values for its widget."""
     old = Secrets.get("NC_SERVERINFO_TOKEN")
     if old and not Opt.dry and v_nextcloud({"key": old}) is True:
-        return {"key": old}      # an earlier attempt made a token that works now: keep it instead of making another one
+        return {"key": old}
     tok = rand_hex(24)
     rc, txt = occ("config:app:set", "serverinfo", "token", "--value=" + tok)
     if rc != 0:
         raise Abort("occ could not set the serverinfo token: %s" % txt.strip()[-200:])
     Secrets.set("NC_SERVERINFO_TOKEN", tok)
-    # Nextcloud's web side can keep the old token in a short-lived cache, so a token that was only just set may be refused
-    # for a while. Wait for it to be accepted (up to 3 minutes); the test that follows then decides.
     try:
         wait_for(lambda: v_nextcloud({"key": tok}) is True, "Nextcloud to accept the new token", 3 if FAKE else 180, every=5)
     except Abort:
@@ -327,11 +300,10 @@ def auto_nextcloud():
     return {"key": tok}
 
 
-TS_KEY_NAME = "TAILSCALE_API_" + "TOKEN"      # (the name of the saved secret)
+TS_KEY_NAME = "TAILSCALE_API_" + "TOKEN"
 
 
 def auto_tailscale():
-    """The widget's values from the access token that was typed at the start of the install (the machine ID is found by itself)."""
     tok = Secrets.get(TS_KEY_NAME)
     Ctx.refresh_tailscale()
     v = {"deviceid": Ctx.ts_id, "key": tok}
@@ -344,9 +316,8 @@ def auto_tailscale():
 
 
 class TailscaleWidget(WidgetStep):
-    """The Homepage Tailscale widget, which needs a key made by hand: the person pastes it when the install asks, or later with `fill`."""
     @property
-    def kind(self):      # the installer fills this widget by itself as soon as it has the token
+    def kind(self):
         return "auto" if Secrets.get(TS_KEY_NAME) else "manual"
 
     @kind.setter
@@ -359,7 +330,6 @@ class TailscaleWidget(WidgetStep):
 
 
 def _register_widgets():
-    """Create one checklist step per Homepage widget."""
     mk = WidgetStep
     items = [
         mk("w-adguard", "adguard-card", "AdGuard Home widget login", ("adguard-setup",), ["username", "password"],

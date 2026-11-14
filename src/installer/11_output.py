@@ -1,9 +1,8 @@
-# ---------------------------------------------------------------- look (same style as the homelab command)
-_tty = ((sys.stdout.isatty() or os.environ.get("HLS_COLOR") == "1")          # HLS_COLOR=1 forces colour (tests)
+_tty = ((sys.stdout.isatty() or os.environ.get("HLS_COLOR") == "1")
         and not os.environ.get("NO_COLOR") and os.environ.get("TERM", "dumb") != "dumb")
 if _tty:
     B, D, G, Y, R, N = "\033[1m", "\033[2m", "\033[32m", "\033[33m", "\033[31m", "\033[0m"
-    C, U = "\033[1;36m", "\033[4;36m"          # commands (bold cyan) and links (underlined cyan)
+    C, U = "\033[1;36m", "\033[4;36m"
 else:
     B = D = G = Y = R = N = C = U = ""
 _loc = (os.environ.get("LC_ALL") or os.environ.get("LC_CTYPE") or os.environ.get("LANG") or "")
@@ -13,7 +12,6 @@ S_OK, S_TODO, S_BAD, S_WAIT, S_RULE, S_DOT = (
 
 
 def _terminal_size():
-    """The size of the real terminal (asked of stdout, stderr or stdin, whichever is one), or None when there is none."""
     for stream in (sys.__stdout__, sys.__stderr__, sys.__stdin__):
         try:
             if stream is not None and stream.isatty():
@@ -24,9 +22,7 @@ def _terminal_size():
 
 
 def window_cols():
-    """The real width of the window. The terminal itself is asked first: the COLUMNS variable is only a copy made
-    when the shell started (and `sudo` passes it on), so it goes stale as soon as the window is resized.
-    HLS_COLS forces a width (tests)."""
+    """Width of the terminal window, read from the terminal itself because the COLUMNS variable is stale after a resize."""
     forced = os.environ.get("HLS_COLS", "")
     if forced.isdigit():
         return int(forced)
@@ -40,7 +36,6 @@ def window_cols():
 
 
 def window_rows():
-    """The real height of the window (0 when it cannot be found). HLS_ROWS forces a height (tests)."""
     forced = os.environ.get("HLS_ROWS", "")
     if forced.isdigit():
         return int(forced)
@@ -49,19 +44,16 @@ def window_rows():
 
 
 def term_cols():
-    """Width of the terminal in columns, at least 40."""
     return max(window_cols(), 40)
 
 
 def out(msg=""):
-    """Print one line, keeping the pinned progress bar on the bottom row."""
     with Live.lock:
         Live.sync()
         print(msg, flush=True)
 
 
 def rule(title):
-    """Print a section heading."""
     w = min(term_cols(), 76)
     n = max(w - len(title) - 8, 3)
     out("")
@@ -74,12 +66,11 @@ _MARK = re.compile(r"`([^`]+)`|(https?://[^\s)`]*[^\s).,;:`])")
 
 
 def _protect(text):
-    """Keep a `command` on one line: its spaces become non-breaking until the line is drawn."""
     return re.sub(r"`([^`]+)`", lambda m: "`" + m.group(1).replace(" ", NBSP) + "`", text)
 
 
 def wrap(text, indent, width=None):
-    """Wrap `text` to the terminal width with `indent` spaces in front of every line."""
+    """Wrap text to the terminal width, indenting every line."""
     width = (width or min(term_cols(), 100)) - indent
     lines = []
     for para in _protect(text).split("\n"):
@@ -98,7 +89,6 @@ def wrap(text, indent, width=None):
 
 
 def mark(line, base=""):
-    """Highlight `commands` and links in a finished line. `base` is the colour to return to afterwards."""
     def sub(m):
         if m.group(1) is not None:
             txt = m.group(1)
@@ -108,8 +98,6 @@ def mark(line, base=""):
 
 
 def styled(text, indent, base=""):
-    """Wrap text and highlight commands and links. A paragraph that starts with "$ " is a command line,
-    shown on its own line and never wrapped."""
     out_lines = []
     for para in text.split("\n"):
         if para.startswith("$ "):
@@ -121,34 +109,29 @@ def styled(text, indent, base=""):
 
 
 def say(msg, indent=2):
-    """Print a plain message, wrapped and indented."""
     for l in styled(msg, indent):
         out(l)
 
 
 def good(msg):
-    """Print a message marked as done (green tick)."""
     out("  %s%s%s %s" % (G, S_OK, N, msg))
 
 
 def _flagged(flag, msg):
-    """Print a message whose first line starts with a coloured flag."""
     for i, l in enumerate(styled(msg, 4)):
         out(("  %s " % flag + l[4:]) if i == 0 else l)
 
 
 def warn(msg):
-    """Print a message marked as a warning."""
     _flagged("%s!%s" % (Y, N), msg)
 
 
 def bad(msg):
-    """Print a message marked as a failure (red cross)."""
     _flagged("%s%s%s" % (R, S_BAD, N), msg)
 
 
 def log(msg):
-    """Append a line to the installer's log file, with the administrator password masked."""
+    """Append a line to the installer log with the admin password masked."""
     try:
         for word in [Runtime.password] + list(Runtime.hide):
             if word and len(word) >= 6:
@@ -160,9 +143,7 @@ def log(msg):
         pass
 
 
-# ---------------------------------------------------------------- live progress line
 def fmt_time(sec):
-    """Seconds as a short text such as '45s' or '3m 10s'."""
     sec = int(sec)
     if sec < 60:
         return "%ds" % sec
@@ -172,35 +153,28 @@ def fmt_time(sec):
 
 
 class Live:
-    """The progress bar. On a real terminal the bottom row of the window is reserved for it (the way apt does it):
-    a spinner, the step, a detail (for example which image is downloading), a bar for the whole install and the
-    elapsed time. Everything else the installer prints scrolls above it, so the bar is always in the same place and
-    never overlaps a message. The row is painted at an absolute position (cursor saved, row written, cursor put back,
-    all in one write), so nothing depends on where the cursor is or on how the terminal re-wrapped earlier output.
-    When the window changes size the reserved row is set up again for the new size.
-    It is only used on a real terminal (HLS_LIVE=1 forces it for tests). When there is no terminal (a pipe, a log
-    file) nothing is animated: each step prints a plain line instead."""
+    """Progress display: reserves the bottom row of the terminal for the current step, a bar for the whole install and the elapsed time."""
     lock = threading.RLock()
     MIN_ROWS = 8
     enabled = (((sys.stdout.isatty() and os.environ.get("TERM", "dumb") != "dumb") or os.environ.get("HLS_LIVE") == "1")
                and (os.environ.get("HLS_LIVE") == "1" or window_rows() >= MIN_ROWS))
     FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏" if _utf else "|/-\\"
     FULL, EMPTY = ("█", "░") if _utf else ("#", "-")
-    active = False          # a step is running
-    region = False          # the bottom row is reserved and the bar is painted there
-    size = (0, 0)           # (rows, columns) the reserved row was set up for
-    paused = 0              # >0 while a question or an external program owns the keyboard
-    echo_saved = None       # terminal settings to put back (typing is not echoed while a step runs)
+    active = False
+    region = False
+    size = (0, 0)
+    paused = 0
+    echo_saved = None
     title = ""
     note = ""
     t_step = 0.0
-    t_all = None            # start of the whole run (for the total elapsed time)
+    t_all = None
     total = 0
     done = 0
     frame = 0
     thread = None
     stop = False
-    own_clock = False       # show this step's own time, not the time of the whole run
+    own_clock = False
 
     @classmethod
     def begin_run(cls, total):
@@ -230,7 +204,6 @@ class Live:
 
     @classmethod
     def end(cls):
-        """A step is over: return how many seconds it took. The bar stays where it is until the next step."""
         with cls.lock:
             cls.active = False
             cls.own_clock = False
@@ -263,8 +236,7 @@ class Live:
 
     @classmethod
     def _echo(cls, on):
-        """While a step runs, keys the person types are not printed (they would only add blank lines); the echo is put
-        back for a question and when the run ends."""
+        """Turn keyboard echo off while a step runs and back on for questions and at the end."""
         try:
             import termios
             if not sys.stdin.isatty():
@@ -291,21 +263,16 @@ class Live:
 
     @classmethod
     def sync(cls):
-        """Set the reserved row up (first time) or again (the window changed size)."""
         if not cls.enabled or not cls.active and not cls.region:
             return
         rows, cols = cls._size()
         if cls.region and (rows, cols) == cls.size:
             return
-        if rows < cls.MIN_ROWS:                 # too small to keep a bar
+        if rows < cls.MIN_ROWS:
             cls.close()
             return
         if cls.region and not cls.paused:
-            # the window was resized: the terminal has moved the old bar row somewhere below the text; wipe whatever
-            # is under the cursor (nothing but that old row can be there)
             sys.stdout.write("\r\033[J")
-        # one blank line makes room (the screen scrolls if the cursor is on the last row), the cursor goes back up to
-        # where it was (now never on the last row), and the scrolling area is set to every row but the last
         sys.stdout.write("\n\033[1A\0337\033[1;%dr\0338" % (rows - 1))
         sys.stdout.flush()
         cls.region = True
@@ -316,7 +283,7 @@ class Live:
         if not cls.region:
             return
         rows, cols = cls.size
-        if cols < 46:                              # too narrow for a readable bar: leave the row empty
+        if cols < 46:
             sys.stdout.write("\0337\033[%d;1H\033[2K\0338" % rows)
             sys.stdout.flush()
             return
@@ -326,7 +293,6 @@ class Live:
 
     @classmethod
     def close(cls):
-        """Give the last row back and put the typing echo back. Safe to call any number of times."""
         with cls.lock:
             try:
                 if cls.region:
@@ -341,7 +307,6 @@ class Live:
 
     @classmethod
     def line(cls, cols):
-        """The bar, never longer than cols - 1 characters."""
         spin = cls.FRAMES[cls.frame % len(cls.FRAMES)]
         clock = fmt_time(time.time() - (cls.t_step if cls.own_clock or not cls.t_all else cls.t_all))
         n = min(cls.total, max(cls.done, 0)) if cls.total else 0
@@ -359,7 +324,7 @@ class Live:
             room = cols - 1 - len("  x ") - len(tail_plain)
             title = cls.title
             text = cls.note
-            avail = room - len(title) - 4                 # what is left for the detail after "  . "
+            avail = room - len(title) - 4
             if text and len(text) > avail:
                 text = (text[:avail - 3] + "...") if avail >= 15 else ""
             note = ("  " + D + S_DOT + " " + text + N) if text else ""
@@ -368,7 +333,6 @@ class Live:
                 title = title[:max(room - 3, 1)] + "..."
             pad = " " * max(room - len(title) - len(note_plain), 0)
             return "  %s%s%s %s%s%s%s" % (C, spin if cls.active else S_OK, N, title, note, pad, tail)
-        # a very narrow window: spinner, counter and time only (or just the spinner)
         short = "  %s %s %s" % (spin, count.replace(" of ", "/"), clock) if count else "  %s %s" % (spin, clock)
         if len(short) > cols - 1:
             short = "  " + spin
@@ -379,7 +343,7 @@ class Live:
             with Live.lock:
                 Live.paused += 1
                 if Live.echo_saved is not None:
-                    try:                               # keys typed while a step ran are not answers
+                    try:
                         import termios
                         termios.tcflush(0, termios.TCIFLUSH)
                     except Exception:
@@ -394,8 +358,7 @@ class Live:
 
     @classmethod
     def pause(cls):
-        """A question or another program has the keyboard for a while (the bar keeps running)."""
         return cls._Paused()
 
 
-atexit.register(Live.close)                 # never leave the terminal with the last row reserved or its echo switched off
+atexit.register(Live.close)

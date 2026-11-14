@@ -1,4 +1,3 @@
-# ---------- looks (colours only on a terminal; plain symbols if the terminal is not UTF-8) ----------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
   B=$'\033[1m'; D=$'\033[2m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; C=$'\033[36m'; N=$'\033[0m'
 else
@@ -9,7 +8,7 @@ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *)                                S_OK="+"; S_UP="^"; S_DL="v"; S_PEND="*"; S_BAD="x"; S_WARN="!"; S_DOT="-"; S_ARR="->"; S_RULE="-" ;;
 esac
 
-rule() {   # rule "Title": a spaced section heading with a thin line
+rule() {
   local w t="$1" n pad
   w=$(term_cols); [ "$w" -gt 76 ] && w=76
   n=$(( w - ${#t} - 8 )); [ "$n" -lt 3 ] && n=3
@@ -20,12 +19,12 @@ line_ok()   { printf '   %s%s%s  %s\n' "$G" "$S_OK" "$N" "$*"; }
 line_warn() { printf '   %s%s%s  %s\n' "$Y" "$S_WARN" "$N" "$*"; }
 line_bad()  { printf '   %s%s%s  %s\n' "$R" "$S_BAD" "$N" "$*"; }
 line_note() { printf '   %s%s  %s%s\n' "$D" "$S_DOT" "$*" "$N"; }
-img_row()   { printf '   %s%s%s  %-18s %s%-32s%s %s\n' "$1" "$2" "$N" "$3" "$D" "$4" "$N" "$5"; }   # colour symbol stack image status
+img_row()   { printf '   %s%s%s  %-18s %s%-32s%s %s\n' "$1" "$2" "$N" "$3" "$D" "$4" "$N" "$5"; }
 term_cols() { local c; c=$(tput cols 2>/dev/null) || c=80; [[ "$c" =~ ^[0-9]+$ ]] || c=80; [ "$c" -lt 40 ] && c=40; echo "$c"; }
-kv() {   # kv KEY TEXT: an indented "key  text" line; long text wraps under itself
+kv() {
   local k=$1 first=1 l w
   w=$(( $(term_cols) - 16 )); [ "$w" -gt 90 ] && w=90
-  [ "$k" = image ] && w=500   # image names are never broken
+  [ "$k" = image ] && w=500
   while IFS= read -r l; do
     if [ "$first" -eq 1 ]; then printf '      %s%-9s%s %s\n' "$D" "$k" "$N" "$l"; first=0
     else printf '      %9s %s\n' "" "$l"; fi
@@ -33,10 +32,6 @@ kv() {   # kv KEY TEXT: an indented "key  text" line; long text wraps under itse
 }
 hb()        { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1 B"; }
 
-# The registry and Portainer talk is done in Python (python3 is on every Linux Mint). Subcommands:
-#   tags IMAGE          the newest version number newer than the running tag (v2.6.0 -> v2.7.0), or nothing
-#   pt-has STACK        yes / no: does Portainer have a stack with that name
-#   pt-update STACK [OLD NEW]...   change image names in the saved stack file and redeploy it
 read -r -d '' PYLIB <<'PY' || true
 import json, os, re, sys, urllib.error, urllib.parse, urllib.request
 

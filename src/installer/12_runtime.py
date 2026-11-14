@@ -1,6 +1,5 @@
-# ---------------------------------------------------------------- running commands
 def run(args, input_text=None, timeout=None, check=False, env=None, quiet=False, shell=False):
-    """Run a command. Returns (returncode, stdout+stderr). In dry-run mode, changing commands are not run."""
+    """Run a command and return (exit code, combined output). Missing commands and timeouts are returned as codes, not raised."""
     shown = args if isinstance(args, str) else " ".join(args)
     log("RUN " + shown[:200])
     try:
@@ -18,7 +17,7 @@ def run(args, input_text=None, timeout=None, check=False, env=None, quiet=False,
 
 
 def act(args, **kw):
-    """Run a command that CHANGES the machine. Dry-run prints it instead."""
+    """Run a command that changes the system; in dry-run mode it only prints what would run."""
     if Opt.dry:
         out("      would run: %s" % (args if isinstance(args, str) else " ".join(args)))
         return 0, ""
@@ -26,19 +25,15 @@ def act(args, **kw):
 
 
 def have(cmd):
-    """True when the command exists on this machine."""
     return shutil.which(cmd) is not None
 
 
 def docker(*args, **kw):
-    """Run a docker command and return (exit code, output). A docker command that hangs (a stuck Docker service)
-    is stopped after 3 minutes instead of freezing the installer for ever."""
     kw.setdefault("timeout", 180)
     return run(["docker"] + list(args), **kw)
 
 
 def docker_answers():
-    """True when the Docker service answers a plain question within 30 seconds."""
     return docker("info", "--format", "{{.ServerVersion}}", timeout=30)[0] == 0
 
 
@@ -49,23 +44,18 @@ DOCKER_DOWN = ("Docker is not answering, so the apps cannot be reached or checke
 
 
 def apt_env():
-    """The environment for apt commands: they must never stop to ask a question."""
     return dict(os.environ, DEBIAN_FRONTEND="noninteractive")
 
 
 def apt_distro():
-    """The name of this system's family in the Docker and Tailscale package addresses: debian or ubuntu (Mint counts as ubuntu)."""
     return "debian" if Ctx.os_id == "debian" else "ubuntu"
 
 
 def apt_install(pkgs):
-    """Install packages with apt without asking questions (does nothing in a dry run)."""
     act(["apt-get", "-oDPkg::Lock::Timeout=600", "install", "-y", "-q"] + list(pkgs), env=apt_env(), check=True, timeout=1800)
 
 
-# ---------------------------------------------------------------- files
 def read_file(path, default=""):
-    """Contents of a text file, or `default` when it cannot be read."""
     try:
         with open(path) as f:
             return f.read()
@@ -74,7 +64,7 @@ def read_file(path, default=""):
 
 
 def write_file(path, text, mode=None, owner=None):
-    """Write a text file (atomically, with the given mode and owner); a dry run only says what would be written."""
+    """Write a text file atomically with the given mode and owner; a dry run only reports it."""
     if Opt.dry:
         out("      would write: %s" % path)
         return
@@ -90,7 +80,6 @@ def write_file(path, text, mode=None, owner=None):
 
 
 def write_bytes(path, data, mode=None, owner=None):
-    """Write a binary file (atomically, with the given mode and owner); a dry run only says what would be written."""
     if Opt.dry:
         out("      would write: %s" % path)
         return
@@ -106,7 +95,6 @@ def write_bytes(path, data, mode=None, owner=None):
 
 
 def chown(path, uid, gid, recursive=False):
-    """Change the owner of a path, and of everything under it when `recursive` is set."""
     if FAKE or Opt.dry:
         return
     try:
@@ -124,7 +112,6 @@ def chown(path, uid, gid, recursive=False):
 
 
 def mkdirs(path, uid=None, gid=None, mode=0o755):
-    """Create a folder and its parents with the given owner and mode."""
     if Opt.dry:
         if not os.path.isdir(path):
             out("      would create folder: %s" % path)
@@ -138,28 +125,23 @@ def mkdirs(path, uid=None, gid=None, mode=0o755):
         chown(path, uid, gid)
 
 
-# ---------------------------------------------------------------- random values
 ALNUM = string.ascii_letters + string.digits
 
 
 def rand_alnum(n=24):
-    """A random password of letters and digits."""
     return "".join(pysecrets.choice(ALNUM) for _ in range(n))
 
 
 def rand_hex(n=24):
-    """A random hex string of 2*n characters."""
     return pysecrets.token_hex(n)
 
 
 def rand_app_key():
-    """A random 32-byte application key in the 'base64:...' form Laravel apps expect."""
     return "base64:" + base64.b64encode(pysecrets.token_bytes(32)).decode()
 
 
-# ---------------------------------------------------------------- HTTP
 def http(method, url, body=None, headers=None, timeout=20, form=None, raw=False):
-    """Returns (status, data, headers). status 0 = could not connect. data = parsed JSON, else text."""
+    """Send an HTTP request and return (status, parsed JSON or text, headers). Status 0 means the connection failed."""
     hdr = dict(headers or {})
     data = None
     if form is not None:
@@ -192,7 +174,7 @@ def http(method, url, body=None, headers=None, timeout=20, form=None, raw=False)
 
 
 def wait_for(fn, what, timeout=300, every=3, quiet=False):
-    """Poll fn() until it returns something true."""
+    """Call fn until it returns a true value or the timeout expires, then raise Abort."""
     end = time.time() + timeout
     n = 0
     while True:
@@ -217,14 +199,12 @@ def wait_for(fn, what, timeout=300, every=3, quiet=False):
         time.sleep(every if not FAKE else 0.05)
 
 
-# ---------------------------------------------------------------- questions
 def interactive():
-    """True when a person is typing at a terminal."""
     return sys.stdin.isatty()
 
 
 def stdin_line():
-    """Read one line from a pipe WITHOUT reading ahead, so a program we start (the restore tool) can read the rest."""
+    """Read one line from a pipe without reading ahead, so a program started later can read the rest."""
     buf = b""
     while True:
         ch = os.read(0, 1)
@@ -237,7 +217,6 @@ def stdin_line():
 
 
 def ask(prompt, default=""):
-    """Ask a question; with --yes the default is used without asking."""
     if Opt.yes and default != "":
         return default
     with Live.pause():
@@ -245,7 +224,6 @@ def ask(prompt, default=""):
 
 
 def _read_piped(label):
-    """Show `label`, then read one answer from standard input when it is not a terminal (EOFError when there is none)."""
     sys.stdout.write(label)
     sys.stdout.flush()
     v = stdin_line()
@@ -256,7 +234,6 @@ def _read_piped(label):
 
 
 def _ask(prompt, default=""):
-    """Read one answer from the terminal (or from standard input when it is not a terminal)."""
     label = "  %s%s: " % (prompt, (" [%s]" % default) if default else "")
     try:
         v = input(label) if interactive() else _read_piped(label)
@@ -266,13 +243,11 @@ def _ask(prompt, default=""):
 
 
 def ask_secret(prompt):
-    """Ask for a secret without echoing it."""
     with Live.pause():
         return _ask_secret(prompt)
 
 
 def _ask_secret(prompt):
-    """Read one secret from the terminal without echo."""
     label = "  %s: " % prompt
     try:
         return getpass.getpass(label) if interactive() else _read_piped(label)
@@ -281,7 +256,6 @@ def _ask_secret(prompt):
 
 
 def yesno(prompt, default=False):
-    """Ask a yes/no question; --yes answers yes."""
     if Opt.yes:
         return True
     v = ask(prompt + (" [Y/n]" if default else " [y/N]"), "").lower()
@@ -291,7 +265,6 @@ def yesno(prompt, default=False):
 
 
 def typed(word, prompt):
-    """True when the person typed exactly `word` (used for the confirmations that cannot be undone)."""
     if Opt.yes:
         return True
     return ask(prompt).strip() == word

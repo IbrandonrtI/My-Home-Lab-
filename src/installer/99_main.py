@@ -1,6 +1,5 @@
-# ================================================================ the command line
 def main(argv):
-    """Read the command line and run the command."""
+    """Read the command line and run the requested command."""
     try:
         signal.signal(signal.SIGPIPE, signal.SIG_DFL)
     except (AttributeError, ValueError):

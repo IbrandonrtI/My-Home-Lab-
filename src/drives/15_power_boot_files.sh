@@ -1,5 +1,4 @@
-# ---------- power settings ----------
-power_apply() {   # power_apply mountpoint role
+power_apply() {
   [ "$TEST_MODE" = 1 ] && return 0
   is_boot_section "$1" && return 0
   command -v hdparm >/dev/null 2>&1 || return 0
@@ -36,18 +35,14 @@ need_tools() {
   fi
 }
 
-# ---------- files that sit in a pool folder on the boot drive ----------
-# Before any drive is assigned, /mnt/storage is a plain folder on the boot drive and the services already put folders
-# (and maybe files) in it. A pool cannot be mounted over a folder that has things in it, so when the first drive of a pool
-# is connected, whatever is in the folder moves onto the new drive first.
-absorb_plain_pool() {   # absorb_plain_pool main|backup /mnt/disks/MAIN1  (the drive is already mounted)
+# Before any drive is assigned, /mnt/storage is a plain folder on the boot drive and services may already have put files there. Move those files into the pool once a drive is added.
+absorb_plain_pool() {
   local role=$1 drive=$2 pool real=1
   pool=$(role_pool "$role")
   mountpoint -q "$pool" && return 0
   [ -d "$pool" ] || return 0
   chattr -i "$pool" 2>/dev/null || true
   [ -n "$(ls -A "$pool" 2>/dev/null)" ] || return 0
-  # (Main: its folders on the boot drive hold the Immich marker files even when no real file was saved there; they are copied too, so Immich finds them on the drive)
   [ "$role" = main ] && ! boot_has_files "$pool" && real=0
   [ "$real" = 1 ] && say "$pool already holds files on the boot drive ($(human "$(du -sb "$pool" 2>/dev/null | awk '{print $1}')")). They are copied onto the new drive first."
   rsync -aH --numeric-ids --ignore-existing --exclude=/lost+found "$pool/" "$drive/" || { warn "Copying the files to the new drive failed. Nothing was removed."; return 1; }
@@ -56,7 +51,6 @@ absorb_plain_pool() {   # absorb_plain_pool main|backup /mnt/disks/MAIN1  (the d
     return 1
   fi
   if [ "$role" = main ] && [ "$real" = 1 ] && ! { [ "$PANEL_MODE" != 1 ] && yn_yes "Everything is on the new drive. Remove the old copies from the boot drive now?"; }; then
-    # (the control panel cannot ask, so it keeps them). They lie hidden under the pool; `sudo drives moveboot` removes them later.
     mkdir -p "$STATE_DIR" 2>/dev/null; date '+%F %T' >"$(boot_kept_flag)" 2>/dev/null
     say "The old copies stay on the boot drive for now. Remove them later with:  sudo drives moveboot"
     log "copied the files of $pool on the boot drive onto $drive; the copies stay"

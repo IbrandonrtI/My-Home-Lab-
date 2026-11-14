@@ -1,8 +1,8 @@
-# ---------- check ----------
 CHECK_NEW=(); CHECK_DL=(); CHECK_FAILED=(); CHECK_OK=0
-declare -A NEWTAG=()       # image -> a newer version number found for it (v2.7.0)
-TAG_UNSURE=()              # pinned images whose newer versions could not be looked up
-do_check() {   # do_check show(0/1)
+declare -A NEWTAG=()
+TAG_UNSURE=()
+# do_check show(0/1): look online for newer images of every running container and save the result.
+do_check() {
   local show=$1 img d st n=0 now line stacks i nt
   CHECK_NEW=(); CHECK_DL=(); CHECK_FAILED=(); CHECK_OK=0; NEWTAG=(); TAG_UNSURE=()
   now=$(date +%s)
@@ -15,7 +15,7 @@ do_check() {   # do_check show(0/1)
   for img in "${IMG_LIST[@]}"; do
     n=$((n + 1))
     if d=$(remote_digest "$img"); then
-      if [[ "$img" =~ :v?[0-9]+(\.[0-9]+)+$ ]]; then      # pinned to a version number: is there a newer one?
+      if [[ "$img" =~ :v?[0-9]+(\.[0-9]+)+$ ]]; then
         if nt=$(pylib tags "$img" 2>/dev/null); then
           if [ -n "$nt" ]; then d="tag=$nt"; NEWTAG[$img]=$nt; fi
         else
@@ -30,7 +30,6 @@ do_check() {   # do_check show(0/1)
       [ "$st" = current ] || new_lines+="${IMG_STACKS[$img]}|$img|$d|$now|$st"$'\n'
     else
       CHECK_FAILED+=("$img"); STAT[$img]=failed
-      # keep what was known about it before
       for line in "${OLD_STATE[@]}"; do
         IFS='|' read -r stacks i d _ <<<"$line"
         if [ "$i" = "$img" ]; then
@@ -64,7 +63,6 @@ do_check() {   # do_check show(0/1)
     return 0
   fi
   [ "$show" -eq 1 ] && line_bad "Could not reach the registry for ${#CHECK_FAILED[@]} image(s). Is the internet working? The saved result was only partly updated."
-  # partial answer: save what is known, but keep the old "checked" time (or save nothing if there was none)
   local ep; ep=$(summary_epoch) || ep=""
   if [ -n "$ep" ] && [ "$CHECK_OK" -gt 0 ]; then printf '%s' "$new_lines" | write_outputs "$ep" || true; fi
   return 2

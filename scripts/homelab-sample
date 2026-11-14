@@ -1,22 +1,27 @@
 #!/usr/bin/env bash
-# homelab-sample - save a few readings that need root, so the login screen can show them.
-#
-# Runs from root's crontab every 15 minutes. It writes small files into /var/lib/homelab/:
-#   temps      one line per drive:  LABEL|DEVICE|TEMP_C|EPOCH     (TEMP_C is "standby" for a sleeping drive, "none" for a pool or array drive that gives no reading, like most flash drives)
-#   apt        UPGRADABLE_PACKAGES|EPOCH
-#   schedule   MINUTE|HOUR|DAY|MONTH|WEEKDAY|EPOCH               (when the nightly backup runs)
-# It also keeps the drive pills of the Homepage dashboard right: "Main Pool" and "Backup Pool" while the pool is
-# connected, "Connect Main Drive" / "Connect Backup Drive" while it is not.
-# The homelab command only reads these files.
-#
-# It never wakes a sleeping drive (smartctl -n standby) and never changes anything except these files.
-# To keep the machine quiet it runs at the lowest priority, only reads the drive temperatures in the first
-# 10 minutes after a boot (apps are still starting), and looks for system updates at most every 6 hours
-# when the schedule runs it (typed by hand, it takes every reading).
-#
-#   sudo homelab-sample            take the readings now and print what was saved
-#   sudo homelab-sample widgets    only update the drive names on the Homepage dashboard (the drive tool runs this)
-#   homelab-sample version
+
+usage() {
+  cat <<'HELP'
+homelab-sample - save a few readings that need root, so the login screen can show them.
+
+Runs from root's crontab every 15 minutes. It writes small files into /var/lib/homelab/:
+  temps      one line per drive:  LABEL|DEVICE|TEMP_C|EPOCH     (TEMP_C is "standby" for a sleeping drive, "none" for a pool or array drive that gives no reading, like most flash drives)
+  apt        UPGRADABLE_PACKAGES|EPOCH
+  schedule   MINUTE|HOUR|DAY|MONTH|WEEKDAY|EPOCH               (when the nightly backup runs)
+It also keeps the drive pills of the Homepage dashboard right: "Main Pool" and "Backup Pool" while the pool is
+connected, "Connect Main Drive" / "Connect Backup Drive" while it is not.
+The homelab command only reads these files.
+
+It never wakes a sleeping drive (smartctl -n standby) and never changes anything except these files.
+To keep the machine quiet it runs at the lowest priority, only reads the drive temperatures in the first
+10 minutes after a boot (apps are still starting), and looks for system updates at most every 6 hours
+when the schedule runs it (typed by hand, it takes every reading).
+
+  sudo homelab-sample            take the readings now and print what was saved
+  sudo homelab-sample widgets    only update the drive names on the Homepage dashboard (the drive tool runs this)
+  homelab-sample version
+HELP
+}
 
 set -u
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -26,7 +31,7 @@ OUT_DIR="${HOMELAB_STATE_DIR:-/var/lib/homelab}"
 
 case "${1:-}" in
   version|--version) echo "homelab-sample $VERSION"; exit 0 ;;
-  help|--help|-h) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
+  help|--help|-h) usage; exit 0 ;;
   ""|widgets) ;;
   *) echo "Usage: sudo homelab-sample   (or: homelab-sample widgets | version)" >&2; exit 1 ;;
 esac
@@ -35,7 +40,6 @@ esac
 mkdir -p "$OUT_DIR" || { echo "Cannot create $OUT_DIR"; exit 1; }
 chmod 755 "$OUT_DIR"
 NOW=$(date +%s)
-# lowest priority for CPU and drive, so the readings never slow the apps or an SSH session down
 renice -n 19 -p $$ >/dev/null 2>&1 || true
 ionice -c3 -p $$ >/dev/null 2>&1 || true
 
@@ -44,14 +48,13 @@ UPDATES_EVERY=21600
 up=${HOMELAB_UPTIME:-$(cut -d. -f1 /proc/uptime 2>/dev/null)}
 [[ "${up:-}" =~ ^[0-9]+$ ]] || up=999999
 
-put() {   # put NAME  (content on stdin): write atomically, readable by everyone
+put() {
   local tmp
   tmp=$(mktemp "$OUT_DIR/.tmp.XXXXXX") || return 1
   cat >"$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$OUT_DIR/$1"
 }
 
-# ---------- drive temperatures ----------
-temp_from_smart() {   # reads smartctl -A output on stdin -> integer degrees C, or nothing
+temp_from_smart() {
   awk '
     function num(x) { gsub(/[^0-9].*$/, "", x); return x }
     /^194[[:space:]]/ { t194 = num($10) }
@@ -62,10 +65,10 @@ temp_from_smart() {   # reads smartctl -A output on stdin -> integer degrees C, 
   '
 }
 
-read_temp() {   # read_temp /dev/sdX -> prints a number or "standby"; prints nothing if there is no reading
+read_temp() {
   local dev=$1 out t opts
   command -v smartctl >/dev/null 2>&1 || return 1
-  for opts in "" "-d sat"; do      # some USB boxes only answer when told they speak SATA
+  for opts in "" "-d sat"; do
     # shellcheck disable=SC2086
     out=$(smartctl -n standby -A $opts "$dev" 2>/dev/null)
     if printf '%s' "$out" | grep -qi 'STANDBY'; then echo standby; return 0; fi
@@ -75,7 +78,7 @@ read_temp() {   # read_temp /dev/sdX -> prints a number or "standby"; prints not
   return 1
 }
 
-disk_label() {   # disk_label NAME -> MAIN1, BACKUP1 ... or "boot", or the model name
+disk_label() {
   local d=$1 line lab mnt model
   while IFS= read -r line; do
     lab=$(printf '%s' "$line" | sed -n 's/.*LABEL="\([^"]*\)".*/\1/p')
@@ -87,7 +90,7 @@ disk_label() {   # disk_label NAME -> MAIN1, BACKUP1 ... or "boot", or the model
   echo "${model:-$d}"
 }
 
-pool_member() {   # pool_member NAME: 0 when the drive belongs to a pool or to a RAID / ZFS setup (so it is listed even when it gives no temperature)
+pool_member() {
   local d=$1 lab
   lab=$(disk_label "$d")
   case "$lab" in MAIN*|BACKUP*) return 0 ;; esac
@@ -108,10 +111,9 @@ sample_temps() {
   printf '%s' "$lines" | put temps
 }
 
-# ---------- system updates ----------
 sample_apt() {
   local n last
-  if [ ! -t 1 ]; then      # started by the schedule, not by hand
+  if [ ! -t 1 ]; then
     [ "$up" -ge "$BOOT_GRACE" ] || return 0
     last=$(cut -d'|' -f2 "$OUT_DIR/apt" 2>/dev/null)
     if [[ "${last:-}" =~ ^[0-9]+$ ]] && [ $((NOW - last)) -lt "$UPDATES_EVERY" ]; then return 0; fi
@@ -122,8 +124,7 @@ sample_apt() {
   fi
 }
 
-# ---------- when the nightly backup runs ----------
-# The nightly task is the first of the backup tasks (the Backups section can change its time); an older server still has its own cron line.
+# Print the times of the nightly backup. The nightly task is the first backup task and the Backups section can change its time; an older server still has the fixed time.
 sample_schedule() {
   local line m h dom mon dow tasks="${HOMELAB_TASKS_FILE:-/etc/homelab-backup-tasks.json}"
   if [ -r "$tasks" ] && command -v python3 >/dev/null 2>&1; then
@@ -148,11 +149,7 @@ PY
   printf '%s|%s|%s|%s|%s|%s\n' "$m" "$h" "$dom" "$mon" "$dow" "$NOW" | put schedule
 }
 
-# ---------- the drive pills on the Homepage dashboard ----------
-# widgets.yaml has one pill per pool: label "Main Pool" (disk /mnt/storage) and "Backup Pool" (disk /mnt/backup).
-# While a pool is not mounted the pill's label asks for the drive instead, and goes back when it is mounted.
-# An older file with one "Drives" pill (disk: / and /mnt/storage) is turned into the new pills once.
-homepage_dir() {   # prints the folder Homepage reads its settings from (remembered between runs)
+homepage_dir() {
   local d=""
   [ -r "$OUT_DIR/homepage-dir" ] && d=$(cat "$OUT_DIR/homepage-dir")
   if [ -z "$d" ] || [ ! -d "$d" ]; then
@@ -162,6 +159,7 @@ homepage_dir() {   # prints the folder Homepage reads its settings from (remembe
   [ -n "$d" ] && [ -d "$d" ] && printf '%s\n' "$d"
 }
 
+# Keep the disk widgets in the Homepage widgets.yaml in step with the pools: one for Main Pool and one for Backup Pool, labelled by which pools are mounted.
 sample_widgets() {
   command -v python3 >/dev/null 2>&1 || return 0
   local dir file main_ok=0 backup_ok=0

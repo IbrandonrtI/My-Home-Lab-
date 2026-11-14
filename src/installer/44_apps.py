@@ -1,21 +1,16 @@
-# ================================================================ Navidrome (plays the songs Downtify saved)
 class NavidromeStack(StackStep):
-    """On every new machine (its music folder is the one Downtify saves into). A hand-built server is only looked at."""
 
     def applies(self):
-        # Every new machine gets Navidrome (and its dashboard card) from the start, even while the music folder is still empty: Downtify fills it.
-        # A hand-built server is only looked at.
         return not Mode.existing
 
     def detail(self):
         return "music folder %s" % (music_folder() or "/mnt/storage/music")
 
     def stamp(self):
-        env = "".join(v for _, v in stack_env("navidrome"))        # new Last.fm keys, or AudioMuse-AI first in the agents, deploy Navidrome once more
+        env = "".join(v for _, v in stack_env("navidrome"))
         return hashlib.md5((stack_text("navidrome") + env).encode()).hexdigest()
 
     def probe(self):
-        # a Navidrome from an earlier version of the installer is deployed once more, so it gets the Spotify-ish theme and the frame setting
         return "done" if stack_up(self.name) and State.data.get("navidrome_stack") == self.stamp() else "todo"
 
     def run(self):
@@ -34,6 +29,7 @@ register(NavidromeStack("navidrome", ("portainer-env", "folders"), "Navidrome mu
 
 @step
 class NavidromeCard(Step):
+    """Add the Navidrome card, with its built-in player, to the dashboard and create the Navidrome login."""
     id, group = "navidrome-card", "Homepage"
     title = "Navidrome login and its dashboard card (first in its group) with Navidrome's own player inside"
     needs = ("stack-navidrome", "homepage-files", "scripts")
@@ -53,13 +49,13 @@ class NavidromeCard(Step):
             return
         old = read_file(hp_path("services.yaml"))
         new = old
-        if card_widget_type(old, "navidrome-card") not in ("navidrome", "iframe"):          # first time: the login
+        if card_widget_type(old, "navidrome-card") not in ("navidrome", "iframe"):
             pw = need_password("to create the Navidrome login")
             if not wait_for(lambda: http("GET", url("navidrome", "/"), raw=True, timeout=10)[0] == 200, "Navidrome to answer", 120):
                 raise Abort("Navidrome does not answer on port %d. Look at its log:  docker logs navidrome" % PORTS["navidrome"])
             creds = {"username": Ctx.admin, "password": pw}
             st, _, _ = http("POST", url("navidrome", "/auth/createAdmin"), body=creds, timeout=30)
-            if st != 200:                                    # 403: it has a login already. Is it ours?
+            if st != 200:
                 st, _, _ = http("POST", url("navidrome", "/auth/login"), body=creds, timeout=30)
                 if st != 200:
                     warn("Navidrome already has a login that is not %s with the shared admin password. Open it and log in with the login it has. "
@@ -67,9 +63,9 @@ class NavidromeCard(Step):
             else:
                 out("      Navidrome is at %s. Log in as %s with the shared admin password." % (url("navidrome"), Ctx.admin))
             if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
-                run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)        # makes the card (and its Tailscale address) now
+                run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)
             old = read_file(hp_path("services.yaml"))
-            if card_widget_type(old, "navidrome-card") is None:      # homelab-cards could not make it (it only runs when Docker answers): the installer writes the card itself
+            if card_widget_type(old, "navidrome-card") is None:
                 old = navidrome_card_added(old, svc_host())
         new = services_without_card(old, PLAYER_ID)
         new = services_with_iframe_widget(new, "navidrome-card", Ctx.lan or svc_host())
@@ -84,7 +80,6 @@ class NavidromeCard(Step):
 
 
 def navidrome_card_added(text, host):
-    """services.yaml with a Navidrome card in the Media & Entertainment group (made when the group is missing). Only used when homelab-cards did not make it."""
     card = ("    - Navidrome:\n        id: navidrome-card\n        href: http://%s:%d\n        siteMonitor: http://%s:%d\n"
             "        icon: navidrome.svg\n        description: Music Streaming Server\n") % (host, PORTS["navidrome"], host, PORTS["navidrome"])
     m = re.search(r"(?m)^- Media & Entertainment:\s*\n", text)
@@ -93,7 +88,6 @@ def navidrome_card_added(text, host):
     return text.rstrip("\n") + "\n\n- Media & Entertainment:\n\n" + card
 
 
-# ================================================================ AudioMuse-AI (similar songs for Navidrome; only after `homelab-setup audiomuse`)
 AUDIOMUSE_PLUGIN_URL = "https://github.com/NeptuneHub/AudioMuse-AI-NV-plugin/releases/download/v11/audiomuseai.ndp"
 AUDIOMUSE_PLUGIN_ID = "audiomuseai"
 
@@ -107,7 +101,6 @@ def audiomuse_plugin_file():
 
 
 def navidrome_cli(*args, **kw):
-    """Run Navidrome's own program inside its container (plugin rescan, edit, enable ...). Returns (exit code, output)."""
     return docker("exec", "-i", "navidrome", "/app/navidrome", *args, **kw)
 
 
@@ -132,7 +125,7 @@ class AudioMuseUser(Step):
                 Secrets.vals[key] = make()
         Secrets.save()
         mine = {"username": AUDIOMUSE_ND_USER, "password": Secrets.get("AUDIOMUSE_ND_PASSWORD")}
-        if http("POST", url("navidrome", "/auth/login"), body=mine, timeout=30)[0] != 200:       # not made yet (or by an earlier try)
+        if http("POST", url("navidrome", "/auth/login"), body=mine, timeout=30)[0] != 200:
             pw = need_password("to make the AudioMuse-AI login in Navidrome")
             st, js, _ = http("POST", url("navidrome", "/auth/login"), body={"username": Ctx.admin, "password": pw}, timeout=30)
             if st != 200 or not isinstance(js, dict) or not js.get("token"):
@@ -149,8 +142,8 @@ class AudioMuseUser(Step):
 
 
 class AudioMuseStack(StackStep):
-    """AudioMuse-AI's three containers: database, web page and worker. Only after `homelab-setup audiomuse`."""
 
+    """AudioMuse-AI's three containers: database, web page and worker. Installed only by `homelab-setup audiomuse`."""
     def applies(self):
         return audiomuse_applies()
 
@@ -158,13 +151,13 @@ class AudioMuseStack(StackStep):
         return "port %d, the worker may use %s of memory" % (PORTS["audiomuse"], audiomuse_mem())
 
     def stamp(self):
-        env = "|".join("%s=%s" % kv for kv in stack_env("audiomuse"))          # a new memory limit deploys the stack once more
+        env = "|".join("%s=%s" % kv for kv in stack_env("audiomuse"))
         return hashlib.md5((stack_text("audiomuse") + env).encode()).hexdigest()
 
     def probe(self):
         need = {"audiomuse-postgres", "audiomuse-flask"}
         if not State.data.get("audiomuse_paused"):
-            need.add("audiomuse-worker")                     # a paused worker (`audiomuse pause`) is wanted, not a fault
+            need.add("audiomuse-worker")
         return "done" if need <= containers_running() and State.data.get("audiomuse_stack") == self.stamp() else "todo"
 
     def run(self):
@@ -175,7 +168,7 @@ class AudioMuseStack(StackStep):
         StackStep.run(self)
         if Opt.dry:
             return
-        State.data.pop("audiomuse_paused", None)             # a new deploy starts the worker again
+        State.data.pop("audiomuse_paused", None)
         State.data["audiomuse_stack"] = self.stamp()
         State.save()
         if not wait_for(lambda: http("GET", url("audiomuse", "/api/health"), timeout=10)[0] == 200, "AudioMuse-AI to answer", 240):
@@ -236,14 +229,13 @@ class AudioMusePlugin(Step):
         State.data["audiomuse_plugin"] = self.stamp()
         State.save()
         if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
-            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)        # the dashboard card of AudioMuse-AI, now
+            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)
         out("      The plugin is on. Now let AudioMuse-AI listen to your songs once: open %s, log in as %s and press Start Analysis." % (
             url("audiomuse"), Ctx.admin))
 
 
-# ================================================================ naviList (playlists from ListenBrainz and Last.fm; only after `homelab-setup navilist`)
-NAVILIST_NAME_WANTED = re.compile(r"jams|exploration", re.I)          # the playlists ListenBrainz makes for you
-NAVILIST_LASTFM_WANTED = ("weekly", "top_1month")                       # this week's chart and the chart of the month
+NAVILIST_NAME_WANTED = re.compile(r"jams|exploration", re.I)
+NAVILIST_LASTFM_WANTED = ("weekly", "top_1month")
 
 
 def navilist_applies():
@@ -270,7 +262,7 @@ class NaviListUser(Step):
             Secrets.vals["NAVILIST_ND_PASSWORD"] = rand_alnum(28)
             Secrets.save()
         mine = {"username": NAVILIST_ND_USER, "password": Secrets.get("NAVILIST_ND_PASSWORD")}
-        if http("POST", url("navidrome", "/auth/login"), body=mine, timeout=30)[0] != 200:       # not made yet (or by an earlier try)
+        if http("POST", url("navidrome", "/auth/login"), body=mine, timeout=30)[0] != 200:
             pw = need_password("to make the naviList login in Navidrome")
             st, js, _ = http("POST", url("navidrome", "/auth/login"), body={"username": Ctx.admin, "password": pw}, timeout=30)
             if st != 200 or not isinstance(js, dict) or not js.get("token"):
@@ -287,8 +279,8 @@ class NaviListUser(Step):
 
 
 class NaviListStack(StackStep):
-    """naviList's one container. Only after `homelab-setup navilist`."""
 
+    """naviList's single container. Installed only by `homelab-setup navilist`."""
     def applies(self):
         return navilist_applies()
 
@@ -296,7 +288,7 @@ class NaviListStack(StackStep):
         return "port %d" % PORTS["navilist"]
 
     def stamp(self):
-        env = "|".join("%s=%s" % kv for kv in stack_env("navilist"))           # a new token or user name deploys the stack once more
+        env = "|".join("%s=%s" % kv for kv in stack_env("navilist"))
         return hashlib.md5((stack_text("navilist") + env).encode()).hexdigest()
 
     def probe(self):
@@ -316,7 +308,7 @@ class NaviListStack(StackStep):
         State.data["navilist_stack"] = self.stamp()
         State.save()
         if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-cards")):
-            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)       # the dashboard card of naviList, now
+            run([P("/usr/local/sbin/homelab-cards"), "sync"], timeout=120)
 
 
 register(NaviListStack("navilist", ("portainer-env", "folders", "stack-navidrome", "navilist-user"),
@@ -324,8 +316,7 @@ register(NaviListStack("navilist", ("portainer-env", "folders", "stack-navidrome
 
 
 def navilist_apply_settings():
-    """Put the saved logins into a running naviList. It only reads its environment the first time it starts, so a later change
-    (a new token, a new user name) is sent to its settings page the same way the page does it. Settings the person changed there stay."""
+    """Send the saved logins to a running naviList through its settings page, because it reads its environment only on first start."""
     base = lambda path: url("navilist", path)
     cur = http("GET", base("/settings/api"), timeout=20)[1]
     cur = cur.get("settings", {}) if isinstance(cur, dict) else {}
@@ -336,19 +327,18 @@ def navilist_apply_settings():
         warn("naviList could not log in to Navidrome (%s). Open %s, go to Settings and press Test Connection." % (
             js.get("error") if isinstance(js, dict) else "no answer", base("")))
     http("POST", base("/settings"), timeout=30, body={
-        "music_folder_ids": cur.get("music_folder_ids", ""),               # the page blanks this when it is left out
+        "music_folder_ids": cur.get("music_folder_ids", ""),
         "lastfm_api_key": Secrets.get("LASTFM_APIKEY"), "lastfm_username": Secrets.get("NAVILIST_LASTFM_USER"),
         "listenbrainz_token": Secrets.get("NAVILIST_LB_TOKEN"), "listenbrainz_username": Secrets.get("NAVILIST_LB_USER")})
-    http("POST", base("/sync/library"), body={}, timeout=30)                 # read the songs of Navidrome now
+    http("POST", base("/sync/library"), body={}, timeout=30)
 
 
 def navilist_subscribe():
-    """Subscribe naviList to the playlists ListenBrainz makes for you (Weekly Jams, Weekly Exploration, Daily Jams) and to two Last.fm charts.
-    Returns (names newly subscribed, names that are not there yet). ListenBrainz makes its playlists only after it has some of your listens."""
+    """Subscribe naviList to the ListenBrainz playlists and two Last.fm charts. Returns the names subscribed and the ones that do not exist yet."""
     base = lambda path: url("navilist", path)
     done, waiting = [], []
     if Secrets.get("NAVILIST_LB_TOKEN") and Secrets.get("NAVILIST_LB_USER"):
-        http("POST", base("/sync/lb-playlists"), body={}, timeout=240)         # fetch the list from ListenBrainz
+        http("POST", base("/sync/lb-playlists"), body={}, timeout=240)
         js = http("GET", base("/sync/lb-playlists/cached"), timeout=60)[1]
         lists = js.get("playlists", []) if isinstance(js, dict) else []
         mine = [p for p in lists if NAVILIST_NAME_WANTED.search("%s %s" % (p.get("title", ""), p.get("source_patch") or ""))]
@@ -361,7 +351,7 @@ def navilist_subscribe():
             if isinstance(r, dict) and r.get("ok"):
                 done.append(p.get("title", p["lb_mbid"]))
     if Secrets.get("LASTFM_APIKEY") and Secrets.get("NAVILIST_LASTFM_USER"):
-        http("POST", base("/sync/lfm-playlists"), body={}, timeout=240)        # fetch the charts from Last.fm
+        http("POST", base("/sync/lfm-playlists"), body={}, timeout=240)
         js = http("GET", base("/sync/lfm-playlists/cached"), timeout=60)[1]
         lists = {p["lfm_id"]: p for p in (js.get("playlists", []) if isinstance(js, dict) else [])}
         for lid in NAVILIST_LASTFM_WANTED:
@@ -375,14 +365,11 @@ def navilist_subscribe():
     return done, waiting
 
 
-# ================================================================ AdGuard Home
 def adguard_yaml():
-    """Contents of AdGuard Home's settings file."""
     return read_file(P("/opt/adguard-docker/conf/AdGuardHome.yaml"))
 
 
 def adguard_auth():
-    """Basic-authentication header for AdGuard Home's API."""
     pw = Runtime.password or ""
     tok = base64.b64encode(("%s:%s" % (Ctx.admin, pw)).encode()).decode()
     return {"Authorization": "Basic " + tok}
@@ -390,6 +377,7 @@ def adguard_auth():
 
 @step
 class AdGuardSetup(Step):
+    """Complete AdGuard Home's first-run setup through its API: admin account, web port and DNS port."""
     id, group, title = "adguard-setup", "Logins and keys", "AdGuard Home first-run setup done (admin account, web port 3000, DNS port 53)"
     needs = ("stack-adguard",)
 
@@ -446,9 +434,7 @@ class AdGuardDns(Step):
             raise Abort("AdGuard Home refused the DNS settings (HTTP %s)." % st)
 
 
-# ================================================================ Immich
 def immich_initialized():
-    """True when Immich has finished its first-run setup."""
     st, js, _ = http("GET", url("immich", "/api/server/config"), timeout=10)
     return st == 200 and isinstance(js, dict) and bool(js.get("isInitialized"))
 
@@ -470,8 +456,6 @@ class ImmichAdmin(Step):
             return
         if not docker_answers():
             raise Abort(DOCKER_DOWN)
-        # Right after a reboot Immich needs a few minutes to start. Until it answers, the check above says "not set up"
-        # even when the account exists, so wait first and look again before asking for a password.
         wait_for(lambda: http("GET", url("immich", "/api/server/ping"), timeout=8)[0] == 200, "Immich to answer", 300)
         if immich_initialized():
             return
@@ -484,9 +468,6 @@ class ImmichAdmin(Step):
 
 
 def immich_ocr_off(pw):
-    """A new Immich starts with text recognition (OCR) on. It makes the machine-learning container load extra models, which is heavy on a small server
-    with a spinning drive (the first photo can keep the drive busy for many minutes). It is turned off once, right after the admin account is made;
-    it is one switch in Immich (Administration, Settings, Machine Learning) if you want it back. A failure here only gives a warning."""
     st, js, _ = http("POST", url("immich", "/api/auth/login"), body={"email": Ctx.email, "password": pw}, timeout=30)
     token = js.get("accessToken") if st in (200, 201) and isinstance(js, dict) else None
     auth = {"Authorization": "Bearer " + str(token)}
@@ -501,9 +482,7 @@ def immich_ocr_off(pw):
         warn("Immich text recognition (OCR) could not be switched off (HTTP %s). Turn it off in Immich: Administration, Settings, Machine Learning." % st)
 
 
-# ================================================================ Nextcloud
 def nc_installed():
-    """True when Nextcloud has finished installing itself."""
     st, js, _ = http("GET", url("nextcloud", "/status.php"), timeout=10)
     return st == 200 and isinstance(js, dict) and js.get("installed") is True
 
@@ -512,12 +491,10 @@ FORCED_NC_KEYS = ("overwritehost", "overwriteprotocol")
 
 
 def occ(*args):
-    """Run Nextcloud's `occ` command inside its container."""
     return docker("exec", "-u", "www-data", "nextcloud", "php", "occ", *args, timeout=300)
 
 
 def nc_system_config():
-    """Nextcloud's whole system config as a dict, from one call (secret values are hidden by occ itself), or None when it cannot be read."""
     rc, txt = occ("config:list", "system")
     if rc != 0:
         return None
@@ -546,12 +523,13 @@ class NextcloudReady(Step):
 
 @step
 class NextcloudConfig(Step):
+    """Set Nextcloud's trusted domains and allow requests to local servers, and remove any forced address."""
     id, group, title = "nextcloud-config", "Logins and keys", "Nextcloud trusts this address and local servers (for Immich)"
     needs = ("nextcloud-ready",)
 
     def probe(self):
         cfg = nc_system_config()
-        if cfg is not None:   # one call to Nextcloud answers all of it (each call into the container takes about 0.4 s)
+        if cfg is not None:
             allow = str(cfg.get("allow_local_remote_servers", "")).lower()
             doms = "\n".join(str(d) for d in (cfg.get("trusted_domains") or []))
             forced = [k for k in FORCED_NC_KEYS if k in cfg]
@@ -565,7 +543,7 @@ class NextcloudConfig(Step):
         if Opt.dry:
             out("      would set trusted domains and allow_local_remote_servers in Nextcloud, and remove a forced address if one is saved")
             return
-        for k in FORCED_NC_KEYS:   # a forced address would send every local request to the Tailscale address
+        for k in FORCED_NC_KEYS:
             if occ("config:system:get", k)[0] == 0:
                 occ("config:system:delete", k)
         for args in (["config:system:set", "allow_local_remote_servers", "--value=true", "--type=boolean"],
@@ -578,6 +556,7 @@ class NextcloudConfig(Step):
 
 @step
 class NextcloudRestoreDb(Step):
+    """Load the Nextcloud database dump from a restored backup."""
     id, group, title = "nextcloud-restore-db", "Logins and keys", "Nextcloud database loaded from your backup"
     needs = ("stack-nextcloud",)
 
@@ -610,9 +589,7 @@ class NextcloudRestoreDb(Step):
         State.mark("nextcloud-restore-db")
 
 
-# ================================================================ Beszel
 def beszel_first_run():
-    """True while Beszel has no user yet."""
     st, js, _ = http("GET", url("beszel", "/api/beszel/first-run"), timeout=10)
     if st == 200 and isinstance(js, dict):
         return bool(js.get("firstRun"))
@@ -620,7 +597,6 @@ def beszel_first_run():
 
 
 def beszel_login(email, pw):
-    """Log in to Beszel and return its answer."""
     st, js, _ = http("POST", url("beszel", "/api/collections/users/auth-with-password"),
                      body={"identity": email, "password": pw}, timeout=20)
     return js.get("token") if st == 200 and isinstance(js, dict) else None

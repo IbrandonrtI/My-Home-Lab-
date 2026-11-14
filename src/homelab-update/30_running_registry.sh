@@ -1,5 +1,4 @@
-# ---------- what is running ----------
-CX=(); CN=(); CI=(); CD=(); CS=()      # container id, name, image name, image id, stack
+CX=(); CN=(); CI=(); CD=(); CS=()
 load_containers() {
   CX=(); CN=(); CI=(); CD=(); CS=()
   local ids cid name img imgid stack
@@ -9,13 +8,13 @@ load_containers() {
   while IFS='|' read -r cid name img imgid stack; do
     [ -n "$cid" ] || continue
     name=${name#/}
-    [ "$stack" = "<no value>" ] && stack=""   # Docker prints this for a container that is not part of a Compose stack
+    [ "$stack" = "<no value>" ] && stack=""
     CX+=("$cid"); CN+=("$name"); CI+=("$img"); CD+=("$imgid"); CS+=("${stack:-$name}")
   done < <(docker inspect $ids --format '{{.Id}}|{{.Name}}|{{.Config.Image}}|{{.Image}}|{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
   return 0
 }
 
-is_held() {   # is_held NAME IMAGE
+is_held() {
   local n=$1 img=$2 h
   [[ "$img" == *@sha256:* || "$img" == sha256:* ]] && return 0
   for h in "${HOLD[@]}"; do [ "$h" = "$n" ] && return 0; done
@@ -38,8 +37,7 @@ build_images() {
   done
 }
 
-# ---------- asking the registry, and comparing ----------
-remote_digest() {   # remote_digest IMAGE -> prints the fingerprint of the newest image online
+remote_digest() {
   local out d
   out=$(timeout "$REGISTRY_TIMEOUT" docker buildx imagetools inspect "$1" 2>/dev/null) || return 1
   d=$(printf '%s\n' "$out" | awk '/^Digest:/ {print $2; exit}')
@@ -47,19 +45,19 @@ remote_digest() {   # remote_digest IMAGE -> prints the fingerprint of the newes
   printf '%s\n' "$d"
 }
 
-local_has() {   # local_has IMAGE DIGEST: is that exact version already downloaded?
+local_has() {
   docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null | grep -qF -- "@$2"
 }
 
-pull_ref() {   # pull_ref IMAGE DIGEST -> what to download: the image itself, or the newer version tag found for it
+pull_ref() {
   if [[ "$2" == tag=* ]]; then printf '%s:%s\n' "${1%:*}" "${2#tag=}"; else printf '%s\n' "$1"; fi
 }
 
-classify() {   # classify IMAGE DIGEST -> new (not downloaded) | downloaded (downloaded, container still old) | current
+classify() {
   local ref=$1 d=$2 tagid i running=0
-  if [[ "$d" == tag=* ]]; then   # a newer version number was found (v2.6.0 -> v2.7.0)
+  if [[ "$d" == tag=* ]]; then
     for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$ref" ] && running=1; done
-    [ "$running" -eq 1 ] || { echo current; return; }          # no container runs the old version any more
+    [ "$running" -eq 1 ] || { echo current; return; }
     if docker image inspect "$(pull_ref "$ref" "$d")" >/dev/null 2>&1; then echo downloaded; else echo new; fi
     return
   fi

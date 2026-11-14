@@ -1,5 +1,4 @@
-# ---------- mount helpers ----------
-give_to_owner() {   # give_to_owner PATH: the user who runs the lab owns it (nothing happens when that user is unknown)
+give_to_owner() {
   id -u "$OWNER" >/dev/null 2>&1 && chown "$OWNER:$OWNER" "$1"
   return 0
 }
@@ -9,22 +8,18 @@ ensure_mp() {
   if ! mountpoint -q "$1"; then chattr +i "$1" 2>/dev/null || true; fi
 }
 
-mount_fstab() {   # fd 9 is the lock (and fd 8 the pool lock of a batch): the mergerfs daemon must not inherit them
-  # From the control panel the daemon of a pool would live inside the panel's service, and a restart of the panel (an upgrade does that) would end it and
-  # unmount the pool. In its own scope it belongs to the system instead.
-  # A pool is mounted over the folder on the boot drive even when files lie in it (the services save there while Main has no drive): "nonempty" lets
-  # it, also for pools whose fstab line was written by an older version.
+mount_fstab() {
   local -a extra=()
-  [ "$(awk -v m="$1" '!/^[[:space:]]*#/ && $2 == m {print $3; exit}' "$FSTAB" 2>/dev/null)" = fuse.mergerfs ] && extra=(-o nonempty)      # (not for a RAID or ZFS setup mounted at the pool path)
+  [ "$(awk -v m="$1" '!/^[[:space:]]*#/ && $2 == m {print $3; exit}' "$FSTAB" 2>/dev/null)" = fuse.mergerfs ] && extra=(-o nonempty)
   if [ "$PANEL_MODE" = 1 ] && [ -d "${SYSTEMD_DIR:-/run/systemd/system}" ] && command -v systemd-run >/dev/null 2>&1; then
     systemd-run --scope --quiet --collect --slice=system.slice mount -T "$FSTAB" "${extra[@]}" "$1" 6>&- 8>&- 9>&- || return 1
   else
     mount -T "$FSTAB" "${extra[@]}" "$1" 6>&- 8>&- 9>&- || return 1
   fi
-  mountpoint -q "$1"   # a mount that "succeeds" without mounting counts as a failure
+  mountpoint -q "$1"
 }
 
-pool_is_live() {   # pool_is_live main|backup -> 0 when that pool is mounted right now as a mergerfs pool that can take a new drive without stopping anything
+pool_is_live() {
   local pool
   pool=$(role_pool "$1") || return 1
   command -v setfattr >/dev/null 2>&1 || return 1
@@ -41,7 +36,7 @@ pool_umount() {
   umount -l "$mp"
 }
 
-apply_pool() {   # rebuild the pool line for a role and (re)mount the pool
+apply_pool() {
   local role=$1 mp
   mp=$(role_pool "$role")
   ensure_mp "$mp"
@@ -49,13 +44,12 @@ apply_pool() {   # rebuild the pool line for a role and (re)mount the pool
   sd_reload
   pool_umount "$mp"
   if [ -n "$(branches_of "$role")" ]; then mount_fstab "$mp" || return 1
-  elif [ "$role" = main ]; then boot_folder_ready      # no drive in Main: the boot drive is the storage
+  elif [ "$role" = main ]; then boot_folder_ready
   fi
-  [ "$role" = main ] && snapraid_active && snapraid_conf_write   # the drives of the Main pool changed: SnapRAID has to know
+  [ "$role" = main ] && snapraid_active && snapraid_conf_write
   return 0
 }
 
-# ---------- disks ----------
 disk_of_part() {
   local src=${1%%\[*}
   lsblk -nsrpo NAME,TYPE "$src" 2>/dev/null | awk '$2 == "disk" || $2 == "loop" {print $1; exit}'
@@ -72,7 +66,7 @@ protected_disks() {
   } | sort -u
 }
 
-busy_disks() {   # drives with something mounted outside the desktop's /media auto-mount (in use: never offered, never erased)
+busy_disks() {
   findmnt -rn -o SOURCE,TARGET 2>/dev/null | while read -r src tgt; do
     case "$src" in /dev/*) ;; *) continue ;; esac
     case "$tgt" in /media/*|/run/media/*) continue ;; esac
@@ -96,9 +90,9 @@ all_disks() {
   fi
 }
 
-legacy_disks() {   # drives mounted directly at a pool path (before conversion to a pool)
+legacy_disks() {
   local mp s
-  array_active && return 0      # a RAID array is mounted at the Main pool path: its drives are not "the old single data drive"
+  array_active && return 0
   for mp in "$MAIN_POOL" "$BACKUP_POOL"; do
     mountpoint -q "$mp" || continue
     [ "$(findmnt -no FSTYPE "$mp")" = ext4 ] || continue
@@ -107,7 +101,7 @@ legacy_disks() {   # drives mounted directly at a pool path (before conversion t
   done | sort -u
 }
 
-refuse_unsafe_disk() {   # refuse_unsafe_disk /dev/sdX: stops the whole command for the system drive or a drive in use
+refuse_unsafe_disk() {
   grep -qx "$1" <<<"$(protected_disks)" && die "$1 holds the operating system. Refusing."
   grep -qx "$1" <<<"$(busy_disks)" && die "$1 is in use (something on it is mounted). Refusing."
   return 0

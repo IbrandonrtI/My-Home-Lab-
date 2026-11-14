@@ -1,14 +1,8 @@
-# ================================================================ Downtify and MeTube (the music-downloader stack)
-# On a new machine the two containers are started from a Portainer stack. On a machine where they were started by hand (docker compose in a
-# terminal), Portainer shows them as "created outside of Portainer" with limited control. Then the same containers are moved into a Portainer
-# stack: their settings are read from the machine, the old containers are removed (the folders and everything in them stay) and Portainer
-# starts them again with those same settings.
-MD_BACKUP = SECRET_DIR + "/music-downloader-before.yaml"       # the old settings, kept in case the move has to be undone
+MD_BACKUP = SECRET_DIR + "/music-downloader-before.yaml"
 MD_NAMES = ("downtify", "metube")
 
 
 def md_old_containers():
-    """The Downtify and MeTube containers that exist right now (hand-made: the stack is not in Portainer yet), as {name: inspect data}."""
     found = {}
     for n in MD_NAMES:
         rc, txt = docker("inspect", n, timeout=30)
@@ -24,7 +18,6 @@ def md_old_containers():
 
 
 def md_compose_from_files(old):
-    """The settings of the old compose project, read with `docker compose config` from the file it was started from ('' when that is not possible)."""
     for c in old.values():
         lab = (c.get("Config") or {}).get("Labels") or {}
         project = lab.get("com.docker.compose.project", "")
@@ -39,12 +32,12 @@ def md_compose_from_files(old):
         rc, txt = docker(*args, "config", timeout=60)
         text = txt if rc == 0 else ""
         if "services:" in text and "build:" not in text and all(("container_name: " + n) in text for n in old):
-            return re.sub(r"(?m)^name:.*\n", "", text, count=1)      # (Portainer gives the project its name: the stack's)
+            return re.sub(r"(?m)^name:.*\n", "", text, count=1)
     return ""
 
 
 def md_compose_from_inspect(old):
-    """A compose file written from what the running containers were started with (image, ports, folders, settings, user)."""
+    """Build a Compose file from the settings a running container was started with (image, ports, folders, environment, user)."""
     lines = ["services:"]
     for n, c in old.items():
         cfg, host = c.get("Config") or {}, c.get("HostConfig") or {}
@@ -79,8 +72,8 @@ def md_compose_from_inspect(old):
 
 
 class MusicDownloaderStack(StackStep):
-    """Downtify (songs) and MeTube (videos) as one Portainer stack called music-downloader."""
-    parallel = False        # (it may move hand-made containers and needs the screen to itself)
+    """Downtify (songs) and MeTube (videos) as one Portainer stack called music-downloader. Containers started by hand are moved into it with their settings."""
+    parallel = False
 
     def applies(self):
         return not Mode.existing
@@ -92,7 +85,7 @@ class MusicDownloaderStack(StackStep):
         if not stack_up(self.name):
             return "todo"
         if not Portainer.alive() or not Portainer.endpoint_id():
-            return "done"      # Portainer cannot be asked right now: the running containers are left alone
+            return "done"
         return "done" if Portainer.stack_named(self.name) else "todo"
 
     def run(self):
@@ -105,7 +98,6 @@ class MusicDownloaderStack(StackStep):
         old = {} if Opt.dry else md_old_containers()
         if not old:
             return StackStep.run(self)
-        # Downtify or MeTube is running already, but not as a Portainer stack: move it, with its own settings.
         if Runtime.unattended:
             raise NeedsPerson("Moving the running Downtify and MeTube into Portainer restarts them, so it waits for `sudo homelab-setup refresh`.")
         text = md_compose_from_files(old) or md_compose_from_inspect(old)
@@ -113,7 +105,7 @@ class MusicDownloaderStack(StackStep):
             raise Abort("Downtify and MeTube were started by hand and their settings could not be read, so nothing was changed. "
                         "In Portainer, Stacks > Add stack, name it music-downloader and paste the compose file you used.")
         missing = [n for n in MD_NAMES if n not in old]
-        if missing:       # only one of the two exists: the other one comes from the repository's file, with its default folders
+        if missing:
             ours = stack_text(self.name)
             part = re.search(r"(?ms)^  %s:\n.*?(?=^  \w|\Z)" % missing[0], ours)
             if part:
@@ -129,7 +121,7 @@ class MusicDownloaderStack(StackStep):
             Portainer.deploy(self.name, text, [])
             wait_for(lambda: stack_up(self.name), "the music-downloader containers to start", self.wait)
         except Abort as e:
-            docker("compose", "-p", self.name, "-f", MD_BACKUP, "up", "-d", timeout=300)      # put them back the way they were
+            docker("compose", "-p", self.name, "-f", MD_BACKUP, "up", "-d", timeout=300)
             raise Abort("Moving Downtify and MeTube into Portainer did not work (%s). They were started again the way they were." % str(e)[:200]) from None
         good("Downtify and MeTube are now a Portainer stack (their folders and settings are unchanged)")
 

@@ -1,14 +1,3 @@
-# AudioMuse-AI: listens to your songs once, then Navidrome can suggest similar songs (Instant Mix) from how they sound.
-# Stack name in Portainer: audiomuse
-# Port:    8100 (AudioMuse's own web page; the analysis of your songs is started there). Inside the container it is 8000,
-#          but Downtify already uses 8000 on the machine.
-# Folders: /home/your-username/audiomuse/postgres holds its database (the analysis results, which take hours to make again).
-# Logins:  the installer fills everything in (the AudioMuse login, the link to Navidrome and the token the Navidrome plugin uses),
-#          so the setup wizard of the web page is not needed.
-# Limits:  the worker is the part that listens to the songs and the only heavy one. AUDIOMUSE_MEM and AUDIOMUSE_CPUS cap it,
-#          so a slow analysis can never starve the other apps. Change the memory cap with:  sudo homelab-setup audiomuse memory
-# Models:  the CLAP and lyrics models are switched off (each needs a lot more memory). "Similar Song" does not need them.
-#          They only apply the first time the stack starts; after that the web page (Administration > Setup Wizard) decides.
 services:
   audiomuse-postgres:
     image: postgres:15-alpine

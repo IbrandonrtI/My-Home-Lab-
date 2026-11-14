@@ -1,13 +1,3 @@
-# naviList: playlists for Navidrome from your ListenBrainz and Last.fm listening (Weekly Jams, Weekly Exploration, Daily Jams, your Last.fm charts).
-# Stack name in Portainer: navilist
-# Port:    8200 (naviList's own web page). Inside the container it is 3000, but AdGuard Home already uses 3000 on the machine.
-# Folders: /home/your-username/navilist/data holds its database and settings.
-# Songs:   it only puts songs you already have in Navidrome into a playlist. It never downloads anything.
-# Logins:  the installer fills in the Navidrome login (a small one made just for naviList), your Last.fm key (from sudo homelab-setup lastfm),
-#          your Last.fm user name, and your ListenBrainz user name and token (asked for by sudo homelab-setup navilist).
-#          These only start it off: naviList keeps its settings in its database, and its Settings page can change them later.
-# Refresh: naviList checks Navidrome every 5 minutes and ListenBrainz and Last.fm every 30 minutes by itself.
-# Version: pinned to a release, so an update never arrives by surprise.
 services:
   navilist:
     image: ghcr.io/ofernander/navilist:v1.0.1

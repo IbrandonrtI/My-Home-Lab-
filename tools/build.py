@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""build.py - join the pieces in src/ into the single files that are installed on the server.
-
-  python3 tools/build.py            build every file (and check that it compiles)
-  python3 tools/build.py --check    build in memory and compare with the files in the repository
-                                    (exit 1 if they differ: someone edited one side only)
-
-  src/installer/*.py        ->  installer/homelab-setup
-  src/drives/*.sh           ->  scripts/drives
-  src/homelab/*.sh          ->  scripts/homelab
-  src/homelab-update/*.sh   ->  scripts/homelab-update
-
-The pieces are joined in file-name order (10_..., 20_..., 99_...). A line `@@include NAME@@` in a piece is replaced by the text of
-the file NAME in the same folder (used to keep the Python program of `homelab theme` and `homelab bookmark` in a file of its own).
-Edit the pieces, never the built files. Each built file stands alone, so it can be copied to a fresh machine on its own.
-"""
 import os
 import py_compile
 import re
@@ -26,7 +11,6 @@ TARGETS = [("installer/homelab-setup", "src/installer", "py"), ("scripts/drives"
 
 
 def join_pieces(folder, ext):
-    """The text of the built file: the pieces of the folder in order, with the include lines filled in."""
     names = sorted(n for n in os.listdir(os.path.join(ROOT, folder)) if re.match(r"^\d\d_.*\.%s$" % ext, n))
     if not names:
         raise SystemExit("no pieces in %s" % folder)
@@ -39,6 +23,7 @@ def join_pieces(folder, ext):
 
 
 def main(argv):
+    """Build each generated file from its folder of pieces, or with --check report which ones are out of date."""
     check = "--check" in argv
     bad = 0
     for out, folder, ext in TARGETS:

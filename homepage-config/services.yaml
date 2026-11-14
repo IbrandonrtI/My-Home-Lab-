@@ -111,7 +111,10 @@
           username: Brandon
           password: your-own-key
 
-- Preview:
+
+# >>> homelab stats >>>
+
+- At a Glance:
 
     - Library:
         id: stat-library
@@ -348,6 +351,10 @@
               label: Nextcloud
             - field: folders.immich
               label: Immich
+
+# <<< homelab stats <<<
+
+# >>> homelab calendar >>>
 - Calendar:
 
     - This Month:
@@ -401,6 +408,9 @@
               url: http://192.168.X.X:3001/images/mycalendars.ics
               color: emerald
 
+# <<< homelab calendar <<<
+
+# >>> homelab customize >>>
 - Customize:
 
     - Control panel:
@@ -414,6 +424,7 @@
           classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96
           allowScrolling: yes
           loadingStrategy: lazy
+
 
 - Edit Links:
 
@@ -442,3 +453,5 @@
           classes: h-96 sm:h-96 md:h-96 lg:h-96 xl:h-96 2xl:h-96
           allowScrolling: no
           loadingStrategy: lazy
+
+# <<< homelab customize <<<

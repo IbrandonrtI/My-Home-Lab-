@@ -1,22 +1,22 @@
-run_changing() {   # run_changing FLOW: run it, then update Homepage/FileBrowser; the exit code is the flow's (1 also when containers did not start)
+run_changing() {
   local rc=0
   "$@" || rc=$?
-  if [ "$1" = wizard_flow ] && [ "$PRESET_TOUCHED" != 1 ]; then return "$rc"; fi      # the wizard only looked, or the person said no
-  if [ "$rc" -ne 0 ] && [ "$PRESET_TOUCHED" != 1 ]; then case "$1" in preset_flow|spare_flow|cache_flow) return "$rc" ;; esac; fi     # a setup that was refused or cancelled changed nothing
+  if [ "$1" = wizard_flow ] && [ "$PRESET_TOUCHED" != 1 ]; then return "$rc"; fi
+  if [ "$rc" -ne 0 ] && [ "$PRESET_TOUCHED" != 1 ]; then case "$1" in preset_flow|spare_flow|cache_flow) return "$rc" ;; esac; fi
   [ -n "${STOPPED// /}" ] || sync_filebrowser
   if [ -n "${START_FAILED// /}" ] && [ "$rc" -eq 0 ]; then rc=1; fi
   return "$rc"
 }
 
-take_lock() {   # one drives command at a time
+take_lock() {
   mkdir -p "$(dirname "$LOGFILE")" 2>/dev/null || true
   { exec 9>"/var/lock/homelab-drives.lock"; } 2>/dev/null || exec 9>"/tmp/homelab-drives.lock"
   flock -n 9 || die "Another drives command is running."
 }
 
+# Read the command line and run the requested command.
 main() {
-  if [ "${1:-}" = panel ]; then shift; panel_main "$@"; return $?; fi      # the control panel's door: its own strict words, no options (see 42_panel.sh)
-  # options can stand before or after the command; test-setup keeps its own arguments
+  if [ "${1:-}" = panel ]; then shift; panel_main "$@"; return $?; fi
   local -a args=()
   local a WANT_HELP=0
   while [ $# -gt 0 ]; do
@@ -41,7 +41,6 @@ main() {
     esac
   done
   set -- ${args[@]+"${args[@]}"}
-  # other words people type for a command that exists: they mean the same thing
   case "${1:-}" in
     name) set -- rename "${@:2}" ;;                    smart) set -- health "${@:2}" ;;
     spindown|standby) set -- sleep "${@:2}" ;;         fsck|verify) set -- check "${@:2}" ;;
@@ -59,14 +58,13 @@ main() {
   esac
   if [ "$WANT_HELP" = 1 ]; then set -- help "$@"; fi
   [ "${1:-}" = help ] && { [ "$#" -le 2 ] || { note "help takes one command name, for example:  sudo drives help release"; exit 1; }; help_for "${2:-}"; exit $?; }
-  # an option that does not belong to the command is refused instead of ignored
   local cmd=${1:-menu}
   if [ "$JSON" = 1 ]; then case "$cmd" in status|list|usage|health|check) ;; *) note "--json works with: status, list, usage, health, check (not with '$cmd')."; exit 1 ;; esac; fi
   if [ "$FULL" = 1 ] && [ "$cmd" != check ]; then note "--full works with: check (not with '$cmd')."; exit 1; fi
   if { [ "$WANT_SPARE" = 1 ] || [ "$WANT_CACHE" = 1 ] || [ "$WANT_ENCRYPT" = 1 ]; } && [ "$cmd" != preset ]; then note "--spare, --cache and --encrypt work with: preset (not with '$cmd')."; exit 1; fi
   if [ "$WANT_FIRST" = 1 ] && [ "$cmd" != wizard ]; then note "--first-run works with: wizard (not with '$cmd')."; exit 1; fi
   if [ "$FOLDERS" = 1 ] && [ "$cmd" != usage ]; then note "--folders works with: usage (not with '$cmd')."; exit 1; fi
-  case "${1:-}" in   # a typo such as `release dry-run` must never be read as `release`
+  case "${1:-}" in
     test-setup|test-cleanup) ;;
     preset|snapraid) if [ $# -gt 2 ]; then note "Unexpected word: ${*:3}"; note "Nothing was done."; note ""; usage_text >&2; exit 1; fi ;;
     *) if [ $# -gt 1 ]; then note "Unexpected word: ${*:2}"; note "Nothing was done."; note ""; usage_text >&2; exit 1; fi ;;

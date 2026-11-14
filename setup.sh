@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
-# setup.sh - starts the home lab installer from a fresh clone of this repository.
-#
-#   git clone https://github.com/IbrandonrtI/My-Home-Lab-.git
-#   cd My-Home-Lab-
-#   sudo bash setup.sh install --dry-run     # show what would be done, change nothing
-#   sudo bash setup.sh install               # set everything up (asks first)
-#   sudo bash setup.sh                       # show the checklist
-#   bash setup.sh --help                     # this text, then the installer's own commands
-#
-# This script only checks that Python 3 is installed (on a machine with apt) and then runs
-# installer/homelab-setup with the same arguments. Run it with `bash`: files uploaded through
-# GitHub's web page do not keep their "executable" mark.
+
+usage() {
+  cat <<'HELP'
+setup.sh - starts the home lab installer from a fresh clone of this repository.
+
+  git clone https://github.com/IbrandonrtI/My-Home-Lab-.git
+  cd My-Home-Lab-
+  sudo bash setup.sh install --dry-run     # show what would be done, change nothing
+  sudo bash setup.sh install               # set everything up (asks first)
+  sudo bash setup.sh                       # show the checklist
+  bash setup.sh --help                     # this text, then the installer's own commands
+
+This script only checks that Python 3 is installed (on a machine with apt) and then runs
+installer/homelab-setup with the same arguments. Run it with `bash`: files uploaded through
+GitHub's web page do not keep their "executable" mark.
+HELP
+}
+
 set -euo pipefail
 
 SELF="${BASH_SOURCE[0]:-}"
@@ -24,7 +30,7 @@ PROG="$HERE/installer/homelab-setup"
 
 case "${1:-}" in
   -h | --help | help)
-    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$SELF"
+    usage
     echo
     if [ -f "$PROG" ] && command -v python3 >/dev/null 2>&1; then
       python3 "$PROG" help

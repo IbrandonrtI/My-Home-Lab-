@@ -1,6 +1,5 @@
-# ================================================================ state, answers, secrets
 class State:
-    """Non-secret facts: the answers given, which one-time actions ran, and what was acknowledged."""
+    """Non-secret facts: the answers given, the one-time actions that ran and what the user acknowledged."""
     data = {}
     readonly = False
 
@@ -16,7 +15,7 @@ class State:
         cls.data.setdefault("skip", {})
         cls.data.setdefault("notes", {})
 
-    lock = threading.RLock()        # (stacks are deployed at the same time, and each one may save its note)
+    lock = threading.RLock()
 
     @classmethod
     def save(cls):
@@ -51,7 +50,7 @@ class State:
 
 
 class Secrets:
-    """The one root-only file (mode 600). Generated passwords and keys. Never the password you type."""
+    """Generated passwords and keys, kept in one root-only file (mode 600). The typed admin password is never stored."""
     vals = {}
 
     @classmethod
@@ -84,17 +83,14 @@ class Secrets:
 
 
 class Runtime:
-    """Lives only in memory while the program runs. The typed password is never written to a file by the installer."""
     password = None
-    background = False      # True in the job that finishes the install by itself: nobody is there to type
-    unattended = False      # True in the quiet scheduled run: a step that needs the password stays open, without a failure message
-    hide = []          # other secret words that must never reach the log file
+    background = False
+    unattended = False
+    hide = []
 
 
 def need_password(why):
-    """Ask for the shared password once per run, when a step really needs it.
-    Every typed password is checked: against the Portainer admin when that account exists, otherwise by typing it twice.
-    (A typo here would quietly give some apps a different password than the others.)"""
+    """Ask for the shared admin password once per run, when a step needs it, and validate it before use."""
     if Runtime.password:
         return Runtime.password
     if Runtime.background or Runtime.unattended:
@@ -120,7 +116,6 @@ def need_password(why):
 
 
 def password_problem(pw):
-    """Why `pw` is not acceptable as the administrator password, or an empty text when it is fine."""
     if len(pw) < 12:
         return "The password must be at least 12 characters (Portainer requires it)."
     if not re.fullmatch(r"[A-Za-z0-9]+", pw):

@@ -1,4 +1,3 @@
-# ---------------------------------------------------------------- Portainer
 def pt_token():
     path = os.environ.get("HLU_SECRETS") or "/root/.homelab-setup/secrets.env"
     try:
@@ -89,7 +88,7 @@ die() { echo "$*" >&2; exit 1; }
 
 need_root() { [ "$(id -u)" -eq 0 ] || die "Run it with sudo: sudo homelab-update ${1:-}"; }
 
-take_lock() {   # take_lock quiet|loud
+take_lock() {
   mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null
   exec 9>"$LOCKFILE" || die "Cannot open $LOCKFILE"
   if ! flock -n 9; then
@@ -98,7 +97,7 @@ take_lock() {   # take_lock quiet|loud
   fi
 }
 
-put() {   # put NAME  (content on stdin): write atomically, readable by everyone
+put() {
   local tmp
   mkdir -p "$STATE_DIR" && chmod 755 "$STATE_DIR" 2>/dev/null
   tmp=$(mktemp "$STATE_DIR/.tmp.XXXXXX") || return 1

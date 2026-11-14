@@ -39,15 +39,14 @@ BACKUP_POOL = os.environ.get("HOMELAB_BACKUP_POOL", "/mnt/backup")
 BACKUP_STATUS = os.environ.get("HLU_BACKUP_STATUS", "/var/lib/homelab-backup/last-run")
 LOCKFILE = os.environ.get("HOMELAB_STATS_LOCK", "/run/homelab-stats.lock")
 FOLDER_CACHE = os.path.join(STATE_DIR, "stats-folders.json")
-RECOUNT_MIN_SECONDS = 3600          # a folder is counted again at most once an hour ...
-RECOUNT_MAX_SECONDS = 7 * 86400     # ... and at least once a week
+RECOUNT_MIN_SECONDS = 3600
+RECOUNT_MAX_SECONDS = 7 * 86400
 DU_TIMEOUT = 3600
 HTTP_TIMEOUT = 15
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 
 def run(cmd, timeout=30):
-    """(exit code, output) of a program; a missing program or a timeout is (127, '')."""
     try:
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, universal_newlines=True)
         return p.returncode, p.stdout
@@ -80,9 +79,7 @@ def write_atomic(path, text, mode=0o644):
     os.replace(tmp, path)
 
 
-# ---------------------------------------------------------------- number and time text
 def human(n):
-    """1500 -> '1.5 KB'. Decimal units, as drives are sold and as the Drives tab shows them (a 1 TB drive is 1 TB)."""
     try:
         n = float(n)
     except (TypeError, ValueError):
@@ -115,16 +112,12 @@ def took(seconds):
     return "%d h %02d min" % (s // 3600, (s % 3600) // 60)
 
 
-# ---------------------------------------------------------------- the time zone the times are shown in
-# The server may keep UTC while you live somewhere else. The times on the Stats tab are shown where the weather city is (the city of the
-# weather pill of the dashboard): its time zone is asked from Open-Meteo once and remembered. No answer: the server's own time zone.
 TZ_FILE = os.path.join(STATE_DIR, "display-timezone")
 TZ_API = os.environ.get("HOMELAB_TZ_API", "https://api.open-meteo.com/v1/forecast")
 _tz = []
 
 
 def weather_place(hp):
-    """(latitude, longitude) of the weather pill in widgets.yaml, or None."""
     txt = read(os.path.join(hp, "widgets.yaml")) if hp else ""
     m = re.search(r"(?m)^\s*-?\s*openmeteo:\s*$(.*?)(?=^\s*-\s|\Z)", txt, re.S)
     if not m:
@@ -135,7 +128,7 @@ def weather_place(hp):
 
 
 def display_tz():
-    """The time zone (a ZoneInfo) the times are shown in, or None for the server's own."""
+    """Return the time zone (a ZoneInfo) used to show times, or None for the server's own."""
     if _tz:
         return _tz[0]
     name = os.environ.get("HOMELAB_DISPLAY_TZ", "")
@@ -160,14 +153,13 @@ def display_tz():
         try:
             import zoneinfo
             tz = zoneinfo.ZoneInfo(name)
-        except Exception:      # no such zone on this machine: the server's own time zone
+        except Exception:
             tz = None
     _tz.append(tz)
     return tz
 
 
 def at(t):
-    """A moment (seconds since 1970) as a date and time in the display time zone."""
     return datetime.datetime.fromtimestamp(t, display_tz())
 
 
@@ -175,7 +167,6 @@ def clock(t):
     return at(t).strftime("%I:%M %p").lstrip("0")
 
 
-# ---------------------------------------------------------------- where Homepage keeps its files
 def homepage_dir():
     saved = read(os.path.join(STATE_DIR, "homepage-dir")).strip()
     if saved and os.path.isdir(saved):
@@ -185,7 +176,7 @@ def homepage_dir():
     out = out.strip()
     if rc == 0 and out and os.path.isdir(out):
         return out
-    for line in read("/etc/passwd").splitlines():          # the first normal user's folder
+    for line in read("/etc/passwd").splitlines():
         f = line.split(":")
         if len(f) > 5 and f[2] == "1000" and os.path.isdir(os.path.join(f[5], "homepage-config")):
             return os.path.join(f[5], "homepage-config")
@@ -202,9 +193,8 @@ def output_path():
     return os.path.join(hp, "images", "stats.json")
 
 
-# ---------------------------------------------------------------- keys from the Homepage cards
 def widgets_from_services(hp):
-    """{'immich': {'url':..., 'key':...}, 'nextcloud': {...}} from the cards in services.yaml."""
+    """Return {'immich': {'url':..., 'key':...}, 'nextcloud': {...}} from the cards in services.yaml."""
     found = {}
     text = read(os.path.join(hp, "services.yaml")) if hp else ""
     if not text:
@@ -220,7 +210,7 @@ def widgets_from_services(hp):
                         if isinstance(w, dict) and w.get("type") in ("immich", "nextcloud") and w.get("url") and w.get("key"):
                             found.setdefault(w["type"], {"url": str(w["url"]).rstrip("/"), "key": str(w["key"])})
         return found
-    except Exception:       # no PyYAML, or an odd file: read the lines instead
+    except Exception:
         pass
     kind = url = key = None
     for line in text.splitlines() + ["- end:"]:
@@ -263,10 +253,8 @@ def get_nextcloud(w):
             "files_raw": nc["storage"]["num_files"]}
 
 
-# ---------------------------------------------------------------- pools and drive health
 def pool_space(path):
-    """(total, used, free) in bytes, or None when the pool is not mounted."""
-    if not (os.path.ismount(path) or (os.environ.get("HOMELAB_STATS_NOMOUNT") == "1" and os.path.isdir(path))):   # NOMOUNT: for the tests
+    if not (os.path.ismount(path) or (os.environ.get("HOMELAB_STATS_NOMOUNT") == "1" and os.path.isdir(path))):
         return None
     try:
         s = os.statvfs(path)
@@ -278,7 +266,7 @@ def pool_space(path):
 
 
 def drive_roles():
-    """{'main': [(label, device)], 'backup': [...]} from the drive labels (MAIN1, BACKUP1 ...)."""
+    """Return {'main': [(label, device)], 'backup': [...]} from the drive labels (MAIN1, BACKUP1, ...)."""
     roles = {"main": [], "backup": []}
     rc, out = run(["lsblk", "-dno", "NAME,TYPE"])
     for line in out.splitlines():
@@ -301,7 +289,6 @@ def drive_roles():
 
 
 def smart_state(dev):
-    """'passed', 'failed', 'asleep' or 'unknown'. -n standby: a sleeping drive is left asleep."""
     if rc_missing("smartctl"):
         return "nosmart"
     for opts in ([], ["-d", "sat"]):
@@ -320,7 +307,6 @@ def rc_missing(prog):
 
 
 def temps():
-    """{device: degrees} from the readings homelab-sample saved."""
     out = {}
     for line in read(os.path.join(STATE_DIR, "temps")).splitlines():
         f = line.split("|")
@@ -330,7 +316,6 @@ def temps():
 
 
 def drive_name(label):
-    """'boot' -> 'Boot Drive', 'MAIN1' -> 'Main 1', 'BACKUP2' -> 'Backup 2'; anything else (a model name) with spaces."""
     if label.lower() == "boot":
         return "Boot Drive"
     m = re.match(r"^(MAIN|BACKUP)(\d*)$", label, re.I)
@@ -340,7 +325,6 @@ def drive_name(label):
 
 
 def temp_text(t, warn, bad):
-    """What the temperature card says for one reading: 'Resting', '34 °C', '52 °C, Warm', '62 °C, Hot'."""
     if t == "standby":
         return "Resting"
     if t == "none":
@@ -350,7 +334,6 @@ def temp_text(t, warn, bad):
 
 
 def temp_rows():
-    """[{'name', 'label'}] for the Drive Temperatures card: every drive homelab-sample read (boot, main, backup), boot first."""
     try:
         warn = int(os.environ.get("HOMELAB_TEMP_WARN", "50"))
         bad = int(os.environ.get("HOMELAB_TEMP_BAD", "60"))
@@ -368,8 +351,7 @@ def temp_rows():
 
 
 def array_health():
-    """(health text, 'RAID' or 'ZFS') of a RAID or ZFS setup that `drives` built, or None when Main is not one."""
-    preset = read(os.path.join(os.environ.get("HOMELAB_DRIVES_STATE_DIR", "/var/lib/homelab-drives"), "preset")).split("|")[0].strip()      # (the file `drives` keeps: what it built)
+    preset = read(os.path.join(os.environ.get("HOMELAB_DRIVES_STATE_DIR", "/var/lib/homelab-drives"), "preset")).split("|")[0].strip()
     if preset.startswith("zfs-"):
         rc, out = run(["zpool", "list", "-H", "-o", "health", os.environ.get("ZFS_POOL_NAME", "tank")], timeout=20)
         st = out.strip().upper()
@@ -384,9 +366,10 @@ def array_health():
 
 
 def pool_block(path, role, roles, old_drives, new_drives):
+    """Readings for one pool: used, free, total, percent, health and drive count."""
     sp = pool_space(path)
     if role == "backup" and not roles.get(role):
-        sp = None                          # a folder is there, but no backup drive: the numbers would only be those of the boot drive
+        sp = None
     if sp is None:
         return {"used": "-", "free": "-", "total": "-", "percent": "Not connected", "health": "Not connected", "drives": "-"}, None
     total, used, free = sp
@@ -397,7 +380,7 @@ def pool_block(path, role, roles, old_drives, new_drives):
         st = smart_state(dev)
         prev = next((d for d in old_drives if d.get("device") == dev), {})
         if st in ("asleep", "unknown") and prev.get("health") in ("passed", "failed"):
-            st = prev["health"]          # asleep: keep what the last reading said
+            st = prev["health"]
         new_drives.append({"label": label, "device": dev, "health": st, "temp": hot.get(dev)})
         states.append(st)
     arr = array_health() if role == "main" and not roles.get(role) else None
@@ -419,8 +402,8 @@ def pool_block(path, role, roles, old_drives, new_drives):
             "health": health, "drives": "%d" % len(states) if states else (arr[1] if arr else "-")}, (total, used)
 
 
-# ---------------------------------------------------------------- the last backup
 def backup_info(now):
+    """Readings about the last backup, from the backup status file."""
     line = read(BACKUP_STATUS).strip().splitlines()
     if not line:
         return {"when": "Never", "ago": "-", "result": "No backup yet", "size": "-", "took": "-", "short": "Never", "saved_to": "-", "saved_note": "-"}
@@ -455,15 +438,13 @@ def backup_info(now):
             "saved_to": saved, "saved_note": note}
 
 
-# ---------------------------------------------------------------- the music library (Downtify)
 AUDIO = (".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac", ".wma")
 MUSIC_CACHE = os.path.join(STATE_DIR, "stats-music.json")
 MUSIC_NAMES = ("music", "Music", "downtify", "Downtify", "Downtify/music", "downtify/music", "media/music", "Media/Music", "downloads/music")
 
 
 def music_dir():
-    """The folder with the songs, or ''. In this order: HOMELAB_MUSIC_DIR, the one line in /var/lib/homelab/music-dir (put the folder there
-    to choose it yourself), the music folder of the Downtify container, a few usual folder names in the main pool."""
+    """Return the folder with the songs, or ''. Order: HOMELAB_MUSIC_DIR, then /var/lib/homelab/music-dir, then the Downtify container's music folder."""
     forced = os.environ.get("HOMELAB_MUSIC_DIR") or read(os.path.join(STATE_DIR, "music-dir")).strip()
     if forced:
         return forced if os.path.isdir(forced) else ""
@@ -484,7 +465,6 @@ def music_dir():
 
 
 def first_artist(name):
-    """'Artist, Other - Title.mp3' -> 'Artist'. A name without ' - ' has no artist."""
     if " - " not in name:
         return ""
     return re.split(r",|;| & | feat\.?| ft\.?", name.split(" - ", 1)[0].strip(), maxsplit=1, flags=re.I)[0].strip()
@@ -494,7 +474,6 @@ RECENT_SONGS = 5
 
 
 def song_age(mtime, now):
-    """'Today', 'Yesterday', '3 days ago' or 'Oct 12' for the day a song was saved."""
     days = (at(now).date() - at(mtime).date()).days
     if days <= 0:
         return "Today"
@@ -507,8 +486,7 @@ def song_age(mtime, now):
 
 
 def count_music(root):
-    """(songs, artists, bytes, newest): the audio files below root. An artist is a folder directly in root, or the name before ' - ' in a
-    file name. newest = [(mtime, song name)], the last few songs saved."""
+    """Return (songs, artists, bytes, newest) for the audio files below root. An artist is a folder directly in root, or the name before ' - ' in a file name. newest is [(mtime, song name)] for the last few songs."""
     songs = size = 0
     artists = set()
     newest = []
@@ -536,6 +514,7 @@ def recent_rows(c, now):
 
 
 def music_block(quick):
+    """Readings about the music library."""
     none = {"songs": "Not found", "artists": "-", "size": "-", "folder": "Not found", "recent": [{"name": "No music folder found", "label": ""}]}
     root = music_dir()
     if not root:
@@ -559,8 +538,8 @@ def music_block(quick):
             "recent": recent_rows(c, time.time())}
 
 
-# ---------------------------------------------------------------- containers and updates
 def container_info():
+    """Readings about the containers."""
     rc, out = run(["docker", "ps", "-a", "--format", "{{.Names}}|{{.State}}|{{.Status}}"], timeout=20)
     if rc != 0:
         return {"running": "-", "total": "-", "problems": "-", "text": "Docker not answering", "n": None}
@@ -596,7 +575,6 @@ def update_info():
             "total": str(total) if (first or sysn is not None) else "-", "checked": checked}
 
 
-# ---------------------------------------------------------------- folder sizes (counted only when something changed)
 def du_bytes(path):
     rc, out = run(["nice", "-n", "19", "ionice", "-c3", "du", "-sb", path], timeout=DU_TIMEOUT)
     m = re.match(r"(\d+)\s", out)
@@ -604,7 +582,7 @@ def du_bytes(path):
 
 
 def folder_sizes(now, spaces, quick):
-    """{'main','backup','nextcloud','immich': text} and whether anything was counted. Uses the cache when nothing changed."""
+    """Return {'main','backup','nextcloud','immich': text} and whether anything was counted. Uses the cache when nothing changed."""
     cache = load_json(FOLDER_CACHE)
     want = [("main", MAIN_POOL, MAIN_POOL), ("backup", BACKUP_POOL, BACKUP_POOL),
             ("nextcloud", os.path.join(MAIN_POOL, "nextcloud"), MAIN_POOL), ("immich", os.path.join(MAIN_POOL, "immich"), MAIN_POOL)]
@@ -614,7 +592,7 @@ def folder_sizes(now, spaces, quick):
         if sp is None or not os.path.isdir(path):
             texts[key] = "Not connected" if sp is None else "No folder"
             continue
-        fp = int(sp[1]) >> 26                      # used space in 64 MB steps
+        fp = int(sp[1]) >> 26
         c = cache.get(key) or {}
         age = now - c.get("at", 0)
         due = ("bytes" not in c) or (c.get("path") != path) or age > RECOUNT_MAX_SECONDS or (c.get("fp") != fp and age >= RECOUNT_MIN_SECONDS)
@@ -634,8 +612,8 @@ def folder_sizes(now, spaces, quick):
     return texts, pending
 
 
-# ---------------------------------------------------------------- put it together
 def collect(quick):
+    """Gather every reading into one dictionary."""
     now = time.time()
     out_path = output_path()
     old = load_json(out_path) if out_path else {}
@@ -665,7 +643,7 @@ def collect(quick):
     res["containers"] = container_info()
     res["updates"] = update_info()
     spaces = {MAIN_POOL: sp_main, BACKUP_POOL: sp_backup}
-    res["folders"], pending = folder_sizes(now, spaces, True)         # the cached sizes first: the file is written at once
+    res["folders"], pending = folder_sizes(now, spaces, True)
 
     im, nc = res["immich"], res["nextcloud"]
     res["glance"] = {
@@ -686,6 +664,7 @@ def save(res, out_path):
 
 
 def main(argv):
+    """Read the command line and run the requested command."""
     arg = argv[1] if len(argv) > 1 else ""
     if arg in ("version", "--version"):
         print("homelab-stats %s" % VERSION)
@@ -712,14 +691,14 @@ def main(argv):
         lock = open(LOCKFILE, "w")
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except (OSError, ImportError):
-        return 0                       # another run is busy counting folders
+        return 0
     os.makedirs(STATE_DIR, exist_ok=True)
     res, out_path, spaces, pending = collect(arg == "quick")
     if not save(res, out_path):
         print("homelab-stats: could not find the Homepage folder, so nothing was saved.", file=sys.stderr)
         return 1
     if arg != "quick":
-        texts, _ = folder_sizes(time.time(), spaces, False)           # counts what changed (slow, lowest priority)
+        texts, _ = folder_sizes(time.time(), spaces, False)
         if texts != res["folders"]:
             res["folders"] = texts
             res["updated"] = int(time.time())

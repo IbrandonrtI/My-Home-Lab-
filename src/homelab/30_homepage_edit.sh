@@ -1,6 +1,5 @@
-# ---- homelab theme / homelab bookmark: edit the Homepage files in your own home folder (never needs sudo) ----
 HOMEPAGE_DIR="${HOMELAB_HOMEPAGE_DIR:-$HOME/homepage-config}"
-calendar_cmd() {   # homelab event add|list|remove|holidays: the holidays and your own events in the dashboard calendar
+calendar_cmd() {
   if ! command -v homelab-calendar >/dev/null 2>&1; then
     echo "homelab-calendar is not installed yet. Run:  homelab upgrade" >&2
     return 1
@@ -8,7 +7,7 @@ calendar_cmd() {   # homelab event add|list|remove|holidays: the holidays and yo
   HP_DIR="$HOMEPAGE_DIR" homelab-calendar "$@"
 }
 
-panel_cmd() {   # homelab panel password|status: the password of the control panel (the Customize tab), saved in your own folder
+panel_cmd() {
   if ! command -v homelab-panel >/dev/null 2>&1; then
     echo "The control panel is not installed yet. Run:  homelab upgrade" >&2
     return 1

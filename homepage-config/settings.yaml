@@ -21,6 +21,7 @@ quicklaunch:
   showSearchSuggestions: true
   provider: google
 
+# Tabs and group icons
 layout:
   Network & DNS:
     tab: Home

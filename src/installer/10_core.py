@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-# homelab-setup - build a Linux machine into the home lab from the GitHub repo.
-#
-#   sudo homelab-setup                 show the checklist (what is done, what is left)
-#   sudo homelab-setup install         set the whole lab up (asks first, safe to run again)
-#   sudo homelab-setup install --dry-run   show what it WOULD do, change nothing
-#   sudo homelab-setup refresh         re-check everything, continue what is now possible
-#   sudo homelab-setup fill            walk through the keys and logins that need you
-#   sudo homelab-setup done STEP       mark a by-hand step as done   (skip STEP: not wanted)
-#   sudo homelab-setup secrets         show the generated passwords (once, then keep them in a password manager)
-#   sudo homelab-setup uninstall       take the lab off this machine (asks: keep or wipe the apps' data, keep or erase the drives)
-#   homelab-setup progress | version | help
-#
-# It never formats or erases a drive (the one exception: it can grow an LVM system volume into unused space, after asking). It never stores the password you type.
-# Python 3 standard library only.
 
 import atexit
 import base64
@@ -42,14 +28,13 @@ import urllib.request
 
 VERSION = "1.0"
 
-# ---------------------------------------------------------------- paths
-ROOT = os.environ.get("HLS_ROOT", "").rstrip("/")          # tests point this at a fake root
-FAKE = os.environ.get("HLS_FAKE") == "1"                    # tests: no root check, no chown
-HOST_OVERRIDE = os.environ.get("HLS_HOST", "")              # tests: where the services answer
+ROOT = os.environ.get("HLS_ROOT", "").rstrip("/")
+FAKE = os.environ.get("HLS_FAKE") == "1"
+HOST_OVERRIDE = os.environ.get("HLS_HOST", "")
 
 
 def P(path):
-    """Path of `path` inside the machine's root folder (the real root, or the fake one under test)."""
+    """Prefix a path with the test root (HLS_ROOT) when one is set, so tests never touch the real system."""
     return ROOT + path
 
 
@@ -57,13 +42,11 @@ STATE_DIR = P("/var/lib/homelab-setup")
 STATE_FILE = STATE_DIR + "/state.json"
 PROGRESS_DIR = P("/var/lib/homelab")
 PROGRESS_FILE = PROGRESS_DIR + "/setup-progress"
-BOOT_GRACE = 600      # seconds after a boot during which scheduled checks wait (apps are still starting)
+BOOT_GRACE = 600
 SECRET_DIR = P("/root/.homelab-setup")
 SECRET_FILE = SECRET_DIR + "/secrets.env"
 LOG_FILE = P("/var/log/homelab-setup.log")
 
-# ---------------------------------------------------------------- the nine stacks (and Navidrome, AudioMuse-AI and naviList, three optional ones)
-# name -> (file in stacks/, containers that must run)
 STACKS = {
     "adguard": ("adguard.yaml", ["adguardhome"]),
     "beszel": ("beszel.yaml", ["beszel"]),
@@ -75,28 +58,24 @@ STACKS = {
     "homepage": ("homepage.yaml", ["homepage"]),
     "beszel-agent": ("beszel-agent.yaml", ["beszel-agent"]),
     "music-downloader": ("music-downloader.yaml", ["downtify", "metube"]),
-    "navidrome": ("navidrome.yaml", ["navidrome"]),        # optional: only on a machine with a music folder (see NavidromeStack)
-    "audiomuse": ("audiomuse.yaml", ["audiomuse-postgres", "audiomuse-flask", "audiomuse-worker"]),   # optional: `homelab-setup audiomuse` (see AudioMuseStack)
-    "navilist": ("navilist.yaml", ["navilist"]),           # optional: `homelab-setup navilist` (see NaviListStack)
+    "navidrome": ("navidrome.yaml", ["navidrome"]),
+    "audiomuse": ("audiomuse.yaml", ["audiomuse-postgres", "audiomuse-flask", "audiomuse-worker"]),
+    "navilist": ("navilist.yaml", ["navilist"]),
 }
 STACK_ORDER = ["homepage", "adguard", "beszel", "netdata", "speedtest-tracker", "filebrowser",
                "immich", "nextcloud", "beszel-agent", "music-downloader"]
 
-# local port of each service, and the HTTPS port Tailscale Serve uses for it
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,
          "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999, "navidrome": 4533, "audiomuse": 8100, "navilist": 8200}
 SERVE = [(1000, "homepage"), (1001, "portainer"), (1002, "immich"), (1003, "beszel"), (1004, "adguard"),
          (1005, "nextcloud"), (1006, "filebrowser"), (1007, "speedtest"), (1008, "netdata")]
 
-# The placeholders the repository files use, replaced by this machine's values (see subst).
 PH_USER = "your-username"
 PH_FQDN = "pc.your-tailnet.ts.net"
 PH_LAN = "192.168.X.X"
 PH_KEY = "your-own-key"
 PH_MAIL = "your-email@example.com"
 
-# Optional: the values of an EARLIER server, for restoring a backup made there. The repository itself holds none.
-# Set HOMELAB_OLD_USER, HOMELAB_OLD_LAN and HOMELAB_OLD_FQDN (for example pc.example.ts.net) before running the installer.
 OLD_USER = os.environ.get("HOMELAB_OLD_USER", "")
 OLD_LAN = os.environ.get("HOMELAB_OLD_LAN", "")
 OLD_FQDN = os.environ.get("HOMELAB_OLD_FQDN", "")
@@ -104,28 +83,29 @@ OLD_TAILNET = OLD_FQDN.split(".", 1)[1] if "." in OLD_FQDN else ""
 
 
 class Abort(Exception):
-    """A step that cannot continue. The message is shown to the person."""
+    """Stops the current step and shows the message to the user."""
+    pass
 
 
 class NeedsPerson(Abort):
-    """A step that must wait for a person (the quiet schedule and the background job leave it for `sudo homelab-setup refresh`)."""
+    """A step that cannot continue until the user does something; it stays open instead of failing."""
+    pass
 
 
 class NeedsPassword(NeedsPerson):
-    """A step that needs the admin password while nobody is there to type it."""
+    pass
 
 
-# ---------------------------------------------------------------- global switches
 class Opt:
-    """Command-line options."""
+    """Command-line options for the current run."""
     dry = False
     yes = False
     backup = None
     no_restore = False
-    no_background = False    # install: do every step before it ends (no background job)
+    no_background = False
     force_existing = False
     all = False
-    wipe_data = False        # uninstall --yes: wipe the apps' data (without --yes the person is asked)
-    wipe_drives = False      # uninstall --yes: erase the drives of the pools (each still needs its typed words)
+    wipe_data = False
+    wipe_drives = False
     details = False
     repo = None

@@ -1,7 +1,6 @@
-# ---------- the saved state ----------
 summary_epoch() { local e=""; [ -r "$SUMMARY_FILE" ] && e=$(head -1 "$SUMMARY_FILE"); [[ "$e" =~ ^[0-9]+$ ]] && echo "$e"; }
 
-OLD_STATE=()   # lines "stacks|image|digest|found"
+OLD_STATE=()
 read_state() {
   OLD_STATE=()
   [ -r "$STATE_FILE" ] || return 0
@@ -9,7 +8,7 @@ read_state() {
   while IFS= read -r l; do [ -n "$l" ] && OLD_STATE+=("$l"); done <"$STATE_FILE"
 }
 
-write_outputs() {   # write_outputs EPOCH   (lines "stacks|image|digest|found|status" on stdin)
+write_outputs() {
   local epoch=$1 line stacks img dig at st s
   local -a order=(); local -A per=()
   local all=""
@@ -28,7 +27,7 @@ write_outputs() {   # write_outputs EPOCH   (lines "stacks|image|digest|found|st
   } | put image-updates
 }
 
-evaluate_state() {   # prints the saved lines that still need action, with their current status appended
+evaluate_state() {
   local line stacks img dig at st
   for line in "${OLD_STATE[@]}"; do
     IFS='|' read -r stacks img dig at <<<"$line"

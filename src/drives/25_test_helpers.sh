@@ -1,4 +1,3 @@
-# ---------- test helpers ----------
 test_setup() {
   [ "$TEST_MODE" = 1 ] || die "Test setup only works with DRIVES_TEST=1"
   local i f count=${1:-3} size=${2:-1G}

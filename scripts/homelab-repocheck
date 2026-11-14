@@ -30,7 +30,6 @@ import tempfile
 
 VERSION = "2.1"
 SKIP_DIRS = {".git", "node_modules", "__pycache__"}
-# A matched VALUE (not the whole line) counts as a placeholder when it looks like one.
 PLACEHOLDER = re.compile(r"^(your|yours|changeme|replace|example|xxxx|x{4,}|\$\{|\$\()|your-|-here$|^<", re.I)
 
 SECRET_PATTERNS = [
@@ -46,7 +45,7 @@ SECRET_PATTERNS = [
 
 class Report:
     def __init__(self):
-        self.items = []  # (level, area, text)
+        self.items = []
 
     def error(self, area, text):
         self.items.append(("PROBLEM", area, text))
@@ -101,7 +100,6 @@ def mask(s):
     return s[:4] + "..." + "(%d characters)" % len(s) if len(s) > 8 else "..."
 
 
-# ---------------------------------------------------------------- checks
 def check_line_endings(root, files, r):
     bad = 0
     for p in files:
@@ -117,6 +115,7 @@ def check_line_endings(root, files, r):
 
 
 def check_scripts(root, r):
+    """Check that every shell script passes bash -n and, when available, shellcheck."""
     d = os.path.join(root, "scripts")
     if not os.path.isdir(d):
         r.warn("scripts", "no scripts folder here, script checks skipped")
@@ -158,6 +157,7 @@ def yaml_module():
 
 
 def check_yaml_files(root, files, r):
+    """Check that every YAML file in the repository parses."""
     yaml = yaml_module()
     ys = [p for p in files if p.lower().endswith((".yaml", ".yml"))]
     if not yaml:
@@ -178,7 +178,6 @@ def check_yaml_files(root, files, r):
         r.ok("yaml", "%d YAML files parse" % len(ys))
 
 
-# ---- markdown
 def slug(h):
     h = re.sub(r"[`*]", "", h.strip().lower())
     h = re.sub(r"[^\w\- ]", "", h)
@@ -241,6 +240,7 @@ def markdown_files(root):
 
 
 def check_markdown(root, r):
+    """Check Markdown files: fences, links and the code blocks inside them."""
     mds = markdown_files(root)
     if not mds:
         r.warn("markdown", "no Markdown files here, Markdown checks skipped")
@@ -255,7 +255,6 @@ def check_markdown(root, r):
         if not mi["balanced"]:
             bad += 1
             r.error(name, "a code fence (```) is opened and never closed")
-        # links
         for m in re.finditer(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)", mi["plain"]):
             u = m.group(1)
             if u.startswith(("mailto:", "tel:")):
@@ -281,7 +280,6 @@ def check_markdown(root, r):
             elif frag and target in info and frag not in info[target]["anchors"]:
                 bad += 1
                 r.error(name, "link to a heading that does not exist in %s: #%s" % (path, frag))
-        # code blocks
         nb = 0
         for lang, body, line in mi["blocks"]:
             if lang == "bash":
@@ -321,13 +319,11 @@ def check_installer(root, r):
     check_built_files(root, r)
 
 
-# built file -> (folder of its pieces in src/, extension of the pieces): the same list as TARGETS in tools/build.py
 BUILT_FILES = [("installer/homelab-setup", "src/installer", "py"), ("scripts/drives", "src/drives", "sh"),
                ("scripts/homelab", "src/homelab", "sh"), ("scripts/homelab-update", "src/homelab-update", "sh")]
 
 
 def joined_pieces(folder, ext):
-    """The pieces of a src/ folder joined in file-name order, with the `@@include NAME@@` lines filled in (what tools/build.py makes)."""
     names = sorted(f for f in os.listdir(folder) if re.match(r"^\d\d_.*\.%s$" % ext, f))
     out = b""
     for n in names:
@@ -337,7 +333,6 @@ def joined_pieces(folder, ext):
 
 
 def check_built_files(root, r):
-    """Every built file (installer and big scripts) must be exactly the join of its pieces in src/, so nobody edited only one side."""
     src_dir = os.path.join(root, "src")
     old = sorted(f for f in os.listdir(src_dir) if re.match(r"^p\d\d_.*\.py$", f)) if os.path.isdir(src_dir) else []
     if old:
@@ -356,6 +351,7 @@ def check_built_files(root, r):
 
 
 def check_secrets(root, files, r):
+    """Look for passwords, keys and tokens that must not be committed."""
     found = 0
     for p in files:
         data = read_text(p)
@@ -370,9 +366,9 @@ def check_secrets(root, files, r):
                 if "homelab-repocheck: ignore" in line:
                     continue
                 if rx.groups >= 2 and (PLACEHOLDER.search(val) or line[m.end():].startswith("(")):
-                    continue   # a placeholder, or a function call such as need_password(...)
+                    continue
                 if rx.groups >= 2 and rel(root, p).startswith("tests" + os.sep):
-                    continue   # the tests use made-up passwords on purpose
+                    continue
                 found += 1
                 r.error("secrets", "%s line %d looks like %s (%s). Replace it with a placeholder." % (rel(root, p), n, what, mask(val)))
                 break
@@ -422,6 +418,7 @@ def run(root, readme_words):
 
 
 def main(argv):
+    """Read the command line and run every check."""
     args = argv[1:]
     if args and args[0] in ("version", "--version"):
         print("homelab-repocheck " + VERSION)

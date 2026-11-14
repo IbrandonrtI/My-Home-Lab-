@@ -1,6 +1,5 @@
-# ================================================================ the machine
 class Ctx:
-    """Facts about THIS machine and the answers given at the start."""
+    """Facts about this machine and the answers given at the start of the install."""
     user = uid = gid = home = ""
     lan = gateway = tz = hostname = ""
     admin = email = ""
@@ -57,7 +56,6 @@ class Ctx:
 
 
 def detect_user():
-    """The normal user who ran sudo (the owner of the lab folders)."""
     if os.environ.get("HLS_USER"):
         return os.environ["HLS_USER"]
     u = os.environ.get("SUDO_USER")
@@ -71,7 +69,6 @@ def detect_user():
 
 
 def detect_lan():
-    """This machine's address on the home network."""
     if os.environ.get("HLS_LAN"):
         return os.environ["HLS_LAN"]
     rc, txt = run(["ip", "-4", "route", "get", "1.1.1.1"])
@@ -86,7 +83,6 @@ def detect_lan():
 
 
 def detect_gateway():
-    """The router's address."""
     if os.environ.get("HLS_GATEWAY"):
         return os.environ["HLS_GATEWAY"]
     rc, txt = run(["ip", "-4", "route", "show", "default"])
@@ -95,7 +91,6 @@ def detect_gateway():
 
 
 def detect_tz():
-    """The machine's time zone name."""
     rc, txt = run(["timedatectl", "show", "-p", "Timezone", "--value"])
     if rc == 0 and txt.strip():
         return txt.strip()
@@ -103,8 +98,6 @@ def detect_tz():
 
 
 def geocode_city(query):
-    """Look a city up with Open-Meteo's free geocoding service (no key needed).
-    Returns a list of {name, region, country, lat, lon} (empty = no such city), or None when the service cannot be reached."""
     base = os.environ.get("HLS_GEOCODE_API", "https://geocoding-api.open-meteo.com")
     st, js, _ = http("GET", base + "/v1/search?count=5&language=en&format=json&name=" + urllib.parse.quote(query), timeout=15)
     if st != 200 or not isinstance(js, dict):
@@ -120,8 +113,7 @@ def geocode_city(query):
 
 
 def ip_location():
-    """Where this internet connection is, found from its public IP address with a free service that needs no account (ipwho.is, then ipapi.co).
-    Returns {tz, name, region, country, lat, lon}, or None when no service answers. The service sees this machine's public IP, nothing else is sent."""
+    """Find the time zone and city from the public IP address using a free lookup service; None when no service answers."""
     override = os.environ.get("HLS_IP_API")
     for base, kind in ([(override, "ipwho")] if override else [("https://ipwho.is", "ipwho"), ("https://ipapi.co", "ipapi")]):
         st, js, _ = http("GET", base + ("/" if kind == "ipwho" else "/json/"), timeout=8)
@@ -137,7 +129,6 @@ def ip_location():
 
 
 def weather_apply(text, w):
-    """Put a chosen city (name, lat, lon) into the openmeteo block of widgets.yaml. Returns the new text, or None if the block is missing."""
     m = re.search(r"(openmeteo:)(.*?)(\n- |\Z)", text, re.S)
     if not m:
         return None
@@ -150,7 +141,6 @@ def weather_apply(text, w):
 
 
 def clock_apply(text, tz):
-    """Put a time zone (like America/New_York) into the dashboard clock's format in widgets.yaml. Returns the new text, or None if the clock is missing."""
     m = re.search(r"(- datetime:)(.*?)(\n- |\Z)", text, re.S)
     if not m or not re.fullmatch(r"[A-Za-z0-9_+/-]{1,60}", tz or ""):
         return None
@@ -167,7 +157,6 @@ def clock_apply(text, tz):
 
 
 def ts_status():
-    """Tailscale's status as a dict, or None when Tailscale is not installed or does not answer."""
     if not have("tailscale"):
         return None
     rc, txt = run(["tailscale", "status", "--json"], timeout=15)
@@ -179,20 +168,16 @@ def ts_status():
         return None
 
 
-# ================================================================ docker facts
 def _container_names(*flags):
-    """Names of the containers `docker ps` lists with these flags (an empty set when Docker does not answer)."""
     rc, txt = docker("ps", *flags, "--format", "{{.Names}}", timeout=30)
     return set(txt.split()) if rc == 0 else set()
 
 
 def containers_running():
-    """Names of the containers that are running."""
     return _container_names()
 
 
 def containers_starting():
-    """Names of the containers that are running but still starting up (Docker says 'health: starting' or 'Restarting')."""
     rc, txt = docker("ps", "--format", "{{.Names}}|{{.Status}}", timeout=30)
     if rc != 0:
         return set()
@@ -200,19 +185,16 @@ def containers_starting():
 
 
 def containers_all():
-    """Names of all containers, running or not."""
     return _container_names("-a")
 
 
 def stack_up(name):
-    """True when every container of the stack is running."""
     need = STACKS[name][1]
     run_now = containers_running()
     return all(c in run_now for c in need)
 
 
 def is_existing():
-    """A machine that already runs the lab (set up by hand, not by the installer)."""
     if State.exists() and State.ran("install-started"):
         return False
     run_now = containers_running()
@@ -221,18 +203,15 @@ def is_existing():
 
 
 def svc_host():
-    """Address used to reach the services from this machine."""
     return HOST_OVERRIDE or Ctx.lan or "127.0.0.1"
 
 
 def url(service, path=""):
-    """Local web address of a service, with an optional path."""
     return "http://%s:%d%s" % (svc_host(), PORTS[service], path)
 
 
-# ================================================================ rendering the repo's files for THIS machine
 def subst(text):
-    """Replace the original server's values (and the placeholders) with this machine's."""
+    """Replace the original server's values and the placeholders with this machine's values."""
     pairs = []
     if Ctx.fqdn:
         pairs += [(OLD_FQDN, Ctx.fqdn), (PH_FQDN, Ctx.fqdn)]
@@ -242,7 +221,7 @@ def subst(text):
         pairs += [(OLD_LAN, Ctx.lan), (PH_LAN, Ctx.lan)]
     pairs += [("/home/" + OLD_USER, Ctx.home), ("/home/" + PH_USER, Ctx.home)]
     for a, b in pairs:
-        if a and a != "/home/":          # an empty old value (none set) must never match
+        if a and a != "/home/":
             text = text.replace(a, b)
     text = re.sub(r'(PUID:\s*)"\d+"', r'\g<1>"%s"' % Ctx.uid, text)
     text = re.sub(r'(PGID:\s*)"\d+"', r'\g<1>"%s"' % Ctx.gid, text)
@@ -250,12 +229,11 @@ def subst(text):
 
 
 def repo_file(*parts):
-    """Path of a file inside the repository the installer was started from."""
     return os.path.join(Ctx.repo, *parts)
 
 
 def stack_text(name):
-    """The stack file for `name` with this machine's values filled in."""
+    """The Compose file of a stack with this machine's values filled in."""
     fn = STACKS[name][0]
     text = read_file(repo_file("stacks", fn))
     if not text:
@@ -279,8 +257,7 @@ MUSIC_FOLDER_NAMES = ("music", "Music", "downtify", "Downtify", "Downtify/music"
 
 
 def music_folder():
-    """The folder with the songs Downtify saved, or '' (the same search as homelab-stats). In this order: HOMELAB_MUSIC_DIR, the line in
-    /var/lib/homelab/music-dir, the music folder of the Downtify container, a few usual names in the main pool."""
+    """Find the folder that holds the songs: the saved setting, the Downtify container's mount, then common names under the main storage."""
     forced = os.environ.get("HOMELAB_MUSIC_DIR") or read_file(P("/var/lib/homelab/music-dir")).strip()
     if forced:
         return forced if os.path.isdir(P(forced)) else ""
@@ -299,9 +276,8 @@ def music_folder():
     return ""
 
 
-
 def stack_env(name):
-    """The variables Portainer needs for the stack, as (name, value) pairs."""
+    """The variables Portainer needs for a stack, as (name, value) pairs."""
     if name == "immich":
         return [("UPLOAD_LOCATION", "/mnt/storage/immich"), ("DB_DATA_LOCATION", Ctx.home + "/immich/postgres"),
                 ("TZ", Ctx.tz), ("IMMICH_VERSION", "release"), ("DB_PASSWORD", Secrets.get("DB_PASSWORD")),
@@ -327,30 +303,25 @@ def stack_env(name):
     return []
 
 
-# ---------------------------------------------------------------- AudioMuse-AI (optional: `homelab-setup audiomuse`)
-AUDIOMUSE_ND_USER = "audiomuse"                       # the small Navidrome login AudioMuse-AI uses to read the library
+AUDIOMUSE_ND_USER = "audiomuse"
 AUDIOMUSE_SECRETS = {"AUDIOMUSE_DB_PASSWORD": lambda: rand_alnum(28), "AUDIOMUSE_ND_PASSWORD": lambda: rand_alnum(28),
                      "AUDIOMUSE_PASSWORD": lambda: rand_alnum(20), "AUDIOMUSE_TOKEN": lambda: rand_hex(24),
                      "AUDIOMUSE_JWT_SECRET": lambda: rand_hex(32)}
-NAVIDROME_AGENTS_WITH = "audiomuseai,deezer,lastfm,listenbrainz"      # audiomuseai must be first: Navidrome asks the first agent that knows similar songs
+NAVIDROME_AGENTS_WITH = "audiomuseai,deezer,lastfm,listenbrainz"
 
 
-# ---------------------------------------------------------------- naviList (optional: `homelab-setup navilist`)
-NAVILIST_ND_USER = "navilist"                         # the small Navidrome login naviList uses to read the library and make playlists
+NAVILIST_ND_USER = "navilist"
 
 
 def navilist_wanted():
-    """True when the person asked for naviList (`homelab-setup navilist`) on a machine the installer built."""
     return bool(State.data.get("navilist")) and not Mode.existing
 
 
 def audiomuse_wanted():
-    """True when the person asked for AudioMuse-AI (`homelab-setup audiomuse`) on a machine the installer built."""
     return bool(State.data.get("audiomuse")) and not Mode.existing
 
 
 def ram_gb():
-    """The memory of this machine in GB, as Linux counts it (an 8 GB stick shows as about 7.4). 0 when it cannot be read."""
     try:
         kb = int(os.environ.get("HLS_RAM_KB") or [l for l in open("/proc/meminfo") if l.startswith("MemTotal:")][0].split()[1])
     except (OSError, IndexError, ValueError):
@@ -359,7 +330,6 @@ def ram_gb():
 
 
 def audiomuse_mem_suggest(total=None):
-    """The worker's memory cap that suits a machine with `total` GB of memory (this machine when not given)."""
     total = ram_gb() if total is None else total
     return "2g" if total < 5.5 else "3g" if total < 11 else "6g" if total < 24 else "8g"
 
@@ -369,12 +339,10 @@ def audiomuse_mem():
 
 
 def audiomuse_cpus():
-    """The worker may use all processor cores but one, so the rest of the lab stays quick while it listens to the songs."""
     return max(1, int(os.environ.get("HLS_CPUS") or os.cpu_count() or 2) - 1)
 
 
 def images_in(text):
-    """The image names used in a stack file."""
     imgs = []
     for m in re.finditer(r"^\s*image:\s*(\S+)", text, re.M):
         img = m.group(1).replace("${IMMICH_VERSION:-release}", "release")

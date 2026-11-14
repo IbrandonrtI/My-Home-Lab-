@@ -1,5 +1,4 @@
-# ---------- updating one stack ----------
-wait_stack() {   # wait_stack STACK: wait until every container of the stack runs again (and is healthy). 0 = yes
+wait_stack() {
   local s=$1 i c st h deadline ok bad_names
   deadline=$(( $(date +%s) + ${HLU_WAIT:-300} ))
   while :; do
@@ -15,13 +14,14 @@ wait_stack() {   # wait_stack STACK: wait until every container of the stack run
   done
 }
 
-manual_steps() {   # manual_steps STACK WHY
+manual_steps() {
   line_warn "$2"
   echo "      Do it by hand in Portainer: Stacks ${S_ARR} $1 ${S_ARR} Editor ${S_ARR} (change the version on the image: line if one is listed above)"
   echo "      ${S_ARR} Update the stack. Then check:  docker ps --format \"table {{.Names}}\\t{{.Status}}\""
 }
 
-update_portainer() {   # recreate the Portainer container itself from the terminal (it is not a stack)
+# Recreate the Portainer container itself from the terminal. It is not a stack.
+update_portainer() {
   local img="" i restart ports mounts args old="portainer-before-update"
   for i in "${!CN[@]}"; do [ "${CN[$i]}" = portainer ] && img=${CI[$i]}; done
   [ -n "$img" ] || { line_bad "No container named portainer is running."; return 1; }
@@ -45,7 +45,7 @@ update_portainer() {   # recreate the Portainer container itself from the termin
   return 1
 }
 
-wait_http() {   # wait_http URL SECONDS: wait until the address answers 200
+wait_http() {
   local url=$1 deadline=$(( $(date +%s) + $2 ))
   until curl -fsS -m 5 -o /dev/null "$url" 2>/dev/null; do
     [ "$(date +%s)" -ge "$deadline" ] && return 1
@@ -53,14 +53,14 @@ wait_http() {   # wait_http URL SECONDS: wait until the address answers 200
   done
 }
 
-update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop here), 2 left for you (nothing was changed)
+# update_stack STACK YES(0/1): returns 0 when updated, 1 when it failed (stop here), 2 when it is left for the person (nothing was changed).
+update_stack() {
   local s=$1 yes=$2 img nt pairs=() old_ids="" i c v old new
   for img in ${SIMG[$s]}; do
     if [ "${SST["$s|$img"]}" = new ]; then manual_steps "$s" "$s was not downloaded yet: run  sudo homelab-update  again first."; return 2; fi
     nt=${SNT["$s|$img"]:-}
     [ -n "$nt" ] && pairs+=("$img" "${img%:*}:$nt")
   done
-  # data in an anonymous volume can be lost when the container is recreated
   for i in "${!CN[@]}"; do
     [ "${CS[$i]}" = "$s" ] || continue
     v=$(anon_volumes_of "${CX[$i]}")
@@ -102,8 +102,6 @@ update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop he
     echo "      Going back: the old version of each image is saved as homelab-rollback:<name>-<date>."
     return 1
   fi
-  # did the containers really change? Portainer can answer before Docker has recreated them, so give it a little time.
-  # Only a container whose image tag now points to a NEWER image is expected to change (a database that did not get a new version stays as it is).
   local settle_end waiting name oldid cur
   settle_end=$(( $(date +%s) + ${HLU_SETTLE:-90} ))
   while :; do

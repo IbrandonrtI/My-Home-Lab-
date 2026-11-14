@@ -1,17 +1,13 @@
-# ================================================================ restore from a backup (only when one is found and you said yes)
 def need_email():
-    """The email address given at the start, or a message saying how to give it (Immich and Beszel need one)."""
     if not Ctx.email:
         raise Abort("An email address is required. Run `sudo homelab-setup install` and answer the questions.")
 
 
 def restore_choice():
-    """What the person chose to restore from a backup (saved in the state file)."""
     return State.data.get("restore", {})
 
 
 def find_backups():
-    """Folders that look like a backup of an earlier lab (they hold main/ and boot-configs/)."""
     cands = []
     if Opt.backup:
         cands.append(Opt.backup)
@@ -27,7 +23,6 @@ def find_backups():
 
 
 def dir_size_gb(path):
-    """Size of a folder in gigabytes."""
     rc, txt = run(["du", "-sb", path], timeout=300)
     try:
         return int(txt.split()[0]) / 1073741824.0
@@ -36,7 +31,7 @@ def dir_size_gb(path):
 
 
 def ask_restore_plan():
-    """Install-time question: restore from a backup? Returns nothing; saves the choice."""
+    """Ask at install time whether to restore from a backup and save the choice."""
     if "restore" in State.data:
         return
     old = fstab_pool_drives()
@@ -75,6 +70,7 @@ def ask_restore_plan():
 
 @step
 class RestoreConfigs(Step):
+    """Restore the saved settings (Homepage, Nextcloud app files, AdGuard Home) from the backup before the services start."""
     id, group, title = "restore-configs", "Platform", "Saved settings restored from your backup"
     needs = ("folders",)
 
@@ -94,7 +90,7 @@ class RestoreConfigs(Step):
             return
         env = dict(os.environ)
         if ROOT:
-            env["HRC_ROOT"] = ROOT                      # tests only: restore into the fake root
+            env["HRC_ROOT"] = ROOT
         with Live.pause():
             rc = subprocess.run(["bash", tool, path], env=env).returncode
         if rc != 0:
@@ -103,7 +99,6 @@ class RestoreConfigs(Step):
 
 
 def has_user_files(folder):
-    """True when the folder holds any file besides Immich's empty `.immich` marker files (the installer makes those itself when no drive is mounted)."""
     for _dir, _subs, files in os.walk(folder):
         if any(f != ".immich" for f in files):
             return True
@@ -112,6 +107,7 @@ def has_user_files(folder):
 
 @step
 class RestoreData(Step):
+    """Copy photos and files from the backup into the main storage before the services start. Refuses if the Immich or Nextcloud folders already hold files."""
     id, group, title = "restore-data", "Platform", "Photos and files copied back from your backup"
     needs = ("folders", "restore-configs")
 
@@ -144,5 +140,4 @@ class RestoreData(Step):
 
 
 def immich_restored():
-    """True when data was restored from a backup and Immich's own database dumps are present."""
     return bool(restore_choice().get("data")) and bool(glob.glob(P("/mnt/storage/immich/backups/*")))

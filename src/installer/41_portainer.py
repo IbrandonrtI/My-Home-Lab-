@@ -1,6 +1,5 @@
-# ================================================================ Portainer
 class Portainer:
-    """Portainer's web API (login, token, stacks)."""
+    """Client for Portainer's web API: login, access token and stack deployment."""
     jwt = None
     _env_id = None
 
@@ -28,7 +27,7 @@ class Portainer:
     @classmethod
     def admin_state(cls):
         st, _, _ = http("GET", cls.base() + "/api/users/admin/check", timeout=8)
-        return st      # 204 ready, 404 needs first admin, 303 setup window closed, 0 not reachable
+        return st
 
     @classmethod
     def login(cls, password):
@@ -57,19 +56,16 @@ class Portainer:
 
     @classmethod
     def stack_named(cls, name):
-        """The stack called `name` as Portainer lists it, or None."""
         return next((s for s in cls.stacks() if s.get("Name") == name), None)
 
     @classmethod
     def stack_file(cls, stack):
-        """The saved file of a stack, as text ('' when it cannot be read)."""
         eid = stack.get("EndpointId") or cls.endpoint_id()
         st, js, _ = cls.call("GET", "/api/stacks/%s/file?endpointId=%s" % (stack["Id"], eid), timeout=30)
         return js.get("StackFileContent", "") if st == 200 and isinstance(js, dict) else ""
 
     @classmethod
     def redeploy(cls, stack, text, env):
-        """Give an existing stack a new file and redeploy it. `env` is a list of {"name", "value"}. Returns (status, answer)."""
         eid = stack.get("EndpointId") or cls.endpoint_id()
         st, js, _ = cls.call("PUT", "/api/stacks/%s?endpointId=%s" % (stack["Id"], eid),
                              body={"stackFileContent": text, "env": env, "prune": False,
@@ -78,7 +74,6 @@ class Portainer:
 
     @classmethod
     def delete(cls, name):
-        """Remove the stack `name` and its containers (the data in folders stays). True when it is gone."""
         stack = cls.stack_named(name)
         if not stack:
             return True
@@ -88,7 +83,6 @@ class Portainer:
 
     @staticmethod
     def error_text(js):
-        """What Portainer said when it refused something."""
         return str(js.get("details") or js.get("message") if isinstance(js, dict) else js)
 
     @classmethod
@@ -108,8 +102,6 @@ class Portainer:
 
 
 def setup_tokens():
-    """Portainer 2.39.4 / 2.43 and newer refuse the first admin without a setup token. Candidates, best first:
-    the one the installer gave Portainer at creation, then the one Portainer printed in its log."""
     found = []
     mine = State.data.get("ptoken")
     if mine:
@@ -135,7 +127,6 @@ class PortainerRunning(Step):
             act(["docker", "start", "portainer"], check=True)
         elif "portainer" not in containers_all():
             act(["docker", "pull", "portainer/portainer-ce:latest"], timeout=900)
-            # our own setup token (new Portainer versions require one for the first admin); used once, then useless
             tok = State.data.get("ptoken") or rand_alnum(32)
             if not Opt.dry:
                 State.data["ptoken"] = tok
@@ -149,7 +140,6 @@ class PortainerRunning(Step):
 
 
 def restart_portainer():
-    """Restart Portainer and wait until it answers again (its first-setup window then opens afresh)."""
     docker("restart", "portainer")
     wait_for(Portainer.alive, "Portainer to restart", 120)
     time.sleep(2 if not FAKE else 0)
@@ -157,6 +147,7 @@ def restart_portainer():
 
 @step
 class PortainerAdmin(Step):
+    """Create the Portainer admin account with the shared admin password."""
     id, group, title = "portainer-admin", "Platform", "Portainer admin account created"
     needs = ("portainer",)
 
@@ -250,16 +241,12 @@ class PortainerEnv(Step):
             raise Abort("Portainer refused to add the local Docker environment (HTTP %s): %s" % (st, str(js)[:200]))
 
 
-# ================================================================ the nine stacks
 class Prefetch:
-    """Downloads the images of every stack in the background, as soon as Docker is installed and while the next steps run. Several downloads run at
-    the same time (a few per registry, since a registry throttles too many at once), the small stacks first (Homepage before everything else) and
-    the big ones (Immich, Nextcloud) last, so the dashboard and the small services are not held up behind several GB of photo software.
-    `prepull` waits for an image that is on its way."""
+    """Download the images of every stack in the background while the first steps run, a few at a time per registry, smallest and most important first."""
     threads = []
-    pending = {}            # image -> Event, set when its download ended (successfully or not)
-    queue = []              # the images still to start, in order
-    busy = {}               # registry -> downloads running now
+    pending = {}
+    queue = []
+    busy = {}
     cv = threading.Condition()
     WORKERS = 5
     PER_REGISTRY = {"docker.io": 3, "ghcr.io": 2, "lscr.io": 2}
@@ -273,11 +260,10 @@ class Prefetch:
 
     @classmethod
     def wanted(cls):
-        """All images of the stacks this install will deploy: Homepage first, the big ones (Immich, Nextcloud) last."""
         stacks = sorted((s for s in STEPS if isinstance(s, StackStep) and s.applies()), key=lambda s: cls.ORDER.get(s.name, 5))
         imgs = []
         for s in stacks:
-            for i in images_in(read_file(repo_file("stacks", STACKS[s.name][0])) or ""):      # the raw file: reading it must not create any secret
+            for i in images_in(read_file(repo_file("stacks", STACKS[s.name][0])) or ""):
                 if i not in imgs:
                     imgs.append(i)
         return imgs
@@ -302,7 +288,6 @@ class Prefetch:
 
     @classmethod
     def take(cls):
-        """The next image to download that its registry allows right now, or None when the queue is empty."""
         with cls.cv:
             while cls.queue:
                 for img in cls.queue:
@@ -323,7 +308,7 @@ class Prefetch:
             try:
                 subprocess.run(["docker", "pull", "-q", img], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3600, check=False)
             except Exception:
-                pass        # the step that needs the image downloads it again, and reports a real failure
+                pass
             finally:
                 with cls.cv:
                     cls.busy[cls.host(img)] -= 1
@@ -332,7 +317,6 @@ class Prefetch:
 
     @classmethod
     def wait(cls, img):
-        """True when `img` was being downloaded in the background and that download has ended."""
         ev = cls.pending.get(img)
         if ev is None:
             return False
@@ -341,7 +325,7 @@ class Prefetch:
 
 
 def prepull(images):
-    """Pull the images one at a time (ghcr.io throttles parallel pulls); the ones the background download is busy with are waited for."""
+    """Pull images one at a time, waiting for any that the background download is still fetching."""
     todo = [i for i in images if docker("image", "inspect", i)[0] != 0]
     for n, img in enumerate(todo, 1):
         if Prefetch.pending.get(img) is not None and not Prefetch.pending[img].is_set():
@@ -364,8 +348,9 @@ def prepull(images):
 
 
 class StackStep(Step):
+    """One Portainer stack: deploy it from its Compose file and wait until its containers run. Stacks marked parallel are deployed together."""
     group = "Services"
-    parallel = True         # the stacks that are ready are started together (see run_pass)
+    parallel = True
 
     def __init__(self, name, needs, title, wait=300):
         self.name, self.needs, self.title, self.wait = name, tuple(needs), title, wait
@@ -389,13 +374,10 @@ class StackStep(Step):
             return
         Portainer.deploy(self.name, text, env)
         wait_for(lambda: stack_up(self.name), "the %s containers to start" % self.name, self.wait)
-        # The stack is only waited for until its containers are RUNNING. Immich can need many minutes to become "healthy" (it prepares its database
-        # on the first start), and nothing here needs that yet: the next stacks go on while it finishes in the background. The steps that really need
-        # Immich or Nextcloud to answer (their admin accounts) come later in the list and wait for them there.
 
 
 def _register_stacks():
-    """Create one checklist step per Portainer stack."""
+    """Create one checklist step for every Portainer stack."""
     base = ("portainer-env", "folders")
     spec = [
         ("homepage", base + ("tailscale-login", "homepage-files"), "Homepage stack (the dashboard)"),
@@ -416,7 +398,6 @@ _register_stacks()
 
 
 def filebrowser_destinations():
-    """The folders FileBrowser has mounted right now (read from the running container)."""
     rc, txt = docker("inspect", "-f", "{{range .Mounts}}{{.Destination}}|{{end}}", "filebrowser-filebrowser-1", timeout=30)
     return {d.strip() for d in txt.split("|") if d.strip()} if rc == 0 else set()
 

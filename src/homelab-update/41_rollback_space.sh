@@ -1,10 +1,9 @@
-# ---------- rollback copies, space, backup ----------
-running_id_of() {   # running_id_of IMAGE -> the id of the image the first container with that name runs, or nothing
+running_id_of() {
   local i
   for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$1" ] && { echo "${CD[$i]}"; return; }; done
 }
 
-rollback_tag() {   # keep a named copy of the version that runs now, so a bad update can be undone
+rollback_tag() {
   local ref=$1 id safe
   id=$(running_id_of "$ref")
   [ -n "$id" ] || return 0
@@ -13,16 +12,16 @@ rollback_tag() {   # keep a named copy of the version that runs now, so a bad up
 }
 
 docker_root() { local r; r=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null); echo "${r:-/var/lib/docker}"; }
-avail_of() {   # avail_of UNIT PATH -> free space at PATH in that unit (1 = bytes, 1G = gigabytes)
+avail_of() {
   df -B"$1" --output=avail "$2" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}'
 }
 free_gb() {
-  [ -n "${HLU_FREE_GB:-}" ] && { echo "$HLU_FREE_GB"; return; }   # test hook
+  [ -n "${HLU_FREE_GB:-}" ] && { echo "$HLU_FREE_GB"; return; }
   avail_of 1G "$(docker_root)"
 }
 free_bytes() { avail_of 1 "$(docker_root)"; }
 
-run_backup() {   # runs the backup and checks the result file. Returns 0 only when a NEW run finished OK.
+run_backup() {
   local start start_min last ts res
   start=$(date +%s); start_min=$(date -d "@$start" '+%F %H:%M')
   "$BACKUP_CMD"; local rc=$?
