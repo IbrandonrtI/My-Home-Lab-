@@ -47,7 +47,7 @@ class Ctx:
     def refresh_tailscale(cls):
         js = ts_status()
         cls.fqdn = cls.tailnet = cls.ts_id = ""
-        if js and js.get("BackendState") == "Running":
+        if js and js.get("BackendState") == "Running" and not ts_cut_off(js):
             me = js.get("Self") or {}
             cls.fqdn = (me.get("DNSName") or "").rstrip(".")
             cls.ts_id = me.get("ID", "")
@@ -154,6 +154,13 @@ def clock_apply(text, tz):
         else:
             block = block.rstrip("\n") + "\n    format:\n      timeZone: %s\n" % tz
     return text[:m.start(2)] + block + text[m.end(2):]
+
+
+def ts_cut_off(js):
+    """True when Tailscale still says it is running but the account no longer knows this machine (removed in the admin page) or its login has expired."""
+    if (js.get("Self") or {}).get("Online") is False:
+        return True
+    return any(re.search(r"log ?in|logged out|key (has )?expired|node key|not authorized|needs? (to )?(re-?)?auth", str(h), re.I) for h in js.get("Health") or [])
 
 
 def ts_status():

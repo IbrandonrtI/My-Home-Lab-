@@ -210,6 +210,9 @@ def do_tailscale_login():
         raise Abort("Tailscale is not installed yet.")
     key = os.environ.get("TS_AUTHKEY", "")
     args = ["tailscale", "up", "--hostname=" + Ctx.hostname.lower(), "--accept-dns=false"]
+    stale = ts_status() or {}
+    if stale.get("BackendState") == "Running" and ts_cut_off(stale):
+        args.append("--force-reauth")
     if key:
         args.append("--auth-key=" + key)
     out("")
