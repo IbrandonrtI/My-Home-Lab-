@@ -6415,9 +6415,11 @@ def show_dashboard_links():
     if Ctx.fqdn:
         out("  Homepage, over Tailscale:    %s" % mark("https://%s:%d" % (Ctx.fqdn, SERVE[0][0])))
         out("  %sThe Tailscale address works from your other devices, not from this machine itself.%s" % (D, N))
+        out("Homepage will take a while to completely install and add everything on the dashboard.")
     else:
         out("  Homepage, over Tailscale:    available once this machine has joined your Tailscale network")
     out("")
+        
 
 
 def offer_drive_wizard():
