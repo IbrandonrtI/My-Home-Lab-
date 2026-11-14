@@ -1,26 +1,23 @@
 
-# ---------- moving the Main pool into a new ZFS / RAID setup ----------
-# The new setup is built on spare drives and filled from the old Main pool while that is still in use (the containers are stopped).
-# Only when the copy is checked does the new setup take the Main path; then the old Main drives are released (their files are not touched).
-MIGRATE_STOPPED=0   # 1 when the person pressed Stop while the files were copied
-ARRAY_MOUNT=""      # where zfs_build / md_build mount the new setup (empty = the Main path)
+MIGRATE_STOPPED=0
+ARRAY_MOUNT=""
 
 main_is_pool() { [ -n "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$(findmnt -no FSTYPE "$MAIN_POOL" 2>/dev/null)" = fuse.mergerfs ]; }
 pool_used_bytes() { df -B1 --output=used "$MAIN_POOL" 2>/dev/null | awk 'NR == 2 {print $1 + 0}'; }
-migrate_need_bytes() { local u=${1:-0}; echo $((u + u / 50 + 67108864)); }      # the files, 2% extra for the way the new file system stores them, and 64 MB
+migrate_need_bytes() { local u=${1:-0}; echo $((u + u / 50 + 67108864)); }
 
-fstab_move_mp() {   # fstab_move_mp OLD NEW: the line that mounts at OLD mounts at NEW
+fstab_move_mp() {
   local tmp; tmp=$(mktemp)
   awk -v o="$1" -v n="$2" '!/^[[:space:]]*#/ && $2 == o { sub(o, n) } { print }' "$FSTAB" >"$tmp" && cat "$tmp" >"$FSTAB"
   rm -f "$tmp"
   log "fstab move mount point: $1 -> $2"
 }
 
-migrate_copy() {   # copy everything from the Main pool into the new setup, then compare (MIGRATE_STOPPED=1 when the person pressed Stop)
+migrate_copy() {
   local rc=0 changed
   local -a skip=(--exclude=/.mergerfs --exclude=/lost+found)
   MIGRATE_STOPPED=0
-  say "Copying the files of the Main pool into the new setup. This can take a long time on big drives..."
+  say "Copying the files of the Main pool into the new setup. This can take a long time on large drives..."
   rsync_run 20 90 "Copying files" -aHAX --numeric-ids "${skip[@]}" "$MAIN_POOL"/ "$MIGRATE_DIR"/ 9>&- >&2 || rc=$?
   if abort_requested; then MIGRATE_STOPPED=1; return 1; fi
   case $rc in 0|24) ;; *) warn "The copy stopped with an error (code $rc)."; return 1 ;; esac
@@ -32,7 +29,7 @@ migrate_copy() {   # copy everything from the Main pool into the new setup, then
   say "The copy is complete and matches."
 }
 
-migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setup apart again (the old Main pool was not changed)
+migrate_discard() {
   local id=$1 d; shift
   pool_umount "$MIGRATE_DIR" || true
   if [ "$(preset_kind "$id")" = zfs ]; then
@@ -48,7 +45,7 @@ migrate_discard() {   # migrate_discard ID DISK...: take the half-built new setu
   rmdir "$MIGRATE_DIR" 2>/dev/null || true
 }
 
-migrate_retire_main() {   # the old Main drives leave the Main pool; their files stay on them and they are spare drives now
+migrate_retire_main() {
   local mp
   for mp in "$@"; do
     mountpoint -q "$mp" && { umount "$mp" 2>/dev/null || umount -l "$mp"; }
@@ -62,7 +59,8 @@ migrate_retire_main() {   # the old Main drives leave the Main pool; their files
   done
 }
 
-migrate_switch() {   # migrate_switch ID: the new setup (mounted at MIGRATE_DIR, filled) takes the Main path; the old drives are released
+# migrate_switch ID: the new setup (mounted at MIGRATE_DIR and filled) takes over the Main path and the old drives are released.
+migrate_switch() {
   local id=$1 kind
   local -a old_mps=()
   kind=$(preset_kind "$id")

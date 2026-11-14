@@ -1,4 +1,3 @@
-# ---------- commands ----------
 cmd_check() {
   need_root check; take_lock loud
   rule "Look online for newer images"
@@ -19,9 +18,9 @@ cmd_refresh() {
   evaluate_state | write_outputs "$ep"
 }
 
+# `auto`: the scheduled run. Does nothing in the first 10 minutes after boot, runs at low priority, refreshes the saved results and looks online when the last check is old enough.
 cmd_auto() {
   need_root auto
-  # the first 10 minutes after a boot: the apps are still starting, so this waits for the next hourly run
   local up=${HOMELAB_UPTIME:-$(cut -d. -f1 /proc/uptime 2>/dev/null)}
   if [[ "${up:-}" =~ ^[0-9]+$ ]] && [ "$up" -lt 600 ]; then return 0; fi
   renice -n 19 -p $$ >/dev/null 2>&1 || true
@@ -57,13 +56,14 @@ cmd_list() {
   echo
 }
 
-confirm() {   # confirm TEXT yes(0/1)
+confirm() {
   [ "$2" -eq 1 ] && return 0
-  [ -t 0 ] || [ "${HLU_TEST_STDIN:-}" = 1 ] || die "Not a terminal. Add --yes to go on without asking."
+  [ -t 0 ] || [ "${HLU_TEST_STDIN:-}" = 1 ] || die "Not a terminal. Add --yes to continue without asking."
   local a; read -r -p "  $1 [y/N] " a
   [[ "$a" == [yY]* ]]
 }
 
+# `run`: look online, download the new images, make sure nothing is being uploaded, then update the stacks one at a time.
 cmd_run() {
   local yes=$1 rc=0 img free
   need_root ""; take_lock loud
@@ -105,7 +105,6 @@ cmd_run() {
     [ "${#failed_pull[@]}" -eq 0 ] || { echo; line_warn "${#failed_pull[@]} download(s) failed; they are marked [not downloaded yet] below. Run homelab-update again later."; }
   fi
 
-  # save what we know now (so the login screen shows the new state even if something stops later)
   refresh_state
 
   rule "Step 3 of 4 ${S_DOT} Is anything being uploaded?"
@@ -160,7 +159,6 @@ cmd_run() {
       2) left=$((left + 1)) ;;
       *) echo; line_bad "Stopped at $s. The stacks after it were not touched."; echo; refresh_state; return 1 ;;
     esac
-    # the containers changed: read them again so the next stack and the login screen see the truth
     refresh_state
   done
   echo
@@ -170,21 +168,21 @@ cmd_run() {
   return 0
 }
 
-refresh_state() {   # re-read the containers and save what is still waiting
+refresh_state() {
   load_containers; build_images; read_state
   evaluate_state | write_outputs "$(summary_epoch || date +%s)"
 }
 
-held_note() {   # held_note COUNT: says how many leftover images stay because a container uses them
+held_note() {
   [ "$1" -eq 0 ] || line_note "$1 leftover image(s) are kept because a container still uses them (a stopped one counts)."
 }
 
-cmd_clean() {   # cmd_clean YES OLD_ONLY
+# cmd_clean YES OLD_ONLY: remove the saved rollback copies of images (all of them, or only those older than the keep time).
+cmd_clean() {
   need_root clean; take_lock loud
   local yes=$1 old_only=$2 tag size age d t now iid in_use i before after since lab all_ids held=0
   local -a tags=() tsizes=() tuse=() dids=() dsizes=() dinfo=()
   load_containers || die "Cannot talk to Docker. Is it running? (docker ps)"
-  # every image that ANY container uses, stopped ones too (for example a spare kept from an old Portainer update)
   all_ids=" "
   local cids; cids=$(docker ps -aq 2>/dev/null)
   # shellcheck disable=SC2086
@@ -245,14 +243,13 @@ cmd_clean() {   # cmd_clean YES OLD_ONLY
   for tag in "${tags[@]}"; do
     if docker rmi "homelab-rollback:$tag" >/dev/null 2>&1; then removed=$((removed + 1)); else line_warn "could not remove homelab-rollback:$tag"; fi
   done
-  # An image that other images are built on cannot go before them, so go in passes until nothing more can be removed.
   local -a pending=("${dids[@]}") nxt=()
   local -A errs=()
   while [ "${#pending[@]}" -gt 0 ]; do
     nxt=(); progress=0
     for iid in "${pending[@]}"; do
       if msg=$(docker image rm "$iid" 2>&1); then removed=$((removed + 1)); progress=1
-      elif [[ "$msg" == *"No such image"* ]]; then removed=$((removed + 1)); progress=1   # Docker already removed it together with its child
+      elif [[ "$msg" == *"No such image"* ]]; then removed=$((removed + 1)); progress=1
       else nxt+=("$iid"); errs[$iid]=$msg; fi
     done
     pending=("${nxt[@]}")
@@ -272,9 +269,8 @@ cmd_clean() {   # cmd_clean YES OLD_ONLY
   echo
 }
 
-usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
-[ "${HLU_SOURCE_ONLY:-}" = 1 ] && return 0   # tests load the functions only
+[ "${HLU_SOURCE_ONLY:-}" = 1 ] && return 0
 YES=0; OLD=0; NOW=0; FULL_BACKUP=0; ARGS=()
 for a in "$@"; do case "$a" in --yes|-y) YES=1 ;; --old) OLD=1 ;; --now) NOW=1 ;; --backup) FULL_BACKUP=1 ;; *) ARGS+=("$a") ;; esac; done
 case "${ARGS[0]:-run}" in

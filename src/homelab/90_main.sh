@@ -1,4 +1,4 @@
-screen() {   # the whole screen, checked live. "login" leaves out the suggested commands and puts the hint under the browser addresses
+screen() {
   local login="${1:-}"
   BUFFERING=1; status; BUFFERING=0
   header; summary_line; setup_line; finish_line
@@ -18,7 +18,6 @@ uptime_secs() {
   echo "$u"
 }
 
-# The two dashboard addresses are looked up through Docker and Tailscale, which takes a moment, so a login keeps them for an hour.
 cached_dashboard_urls() {
   local dir="${HOMELAB_CACHE_DIR:-${XDG_RUNTIME_DIR:-$HOME/.cache}}/homelab-login" file mt now
   file="$dir/urls"; now=$(date +%s); mt=$(stat -c %Y "$file" 2>/dev/null || echo 0)
@@ -33,10 +32,6 @@ cached_dashboard_urls() {
   fi
 }
 
-# login_screen: what ~/.bashrc runs when a terminal opens: the summary, the status and the browser addresses, without the suggested commands.
-#  - A screen made less than 2 minutes ago (for the same window width) is shown again as it was, so opening several terminals in a row
-#    does the checks once. "homelab" and "homelab status" are always live.
-#  - In the first 10 minutes after a boot the apps are still starting: only light checks run, so SSH stays quick.
 login_screen() {
   local dir="${HOMELAB_CACHE_DIR:-${XDG_RUNTIME_DIR:-$HOME/.cache}}/homelab-login" file cols now mt age up text
   file="$dir/screen"; cols=$(term_cols); now=$(date +%s); up=$(uptime_secs)
@@ -54,7 +49,7 @@ login_screen() {
   fi
 }
 
-forward() {   # short forms: "homelab backup" runs "sudo homelab-backup" (it says so, so the real name is learned)
+forward() {
   local word="$1"; shift
   local -a real
   case "$word" in
@@ -72,14 +67,14 @@ forward() {   # short forms: "homelab backup" runs "sudo homelab-backup" (it say
   exec sudo "${real[@]}" "$@"
 }
 
-did_you_mean() {   # a word that is not a homelab option: point to the command the person most likely meant
+did_you_mean() {
   local w="${1:-}" c="" why=""
   case "$w" in
     disk|disks|storage|pool|pools)     c="homelab drives";                     why="the drive menu: look at, connect, remove or fix drives" ;;
     pull|install)                      c="homelab upgrade";                    why="download the newest lab files from GitHub and put them on this server" ;;
     check|test|health|verify)          c="sudo homelab-selftest";              why="the big check of the whole lab. Which check fits? see: homelab commands" ;;
     restore)                           c="sudo homelab-restore-configs check"; why="preview restoring the saved settings after a rebuild" ;;
-    recover|remount|mount)             c="sudo drives remount";                why="after an unplug or power cut: remount the drives and start the containers" ;;
+    recover|remount|mount)             c="sudo drives remount";                why="after a disconnection or power loss: remount the drives and start the containers" ;;
     logs|log)                          c="docker logs --tail 50 NAME";         why="the last lines a container printed" ;;
     help-me|-?|\?)                    c="homelab help";                       why="what this command can do" ;;
   esac
@@ -99,7 +94,7 @@ case "${1:-}" in
   docs)   show_docs ;;
   secrets) secrets ;;
   -h|--help|help)
-    awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0" ;;
+    usage ;;
   version|--version) echo "homelab $VERSION" ;;
   status) BUFFERING=1; status; BUFFERING=0; rule "Status"; printf '%s\n' "$STATUS_BUF" ;;
   commands|command)

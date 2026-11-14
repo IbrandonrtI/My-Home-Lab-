@@ -1,28 +1,33 @@
 #!/usr/bin/env bash
-# homelab-backup - daily copy of the main storage and the boot drive's configs.
-#
-# Runs from root's crontab at 6:00. What it does, in order:
-#   1. dumps the Nextcloud database
-#   2. copies the main storage to the backup storage with rsync
-#      (files you delete or replace are moved to _deleted/<date>/ and kept 30 days)
-#   3. copies the boot drive's configs
-#   4. removes dumps and _deleted folders older than 30 days
-#
-# Settings can be overridden in /etc/homelab-backup.conf (see the guide).
-# The result of each run is saved in /var/lib/homelab-backup/last-run as
-#   date|result|destination|seconds|bytes   (bytes = size of the whole backup folder)
-#
-# Usage:
-#   sudo homelab-backup           run the backup now (about a minute, longer after many new files)
-#   homelab-backup help           this text (nothing is started)
-#   homelab-backup version
-# It takes no other options: anything else is refused, so a typo can never start a backup by accident.
-# Watch a backup while it runs:  sudo tail -f /var/log/homelab-backup.log
+
+usage() {
+  cat <<'HELP'
+homelab-backup - daily copy of the main storage and the boot drive's configs.
+
+Runs from root's crontab at 6:00. What it does, in order:
+  1. dumps the Nextcloud database
+  2. copies the main storage to the backup storage with rsync
+     (files you delete or replace are moved to _deleted/<date>/ and kept 30 days)
+  3. copies the boot drive's configs
+  4. removes dumps and _deleted folders older than 30 days
+
+Settings can be overridden in /etc/homelab-backup.conf (see the guide).
+The result of each run is saved in /var/lib/homelab-backup/last-run as
+  date|result|destination|seconds|bytes   (bytes = size of the whole backup folder)
+
+Usage:
+  sudo homelab-backup           run the backup now (about a minute, longer after many new files)
+  homelab-backup help           this text (nothing is started)
+  homelab-backup version
+It takes no other options: anything else is refused, so a typo can never start a backup by accident.
+Watch a backup while it runs:  sudo tail -f /var/log/homelab-backup.log
+HELP
+}
 
 VERSION="1.1"
 case "${1:-}" in
   "") ;;
-  -h | --help | help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
+  -h | --help | help) usage; exit 0 ;;
   version | --version) echo "homelab-backup $VERSION"; exit 0 ;;
   *) echo "homelab-backup: unknown option '$1'. Nothing was started." >&2
      echo "To run the backup now:  sudo homelab-backup      For help:  homelab-backup help" >&2; exit 2 ;;
@@ -34,7 +39,7 @@ export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/loc
 
 SRC="/mnt/storage"
 DEST_POOL="/mnt/backup"
-DEST_FALLBACK=""                    # e.g. /home/your-username/boot-drive-files/backup-interim (used only if the pool is not mounted)
+DEST_FALLBACK=""
 RETENTION_DAYS=30
 LOGFILE="/var/log/homelab-backup.log"
 STATUS_FILE="/var/lib/homelab-backup/last-run"
@@ -42,7 +47,6 @@ NEXTCLOUD_DB_CONTAINER="nextcloud_db"
 NEXTCLOUD_DB_USER="nextcloud"
 NEXTCLOUD_DB_NAME="nextcloud"
 MIN_FREE_GB=20
-# The user who owns the lab folders: HOMELAB_USER, else the first normal user (uid 1000).
 LAB_USER="${HOMELAB_USER:-$(getent passwd 1000 | cut -d: -f1)}"
 LAB_HOME="$(getent passwd "$LAB_USER" 2>/dev/null | cut -d: -f6)"
 LAB_HOME="${LAB_HOME:-/home/$LAB_USER}"
@@ -71,17 +75,17 @@ DEST=""
 
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*" >>"$LOGFILE"; }
 fail() { ERRORS=$((ERRORS + 1)); NOTES="$NOTES$*; "; log "ERROR: $*"; }
-rsync_ok() { [ "$1" -eq 0 ] || [ "$1" -eq 24 ]; }     # 24 = some files vanished while copying: not an error
+# Decide whether an rsync exit code is acceptable. Code 24 means some files disappeared while copying, which is not an error.
+rsync_ok() { [ "$1" -eq 0 ] || [ "$1" -eq 24 ]; }
 
 finish() {
   local result=OK secs=$(( $(date +%s) - START )) size=""
   [ "$ERRORS" -eq 0 ] || result="FAILED ($ERRORS problem(s): ${NOTES%; })"
-  # size of everything in the backup folder (the login screen shows it); skipped if it takes too long
   if [ -n "$DEST" ] && [ -d "$DEST" ]; then size=$(timeout 300 du -sb "$DEST" 2>/dev/null | awk '{print $1}'); fi
   mkdir -p "$(dirname "$STATUS_FILE")"
   printf '%s|%s|%s|%s|%s\n' "$(date '+%F %H:%M')" "$result" "${DEST:-none}" "$secs" "$size" >"$STATUS_FILE"
   log "finished: $result in ${secs}s"
-  if [ -t 2 ]; then   # run by hand: say how it went (cron has no screen, so it stays quiet)
+  if [ -t 2 ]; then
     if [ "$ERRORS" -eq 0 ]; then echo "Backup finished: OK (${secs}s)." >&2
     else echo "Backup FAILED: ${NOTES%; }" >&2; echo "Details:  sudo tail -20 $LOGFILE" >&2; fi
   fi
@@ -95,12 +99,10 @@ finish() {
 [ "$(id -u)" = 0 ] || { echo "Run as root: sudo homelab-backup"; exit 1; }
 mkdir -p "$(dirname "$LOGFILE")"
 exec 8>/var/lock/homelab-backup.lock
-flock -n 8 || { log "another backup is already running, skipping"; exit 0; }
+flock -n 8 || { log "another backup is already running; skipping"; exit 0; }
 log "start"
 
-# ---- keep the backup drives awake while this runs, then let them sleep again when idle ----
-# (the drive tool sets "sleep after 10 minutes idle" on backup drives; a backup must never be put to sleep half way)
-backup_drive_timers() {   # backup_drive_timers 0 (stay awake) | 120 (sleep after 10 minutes idle)
+backup_drive_timers() {
   command -v hdparm >/dev/null 2>&1 || return 0
   local mp src dsk
   for mp in "${HOMELAB_DISKS_DIR:-/mnt/disks}"/BACKUP*; do
@@ -115,7 +117,6 @@ backup_drive_timers() {   # backup_drive_timers 0 (stay awake) | 120 (sleep afte
 backup_drive_timers 0
 trap 'backup_drive_timers 120' EXIT
 
-# ---- where to write ----
 if mountpoint -q "$DEST_POOL"; then
   DEST="$DEST_POOL"
 elif [ -n "$DEST_FALLBACK" ]; then
@@ -127,7 +128,6 @@ else
   finish
 fi
 
-# ---- safety checks on the source ----
 if ! mountpoint -q "$SRC"; then
   fail "main storage ($SRC) is not mounted, nothing was copied"
   finish
@@ -137,11 +137,9 @@ if [ -z "$(find "$SRC" -mindepth 1 -maxdepth 1 ! -name lost+found -print -quit)"
   finish
 fi
 
-# ---- run quietly: lowest priority for CPU and drive, so SSH and the apps stay responsive ----
 renice -n 19 -p $$ >/dev/null 2>&1 || true
 ionice -c3 -p $$ >/dev/null 2>&1 || true
 
-# ---- free space ----
 free_gb=$(( $(df -B1 --output=avail "$DEST" | tail -1 | tr -d ' ') / 1073741824 ))
 if [ "$free_gb" -lt "$MIN_FREE_GB" ]; then
   fail "only ${free_gb} GB free at $DEST (need at least $MIN_FREE_GB)"
@@ -156,7 +154,6 @@ if [ ! -d "$DEST/main" ]; then
 fi
 mkdir -p "$DEST/main" "$DEST/boot-configs" "$DEST/db-dumps" "$DEST/_deleted/$TODAY"
 
-# ---- 1. Nextcloud database ----
 if docker info >/dev/null 2>&1 && docker ps --format '{{.Names}}' | grep -qx "$NEXTCLOUD_DB_CONTAINER"; then
   dump="$DEST/db-dumps/nextcloud-$TODAY.sql.gz"
   if docker exec "$NEXTCLOUD_DB_CONTAINER" pg_dump -U "$NEXTCLOUD_DB_USER" "$NEXTCLOUD_DB_NAME" | gzip -c >"$dump.tmp" \
@@ -171,14 +168,12 @@ else
   fail "container $NEXTCLOUD_DB_CONTAINER is not running, database not dumped"
 fi
 
-# ---- 2. main storage ----
 rsync -aH --numeric-ids --delete --exclude=/lost+found \
   --backup --backup-dir="$DEST/_deleted/$TODAY/main" \
   "$SRC/" "$DEST/main/" >>"$LOGFILE" 2>&1
 rc=$?
 if rsync_ok "$rc"; then log "main storage copied"; else fail "rsync of main storage exited with code $rc"; fi
 
-# ---- 3. boot drive configs ----
 for p in "${CONFIG_PATHS[@]}"; do
   if [ ! -e "$p" ]; then log "config path not found, skipped: $p"; continue; fi
   rsync -aHR --numeric-ids --delete \
@@ -190,7 +185,6 @@ done
 crontab -l >"$DEST/boot-configs/root-crontab.txt" 2>/dev/null || true
 log "configs copied"
 
-# ---- 4. clean-up ----
 find "$DEST/db-dumps" -maxdepth 1 -type f -name 'nextcloud-*.sql.gz' -mtime +"$RETENTION_DAYS" -delete
 if [ -d "$DEST/_deleted" ]; then
   find "$DEST/_deleted" -mindepth 1 -maxdepth 1 -type d -mtime +"$RETENTION_DAYS" -exec rm -rf {} +

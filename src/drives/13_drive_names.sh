@@ -1,4 +1,3 @@
-# ---------- drive names ----------
 BRAND_TABLE='SAMSUNG|^MZ[- ]?[A-Z0-9_]|^HM[0-9]{3}|^HN-M	Samsung
 TOSHIBA|^MQ0[0-9]|^DT0[0-9]|^HDW|^MK[0-9]{4}|^MG0[0-9]|^KBG|^KXG	Toshiba
 WESTERN DIGITAL|^WDC|^WD ?[0-9]|^WDS	Western Digital
@@ -25,9 +24,7 @@ FUJITSU	Fujitsu
 (^| )PNY( |$)	PNY
 TEAM ?GROUP|^TEAM 	TeamGroup'
 
-# The name helpers below use only what bash can do itself (no tr, sed, grep or awk): a status screen asks for the name of every
-# drive several times, and starting four or five programs for each question made `sudo drives status` slow with many drives.
-drive_brand() {   # drive_brand "TOSHIBA MQ01ABD100" -> Toshiba (nothing when the maker is not known)
+drive_brand() {
   local LC_ALL=C text=${1^^} pat name
   text=${text//_/ }
   while [[ $text == *"  "* ]]; do text=${text//  / }; done
@@ -38,34 +35,33 @@ drive_brand() {   # drive_brand "TOSHIBA MQ01ABD100" -> Toshiba (nothing when th
   return 0
 }
 
-pretty_size() {   # bytes -> "1 TB", "750 GB" (as the drive is sold)
+pretty_size() {
   local b=$1 t
   [[ $b =~ ^[0-9]+$ ]] || b=0
   b=$((10#$b))
   if [ "$b" -ge 950000000000 ]; then
-    t=$(( (b + 50000000000) / 100000000000 ))                      # tenths of a TB, rounded
+    t=$(( (b + 50000000000) / 100000000000 ))
     if [ $((t % 10)) -eq 0 ]; then printf '%d TB' $((t / 10)); else printf '%d.%d TB' $((t / 10)) $((t % 10)); fi
   elif [ "$b" -ge 1000000000 ]; then printf '%d GB' $(( (b + 500000000) / 1000000000 ))
   else printf '%d MB' $(( (b + 500000) / 1000000 )); fi
 }
 
-clean_name() {   # safe as a folder name and inside a Docker volume line
+clean_name() {
   local LC_ALL=C s=${1//_/ } lead trail
   s=${s//[^A-Za-z0-9 .()+,-]/ }
   while [[ $s == *"  "* ]]; do s=${s//  / }; done
-  lead=${s%%[! .-]*}; s=${s#"$lead"}                             # leading spaces, dots and dashes
-  trail=${s##*[! .-]}; s=${s%"$trail"}                            # trailing ones
+  lead=${s%%[! .-]*}; s=${s#"$lead"}
+  trail=${s##*[! .-]}; s=${s%"$trail"}
   printf '%s' "$s"
 }
 
-drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, Flash (a USB stick), or nothing when it cannot be told
+drive_kind() {
   local LC_ALL=C model=${2^^} line rota tran
   model=${model//_/ }
   if [[ $model =~ (^|[^A-Z0-9])SSD([^A-Z0-9]|$)|NVME ]]; then printf SSD; return 0; fi
   line=$(lsblk -dnbo ROTA,TRAN "$1" 2>/dev/null); line=${line%%$'\n'*}
   read -r rota tran <<<"$line"
   [ "${tran,,}" = nvme ] && { printf SSD; return 0; }
-  # a USB stick: it plugs in with USB, can be pulled out (removable) and often claims to spin like a hard drive; or its model says so
   if [ "${tran,,}" = usb ]; then
     if [[ $model =~ CRUZER|DATATRAVELER|FLASH|JUMPDRIVE|ULTRA\ FIT|STORE\ N\ GO|TRANSMEMORY|MICRO\ SD|CARD\ READER ]] || [ "$(lsblk -dno RM "$1" 2>/dev/null | head -1 | tr -d ' ')" = 1 ]; then printf Flash; return 0; fi
   fi
@@ -73,23 +69,23 @@ drive_kind() {   # drive_kind /dev/sdX "model" -> SSD, HDD, Flash (a USB stick),
   return 0
 }
 
-drive_key() {   # drive_key /dev/sdX -> what stays with the physical drive (its serial number); nothing when the drive has none that can be trusted
+drive_key() {
   local ser
   ser=$(lsblk -dno SERIAL "$1" 2>/dev/null | head -n 1 | tr -d ' |')
-  if [ "${#ser}" -ge 4 ] && [[ "$ser" != *[!0]* ]] ; then ser=""; fi      # (a serial of only zeros is the same on many cheap sticks)
+  if [ "${#ser}" -ge 4 ] && [[ "$ser" != *[!0]* ]] ; then ser=""; fi
   if [ -n "$ser" ]; then printf '%s' "$ser"; elif [ "$TEST_MODE" = 1 ]; then printf '%s' "$(basename "$1")"; fi
   return 0
 }
 
-remembered_name() {   # remembered_name /dev/sdX -> the name you chose for this physical drive (nothing when there is none)
-  [ -s "$DRIVE_MEMORY" ] || return 0      # (nobody chose a name: no extra program is started)
+remembered_name() {
+  [ -s "$DRIVE_MEMORY" ] || return 0
   local k; k=$(drive_key "$1")
   [ -n "$k" ] || return 0
   awk -F'|' -v k="$k" '$1 == k {print $2; exit}' "$DRIVE_MEMORY" 2>/dev/null
   return 0
 }
 
-remember_name() {   # remember_name /dev/sdX "name": 0 when it was kept
+remember_name() {
   local k tmp; k=$(drive_key "$1")
   [ -n "$k" ] && [ -n "$2" ] || return 1
   mkdir -p "$(dirname "$DRIVE_MEMORY")" 2>/dev/null || return 1
@@ -100,7 +96,7 @@ remember_name() {   # remember_name /dev/sdX "name": 0 when it was kept
   return 0
 }
 
-forget_name() {   # forget_name /dev/sdX: the drive goes back to its automatic name
+forget_name() {
   [ -s "$DRIVE_MEMORY" ] || return 0
   local k tmp; k=$(drive_key "$1")
   [ -n "$k" ] || return 0
@@ -110,7 +106,7 @@ forget_name() {   # forget_name /dev/sdX: the drive goes back to its automatic n
   return 0
 }
 
-disk_base_name() {   # disk_base_name /dev/sdX -> "1 TB Samsung HDD" (or the name you chose for this drive)
+disk_base_name() {
   local d=$1 model size brand kind name
   name=$(remembered_name "$d")
   if [ -n "$name" ]; then printf '%s' "$(clean_name "$name")"; return 0; fi
@@ -124,14 +120,14 @@ disk_base_name() {   # disk_base_name /dev/sdX -> "1 TB Samsung HDD" (or the nam
   printf '%s' "$name"
 }
 
-chosen_name() {   # a name set in DRIVE_NAMES_FILE for this label
+chosen_name() {
   [ -r "$DRIVE_NAMES_FILE" ] || return 0
   local n
   n=$(awk -F= -v k="$1" '{ gsub(/^[ \t]+|[ \t]+$/, "", $1) } $1 == k && !/^[ \t]*#/ { sub(/^[^=]*=/, ""); print; exit }' "$DRIVE_NAMES_FILE")
   clean_name "$n"
 }
 
-name_store_put() {   # name_store_put LABEL "name"
+name_store_put() {
   local tmp
   mkdir -p "$(dirname "$NAME_STORE")" 2>/dev/null || return 0
   tmp=$(mktemp) || return 0
@@ -140,7 +136,7 @@ name_store_put() {   # name_store_put LABEL "name"
   rm -f "$tmp"
 }
 
-name_store_del() {   # name_store_del LABEL
+name_store_del() {
   [ -r "$NAME_STORE" ] || return 0
   local tmp; tmp=$(mktemp) || return 0
   awk -F'|' -v k="$1" '$1 != k' "$NAME_STORE" >"$tmp" 2>/dev/null; cat "$tmp" >"$NAME_STORE" 2>/dev/null || true
@@ -149,9 +145,7 @@ name_store_del() {   # name_store_del LABEL
 
 name_store_get() { [ -r "$NAME_STORE" ] && awk -F'|' -v k="$1" '$1 == k {print $2; exit}' "$NAME_STORE"; return 0; }
 
-# While a look-only command runs, NAME_CACHE is a temporary folder holding the names already worked out, so each drive is asked about once
-# instead of once for every other drive. It is created and removed by with_name_cache and is never set while anything is being changed.
-name_cached() {   # name_cached KIND MOUNTPOINT function -> prints the name, from the cache when there is one
+name_cached() {
   local f
   if [ -n "${NAME_CACHE:-}" ] && [ -d "$NAME_CACHE" ]; then
     f="$NAME_CACHE/$1${2//\//_}"
@@ -161,7 +155,7 @@ name_cached() {   # name_cached KIND MOUNTPOINT function -> prints the name, fro
   fi
   "$3" "$2"
 }
-with_name_cache() {   # with_name_cache function [args]: run a look-only function with the name cache switched on
+with_name_cache() {
   local rc=0
   NAME_CACHE=$(mktemp -d 2>/dev/null) || NAME_CACHE=""
   "$@" || rc=$?
@@ -171,12 +165,13 @@ with_name_cache() {   # with_name_cache function [args]: run a look-only functio
 }
 
 branch_base_name() { name_cached base "$1" branch_base_calc; }
-branch_base_calc() {   # the name of one pool drive, before numbering: chosen, else scanned now, else the one kept, else the label
+# Name of a pool drive before numbering: the chosen name, else the name scanned now, else the name kept, else the label.
+branch_base_calc() {
   local mp=$1 label n part img
   label=$(basename "$mp")
   n=$(chosen_name "$label")
   [ -n "$n" ] && { printf '%s' "$n"; return 0; }
-  if is_boot_section "$mp"; then   # "100 GB boot drive section", from the size of its file
+  if is_boot_section "$mp"; then
     img=$(boot_image_of "$mp")
     if [ -f "$img" ]; then
       n="$(pretty_size "$(stat -c %s "$img")") boot drive section"
@@ -198,7 +193,7 @@ branch_base_calc() {   # the name of one pool drive, before numbering: chosen, e
 }
 
 branch_name() { name_cached shown "$1" branch_name_calc; }
-branch_name_calc() {   # the name shown for a pool drive; a name shared with another pool drive gets a number (1, 2, ...)
+branch_name_calc() {
   local mp=$1 b n base total=0 mine=0
   base=$(branch_base_name "$mp")
   for b in $(all_branches); do
@@ -208,12 +203,12 @@ branch_name_calc() {   # the name shown for a pool drive; a name shared with ano
   if [ "$total" -gt 1 ] && [ "$mine" -gt 0 ]; then printf '%s %s' "$base" "$mine"; else printf '%s' "$base"; fi
 }
 
-disk_details() {   # "(/dev/sdb, 931.5G, TOSHIBA MQ01ABD100, sata)"
+disk_details() {
   local d=$1
   printf '(%s, %s, %s, %s)' "$d" "$(lsblk -dno SIZE "$d" | tr -d ' ')" "$(lsblk -dno MODEL "$d" | sed 's/ *$//')" "$(lsblk -dno TRAN "$d" | sed 's/ *$//')"
 }
 
-disk_summary() {   # "1 TB Toshiba HDD  (/dev/sdb, 931.5G, TOSHIBA MQ01ABD100, sata)"
+disk_summary() {
   printf '%s  %s' "$(disk_base_name "$1")" "$(disk_details "$1")"
 }
 
@@ -271,7 +266,7 @@ next_label() {
   echo "$p$n"
 }
 
-disk_holder_pids() {   # disk_holder_pids /dev/sdX -> the processes that still have the drive (or a partition of it) mounted in their own view of the system, or open
+disk_holder_pids() {
   local dev=$1 mm f pid
   for mm in $(lsblk -lno MAJ:MIN "$dev" 2>/dev/null | tr -d ' '); do
     for f in /proc/[0-9]*/mountinfo; do
@@ -283,7 +278,7 @@ disk_holder_pids() {   # disk_holder_pids /dev/sdX -> the processes that still h
   fuser $(lsblk -lnpo NAME "$dev" 2>/dev/null) 2>/dev/null | tr -s ' ' '\n'
 }
 
-disk_holders() {   # disk_holders /dev/sdX -> one readable line for everything that still holds the drive
+disk_holders() {
   local dev=$1 d n pid
   d=${dev#/dev/}
   for pid in $(disk_holder_pids "$dev" | sort -un); do
@@ -294,7 +289,7 @@ disk_holders() {   # disk_holders /dev/sdX -> one readable line for everything t
   return 0
 }
 
-unmount_in_views() {   # unmount_in_views /dev/sdX: a program (often a container) that has its own copy of the old mount is told to let go of it, without stopping the program
+unmount_in_views() {
   local dev=$1 mm pid ns seen=" " tgt
   for mm in $(lsblk -lno MAJ:MIN "$dev" 2>/dev/null | tr -d ' '); do
     for pid in $(disk_holder_pids "$dev" | sort -un); do
@@ -309,7 +304,7 @@ unmount_in_views() {   # unmount_in_views /dev/sdX: a program (often a container
   return 0
 }
 
-release_disk() {   # release_disk /dev/sdX: first every program with its own copy of the old mount lets go of it; a container that still holds the drive after that is stopped for a moment (HOLDER_STOPPED; format_disk starts it again)
+release_disk() {
   local dev=$1 pid ns cpid cname cns held=""
   command -v nsenter >/dev/null 2>&1 && unmount_in_views "$dev"
   [ -z "$(disk_holder_pids "$dev")" ] && return 0
@@ -324,20 +319,20 @@ release_disk() {   # release_disk /dev/sdX: first every program with its own cop
   done
   held=$(echo "$held" | tr ' ' '\n' | sort -u | tr '\n' ' ')
   [ -n "${held// /}" ] || return 0
-  note "These containers still hold the old drive: $held. Stopping them for a moment."
+  note "These containers are still using the old drive: $held. They will be stopped briefly."
   # shellcheck disable=SC2086
   docker_each stop $held >/dev/null
   HOLDER_STOPPED="$HOLDER_STOPPED $held"
 }
 
-release_started() {   # start the containers that release_disk stopped
+release_started() {
   [ -n "${HOLDER_STOPPED// /}" ] || return 0
   # shellcheck disable=SC2086
   docker_each start $HOLDER_STOPPED >/dev/null
   HOLDER_STOPPED=""
 }
 
-retry_busy() {   # retry_busy COMMAND...: a drive that was just unplugged from a pool or just changed is sometimes still looked at by the system for a moment ("busy"): try again a few times
+retry_busy() {
   local i
   for i in 1 2 3 4 5 6; do
     "$@" && return 0
@@ -346,7 +341,8 @@ retry_busy() {   # retry_busy COMMAND...: a drive that was just unplugged from a
   "$@"
 }
 
-format_disk() {   # format_disk /dev/sdX LABEL -> prints partition path
+# format_disk /dev/sdX LABEL: format the drive and print the new partition path.
+format_disk() {
   local dev=$1 label=$2 p vg
   refuse_unsafe_disk "$dev"
   umount_disk_parts "$dev"

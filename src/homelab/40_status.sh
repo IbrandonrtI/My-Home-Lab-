@@ -1,6 +1,5 @@
 human_bytes() { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1 B"; }
 
-# "in 11 h" / "in 40 min" for a number of seconds
 in_words() {
   local s=$1
   if [ "$s" -ge 7200 ]; then echo "in $(( s / 3600 )) h"
@@ -8,7 +7,6 @@ in_words() {
   else echo "soon"; fi
 }
 
-# next_run MINUTE HOUR DAY MONTH WEEKDAY -> "06:00 (in 11 h)" for a daily line, or "see root's crontab"
 next_run() {
   local m=$1 h=$2 dom=$3 mon=$4 dow=$5 t now hhmm
   if [[ "$m" =~ ^[0-9]+$ ]] && [[ "$h" =~ ^[0-9]+$ ]] && [ "$dom" = "*" ] && [ "$mon" = "*" ] && [ "$dow" = "*" ]; then
@@ -21,8 +19,7 @@ next_run() {
   fi
 }
 
-# the file written by homelab-sample is "fresh" if its time stamp is recent
-sample_age_min() {   # sample_age_min EPOCH -> minutes
+sample_age_min() {
   echo $(( ( $(date +%s) - $1 ) / 60 ))
 }
 
@@ -43,9 +40,7 @@ backup_size_line() {
   ok "Backup size" "$text"
 }
 
-# The name of a pool drive as "sudo drives status" shows it ("1 TB Samsung HDD"), not the label on the drive (MAIN2).
-# The name you chose in /etc/homelab-drive-names wins, then the name "drives" saved. A name two drives share keeps the label too.
-drive_shown_name() {   # drive_shown_name LABEL TEMPS-FILE
+drive_shown_name() {
   local lab=$1 file=$2 name="" other n=0 names_file="${HOMELAB_NAMES_FILE:-/etc/homelab-drive-names}"
   case "$lab" in MAIN[0-9]*|BACKUP[0-9]*) ;; *) printf '%s' "$lab"; return 0 ;; esac
   [ -r "$names_file" ] && name=$(awk -F= -v k="$lab" '{ gsub(/^[ \t]+|[ \t]+$/, "", $1) } $1 == k && !/^[ \t]*#/ { sub(/^[^=]*=/, ""); print; exit }' "$names_file")
@@ -58,7 +53,7 @@ drive_shown_name() {   # drive_shown_name LABEL TEMPS-FILE
   if [ "$n" -eq 1 ]; then printf '%s (%s)' "$name" "$lab"; else printf '%s' "$name"; fi
 }
 
-saved_drive_name() {   # saved_drive_name LABEL -> the name "drives" saved for that drive, or nothing
+saved_drive_name() {
   [ -r "$STATE_DIR/drive-names" ] && awk -F'|' -v k="$1" '$1 == k {print $2; exit}' "$STATE_DIR/drive-names"
   return 0
 }
@@ -101,8 +96,6 @@ updates_line() {
     names=$(tail -n +2 "$STATE_DIR/image-updates" | awk 'NF {printf "%s%s", (c++ ? ", " : ""), $1}')
     img_n=$(tail -n +2 "$STATE_DIR/image-updates" | awk 'NF' | wc -l)
   fi
-  # the saved count is from the last reading (up to 6 hours ago). When apt ran since then (an upgrade, or an apt update that
-  # found new lists) it is out of date, so count again now: a simulation that changes nothing and needs no sudo.
   if [[ "$n" =~ ^[0-9]+$ && "$ep" =~ ^[0-9]+$ ]] && [ "$JUST_BOOTED" != 1 ] && command -v apt-get >/dev/null 2>&1; then
     local m1 m2
     m1=$(stat -c %Y "${HOMELAB_DPKG_STATUS:-/var/lib/dpkg/status}" 2>/dev/null || echo 0)
@@ -134,7 +127,6 @@ pool_mounted() { command -v findmnt >/dev/null 2>&1 && findmnt -n "$1" >/dev/nul
 
 pool_lines() {
   local used size
-  # main pool
   if pool_mounted "$MAIN_POOL"; then
     read -r used size < <(df -h --output=used,size "$MAIN_POOL" 2>/dev/null | awk 'NR==2 {print $1, $2}')
     if only_boot_section MAIN; then
@@ -144,18 +136,16 @@ pool_lines() {
       ok "Main Pool" "mounted, ${used:-?} used of ${size:-?}"
     fi
   elif [ -e "$STATE_DIR/no-data-drive" ]; then
-    # written by homelab-setup while no data drive has been set up (or when you skipped that step): not a failure
     warn "Main Pool" "no data drive set up yet (when you have one: sudo drives)"
     suggest 5 "sudo drives" "connect a data drive (a menu; it asks before erasing anything)"
   else
-    bad "Main Pool" "NOT MOUNTED -> plug the drive in, then run: sudo drives remount (drive dead? sudo drives replace)"
+    bad "Main Pool" "NOT MOUNTED -> connect the drive, then run: sudo drives remount (if the drive has failed, run: sudo drives replace)"
     suggest 1 "sudo drives remount" "the data drive is not mounted: remount it and restart the containers"
   fi
 
-  # backup pool
   if pool_mounted "$BACKUP_POOL"; then
     if only_boot_section BACKUP; then
-      warn "Backup Pool" "mounted, but only on a section of the boot drive (lost if that drive dies; fix: sudo drives connect)"
+      warn "Backup Pool" "mounted, but only on a section of the boot drive (lost if that drive fails; fix: sudo drives connect)"
       suggest 4 "sudo drives" "connect a real backup drive: the backup is on the boot drive now"
     else
       ok "Backup Pool" "mounted"
@@ -193,11 +183,10 @@ last_backup_line() {
   fi
 }
 
-# containers (a stopped container whose restart policy is "no" was stopped on purpose, so it is ignored)
+# Summary line of the containers. A stopped container whose restart policy is "no" was stopped on purpose and is ignored.
 containers_line() {
   local n_run=0 n_all=0 down="" unhealthy cname cstate cpol crc cstart restarted="" st_ts now
   if [ "$JUST_BOOTED" -eq 1 ]; then
-    # first minutes after a boot: Docker is busy starting the apps, so the login screen leaves it alone
     warn "Containers" "the server just started and the apps are still starting (live check in a few minutes: homelab status)"
   elif command -v docker >/dev/null 2>&1 && timeout 5 docker info >/dev/null 2>&1; then
     now=$(date +%s)
@@ -255,7 +244,7 @@ boot_drive_line() {
   return 0
 }
 
-cards_line() {   # the cards homelab-cards made for new services (it writes the summary; a section it was unsure about is asked for)
+cards_line() {
   local f="$STATE_DIR/cards-summary" names="" unsure="" kind name _c _s uns _a n=0
   [ -r "$f" ] || return 0
   while IFS='|' read -r kind name _c _s uns _a; do
@@ -265,10 +254,10 @@ cards_line() {   # the cards homelab-cards made for new services (it writes the 
   done <"$f"
   [ "$n" -gt 0 ] || return 0
   if [ -n "$unsure" ]; then
-    warn "Service cards" "$n added by themselves (${names%, }); not sure of the section for: ${unsure% }"
+    warn "Service cards" "$n added automatically (${names%, }); not sure of the section for: ${unsure% }"
     suggest 3 "sudo homelab-cards move ${unsure%% *} SECTION" "put its dashboard card in the right section"
   else
-    ok "Service cards" "$n added by themselves: ${names%, }"
+    ok "Service cards" "$n added automatically: ${names%, }"
   fi
 }
 

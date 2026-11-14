@@ -1,4 +1,3 @@
-# ---------- the plan ----------
 rank_of() {
   case "${1,,}" in
     adguard*) echo 2 ;; immich*) echo 3 ;; nextcloud*) echo 4 ;; portainer*) echo 5 ;; *) echo 1 ;;
@@ -8,13 +7,13 @@ rank_of() {
 img_version() {
   local v
   v=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$1" 2>/dev/null)
-  [ "$v" = "<no value>" ] && v=""   # Docker prints this when the image has no version label
+  [ "$v" = "<no value>" ] && v=""
   printf '%s' "$v"
 }
 
 nc_version_of() { sed -n "s/.*OC_VersionString *= *'\([^']*\)'.*/\1/p" | head -1; }
 
-warn_block() {   # warn_block "text..." : a yellow ! line that wraps under itself
+warn_block() {
   local first=1 l w text="$*"
   w=$(( $(term_cols) - 14 )); [ "$w" -gt 90 ] && w=90
   while IFS= read -r l; do
@@ -23,8 +22,8 @@ warn_block() {   # warn_block "text..." : a yellow ! line that wraps under itsel
   done < <(printf '%s\n' "$text" | fold -s -w "$w")
 }
 
-PLAN_STACKS=(); declare -A SIMG=() SST=() SNT=()      # the stacks waiting, their images, each image's status, each image's newer version
-build_plan() {   # reads the saved state and fills PLAN_STACKS (in the order to update) / SIMG / SST / SNT
+PLAN_STACKS=(); declare -A SIMG=() SST=() SNT=()
+build_plan() {
   local line stacks img dig at st s
   PLAN_STACKS=(); SIMG=(); SST=(); SNT=()
   read_state
@@ -44,7 +43,8 @@ build_plan() {   # reads the saved state and fills PLAN_STACKS (in the order to 
   while IFS= read -r s; do [ -n "$s" ] && PLAN_STACKS+=("$s"); done <<<"$sorted"
 }
 
-print_stack() {   # print_stack N STACK: what is waiting in one stack, with the notes that matter
+# print_stack N STACK: show what is waiting in one stack, with the notes that matter.
+print_stack() {
   local n=$1 s=$2 img any_new=0 oldid newv oldv m i
   for img in ${SIMG[$s]}; do [ "${SST["$s|$img"]}" = new ] && any_new=1; done
   if [ "$any_new" -eq 1 ]; then
@@ -68,7 +68,7 @@ print_stack() {   # print_stack N STACK: what is waiting in one stack, with the 
     m=$(anon_volumes_of "${CX[$i]}")
     if [ -n "$m" ]; then
       warn_block "WARNING: ${CN[$i]} keeps data in an anonymous volume ($(echo "$m" | paste -sd, -))." \
-        "Updating can leave it EMPTY, so it is NOT updated here. Copy that data out first."
+        "Updating can leave it empty, so it is not updated here. Copy that data out first."
     fi
   done
   case "${s,,}" in
@@ -78,15 +78,15 @@ print_stack() {   # print_stack N STACK: what is waiting in one stack, with the 
       kv "" "A quick dump of its database is made right before. Do it alone, not together with Nextcloud." ;;
     nextcloud*) nextcloud_notes "$s" ;;
     portainer*)
-      kv note "Portainer is recreated from the terminal (it is not a stack). Its page and the Homepage card are down for a minute." ;;
+      kv note "Portainer is recreated from the terminal (it is not a stack). Its page and the Homepage card are unavailable for about a minute." ;;
   esac
 }
 
-anon_volumes_of() {   # anon_volumes_of CONTAINER: the paths kept in anonymous volumes (a 64-character name)
+anon_volumes_of() {
   docker inspect "$1" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{.Destination}}{{println}}{{end}}{{end}}' 2>/dev/null | awk '$1 ~ /^[0-9a-f]{64}$/ {print $2}'
 }
 
-print_plan() {   # for "list": every waiting stack, in order
+print_plan() {
   build_plan
   if [ "${#PLAN_STACKS[@]}" -eq 0 ]; then line_ok "Nothing is waiting: every container runs the newest image."; return 0; fi
   local n=0 todl=0 s img
@@ -104,7 +104,7 @@ print_plan() {   # for "list": every waiting stack, in order
   echo "  ${D}When everything runs fine, free the disk space with:${N}  sudo homelab-update clean"
 }
 
-nc_versions() {   # nc_versions STACK -> "OLD NEW" Nextcloud version numbers (the running one and the downloaded one), or nothing
+nc_versions() {
   local s=$1 i name="" ref="" old new
   for i in "${!CS[@]}"; do
     if [ "${CS[$i]}" = "$s" ] && [[ "${CI[$i]}" == nextcloud:* || "${CI[$i]}" == nextcloud ]]; then
@@ -119,7 +119,7 @@ nc_versions() {   # nc_versions STACK -> "OLD NEW" Nextcloud version numbers (th
   return 0
 }
 
-nc_jump() {   # nc_jump OLD NEW -> skip (more than one major version) | major | same | minor
+nc_jump() {
   local om=${1%%.*} nm=${2%%.*}
   [[ "$om" =~ ^[0-9]+$ && "$nm" =~ ^[0-9]+$ ]] || { echo minor; return; }
   if [ "$nm" -gt $((om + 1)) ]; then echo skip
@@ -128,11 +128,11 @@ nc_jump() {   # nc_jump OLD NEW -> skip (more than one major version) | major | 
   else echo minor; fi
 }
 
-nextcloud_notes() {   # nextcloud_notes STACK   (uses SST from build_plan)
+nextcloud_notes() {
   local s=$1 old new
   if read -r old new < <(nc_versions "$s") && [ -n "${new:-}" ]; then
     case "$(nc_jump "$old" "$new")" in
-      skip) warn_block "STOP: Nextcloud would jump from $old to $new and skip a major version. It is NOT updated here." \
+      skip) warn_block "Stop: Nextcloud would jump from $old to $new and skip a major version. It is not updated here." \
               "Nextcloud can only go up one major version at a time. Read the Nextcloud release notes first." ;;
       major) warn_block "MAJOR upgrade: $old $S_ARR $new. Read the Nextcloud release notes first;" \
               "check that your apps support it. It is only done when you type yes yourself (not with --yes)." ;;

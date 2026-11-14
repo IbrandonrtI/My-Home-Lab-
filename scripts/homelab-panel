@@ -12,7 +12,7 @@ What the panel is:
   - it runs as the same user as the dashboard files, so it needs no sudo for them: it edits ~/homepage-config (settings.yaml, services.yaml,
     bookmarks.yaml and the look block of custom.css) and nothing else. The work is done by plain text edits, the same files you could edit by hand.
   - the Drives tab asks the drives tool (sudo drives panel ...) through a narrow sudo rule: look at the drives, rename one, sleep or wake one,
-    remount after an unplug, add a spare drive to a pool, take one out, move one between pools, erase a spare drive. The drives tool itself asks
+    remount after a disconnection, add a spare drive to a pool, take one out, move one between pools, erase a spare drive. The drives tool itself asks
     for the typed confirmations (the drive name and ERASE, CONTINUE, REMOVE, KEEP) and refuses when a backup or an upload is running.
   - the Terminal card of the Links tab is a web terminal (ttyd, its own service as the same user) that listens on a private socket only this
     panel can reach. The panel checks the login before it passes anything through, so the terminal is as private as the panel: only your tailnet.
@@ -47,12 +47,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 try:
     import yaml
-except ImportError:                                    # only used to check a file before it is saved
+except ImportError:
     yaml = None
 
 VERSION = "0.1"
 
-# ---------------------------------------------------------------- where things are
 HOME = os.environ.get("HLP_HOME") or os.path.expanduser("~")
 HP = os.environ.get("HOMELAB_HOMEPAGE_DIR") or os.path.join(HOME, "homepage-config")
 STATE_DIR = os.environ.get("HLP_STATE") or os.path.join(HOME, ".config", "homelab-panel")
@@ -61,15 +60,15 @@ PORT = int(os.environ.get("HLP_PORT") or 8300)
 BIND = os.environ.get("HLP_BIND") or "127.0.0.1"
 HOSTS = [h.strip().lower() for h in (os.environ.get("HLP_HOSTS") or "").split(",") if h.strip()]
 FRAME = [h.strip() for h in (os.environ.get("HLP_FRAME") or "").split(",") if h.strip()]
-HOMEPAGE_URL = (os.environ.get("HLP_HOMEPAGE_URL") or "").rstrip("/")      # where the dashboard is (for the picture preview)
-TERM_SOCK = os.environ.get("HLP_TERM_SOCK") or "/run/homelab-terminal/ttyd.sock"      # where ttyd (the web terminal) listens: a socket, not a port
+HOMEPAGE_URL = (os.environ.get("HLP_HOMEPAGE_URL") or "").rstrip("/")
+TERM_SOCK = os.environ.get("HLP_TERM_SOCK") or "/run/homelab-terminal/ttyd.sock"
 COOKIE = "hlpanel" if os.environ.get("HLP_COOKIE_PLAIN") else "__Host-hlpanel"
 NO_DOCKER = bool(os.environ.get("HLP_NO_DOCKER"))
-DRIVES_CMD = shlex.split(os.environ.get("HLP_DRIVES") or "sudo -n /usr/local/sbin/drives")      # the one door to the drives (see "the Drives tab")
-BACKUP_CMD = shlex.split(os.environ.get("HLP_BACKUP") or "sudo -n /usr/local/sbin/homelab-backup-tasks panel")      # the one door to the backup tasks (see "the Backups section")
+DRIVES_CMD = shlex.split(os.environ.get("HLP_DRIVES") or "sudo -n /usr/local/sbin/drives")
+BACKUP_CMD = shlex.split(os.environ.get("HLP_BACKUP") or "sudo -n /usr/local/sbin/homelab-backup-tasks panel")
 
-SHIPPED = os.environ.get("HLP_SHIPPED") or "/usr/local/share/homelab-panel/shipped-services.yaml"           # the cards HomeLab ships (for Add From List and Restore)
-SHIPPED_EXTRAS = os.environ.get("HLP_SHIPPED_EXTRAS") or "/usr/local/share/homelab-panel/shipped-stat-extras.yaml"      # more single-number cards on offer
+SHIPPED = os.environ.get("HLP_SHIPPED") or "/usr/local/share/homelab-panel/shipped-services.yaml"
+SHIPPED_EXTRAS = os.environ.get("HLP_SHIPPED_EXTRAS") or "/usr/local/share/homelab-panel/shipped-stat-extras.yaml"
 SETTINGS = os.path.join(HP, "settings.yaml")
 SERVICES = os.path.join(HP, "services.yaml")
 BOOKMARKS = os.path.join(HP, "bookmarks.yaml")
@@ -85,18 +84,16 @@ SESSION_MAX = 7 * 24 * 3600
 
 LOOK_B1, LOOK_B2 = "/* >>> homelab look >>>", "/* <<< homelab look <<< */"
 BG_B1, BG_B2 = "/* >>> homelab picture >>>", "/* <<< homelab picture <<< */"
-BLUR_PX = {"sm": 4, "md": 12, "lg": 16, "xl": 24, "2xl": 40, "3xl": 64}       # (the same numbers as the preview in custom.js)
-THEME_B1 = "/* >>> homelab theme >>>"          # the block `homelab theme` writes (the look block always stays in front of it)
+BLUR_PX = {"sm": 4, "md": 12, "lg": 16, "xl": 24, "2xl": 40, "3xl": 64}
+THEME_B1 = "/* >>> homelab theme >>>"
 
 
 class Fail(Exception):
-    """Something the person can fix; the message is shown as it is. code is the HTTP status."""
     def __init__(self, msg, code=400):
         Exception.__init__(self, msg)
         self.code = code
 
 
-# ---------------------------------------------------------------- small file helpers
 def read(p):
     try:
         with open(p, encoding="utf-8") as f:
@@ -123,7 +120,7 @@ LOCK = threading.RLock()
 
 
 class Tx:
-    """One change: the files are collected, checked, and written together; the old texts are saved first so Undo can bring them back."""
+    """One change to the dashboard files. The files are collected, checked and written together, and the old texts are saved first so Undo can restore them."""
     def __init__(self, label):
         self.label = label
         self.old = {}
@@ -140,7 +137,7 @@ class Tx:
         self.new[path] = text
 
     def commit(self):
-        if SETTINGS in self.new or CSS in self.new:               # the picture numbers of settings.yaml are written into custom.css too (see css_with_picture)
+        if SETTINGS in self.new or CSS in self.new:
             css = self.get(CSS)
             fixed = css_with_picture(css, self.get(SETTINGS))
             if fixed != css:
@@ -157,7 +154,6 @@ class Tx:
 
 
 def check_text(path, text):
-    """A file must still be understood by Homepage's YAML reader before it is saved."""
     if yaml is None or not path.endswith(".yaml"):
         return
     try:
@@ -169,7 +165,6 @@ def check_text(path, text):
 
 
 def snap(label, olds):
-    """Save the old texts of the files about to change (a folder per change, the newest 40 are kept)."""
     os.makedirs(HISTORY, exist_ok=True)
     name = "%s-%04d" % (time.strftime("%Y%m%d-%H%M%S"), int(time.time() * 1000) % 10000)
     d = os.path.join(HISTORY, name)
@@ -212,12 +207,10 @@ def undo():
     return meta["label"]
 
 
-# ---------------------------------------------------------------- YAML text helpers (no PyYAML needed to write)
 YAML_WORDS = {"yes", "no", "true", "false", "on", "off", "null", "~", "y", "n"}
 
 
 def yq(s):
-    """A value as it is written in YAML: plain when that is safe, otherwise in double quotes."""
     s = str(s)
     if s == "":
         return '""'
@@ -229,7 +222,6 @@ def yq(s):
 
 
 def unq(s):
-    """The text of a YAML scalar (quotes removed)."""
     s = s.strip()
     if len(s) >= 2 and s[0] == s[-1] == '"':
         return re.sub(r'\\(["\\])', r"\1", s[1:-1])
@@ -263,14 +255,13 @@ def clean_url(s, what, allow_empty=True):
 
 
 def clean_icon(s):
-    """An icon is a Homepage icon name (mdi-home, plex.svg, si-github) or a picture address."""
     s = (s or "").strip() if isinstance(s, str) else ""
     if not s:
         return ""
     if re.match(r"^https?://", s):
         return clean_url(s, "The icon address")
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/+-]{0,80}(#[0-9a-fA-F]{3,8})?", s):
-        raise Fail("The icon name can only have letters, digits and - _ . characters (for example mdi-home, plex.svg or an https:// picture address).")
+        raise Fail("The icon name can only contain letters, digits and the characters - _ . (for example mdi-home, plex.svg or an https:// picture address).")
     return s
 
 
@@ -296,19 +287,14 @@ def number(v, what, lo, hi):
     return int(n) if n == int(n) else n
 
 
-# ================================================================ the look (colors, glass, shapes) -> a block in custom.css
-SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}       # the shipped color of two tabs (see the tabs block of custom.css)
+SHIPPED_TAB_COLORS = {"Stats": "#5ed6a4", "Links": "#bea0ff"}
 LOOK_DEFAULT = {"accent": "#8ab4ff", "glass": "#0d121e", "glassOpacity": 56, "glassClear": False, "glassLevel": 70, "radius": 16, "edge": 7.5,
                 "side": 70, "glassBlur": 14, "glassSat": 125, "glassRim": 0, "glassTint": True, "cardDepth": 0, "text": "#eef2f9", "muted": "#a9b4c7", "theme": "calm", "playerHeight": 600, "paintStrength": 10, "paintStyle": "gradient", "labelIcon": "plain", "tabs": {}, "paintAll": "", "cards": {}, "links": {}, "labels": {}, "names": {}, "logo": {}}
 LABEL_ICONS = ("plain", "circle", "square", "ring")
 PAINT_STYLES = ("gradient", "solid")
-NO_PAINT = ("customize-card", "linkedit-card", "terminal-card")        # the panel's own cards are never painted (the Navidrome card is: its frame takes the theme color, the player inside keeps its own look)
-# The themes of the Look screen. "look" is what the theme sets (only what differs from the default); "palette" is a list of colors spread over the groups of
-# cards, tiles and bookmarks (one color per group, round and round); "paintAll" is the one color of the cards and tiles (and of the bookmarks, unless "paintLinks" gives them a
-# second color that goes with it); "ui" is how the control panel itself looks.
-# The Calm Night theme is the default look: choosing it puts everything back.
+NO_PAINT = ("customize-card", "linkedit-card", "terminal-card")
 LOOK_THEMES = [
-    {"id": "calm", "name": "Calm Night", "blurb": "The look the dashboard came with: deep blue glass.", "look": {}, "palette": [],
+    {"id": "calm", "name": "Calm Night", "blurb": "The default look: deep blue glass.", "look": {}, "palette": [],
      "background": {"url": "https://images.unsplash.com/photo-1778049005316-10cd95096f69?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 60, "brightness": 42, "opacity": 80}},
     {"id": "frost", "name": "Frosted Glass", "blurb": "Clear, bright glass with soft edges and system colors.",
      "look": {"glassTint": False, "accent": "#5ac8fa", "glass": "#d6e2f7", "glassClear": True, "glassLevel": 62, "radius": 24, "edge": 14, "glassBlur": 30, "glassSat": 190, "cardDepth": 50, "paintStrength": 26, "text": "#ffffff", "muted": "#dde8f8",
@@ -317,14 +303,14 @@ LOOK_THEMES = [
      "background": {"url": "https://images.unsplash.com/photo-1756909688538-2fc0fe8e757f?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 100, "brightness": 62, "opacity": 88},
      "ui": {"bg": "linear-gradient(135deg,#1b2a4a,#2f2150 55%,#173a46)", "panel": "rgba(255,255,255,0.08)", "panel2": "rgba(255,255,255,0.14)",
             "line": "rgba(255,255,255,0.22)", "field": "rgba(255,255,255,0.09)", "dialog": "#1d2a47", "blur": "24px"}},
-    {"id": "liquid", "name": "Liquid Glass", "blurb": "Almost clear glass with a bright, shining edge, like the glass on Apple devices.",
+    {"id": "liquid", "name": "Liquid Glass", "blurb": "Almost clear glass with a bright edge.",
      "look": {"glassTint": False, "accent": "#8ea2ff", "glass": "#e8f0ff", "glassClear": True, "glassLevel": 88, "radius": 28, "edge": 14, "glassBlur": 22, "glassSat": 220, "glassRim": 35, "cardDepth": 40,
               "paintStrength": 28, "text": "#ffffff", "muted": "#e0ebff", "tabs": {"Stats": "#8fb8ff", "Links": "#d3b0ff"}},
      "paintAll": "#8ea2ff", "paintLinks": "#b39bff",
      "background": {"url": "https://images.unsplash.com/photo-1603847734015-17ac936a0036?q=80&w=1740&auto=format&fit=crop", "blur": "sm", "saturate": 100, "brightness": 52, "opacity": 92},
      "ui": {"bg": "linear-gradient(135deg,#243a66,#4a2f6a 50%,#1f4a5c)", "panel": "rgba(255,255,255,0.07)", "panel2": "rgba(255,255,255,0.13)",
             "line": "rgba(255,255,255,0.16)", "field": "rgba(255,255,255,0.08)", "dialog": "#26365e", "blur": "28px", "rim": 70}},
-    {"id": "ocean", "name": "Ocean", "blurb": "Cool blues and sea greens.",
+    {"id": "ocean", "name": "Ocean", "blurb": "Blue and sea-green tones.",
      "look": {"glassTint": False, "accent": "#5ec8ff", "glass": "#06141f", "glassOpacity": 58, "cardDepth": 60, "paintStrength": 26, "text": "#f2fcff", "muted": "#bcdbe8", "tabs": {"Stats": "#4fd6c4", "Links": "#7fb0ff"}},
      "paintAll": "#3fb7c9", "paintLinks": "#4f9fd0",
      "background": {"url": "https://images.unsplash.com/photo-1565733293285-77aa342b22dd?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 68, "opacity": 85},
@@ -334,17 +320,17 @@ LOOK_THEMES = [
      "paintAll": "#ff9a6b", "paintLinks": "#e07bd0",
      "background": {"url": "https://images.unsplash.com/photo-1750560813794-6c33decf299c?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 90, "brightness": 68, "opacity": 85},
      "ui": {"bg": "#160c0f", "panel": "#21141a", "panel2": "#2c1b22", "field": "#150b0e"}},
-    {"id": "rose", "name": "Rose", "blurb": "Soft pink and lilac with rounder corners.",
+    {"id": "rose", "name": "Rose", "blurb": "Soft pink and lilac with rounded corners.",
      "look": {"glassTint": False, "accent": "#ff8fb5", "glass": "#1a0c16", "glassOpacity": 60, "radius": 22, "cardDepth": 50, "paintStrength": 32, "text": "#fff2f7", "muted": "#efcadb", "tabs": {"Stats": "#ffa8c0", "Links": "#c9a0ff"}},
      "paintAll": "#f08fb4", "paintLinks": "#c79cf0",
      "background": {"url": "https://images.unsplash.com/photo-1764513168327-309c566fbc36?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 85, "brightness": 58, "opacity": 85},
      "ui": {"bg": "#150b13", "panel": "#1f1220", "panel2": "#2a1829", "field": "#140a12"}},
-    {"id": "graphite", "name": "Graphite", "blurb": "One quiet gray. Nothing competes for your attention.",
+    {"id": "graphite", "name": "Graphite", "blurb": "A single neutral gray with no accent colors.",
      "look": {"glassTint": False, "accent": "#a9b8c8", "glass": "#111214", "glassOpacity": 64, "radius": 10, "cardDepth": 55, "paintStrength": 20, "text": "#f4f5f7", "muted": "#bdc2cb", "tabs": {"Stats": "#a9b8c8", "Links": "#a9b8c8"}},
      "paintAll": "#a9b8c8",
      "background": {"url": "https://images.unsplash.com/photo-1768684160371-566aadb7785e?q=80&w=1740&auto=format&fit=crop", "blur": "md", "saturate": 15, "brightness": 60, "opacity": 85},
      "ui": {"bg": "#0e0f11", "panel": "#17181b", "panel2": "#202226", "field": "#0c0d0f"}},
-    {"id": "neon", "name": "Neon Night", "blurb": "Sharp corners and bright cyan and magenta over a night street.",
+    {"id": "neon", "name": "Neon Night", "blurb": "Sharp corners with bright cyan and magenta accents on a dark background.",
      "look": {"glassTint": False, "accent": "#00e5ff", "glass": "#05060d", "glassOpacity": 80, "radius": 6, "edge": 12, "glassBlur": 8, "cardDepth": 65, "paintStrength": 30, "text": "#f2feff", "muted": "#a8dbe4",
               "tabs": {"Stats": "#ff3df2", "Links": "#3d8bff"}},
      "paintAll": "#8a5cff", "paintLinks": "#00cfe8",
@@ -355,7 +341,6 @@ THEME_IDS = [t["id"] for t in LOOK_THEMES]
 
 
 def slugify(text):
-    """The name tag custom.js gives a group or a bookmark (data-group, data-bm)."""
     return re.sub(r"^-+|-+$", "", re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()))
 
 
@@ -363,7 +348,7 @@ def clean_map(raw, what, limit, key_ok, value_fn):
     if raw is None or raw == {}:
         return {}
     if not isinstance(raw, dict) or len(raw) > limit:
-        raise Fail("%s are not understood (too many?)." % what)
+        raise Fail("%s are not valid (too many?)." % what)
     out = {}
     for k, val in raw.items():
         k = clean_text(k, "A name", 60)
@@ -375,8 +360,8 @@ def clean_map(raw, what, limit, key_ok, value_fn):
     return out
 
 
-NAME_KEYS = {"homelab": "HomeLab", "main": "Main Pool", "backup": "Backup Pool"}       # what a person can rename (the key -> the shipped name)
-LOGO_DATA_MAX = 150_000                                                              # the size of an uploaded logo, as text (the browser shrinks the picture first)
+NAME_KEYS = {"homelab": "HomeLab", "main": "Main Pool", "backup": "Backup Pool"}
+LOGO_DATA_MAX = 150_000
 LOGO_SIZE = (24, 96)
 
 
@@ -401,14 +386,14 @@ def names_clean(raw):
 
 
 def logo_clean(raw):
-    """The logo: `src` (a web address of a picture, or the picture itself as a data: address that the browser made), `link` (optional), `size` (height in pixels) and `off` (kept, not shown)."""
+    """Check the logo settings: `src` (a web address of a picture, or the picture itself as a data: address), `link` (optional), `size` (height in pixels) and `off`."""
     if raw in (None, {}):
         return {}
     if not isinstance(raw, dict):
         raise Fail("The logo is not understood.")
     src = raw.get("src") or ""
     if not isinstance(src, str):
-        raise Fail("The logo picture is not understood.")
+        raise Fail("The logo picture is not valid.")
     src = src.strip()
     if not src:
         return {}
@@ -421,14 +406,14 @@ def logo_clean(raw):
         except (ValueError, binascii.Error):
             raise Fail("That logo picture is damaged. Choose it again.") from None
         if sniff_image(data) not in (".png", ".jpg", ".webp", ".gif"):
-            raise Fail("That file is not a picture I can use as a logo.")
+            raise Fail("That file cannot be used as a logo.")
     else:
         src = clean_url(src, "The logo address", False)
         if "\\" in src:
             raise Fail("The logo address has a character that is not allowed.")
     out = {"src": src}
     if raw.get("off"):
-        out["off"] = True                              # the logo is kept but not shown
+        out["off"] = True
     link = clean_url(raw.get("link"), "The logo link")
     if link:
         if "\\" in link:
@@ -442,7 +427,7 @@ def logo_clean(raw):
 
 
 def look_clean(raw):
-    """The look a person asked for, checked; only the values that differ from the default are kept."""
+    """Validate the requested look and keep only the values that differ from the default."""
     if not isinstance(raw, dict):
         raise Fail("The look is missing.")
     out = {}
@@ -486,11 +471,11 @@ def look_clean(raw):
         out["paintStrength"] = number(raw["paintStrength"], "How strong the colors are", 0, 100)
     if "paintStyle" in raw:
         if raw["paintStyle"] not in PAINT_STYLES:
-            raise Fail("The color style is not understood.")
+            raise Fail("The color style is not valid.")
         out["paintStyle"] = raw["paintStyle"]
     if "labelIcon" in raw:
         if raw["labelIcon"] not in LABEL_ICONS:
-            raise Fail("The label icon style is not understood.")
+            raise Fail("The label icon style is not valid.")
         out["labelIcon"] = raw["labelIcon"]
     if raw.get("paintAll"):
         out["paintAll"] = rgb_hex(hex_rgb(raw["paintAll"], "color for everything"))
@@ -500,7 +485,7 @@ def look_clean(raw):
             out[key] = got
     tabs = raw.get("tabs") or {}
     if not isinstance(tabs, dict) or len(tabs) > 30:
-        raise Fail("The tab colors are not understood.")
+        raise Fail("The tab colors are not valid.")
     tt = {}
     for name, col in tabs.items():
         name = clean_text(name, "A tab name", 40)
@@ -516,7 +501,7 @@ def look_clean(raw):
 
     def label_of(val, k):
         if not isinstance(val, dict):
-            raise Fail("The colors of the label '%s' are not understood." % k)
+            raise Fail("The colors of the label '%s' are not valid." % k)
         d = {}
         for part in ("text", "icon"):
             if val.get(part):
@@ -549,8 +534,6 @@ NO_RIM = "0 0 0 0 transparent"
 
 
 def rim_shadow(level):
-    """The shine on the edge of the glass (the box-shadow list behind --lk-rim): a bright thin line at the top left, a softer one at the bottom right
-    and a faint glow just inside the edge. 0 is none."""
     r = max(0.0, min(100.0, float(level))) / 100.0
     if r <= 0:
         return NO_RIM
@@ -559,7 +542,6 @@ def rim_shadow(level):
 
 
 def glass_alpha(v):
-    """How solid the glass is: the slider, or, when the glass is set to transparent, a level (100 = clear). With the tint off there is no color layer at all."""
     if not v["glassTint"]:
         return 0.0
     if v["glassClear"]:
@@ -568,7 +550,6 @@ def glass_alpha(v):
 
 
 def shipped_accent(css, key):
-    """The --accent a card or tile has in the part of custom.css that is not the look block (the shipped colors), or None."""
     before, _block, after = css_look_split(css)
     for text in (before, after):
         for m in re.finditer(r"(?m)^([^{}\n/]*)\{\s*--accent:\s*(\d+,\s*\d+,\s*\d+)\s*;?\s*\}", text):
@@ -578,7 +559,6 @@ def shipped_accent(css, key):
 
 
 def shipped_group_accent(css, slug):
-    """The --accent a bookmark group has in the part of custom.css that is not the look block, or None."""
     before, _block, after = css_look_split(css)
     for text in (before, after):
         for m in re.finditer(r'\[data-group="%s"\]\s*\{\s*--accent:\s*(\d+,\s*\d+,\s*\d+)\s*;?\s*\}' % re.escape(slug), text):
@@ -595,9 +575,7 @@ WRAP = "html body #inner_wrapper"
 
 
 def paint_vars(rgbs, t, style):
-    """The color of one painted card, tile or bookmark: its color and how strong the fill is (the page's CSS draws the fill from these three values).
-    A gradient is strong on one side and fades out; solid is the same strength everywhere."""
-    k = t ** 0.8                                       # 0 = no color at all; 40 is the strength the page's own CSS has when nothing is set
+    k = t ** 0.8
     if style == "solid":
         a1 = a2 = num(0.72 * k)
     else:
@@ -609,7 +587,6 @@ RESET_VARS = "--hl-a1:initial;--hl-a2:initial;"
 
 
 def paint_decl(rgbs, t):
-    """The edge of one painted card: a colored border and a soft glow around it."""
     return ("border-color:rgba(%s,%s)!important;"
             "box-shadow:0 0 0 1px rgba(%s,%s),0 0 18px -8px rgba(%s,%s),0 14px 30px -20px rgba(0,0,0,.75),var(--lk-rim,0 0 0 0 transparent)!important;" % (
                 rgbs, num(0.16 + 0.34 * t), rgbs, num(0.05 + 0.14 * t), rgbs, num(0.05 + 0.3 * t)))
@@ -619,16 +596,14 @@ PLAIN_DECL = "border-color:var(--lk-line)!important;box-shadow:0 14px 30px -20px
 
 
 def paint_rules(v, saved, css):
-    """Rules for the colors of cards, tiles and bookmarks. With `saved` (the look on the page now) the things that were painted and are not any more
-    get rules that put them back, so a preview shows a removed color at once."""
+    """Build the rules for the colors of cards, tiles and bookmarks. With `saved` (the look on the page now), things that were painted and no longer are get rules that put them back."""
     t = v["paintStrength"] / 100.0
     st = v["paintStyle"]
     rules = []
     allc = "%d, %d, %d" % hex_rgb(v["paintAll"]) if v.get("paintAll") else None
-    cards_all = WRAP + " .service" + "".join(':not([id="%s"])' % x for x in NO_PAINT)     # (an attribute test is weaker than an id, so a card of its own color wins)
+    cards_all = WRAP + " .service" + "".join(':not([id="%s"])' % x for x in NO_PAINT)
     glob_was = saved is not None and (look_full(saved)["paintStrength"] != LOOK_DEFAULT["paintStrength"] or look_full(saved)["paintStyle"] != "gradient")
     if v["paintStrength"] != LOOK_DEFAULT["paintStrength"] or st != "gradient":
-        # the strength and the style also work on the cards, tiles and bookmarks that keep their own default color
         al = paint_vars("0", t, st).split(";", 1)[1]
         rules.append("%s{%s}%s .bookmark>a{%s}" % (cards_all, al, WRAP, al))
     elif glob_was:
@@ -701,8 +676,7 @@ def label_rules(v, saved):
 
 
 def look_css(custom, full=False, saved=None, css=""):
-    """The rules of the look block for a look (only what differs from the default). `full` writes every value, for a preview in front of a saved look
-    (then `saved` is the look on the page now and `css` its custom.css)."""
+    """Build the rules of the look block for a look (only what differs from the default). `full` writes every value, for a preview in front of a saved look."""
     if not custom and not full and saved is None:
         return ""
     v = look_full(custom)
@@ -714,7 +688,7 @@ def look_css(custom, full=False, saved=None, css=""):
         tok.append("--lk-glass: %d, %d, %d;" % hex_rgb(v["glass"]))
     if full or "glassOpacity" in custom or "glassClear" in custom or "glassLevel" in custom or "glassTint" in custom:
         tok.append("--lk-glass-a: %s;" % num(glass_alpha(v)))
-    if full or "glassTint" in custom:             # (with no tint the text gets a thin shadow, so it stays sharp on a bright picture)
+    if full or "glassTint" in custom:
         tok.append("--lk-tshadow: %s;" % ("none" if v["glassTint"] else "0 1px 2px rgba(0, 0, 0, 0.6), 0 0 8px rgba(0, 0, 0, 0.3)"))
     if full or "radius" in custom:
         tok.append("--lk-radius: %dpx;" % v["radius"])
@@ -726,7 +700,7 @@ def look_css(custom, full=False, saved=None, css=""):
         tok.append("--lk-blur: %spx;" % num(v["glassBlur"]))
     if full or "glassSat" in custom:
         tok.append("--lk-sat: %s%%;" % num(v["glassSat"]))
-    if full or "cardDepth" in custom:       # (a dark, rich shade of each card's own color under the bright color: the words stand out and the color is not washed out)
+    if full or "cardDepth" in custom:
         tok.append("--lk-deep: %s%%;" % num(round(v["cardDepth"] * 0.85, 1)))
     if full or "glassRim" in custom:
         tok.append("--lk-rim: %s;" % rim_shadow(v["glassRim"]))
@@ -736,7 +710,7 @@ def look_css(custom, full=False, saved=None, css=""):
         tok.append("--lk-muted: %s;" % v["muted"])
     if full or "playerHeight" in custom:
         tok.append("--lk-player-h: %dpx;" % v["playerHeight"])
-    if not full:                       # (a preview of names and logo is sent to the dashboard as its own message: the page cannot take them as CSS)
+    if not full:
         for k, val in sorted((custom.get("names") or {}).items()):
             tok.append('--hl-name-%s: "%s";' % (k, val))
         lg = custom.get("logo") or {}
@@ -747,7 +721,6 @@ def look_css(custom, full=False, saved=None, css=""):
             tok.append("--hl-logo-size: %spx;" % num(lg.get("size", 48)))
     if tok:
         rules.append("html body #inner_wrapper { %s }" % " ".join(tok))
-    # a color for a tab: the tab rules of the tabs block are more specific than the one above, so each tab gets its own line
     tabs = v["tabs"] if full else (custom.get("tabs") or {})
     for name in sorted(tabs):
         rules.append('html[data-tab="%s"] body #inner_wrapper { --lk-accent: %d, %d, %d; }' % ((name,) + hex_rgb(tabs[name])))
@@ -767,7 +740,6 @@ def look_block(custom):
 
 
 def css_look_split(text):
-    """(text before the block, the block or '', text after the block)"""
     a = text.find(LOOK_B1)
     if a < 0:
         return text, "", ""
@@ -794,7 +766,6 @@ def look_get(css=None):
 
 
 def css_with_look(css, custom):
-    """custom.css with the look block replaced (or added in front of the theme block, or at the end)."""
     before, block, after = css_look_split(css)
     new = look_block(custom)
     if block:
@@ -808,8 +779,6 @@ def css_with_look(css, custom):
 
 
 def picture_block(settings_text):
-    """The exact blur, brightness and color of the background picture. Homepage only knows a few set values from settings.yaml (for example brightness 50, 75 or 100:
-    a number like 52 makes no style at all, so the picture was not dimmed). The panel writes the real numbers here, the same ones its preview uses."""
     d = bg_get(settings_text)
     decl = []
     if d.get("blur") in BLUR_PX:
@@ -859,7 +828,6 @@ def api_look_save(body):
 
 
 def api_look_css(body):
-    """The rules for a preview of a look that is not saved yet (the page puts them over the saved look)."""
     custom = look_clean(body.get("look"))
     css = read(CSS)
     return {"css": look_css(custom, full=True, saved=look_get(css), css=css)}
@@ -872,7 +840,6 @@ def api_look_reset(body):
     return {}
 
 
-# ================================================================ the background (settings.yaml: background:)
 BG_DEFAULT = {"blur": "md", "saturate": 60, "brightness": 42, "opacity": 80}
 BLURS = ("sm", "md", "lg", "xl", "2xl", "3xl")
 IMG_TYPES = {b"\xff\xd8\xff": ".jpg", b"\x89PNG\r\n\x1a\n": ".png", b"GIF8": ".gif"}
@@ -902,7 +869,7 @@ def bg_get(text):
 
 
 def bg_set(text, key, value):
-    """Set (or, with value None, remove) one key of the background: block."""
+    """Set one key of the background block, or remove it when value is None."""
     lines = text.split("\n")
     i, j = bg_block(lines)
     new = "  %s: %s" % (key, "'" + str(value).replace("'", "''") + "'" if key == "image" else value)
@@ -960,10 +927,10 @@ def api_bg_save(body):
     tx = Tx("Background changed")
     text = tx.get(SETTINGS)
     u = body.get("url")
-    if u and isinstance(u, str) and u.startswith("/images/"):            # a picture of this machine (the picture of a theme of your own)
+    if u and isinstance(u, str) and u.startswith("/images/"):
         name = u[len("/images/"):]
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,120}", name) or not os.path.isfile(os.path.join(IMAGES, name)):
-            raise Fail("That picture is not in the images folder any more.")
+            raise Fail("That picture is no longer in the images folder.")
         text = bg_set(text, "image", u)
     elif u:
         text = bg_set(text, "image", clean_url(u, "The picture address", False))
@@ -996,7 +963,6 @@ def sniff_image(data):
 
 
 def restart_homepage():
-    """Homepage only serves a new local picture after a restart. Done in the background; the panel does not wait."""
     if NO_DOCKER:
         return False
 
@@ -1010,11 +976,10 @@ def restart_homepage():
 
 
 def bg_store(data, body=None, fixed=None):
-    """Keeps a picture in the images folder and makes it the background (with the sliders in `body`, if any). Returns what the panel needs to know.
-    `fixed` is a name without the ending (the picture of a theme keeps its own file, so the next time the theme is chosen nothing is downloaded)."""
+    """Keep a picture in the images folder and make it the background, with the sliders in `body` if any. Returns what the panel needs to know."""
     ext = sniff_image(data)
     if not ext:
-        raise Fail("That file is not a picture I can use. Choose a .jpg, .png, .webp, .gif or .avif file.")
+        raise Fail("That file cannot be used as a picture. Choose a .jpg, .png, .webp, .gif or .avif file.")
     os.makedirs(IMAGES, exist_ok=True)
     name = (fixed + ext) if fixed else "background-%s%s" % (time.strftime("%Y%m%d%H%M%S"), ext)
     with open(os.path.join(IMAGES, name), "wb") as f:
@@ -1024,7 +989,7 @@ def bg_store(data, body=None, fixed=None):
     text = bg_set(tx.get(SETTINGS), "image", "/images/" + name)
     tx.put(SETTINGS, bg_numbers(body or {}, text))
     tx.commit()
-    for old in ([] if fixed else os.listdir(IMAGES)):                      # earlier uploads are not needed any more (Undo only brings back the setting)
+    for old in ([] if fixed else os.listdir(IMAGES)):
         if re.fullmatch(r"background-\d{14}\.\w+", old) and old != name:
             try:
                 if len([x for x in os.listdir(IMAGES) if x.startswith("background-")]) > 3:
@@ -1039,20 +1004,19 @@ def api_bg_upload(data):
 
 
 def theme_picture(body):
-    """The picture of a theme: the panel only names the theme, and the address comes from the list above (so it cannot be made to fetch any other address).
-    The picture is copied to the images folder, so the dashboard keeps working without the internet. If that fails the address is used as it is."""
+    """Return the picture of a theme. The panel only names the theme and the address comes from the list above, so it cannot be made to fetch any other address."""
     t = next((x for x in LOOK_THEMES if x["id"] == body.get("theme")), None)
     if not t or not t.get("background"):
         raise Fail("That theme has no picture.")
     url = t["background"]["url"]
     with LOCK:
         have = [f for f in (sorted(os.listdir(IMAGES)) if os.path.isdir(IMAGES) else []) if re.fullmatch(r"theme-%s\.\w+" % t["id"], f)]
-        if have:                         # the picture of this theme was used before: it is in the folder (and the dashboard has seen it), so nothing is downloaded and nothing restarts
+        if have:
             tx = Tx("Background picture changed")
             tx.put(SETTINGS, bg_numbers(body, bg_set(tx.get(SETTINGS), "image", "/images/" + have[0])))
             tx.commit()
             return {"restarting": False, "image": "/images/" + have[0], "stored": True, "cached": True}
-    base = os.environ.get("HLP_THEME_PICTURE_BASE")             # (for the tests: a small web server of their own)
+    base = os.environ.get("HLP_THEME_PICTURE_BASE")
     data = None
     try:
         req = urllib.request.Request(base.rstrip("/") + "/" + t["id"] + ".png" if base else url, headers={"User-Agent": "homelab-panel"})
@@ -1071,14 +1035,13 @@ def theme_picture(body):
         return {"restarting": False, "image": url, "stored": False}
 
 
-# ================================================================ layout: tabs, groups, their order (settings.yaml: layout:)
-AUTOMATIC = {"At a Glance", "Music Library", "Library Totals", "Storage", "Backup & Updates", "Folder Sizes", "Calendar"}     # made by the lab's scripts
-HL_ID = re.compile(r"^(stat|cal)-")      # the ids of the cards HomeLab fills in (numbers, calendar)
-HL_BLOCKS = (("# >>> homelab stats >>>", "# <<< homelab stats <<<"), ("# >>> homelab calendar >>>", "# <<< homelab calendar <<<"))      # the installer's blocks in services.yaml
+AUTOMATIC = {"At a Glance", "Music Library", "Library Totals", "Storage", "Backup & Updates", "Folder Sizes", "Calendar"}
+HL_ID = re.compile(r"^(stat|cal)-")
+HL_BLOCKS = (("# >>> homelab stats >>>", "# <<< homelab stats <<<"), ("# >>> homelab calendar >>>", "# <<< homelab calendar <<<"))
 HL_GROUP_LOOK = {"At a Glance": ("mdi-view-dashboard", 4, "Stats"), "Music Library": ("mdi-music", 2, "Stats"), "Library Totals": ("mdi-image-multiple", 2, "Stats"),
                  "Storage": ("mdi-harddisk", 3, "Stats"), "Backup & Updates": ("mdi-backup-restore", 2, "Stats"), "Folder Sizes": ("mdi-folder-multiple", 1, "Stats"),
-                 "Calendar": ("mdi-calendar-month", 2, "Home")}      # group -> (icon, columns, tab) for a group that Add From List or Restore has to make again
-PROTECTED = {"Customize", "Edit Links", "Terminal"}          # the panel itself (the Customize tab and the link editor of the Links tab): it can be moved, but not removed
+                 "Calendar": ("mdi-calendar-month", 2, "Home")}
+PROTECTED = {"Customize", "Edit Links", "Terminal"}
 
 
 def layout_span(lines):
@@ -1094,7 +1057,7 @@ def layout_span(lines):
 
 
 def layout_groups(text):
-    """[{name, props: {tab, icon, style, columns, ...}, extra: [lines]}] in the order of the file."""
+    """Return [{name, props: {tab, icon, style, columns, ...}, extra: [lines]}] in the order of the file."""
     lines = text.split("\n")
     i, j = layout_span(lines)
     out = []
@@ -1164,7 +1127,6 @@ def layout_state():
     svc = {g["name"]: len(g["cards"]) for g in services_parse(read(SERVICES).split("\n"))}
     bm = {g["name"]: len(g["links"]) for g in marks_parse(read(BOOKMARKS))[1]}
     listed = {g["name"] for g in groups}
-    # a group that is in services.yaml or bookmarks.yaml but not in the layout is shown on every tab by Homepage: list it as part of the first tab
     extra = [n for n in list(svc) + list(bm) if n not in listed]
     for n in dict.fromkeys(extra):
         groups.append({"name": n, "props": {"tab": (layout_tabs(groups)[0]["name"] if groups else "Home")}, "extra": [], "unlisted": True})
@@ -1178,6 +1140,7 @@ def layout_state():
 
 
 def api_layout_save(body):
+    """Save the tabs, the order of the groups and their icons, styles and columns."""
     want = body.get("tabs")
     if not isinstance(want, list) or not want or len(want) > 12:
         raise Fail("The layout is missing.")
@@ -1231,9 +1194,8 @@ def api_layout_save(body):
     return {}
 
 
-# ================================================================ cards (services.yaml): line based, so widgets and secrets are never touched
 def services_parse(lines):
-    """[{name, start, end, cards: [{name, start, end}]}] with line numbers; end is exclusive."""
+    """Return [{name, start, end, cards: [{name, start, end}]}] with line numbers. end is exclusive."""
     heads = [(i, re.match(r"^- (.+?):\s*$", l)) for i, l in enumerate(lines)]
     heads = [(i, unq(m.group(1))) for i, m in heads if m]
     groups = []
@@ -1248,13 +1210,13 @@ def services_parse(lines):
                 ce -= 1
             g["cards"].append({"name": cn, "start": k, "end": ce})
         while g["end"] > g["start"] + 1 and (not lines[g["end"] - 1].strip() or (lines[g["end"] - 1].lstrip().startswith("#") and indent(lines[g["end"] - 1]) < 4)):
-            g["end"] -= 1                    # the blank lines and the marker comments after the last card belong to no group
+            g["end"] -= 1
         groups.append(g)
     return groups
 
 
 def card_fields(lines, c):
-    """The simple lines of a card (id, href, icon, description, siteMonitor) and the type of its widget ('' when it has none)."""
+    """Return the simple lines of a card (id, href, icon, description, siteMonitor) and the type of its widget ('' when it has none)."""
     f = {}
     for k in range(c["start"] + 1, c["end"]):
         m = re.match(r"^        (id|href|icon|description|siteMonitor|target):\s*(.*?)\s*$", lines[k])
@@ -1298,11 +1260,11 @@ def find_card(lines, group, name):
             for c in g["cards"]:
                 if c["name"] == name:
                     return g, c
-    raise Fail("I cannot find the card '%s' in '%s'. Reload the panel and try again." % (name, group))
+    raise Fail("The card '%s' was not found in '%s'. Reload the panel and try again." % (name, group))
 
 
 def set_line(lines, c, key, value):
-    """Set one simple line of a card (value None or '' removes it). The widget lines are never touched."""
+    """Set one simple line of a card. A value of None or '' removes it. The widget lines are never touched."""
     ind = " " * 8
     idx = None
     for k in range(c["start"] + 1, c["end"]):
@@ -1319,7 +1281,7 @@ def set_line(lines, c, key, value):
         lines[idx] = new
         return
     at = c["end"]
-    for k in range(c["start"] + 1, c["end"]):                       # new simple lines go in front of the widget (or any deeper block)
+    for k in range(c["start"] + 1, c["end"]):
         if re.match(r"^        (widget|server|container|stack):", lines[k]):
             at = k
             break
@@ -1341,13 +1303,12 @@ def new_card_lines(name, href, icon, description, monitor):
 
 
 def tidy_blank(lines, at):
-    """After a cut at index `at`: no double blank line."""
     while 0 < at < len(lines) and not lines[at].strip() and not lines[at - 1].strip():
         del lines[at]
 
 
 def card_insert(lines, group, block, before=None):
-    """Put a card block into a group: before the card named `before`, else at the end. A group that does not exist is made."""
+    """Put a card block into a group, before the card named `before` or else at the end. A group that does not exist is created."""
     for g in services_parse(lines):
         if g["name"] == group:
             if before is not None:
@@ -1389,7 +1350,6 @@ def card_values(body, managed_card=False):
 
 
 def ensure_layout_group(tx, group, tab=None, props=None):
-    """A new group gets a line in the layout (on the tab given, else the first tab; `props` are its icon and columns)."""
     text = tx.get(SETTINGS)
     gs = layout_groups(text)
     if any(g["name"] == group for g in gs) or not gs:
@@ -1400,8 +1360,6 @@ def ensure_layout_group(tx, group, tab=None, props=None):
 
 
 def hl_adopt(lines):
-    """The first time a card HomeLab fills in is changed: the marker line of its block says `customized`, so the installer stops
-    rewriting the block on an upgrade (it would put the shipped cards back). Returns True when a block was marked."""
     done = False
     for b, _e in HL_BLOCKS:
         for i, l in enumerate(lines):
@@ -1417,7 +1375,7 @@ def hl_lan(live_text):
 
 
 def hl_catalog():
-    """The cards HomeLab can fill in, from the files the installer keeps next to the panel: [{id, name, group, icon, description, extra, lines}]."""
+    """Return the cards HomeLab can fill in, from the files the installer keeps next to the panel: [{id, name, group, icon, description, extra, lines}]."""
     out, seen = [], set()
     lan = hl_lan(read(SERVICES))
     for path, extra in ((SHIPPED, False), (SHIPPED_EXTRAS, True)):
@@ -1441,7 +1399,6 @@ def hl_catalog():
 
 
 def hl_state():
-    """What the page needs for Add From List: every card on offer and whether it is on the dashboard now."""
     lines = read(SERVICES).split("\n")
     where = {}
     for g in services_parse(lines):
@@ -1454,7 +1411,6 @@ def hl_state():
 
 
 def hl_place(tx, lines, card, group, tab=None):
-    """Put a card of the catalog into a group (made when it is missing) and make sure the layout knows the group."""
     if any(c["name"] == card["name"] for g in services_parse(lines) if g["name"] == group for c in g["cards"]):
         raise Fail("The group '%s' already has a card called '%s'. Change that card's name first." % (group, card["name"]))
     card_insert(lines, group, list(card["lines"]))
@@ -1466,7 +1422,7 @@ def hl_place(tx, lines, card, group, tab=None):
 
 
 def api_hl_restore(body):
-    """Put every card HomeLab ships back (the ones changed, moved or hidden), each in its own group. Cards you added stay."""
+    """Put back every card HomeLab ships that was changed, moved or hidden, each in its own group. Cards the user added stay."""
     cat = [c for c in hl_catalog() if not c["extra"]]
     if not cat:
         raise Fail("The list of HomeLab's cards is not on this machine yet. Run:  sudo homelab-setup upgrade")
@@ -1508,6 +1464,7 @@ def drop_layout_group(tx, group):
 
 
 def api_card(body):
+    """Add, edit, remove or move cards in services.yaml."""
     op = body.get("op")
     tx = Tx({"add": "Card added", "add-list": "Cards added", "edit": "Card changed", "remove": "Card removed", "move": "Card moved"}.get(op, "Cards changed"))
     lines = tx.get(SERVICES).split("\n")
@@ -1568,7 +1525,7 @@ def api_card(body):
         del lines[c["start"]:c["end"]]
         tidy_blank(lines, c["start"])
         left = next((x for x in services_parse(lines) if x["name"] == g["name"]), None)
-        if left is not None and not left["cards"]:                 # Homepage does not like an empty group
+        if left is not None and not left["cards"]:
             del lines[left["start"]:left["end"]]
             tx.put(SERVICES, "\n".join(lines))
             drop_layout_group(tx, g["name"])
@@ -1600,11 +1557,6 @@ def api_card(body):
     return {}
 
 
-# ================================================================ your own themes: a look, and if you want a picture, a layout and the cards
-# A theme you make is saved in a small file next to the Homepage files (.panel-themes.json), so it is kept with them and travels with a backup.
-# It holds the look as the page shows it, and (only if its box was ticked) the picture settings, the layout (tabs, groups, their order) and the
-# presentation of the cards (which cards, their names, icons, texts, groups and order). The cards' own addresses and widgets are never copied
-# back over the live ones: a theme only puts cards in order, renames them and brings back the ones HomeLab fills in or you made yourself.
 MYTHEMES = os.path.join(HP, ".panel-themes.json")
 MYTHEME_ID = re.compile(r"^my-[a-z0-9]{4,24}$")
 MAX_MYTHEMES = 24
@@ -1625,7 +1577,6 @@ def mythemes_save(lst):
 
 
 def mythemes_state():
-    """What the page needs of each theme: its look and picture (for the tile and for trying it) and which parts it holds. The layout and the cards stay on the server."""
     out = []
     for t in mythemes_load():
         parts = [p for p in MYTHEME_PARTS if p in t]
@@ -1666,7 +1617,7 @@ def cards_snapshot():
 
 
 def mytheme_background(raw, tid, old_image=None):
-    """The picture settings of a theme, checked. A picture on this machine is copied to a file of the theme's own, so replacing the background later does not change it."""
+    """Check the picture settings of a theme. A picture on this machine is copied to a file of the theme's own, so replacing the background later does not change it."""
     if not isinstance(raw, dict):
         raise Fail("The picture settings are missing.")
     out = {}
@@ -1698,11 +1649,12 @@ def mytheme_background(raw, tid, old_image=None):
 
 
 def api_mytheme(body):
+    """Create, apply, rename and delete the user's saved themes."""
     op = body.get("op")
     lst = mythemes_load()
     if op == "create":
         if len(lst) >= MAX_MYTHEMES:
-            raise Fail("You have %d themes already. Delete one first." % MAX_MYTHEMES)
+            raise Fail("The limit of %d themes has been reached. Delete one first." % MAX_MYTHEMES)
         name = clean_text(body.get("name"), "The theme name", 30)
         if not re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", name):
             raise Fail("The name '%s' has characters that are not allowed (use letters, digits, spaces and - _ . , ( ) + )." % name)
@@ -1710,7 +1662,7 @@ def api_mytheme(body):
             raise Fail("There is already a theme called '%s'. Choose another name." % name)
         parts = body.get("parts")
         if not isinstance(parts, list) or not parts or any(p not in MYTHEME_PARTS for p in parts):
-            raise Fail("Tick at least one thing for the theme to hold.")
+            raise Fail("Select at least one item for the theme to contain.")
         tid = "my-" + secrets.token_hex(4)
         t = {"id": tid, "name": name, "blurb": clean_text(body.get("blurb", ""), "The description", 90, True) or "Your own theme.", "created": int(time.time())}
         if "look" in parts:
@@ -1731,7 +1683,7 @@ def api_mytheme(body):
         return {"id": tid}
     t = next((x for x in lst if x["id"] == body.get("id")), None)
     if t is None:
-        raise Fail("I cannot find that theme. Reload the panel and try again.")
+        raise Fail("The theme was not found. Reload the panel and try again.")
     if op == "rename":
         name = clean_text(body.get("name"), "The theme name", 30)
         if not re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", name):
@@ -1767,7 +1719,7 @@ def api_mytheme(body):
 
 
 def layout_apply(tx, snap):
-    """The tabs, the order of the groups and their icons, styles and columns of a theme, for the groups that are here now. Groups the theme does not know stay on their tab, after the others."""
+    """Apply a theme's tabs, group order, icons, styles and columns to the groups that exist now. Groups the theme does not know stay on their tab."""
     text = tx.get(SETTINGS)
     cur = layout_groups(text)
     if not cur:
@@ -1805,8 +1757,7 @@ def layout_apply(tx, snap):
 
 
 def cards_apply(tx, snap):
-    """Put the cards the way a theme had them: names, icons, texts, groups and order. A card that is gone is made again when it is one HomeLab fills in or one you made yourself
-    (a card with a widget is never copied). The cards HomeLab fills in that the theme did not have are hidden (Add From HomeLab's List brings them back)."""
+    """Put the cards the way a theme had them: names, icons, texts, groups and order. A card that is gone is created again when HomeLab fills it in or the user made it."""
     lines = tx.get(SERVICES).split("\n")
     want = [(g["group"], c) for g in (snap.get("groups") if isinstance(snap, dict) else []) or [] for c in g.get("cards", [])]
     catalog = {c["id"]: c for c in hl_catalog()}
@@ -1822,7 +1773,7 @@ def cards_apply(tx, snap):
                         return g, c
                 elif not f.get("id") and c["name"] == item.get("key"):
                     return g, c
-        if item.get("kind") == "own" and item.get("href"):                 # a card of yours that was renamed since: the same address is the same card
+        if item.get("kind") == "own" and item.get("href"):
             for g in services_parse(lines):
                 for c in g["cards"]:
                     f = card_fields(lines, c)
@@ -1861,7 +1812,6 @@ def cards_apply(tx, snap):
         pub = card_public(lines, c, g["name"])
         if pub["locked"]:
             continue
-        # name, icon and text (a name that another card of the group has already is not used)
         nm = item.get("name") or c["name"]
         if nm != c["name"] and not any(x["name"] == nm for gg in services_parse(lines) if gg["name"] == group for x in gg["cards"]) and re.fullmatch(r"[^\"'\\{};<>/*:#\[\]|`]+", nm) and len(nm) <= 60:
             lines[c["start"]] = "    - %s:" % yq(nm)
@@ -1873,7 +1823,6 @@ def cards_apply(tx, snap):
             set_line(lines, c, "description", clean_text(item.get("description", ""), "The description", 160, True))
         except Fail:
             pass
-        # to the end of its group: after all the cards of the theme the group has them in the theme's order
         block = lines[c["start"]:c["end"]]
         del lines[c["start"]:c["end"]]
         tidy_blank(lines, c["start"])
@@ -1883,7 +1832,6 @@ def cards_apply(tx, snap):
         if left is not None and not left["cards"]:
             del lines[left["start"]:left["end"]]
             drop_layout_group(tx, g["name"])
-    # the cards the theme does not have: the ones HomeLab fills in are hidden, the others stay where they are (after the theme's)
     sids = {c["id"] for _g, c in want if c.get("id")}
     skeys = {c.get("key") for _g, c in want if not c.get("id")}
     for _ in range(200):
@@ -1930,9 +1878,8 @@ def card_ids(lines):
     return [card_fields(lines, c).get("id", "") for g in services_parse(lines) for c in g["cards"]]
 
 
-# ================================================================ links (bookmarks.yaml): the whole file is rewritten from the parsed groups
 def marks_parse(text):
-    """(the comment lines at the top, [{name, links: [{name, abbr, href, icon, description, extra}]}])"""
+    """Return (the comment lines at the top, [{name, links: [{name, abbr, href, icon, description, extra}]}]) from bookmarks.yaml."""
     lines = text.split("\n")
     head, groups, cur, ent = [], [], None, None
     for l in lines:
@@ -1991,6 +1938,7 @@ def abbr_of(name):
 
 
 def api_link(body):
+    """Add, edit, remove or move bookmarks and bookmark groups."""
     op = body.get("op")
     tx = Tx({"add": "Link added", "edit": "Link changed", "remove": "Link removed", "move": "Link moved", "group-add": "Link group added",
              "group-rename": "Link group renamed", "group-remove": "Link group removed"}.get(op, "Links changed"))
@@ -1999,13 +1947,13 @@ def api_link(body):
     def grp(name):
         g = next((x for x in groups if x["name"] == name), None)
         if not g:
-            raise Fail("I cannot find the group '%s'. Reload the panel and try again." % name)
+            raise Fail("The group '%s' was not found. Reload the panel and try again." % name)
         return g
 
     def link(g, name):
         e = next((x for x in g["links"] if x["name"] == name), None)
         if not e:
-            raise Fail("I cannot find the link '%s'. Reload the panel and try again." % name)
+            raise Fail("The link '%s' was not found. Reload the panel and try again." % name)
         return e
 
     def values(b):
@@ -2089,7 +2037,7 @@ def api_link(body):
 
 
 def api_group(body):
-    """Groups of cards: rename or remove a whole group of the dashboard (not the ones HomeLab keeps up to date)."""
+    """Rename or remove a whole group of cards on the dashboard. Groups HomeLab keeps up to date cannot be removed."""
     op = body.get("op")
     name = body.get("group")
     if name in AUTOMATIC or name in PROTECTED:
@@ -2098,7 +2046,7 @@ def api_group(body):
     lines = tx.get(SERVICES).split("\n")
     g = next((x for x in services_parse(lines) if x["name"] == name), None)
     if g is None:
-        raise Fail("I cannot find the group '%s'. Reload the panel and try again." % name)
+        raise Fail("The group '%s' was not found. Reload the panel and try again." % name)
     if op == "rename":
         new = check_group_name(body.get("to"))
         if any(x["name"] == new for x in services_parse(lines)):
@@ -2123,7 +2071,6 @@ def api_group(body):
     return {}
 
 
-# ================================================================ the password and the sessions
 def hash_password(pw, salt=None):
     salt = salt or secrets.token_bytes(16)
     h = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=2 ** 14, r=8, p=1, dklen=32)
@@ -2141,7 +2088,7 @@ def check_password(pw):
 
 def password_problem(pw):
     if len(pw) < 10:
-        return "The password needs at least 10 characters."
+        return "The password must be at least 10 characters."
     if pw.strip() != pw:
         return "The password cannot start or end with a space."
     return ""
@@ -2154,10 +2101,10 @@ def set_password(pw):
     os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
     os.chmod(STATE_DIR, 0o700)
     write_atomic(PASSFILE, hash_password(pw) + "\n", 0o600)
-    SESSIONS.clear()                                   # a new password logs everyone out
+    SESSIONS.clear()
 
 
-SESSIONS = {}          # token -> {"created", "seen", "csrf"}
+SESSIONS = {}
 FAILS = {"count": 0, "until": 0.0}
 
 
@@ -2180,7 +2127,6 @@ def login(pw):
 
 
 def pw_version():
-    """Changes whenever the password file does: a new password logs every session out, also in a running panel."""
     try:
         return os.stat(PASSFILE).st_mtime_ns
     except OSError:
@@ -2197,9 +2143,8 @@ def session_ok(tok):
     return True
 
 
-# ================================================================ what can get a color, and the icon library
 def paint_state():
-    """The cards, tiles and bookmarks and the group labels the Colors screen lists."""
+    """Return the cards, tiles, bookmarks and group labels that the Colors screen lists."""
     lines = read(SERVICES).split("\n")
     css = read(CSS)
     look_accent = look_full(look_get(css))["accent"]
@@ -2248,8 +2193,7 @@ def fetch_json(urls):
 
 
 def icon_index():
-    """{"apps": [names like plex.svg], "mdi": [names like home-outline]} from the icon lists the dashboard's own icons come from. The lists are downloaded once
-    and kept for a month; without internet the last copy (or nothing) is used and the page falls back to its short list."""
+    """Return {"apps": [names like plex.svg], "mdi": [names like home-outline]} from the icon lists the dashboard uses. The lists are downloaded once and kept for a month."""
     cache = os.path.join(STATE_DIR, "icons.json")
     try:
         with open(cache, encoding="utf-8") as f:
@@ -2276,14 +2220,11 @@ def icon_index():
     return data
 
 
-# ================================================================ the state the page shows
-# ================================================================ time zone and city (the clock and the weather card of the dashboard)
 GEOCODE_API = os.environ.get("HLP_GEOCODE_API") or "https://geocoding-api.open-meteo.com"
 ZONE_NAME = re.compile(r"[A-Za-z0-9_+/-]{1,60}\Z")
 
 
 def widget_block(text, key):
-    """(start, end) of the text of one widget in widgets.yaml (from the word after its dash up to the next widget), or None."""
     m = re.search(r"(- %s:)(.*?)(\n- |\Z)" % key, text, re.S)
     return (m.start(2), m.end(2)) if m else None
 
@@ -2307,7 +2248,7 @@ def location_state():
 
 
 def api_location_search(body):
-    """Cities with that name (Open-Meteo's free search, no key): the page shows them and the person picks one."""
+    """Search cities by name with Open-Meteo's free search. The page shows the results and the person picks one."""
     q = str(body.get("q") or "").strip()[:60]
     if not q:
         raise Fail("Type the name of a city first.")
@@ -2316,7 +2257,7 @@ def api_location_search(body):
         with urllib.request.urlopen(req, timeout=15) as r:
             js = json.loads(r.read().decode("utf-8", "replace"))
     except (OSError, ValueError):
-        raise Fail("The city search did not answer. Check that the server is online, and try again.") from None
+        raise Fail("The city search did not respond. Check that the server is online and try again.") from None
     found = []
     for r in js.get("results") or []:
         try:
@@ -2328,13 +2269,14 @@ def api_location_search(body):
 
 
 def api_location_save(body):
+    """Save the chosen city and time zone."""
     tz = str(body.get("timeZone") or "").strip()
     place = body.get("place")
     tx = Tx("Time zone and city changed")
     text = tx.get(WIDGETS)
     if tz:
         if not ZONE_NAME.match(tz) or tz not in zoneinfo.available_timezones():
-            raise Fail("That is not a time zone name. Pick one from the list, like America/New_York.")
+            raise Fail("That is not a valid time zone name. Choose one from the list, for example America/New_York.")
         b = widget_block(text, "datetime")
         if not b:
             raise Fail("The dashboard has no clock widget in widgets.yaml, so there is nothing to set.")
@@ -2349,9 +2291,9 @@ def api_location_save(body):
         try:
             name, lat, lon = str(place["name"]).strip(), float(place["lat"]), float(place["lon"])
         except (KeyError, TypeError, ValueError):
-            raise Fail("The city is not understood. Search for it again and pick one from the list.") from None
+            raise Fail("The city is not valid. Search for it again and choose one from the list.") from None
         if not name or len(name) > 60 or not (-90 <= lat <= 90 and -180 <= lon <= 180):
-            raise Fail("The city is not understood. Search for it again and pick one from the list.")
+            raise Fail("The city is not valid. Search for it again and choose one from the list.")
         b = widget_block(text, "openmeteo")
         if not b:
             raise Fail("The dashboard has no weather widget in widgets.yaml, so there is nothing to set.")
@@ -2374,32 +2316,27 @@ def full_state():
             "links": marks_state(), "location": location_state(), "paint": paint_state(), "undo": (h[1]["label"] if h else ""), "automatic": sorted(AUTOMATIC), "protected": sorted(PROTECTED)}
 
 
-# ================================================================ the Drives tab
-# The panel never touches a drive itself. It asks the drives tool, through the narrow sudo rule the installer writes
-# (/etc/sudoers.d/homelab-panel): `sudo -n drives panel status|health|check|actions|remount|rename ID NAME|sleep ID|wake ID` and nothing else.
-# Every word is checked here and again by the drives tool.
-DRIVES_GATE = threading.Condition()           # looking at the drives (any number at once) or changing them (one, alone); it is not the big LOCK, so the look still works meanwhile
+DRIVES_GATE = threading.Condition()
 DRIVES_STATE = {"readers": 0, "changing": False}
 DRIVE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}\Z")
 DRIVE_NAME = re.compile(r"[A-Za-z0-9 .()+,-]{1,40}\Z")
 DRIVE_TIMEOUT = {"status": 90, "actions": 90, "setups": 120, "health": 180, "check": 180, "remount": 600, "apps": 60}
-DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|NOW|RESTORE|START|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)\Z")      # what a person may type in a confirmation; the drives tool checks that it is the word asked for
+DRIVE_WORD = re.compile(r"(ERASE|CONTINUE|REMOVE|KEEP|NOW|RESTORE|START|/dev/[a-z0-9]{1,16}|pool|mirror|snapraid1|snapraid2|zfs-stripe|zfs-mirror|zfs-raidz1|zfs-raidz2|zfs-raidz3|md-raid0|md-raid1|md-raid5|md-raid6|md-raid10)\Z")
 JOB_MAX_SECONDS = 8 * 3600
-JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "items": [], "progress": {}, "current": "", "stopping": False}      # the drive change that runs (or ran last) in the background
+JOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "items": [], "progress": {}, "current": "", "stopping": False}
 JOB_LOCK = threading.Lock()
 
 
 def drives_problem(rc, text):
-    """A sentence for a drives command that did not work (sudo said no, the tool is missing, or the tool refused)."""
     low = text.lower()
     if rc == 127 or "command not found" in low or "no such file" in low:
         return "The drives tool is not installed on this machine, so the Drives tab has nothing to work with."
     if "password is required" in low or "not allowed" in low or "may not run sudo" in low or "no tty present" in low:
         return "The Drives tab is not allowed to use the drives tool yet. On the server, run:  sudo homelab-setup upgrade"
     if rc == 124:
-        return "The drives tool took too long. Nothing more was started; try again in a minute."
+        return "The drives tool took too long. Nothing further was started. Try again shortly."
     lines = [x.strip() for x in text.splitlines() if x.strip() and not x.startswith("WARNING")]
-    return " ".join(lines[-3:])[:400] or "The drives tool did not work (code %d)." % rc
+    return " ".join(lines[-3:])[:400] or "The drives tool failed (code %d)." % rc
 
 
 DRIVES_BUSY_MSG = "A drive change is running right now. This page shows its progress."
@@ -2419,15 +2356,14 @@ def drives_look_end():
 
 
 def drives_change_begin(wait=30):
-    """A change runs alone: it says so first (so no new look starts), then waits a moment for the looks that are already running."""
     with DRIVES_GATE:
         if DRIVES_STATE["changing"]:
-            raise Fail("Another drive command is running. Try again in a moment.", 409)
+            raise Fail("Another drive command is running. Try again shortly.", 409)
         DRIVES_STATE["changing"] = True
         if not DRIVES_GATE.wait_for(lambda: DRIVES_STATE["readers"] == 0, timeout=wait):
             DRIVES_STATE["changing"] = False
             DRIVES_GATE.notify_all()
-            raise Fail("The drives are still being read. Try again in a moment.", 409)
+            raise Fail("The drives are still being read. Try again shortly.", 409)
 
 
 def drives_change_end():
@@ -2437,7 +2373,7 @@ def drives_change_end():
 
 
 def drives_run(words, timeout, look=False):
-    """Run `drives panel WORDS...`; returns (returncode, stdout, stderr). Looks run together; a change runs alone."""
+    """Run `drives panel WORDS...` and return (returncode, stdout, stderr). Reading commands can run together; a change runs alone."""
     if look:
         drives_look_begin()
     else:
@@ -2458,18 +2394,17 @@ def drives_run(words, timeout, look=False):
 
 
 def drives_json(action, extra=()):
-    """The JSON a look-only command prints (health and check also exit 1 when they find a problem, and still print it)."""
     rc, out, err = drives_run([action] + list(extra), DRIVE_TIMEOUT[action], look=True)
     try:
         data = json.loads(out)
     except ValueError:
         raise Fail(drives_problem(rc, err or out), 502 if rc != 124 else 504) from None
     if not isinstance(data, dict):
-        raise Fail("The drives tool answered in a way the panel does not understand.", 502)
+        raise Fail("The drives tool returned a response that the panel cannot read.", 502)
     return data
 
 
-DRIVES_LAST = {"state": None}      # the last state that was read: shown (marked stale) while a change is running, so the page still has its drive boxes
+DRIVES_LAST = {"state": None}
 DRIVES_LAST_FILE = os.path.join(STATE_DIR, "drives-last.json")
 
 
@@ -2486,8 +2421,7 @@ def drives_last_load():
 
 
 def api_drives_state():
-    """Pools, drives and the last backup, plus what can be renamed or put to sleep.
-    While a change is running the drives are not read (they are being changed): the last state that was read is shown instead, marked "stale"."""
+    """Return the pools, drives and last backup, plus what can be renamed or put to sleep. While a change is running the drives are not read, so the last state is returned."""
     try:
         st = drives_json("status")
         ac = drives_json("actions")
@@ -2510,23 +2444,21 @@ def api_drives_state():
 
 
 def drive_message(out, err, limit=600, problem=False):
-    """What the drives tool said, for a toast: its own sentences, without the progress lines.
-    A finished change is told by its "Done." line alone; a change that did not work by the warnings it ended with.
-    The text is cut between lines, never in the middle of a sentence."""
+    """Turn the drives tool's output into a short message for the page. A finished change is reported by its "Done." line alone."""
     lines = []
     for x in (out + "\n" + err).splitlines():
         x = x.strip()
-        if not x or x.startswith(("Starting containers", "Stopping", "WARNING: Not a good moment")):
+        if not x or x.startswith(("Starting containers", "Stopping", "WARNING: Not safe to continue now")):
             continue
         if re.fullmatch(r"[-\u2014\u2500=_ ]+", x) or x.startswith(("\u2014", "\u2500")) or "\u2014\u2014" in x:
-            continue      # (a rule or a heading line of another tool)
+            continue
         lines.append(x)
     if not problem:
         for x in lines:
             if x.startswith("Done"):
                 return x[:limit]
     else:
-        errors = [x[len("ERROR:"):].strip() for x in lines if x.startswith("ERROR:")]      # (the reason the tool gave up: it stands alone, not after the drive's table)
+        errors = [x[len("ERROR:"):].strip() for x in lines if x.startswith("ERROR:")]
         warned = [x[len("WARNING:"):].strip() for x in lines if x.startswith("WARNING:") and "lazy unmount" not in x]
         if errors:
             lines = errors
@@ -2538,7 +2470,7 @@ def drive_message(out, err, limit=600, problem=False):
 
 
 def api_drives_do(action, body):
-    """rename / sleep / wake / remount. The answer says what the drives tool said."""
+    """Run rename, sleep, wake or remount and return what the drives tool said."""
     words = [action]
     if action in ("rename", "sleep", "wake"):
         ident = body.get("id")
@@ -2568,7 +2500,6 @@ DRIVE_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}(:(keep|erase))?\Z")
 
 
 def job_ids(body):
-    """The drives a change is about: `ids` (up to eight, each 'ID' or 'ID:keep' / 'ID:erase') or the single `id`."""
     ids = body.get("ids")
     if ids is None:
         ids = [body.get("id")]
@@ -2588,7 +2519,7 @@ def job_ids(body):
 
 
 def job_words(action, body):
-    """The exact words of a drive change (add, wipe, disconnect, move), checked before anything is asked of the drives tool."""
+    """Build the exact words of a drive change (add, wipe, disconnect, move) and check them before the drives tool is asked to do anything."""
     typed = body.get("typed", [])
     if not isinstance(typed, list) or len(typed) > 20 or not all(isinstance(w, str) and DRIVE_WORD.match(w) for w in typed):
         raise Fail("A confirmation word is not allowed.")
@@ -2598,9 +2529,9 @@ def job_words(action, body):
         if v not in allowed:
             raise Fail("Choose %s first." % key)
         return v
-    if action == "moveboot":     # the files that were saved on the boot drive while Main had no drive are moved to the Main pool (nothing to choose)
+    if action == "moveboot":
         return ["moveboot"]
-    if action == "appsfix":      # Fix Drives found that Immich or Nextcloud cannot find their files: restore them from the backup, or start them on empty folders (needs START typed)
+    if action == "appsfix":
         return ["appsfix", pick("mode", ("restore", "fresh"))] + typed
     if action == "bootadd":
         units = body.get("units")
@@ -2612,7 +2543,7 @@ def job_words(action, body):
         if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9-]{3,12}", name):
             raise Fail("Choose a setup first.")
         if not isinstance(ids, list) or not 1 <= len(ids) <= 16 or not all(isinstance(t, str) and DRIVE_TOKEN.match(t) for t in ids) or len({t.split(":")[0] for t in ids}) != len(ids):
-            raise Fail("Choose the drives for the setup.")      # (each is 'ID', or 'ID:keep' to keep its files, 'ID:erase')
+            raise Fail("Choose the drives for the setup.")
         return ["setup", name, ",".join(ids)] + typed
     if action == "wipe":
         ident = body.get("id")
@@ -2635,7 +2566,6 @@ def job_words(action, body):
 
 
 def job_progress(line):
-    """A progress line of the drives tool: `PROGRESS ID PERCENT text`. Keeps the bar of that drive (it never goes back; several drives report at the same time). True when the line was one."""
     m = re.match(r"PROGRESS (\S+) (\d{1,3}) ?(.*)\Z", line)
     if not m:
         return False
@@ -2648,7 +2578,7 @@ def job_progress(line):
 
 
 def job_thread(words):
-    """Run one drive change and keep its progress lines for the page. Holds the drive gate (a change runs alone) until it is over."""
+    """Run one drive change and keep its progress lines for the page. Holds the drive gate, so a change runs alone, until it ends."""
     rc, tail = 1, []
     try:
         try:
@@ -2681,10 +2611,10 @@ def job_thread(words):
             if rc == 0:
                 for it in JOB["items"]:
                     JOB["progress"][it] = {"pct": 100, "text": "Done"}
-            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else (tail[-1] if rc == 4 and tail else drive_message(text, "", 1500, problem=(rc != 0)))      # (4 = the person pressed Stop: the tool's last line says what happened)
+            JOB["message"] = drives_problem(rc, text) if rc in (124, 127) or sudo_no else (tail[-1] if rc == 4 and tail else drive_message(text, "", 1500, problem=(rc != 0)))
             JOB["running"] = False
             JOB["stopping"] = False
-            drives_change_end()      # (inside the same lock: whoever sees "not running" can look at the drives at once)
+            drives_change_end()
 
 
 def api_drives_job_start(action, body):
@@ -2704,22 +2634,22 @@ def api_drives_job():
 
 
 def api_drives_abort():
-    """The Stop button: asks the drives tool to stop the running change at the next safe moment (it does not wait for the change, and it is not held back by the drive gate)."""
+    """The Stop button: ask the drives tool to stop the running change at the next safe moment. It does not wait for the change and is not held back by the drive gate."""
     with JOB_LOCK:
         running, action = JOB["running"], JOB["action"]
         copying = any(str(v.get("text", "")).startswith("Copying files") for v in JOB["progress"].values())
     if not running:
         raise Fail("No drive change is running right now.", 409)
     if action == "setup" and not copying:
-        raise Fail("A new setup can be stopped only while the files of the Main pool are being copied. Erasing and building the drives is not something to cut off halfway.", 409)
+        raise Fail("A new setup can be stopped only while the files of the Main pool are being copied. Erasing and building the drives cannot be interrupted.", 409)
     if action == "appsfix" and not copying:
         raise Fail("Cancel works while the files are being copied from the backup. Right now nothing is being copied.", 409)
     if action not in ("add", "move", "disconnect", "setup", "appsfix"):
-        raise Fail("That cannot be stopped: erasing a drive is not something to cut off halfway.", 409)
+        raise Fail("That cannot be stopped: erasing a drive cannot be interrupted.", 409)
     try:
         p = subprocess.run(DRIVES_CMD + ["panel", "abort"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        raise Fail("The drives tool did not answer. Try Stop again.", 504) from None
+        raise Fail("The drives tool did not respond. Try Stop again.", 504) from None
     except FileNotFoundError:
         raise Fail("The drives tool is not installed.", 502) from None
     msg = drive_message(p.stdout or "", p.stderr or "")
@@ -2730,13 +2660,10 @@ def api_drives_abort():
     return {"message": msg or "Stopping."}
 
 
-# ================================================================ the Backups section (Drives tab)
-# The panel never copies anything itself: it asks `homelab-backup-tasks panel WORD ...` (through the narrow sudo rule) and shows what comes back.
-# Looking and editing answer at once; a run, a preview and a restore take a while, so they run in the background (BJOB) and the page follows them.
 BACKUP_ID = re.compile(r"[a-z][a-z0-9-]{0,23}\Z")
 BACKUP_VERSION = re.compile(r"(current|\d{4}-\d\d-\d\d(_\d{6})?)\Z")
 BACKUP_HOST = re.compile(r"[a-z_][a-z0-9_-]{0,31}@[A-Za-z0-9][A-Za-z0-9.-]{0,252}(:[0-9]{1,5})?\Z")
-BJOB = {"id": 0, "running": False, "action": "", "task": "", "lines": [], "rc": None, "message": "", "started": 0, "pct": None}      # the run, preview or restore in the background (or the last one)
+BJOB = {"id": 0, "running": False, "action": "", "task": "", "lines": [], "rc": None, "message": "", "started": 0, "pct": None}
 BJOB_LOCK = threading.Lock()
 BACKUP_SAVE_KEYS = ("id", "name", "enabled", "source", "exclude", "dest", "schedule", "keep")
 
@@ -2746,7 +2673,7 @@ def backup_problem(rc, text):
     if rc == 127 or "command not found" in low or "no such file" in low:
         return "The backup tool is not installed on this machine yet. Run the installer's update (homelab-update) to add it."
     if rc == 124:
-        return "The backup tool took too long to answer. Try again in a moment."
+        return "The backup tool took too long to respond. Try again shortly."
     if "password is required" in low or "not allowed" in low or "may not run sudo" in low or "no tty present" in low:
         return "The panel is not allowed to run the backup tool yet. Run the installer's update (homelab-update) to add the permission."
     return ""
@@ -2764,7 +2691,6 @@ def backup_run(words, stdin=None, timeout=60):
 
 
 def backup_json(words, stdin=None, timeout=60):
-    """The JSON the backup tool prints. Its own {"error": ...} becomes a message for the person."""
     rc, out, err = backup_run(words, stdin, timeout)
     try:
         data = json.loads(out.strip().split("\n")[-1]) if out.strip() else None
@@ -2773,7 +2699,7 @@ def backup_json(words, stdin=None, timeout=60):
     if isinstance(data, dict) and "error" in data:
         raise Fail(str(data["error"])[:600], 409)
     if rc != 0 or not isinstance(data, dict):
-        raise Fail(backup_problem(rc, err + out) or "The backup tool answered in a way the panel does not understand.", 502 if rc != 124 else 504)
+        raise Fail(backup_problem(rc, err + out) or "The backup tool returned a response that the panel cannot read.", 502 if rc != 124 else 504)
     return data
 
 
@@ -2808,7 +2734,7 @@ def api_backup_save(body):
 
 
 def api_backup_task(action, body):
-    """delete / toggle / sshkey / sshtest / cloud-add: quick things that answer at once."""
+    """Quick backup actions that complete immediately: delete, toggle, sshkey, sshtest and cloud-add."""
     if action == "delete":
         if body.get("data") not in ("keep", "erase"):
             raise Fail("Choose whether to keep or erase the copies already made.")
@@ -2829,19 +2755,18 @@ def api_backup_task(action, body):
 
 
 def api_backup_look(path, query):
-    """versions / browse: what a task's destination holds (the person picks what to bring back)."""
     q = {k: v[0] for k, v in urllib.parse.parse_qs(query).items()}
     if path == "versions":
         return backup_json(["versions", backup_id(q.get("id"))], timeout=120)
     return backup_json(["browse", backup_id(q.get("id")), backup_version(q.get("v")), backup_rel(q.get("rel"))], timeout=180)
 
 
-DL_TOKENS = {}      # one-time download links: {token: (valid until, session, task, version, rel, mode, file name)}
+DL_TOKENS = {}
 DL_LOCK = threading.Lock()
 
 
 def api_backup_dltoken(body, session):
-    """The Download button: a link that works once, for two minutes, for this session only (a plain link cannot carry the panel's own header)."""
+    """The Download button: create a link that works once, for two minutes and for this session only."""
     mode = body.get("mode")
     if mode not in ("file", "zip"):
         raise Fail("Choose a file or a folder.")
@@ -2856,23 +2781,23 @@ def api_backup_dltoken(body, session):
         for k in [k for k, v in DL_TOKENS.items() if v[0] < now]:
             del DL_TOKENS[k]
         if len(DL_TOKENS) > 200:
-            raise Fail("Too many downloads are waiting. Try again in a moment.", 429)
+            raise Fail("Too many downloads are waiting. Try again shortly.", 429)
         DL_TOKENS[tok] = (now + 120, session, task, version, rel or ".", mode, name)
     return {"url": "/api/backup/download?t=" + tok}
 
 
 def backup_download(handler, query):
-    """Streams one file, or a folder as a .zip, from the backup tool to the browser. The tool does the reading as root; nothing is kept on the way."""
+    """Stream one file, or a folder as a .zip, from the backup tool to the browser. The tool reads as root and nothing is kept on the way."""
     t = urllib.parse.parse_qs(query).get("t", [""])[0]
     with DL_LOCK:
         entry = DL_TOKENS.pop(t, None)
     if not entry or entry[0] < time.time() or entry[1] != handler.cookie_token():
-        raise Fail("That download link has run out. Press Download again.", 403)
+        raise Fail("That download link has expired. Press Download again.", 403)
     _, _, task, version, rel, mode, name = entry
     p = subprocess.Popen(BACKUP_CMD + ["stream", task, version, rel, mode], stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL)
     try:
         first = p.stdout.read(65536)
-        if len(first) < 65536:      # the end of the data came: the tool is done (a short file) or it refused (it prints {"error": ...} and stops)
+        if len(first) < 65536:
             rc = p.wait()
             if rc != 0:
                 msg = ""
@@ -2888,7 +2813,7 @@ def backup_download(handler, query):
         handler.send_header("Content-Disposition", "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (safe, urllib.parse.quote(name)))
         handler.send_header("Cache-Control", "no-store")
         handler.send_header("X-Content-Type-Options", "nosniff")
-        handler.send_header("Connection", "close")      # (no length is known: the end of the data is the end of the connection)
+        handler.send_header("Connection", "close")
         handler.end_headers()
         handler.close_connection = True
         try:
@@ -2899,7 +2824,7 @@ def backup_download(handler, query):
                     break
                 handler.wfile.write(chunk)
         except (BrokenPipeError, ConnectionResetError):
-            pass      # the person closed the download
+            pass
     finally:
         if p.poll() is None:
             p.kill()
@@ -2909,6 +2834,7 @@ def backup_download(handler, query):
 
 
 def backup_job_thread(words):
+    """Run a backup command in the background and keep its output lines for the page."""
     rc = 1
     try:
         try:
@@ -2941,12 +2867,12 @@ def backup_job_thread(words):
             BJOB["rc"] = rc
             if rc == 0:
                 BJOB["pct"] = 100
-            BJOB["message"] = backup_problem(rc, text) or (tail[-1] if tail else ("Done." if rc == 0 else "The backup tool stopped without saying why."))
+            BJOB["message"] = backup_problem(rc, text) or (tail[-1] if tail else ("Done." if rc == 0 else "The backup tool stopped without giving a reason."))
             BJOB["running"] = False
 
 
 def api_backup_job_start(action, body):
-    """run / dry / restore in the background; one at a time."""
+    """Start run, dry or restore in the background, one at a time."""
     tid = backup_id(body.get("id"))
     if action == "restore":
         target = body.get("target")
@@ -2971,18 +2897,15 @@ def api_backup_job():
         return dict(BJOB, lines=BJOB["lines"][-(8 if BJOB["running"] else 40):])
 
 
-# ================================================================ the Updates tab: container updates, system updates and a restart
-# What is waiting is read from the files homelab-update and the nightly check keep in /var/lib/homelab (the same ones the login screen reads). The buttons run the
-# exact commands the sudo rule allows, one at a time in the background (UPJOB); the page follows them with /api/updates/job.
 UPDATE_STATE = os.environ.get("HLP_UPDATE_STATE") or "/var/lib/homelab"
 REBOOT_FILE = os.environ.get("HLP_REBOOT_FILE") or "/var/run/reboot-required"
-UPDATE_STEPS = {         # name -> the commands (run one after the other; the first that fails stops the rest)
+UPDATE_STEPS = {
     "check": [["sudo", "-n", "/usr/local/sbin/homelab-update", "check"]],
     "containers": [["sudo", "-n", "/usr/local/sbin/homelab-update", "--yes"]],
     "system": [["sudo", "-n", "/usr/bin/apt-get", "update"], ["sudo", "-n", "/usr/bin/apt-get", "-y", "upgrade"]],
     "restart": [["sudo", "-n", "/usr/bin/systemctl", "reboot"]],
 }
-if os.environ.get("HLP_UPDATE_STEPS"):       # tests: {"name": [[command...], ...]}
+if os.environ.get("HLP_UPDATE_STEPS"):
     UPDATE_STEPS = json.loads(os.environ["HLP_UPDATE_STEPS"])
 UPJOB = {"id": 0, "running": False, "action": "", "lines": [], "rc": None, "message": "", "started": 0, "pct": None, "stage": ""}
 UPJOB_LOCK = threading.Lock()
@@ -3003,9 +2926,6 @@ APT_CACHE = {"at": 0.0, "n": None, "kept": 0}
 
 
 def apt_waiting():
-    """(how many system packages 'apt-get upgrade' would install now, how many it keeps back). 'apt-get -s' only simulates and needs no sudo.
-    (None, 0) if it cannot be asked. The saved count in /var/lib/homelab/apt is only refreshed every few hours, which is too slow right after an update.
-    Kept-back packages are the 'N not upgraded' in apt's last line: they need new dependencies or are being rolled out slowly by Ubuntu, and a plain upgrade leaves them."""
     if APT_CACHE["n"] is not None and time.time() - APT_CACHE["at"] < 60:
         return APT_CACHE["n"], APT_CACHE["kept"]
     try:
@@ -3021,7 +2941,6 @@ def apt_waiting():
 
 
 def refresh_alerts():
-    """Let homelab-alerts write the bell's list again (it needs no sudo). Best effort: the 5 minute schedule does it anyway."""
     try:
         subprocess.run([ALERTS_CMD], capture_output=True, timeout=60, stdin=subprocess.DEVNULL)
     except (OSError, subprocess.SubprocessError):
@@ -3030,7 +2949,7 @@ def refresh_alerts():
 
 def api_updates_state(fresh=False):
     if fresh:
-        APT_CACHE["n"] = None            # the Refresh button asks apt again
+        APT_CACHE["n"] = None
     lines = read_text(os.path.join(UPDATE_STATE, "image-updates")).splitlines()
     first = lines[0].strip() if lines else ""
     stacks = []
@@ -3053,10 +2972,7 @@ def api_updates_job():
 
 
 def upd_progress(action, st, line):
-    """The bar of the Updates tab: reads what the update tools print (a line at a time, colors already removed) and works out how far along they are.
-    st is the memory of one job (a dict that starts empty). Returns (percent or None, a few words), or None when this line says nothing new.
-    The percent never goes backwards. None means 'cannot tell how far' (the bar then pulses). The numbers are honest counts of what the tools print:
-    packages downloaded, unpacked and set up (apt), images downloaded and stacks updated (homelab-update)."""
+    """Work out how far an update has got from the lines the update tools print (one line at a time, colors removed) for the Updates tab's progress bar. `st` is the memory of one job."""
     def done(pct, text):
         pct = None if pct is None else max(st.get("pct", 0), min(99, int(round(pct))))
         if pct is not None:
@@ -3067,19 +2983,19 @@ def upd_progress(action, st, line):
         if m:
             st["step"] = int(m.group(1))
             if st["step"] == 1:
-                return done(3, "Step 1 of 4: looking online for new versions")
+                return done(3, "Step 1 of 4: checking for new versions")
             if st["step"] == 2:
                 return done(10, "Step 2 of 4: downloading the new images")
             if st["step"] == 3:
-                return done(52, "Step 3 of 4: making sure nothing is being uploaded")
-            return done(55, "Step 4 of 4: updating the services one after the other")
+                return done(52, "Step 3 of 4: checking that no upload is running")
+            return done(55, "Step 4 of 4: updating the services one at a time")
         step = st.get("step", 0)
         m = re.search(r"(\d+) image\(s\) to download", line)
         if m and step == 2:
             st["images"] = int(m.group(1))
             st["got"] = 0
             return done(10, "Step 2 of 4: downloading the new images (0 of %d)" % st["images"])
-        if step == 2 and re.match(r" {6}\S ", line):                  # (the line under an image: downloaded / already up to date / FAILED)
+        if step == 2 and re.match(r" {6}\S ", line):
             st["got"] = st.get("got", 0) + 1
             total = st.get("images") or 0
             if total:
@@ -3115,11 +3031,11 @@ def upd_progress(action, st, line):
         if line.startswith("$ "):
             if "update" in line.split():
                 st["phase"] = "list"
-                return done(2, "Step 1 of 2: getting the newest list of packages")
+                return done(2, "Step 1 of 2: updating the package list")
             if "upgrade" in line.split():
                 st["phase"] = "pkgs"
                 st.setdefault("total", APT_CACHE["n"] or 0)
-                return done(10, "Step 2 of 2: installing the packages" + (" (%d)" % st["total"] if st["total"] else ""))
+                return done(10, "Step 2 of 2: installing packages" + (" (%d)" % st["total"] if st["total"] else ""))
             return None
         m = re.search(r"(\d+) upgraded, (\d+) newly installed", line)
         if m:
@@ -3129,7 +3045,7 @@ def upd_progress(action, st, line):
             return done(10, "Step 2 of 2: installing %d package%s" % (st["total"], "" if st["total"] == 1 else "s"))
         if st.get("phase") == "list":
             st["lists"] = st.get("lists", 0) + 1
-            return done(2 + min(7, st["lists"] // 2), "Step 1 of 2: getting the newest list of packages") if re.match(r"(Hit|Get|Ign):", line) else None
+            return done(2 + min(7, st["lists"] // 2), "Step 1 of 2: updating the package list") if re.match(r"(Hit|Get|Ign):", line) else None
         if st.get("phase") == "pkgs":
             kind = "dl" if re.match(r"Get:\d+ ", line) else "un" if line.startswith("Unpacking ") else "set" if line.startswith("Setting up ") else ""
             if not kind:
@@ -3138,9 +3054,9 @@ def upd_progress(action, st, line):
                 return None
             st[kind] = st.get(kind, 0) + 1
             total = st.get("total") or 0
-            if not total:                                       # (the number of packages is not known: a bar that slows down as it goes)
+            if not total:
                 n = st.get("dl", 0) + st.get("un", 0) + st.get("set", 0)
-                return done(10 + 85 * (1 - 1 / (1 + n / 20.0)), "Step 2 of 2: installing the packages (%d steps done)" % n)
+                return done(10 + 85 * (1 - 1 / (1 + n / 20.0)), "Step 2 of 2: installing packages (%d steps done)" % n)
             n = min(st.get("dl", 0), total) + min(st.get("un", 0), total) + min(st.get("set", 0), total)
             word = {"dl": "downloading", "un": "unpacking", "set": "setting up"}[kind]
             return done(10 + 86 * n / (3.0 * total), "Step 2 of 2: %s package %d of %d" % (word, min(st[kind], total), total))
@@ -3148,6 +3064,7 @@ def upd_progress(action, st, line):
 
 
 def updates_job_thread(action):
+    """Run the steps of an update action in the background and keep their output for the Updates tab."""
     rc = 1
     mem = {}
     try:
@@ -3182,9 +3099,9 @@ def updates_job_thread(action):
             if rc != 0:
                 break
     finally:
-        APT_CACHE["n"] = None            # the count of waiting system updates is asked again
+        APT_CACHE["n"] = None
         if action != "restart":
-            refresh_alerts()             # and the bell does not wait for its 5 minute schedule
+            refresh_alerts()
         with UPJOB_LOCK:
             tail = [x for x in UPJOB["lines"] if x.strip() and not x.startswith("$ ")]
             text = "\n".join(UPJOB["lines"])
@@ -3194,11 +3111,11 @@ def updates_job_thread(action):
             if rc == 0:
                 UPJOB["message"] = tail[-1] if tail else "Done."
             elif "a password is required" in text or "not allowed to execute" in text or "sudo:" in text:
-                UPJOB["message"] = "The panel is not allowed to run that yet. Run the installer's update (homelab-update) to add the permission."
+                UPJOB["message"] = "The panel does not have permission to run that yet. Run the installer's update (homelab-update) to add the permission."
             elif rc == 127:
                 UPJOB["message"] = "That tool is not installed on this machine."
             else:
-                UPJOB["message"] = tail[-1] if tail else "It stopped without saying why."
+                UPJOB["message"] = tail[-1] if tail else "It stopped without giving a reason."
             UPJOB["running"] = False
 
 
@@ -3210,17 +3127,13 @@ def api_updates_start(body):
         raise Fail("Confirm the restart first.")
     with UPJOB_LOCK:
         if UPJOB["running"]:
-            raise Fail("Something is being updated already. Wait until it has finished.", 409)
+            raise Fail("An update is already running. Wait until it has finished.", 409)
         UPJOB.update(id=UPJOB["id"] + 1, running=True, action=action, lines=[], rc=None, message="", started=int(time.time()), pct=None, stage="")
         jid = UPJOB["id"]
     threading.Thread(target=updates_job_thread, args=(action,), daemon=True).start()
     return {"ok": True, "job": jid}
 
 
-# ================================================================ the Upload card (Drives tab): photos and videos to Immich, songs to the music folder
-# The page sends one file at a time as the raw body of a request; the panel passes it on in pieces (nothing is kept in memory or in a temporary file),
-# so a video of several GB works. Photos go to Immich with an API key the person pastes once (kept in a private file, never shown again).
-# Songs are saved as they are into the folder Navidrome plays from (the folder Downtify saves into); Navidrome adds them at its next scan (within the hour).
 IMMICH_URL = (os.environ.get("HLP_IMMICH_URL") or "http://127.0.0.1:2283").rstrip("/")
 UPLOAD_FILE = os.path.join(STATE_DIR, "uploads.json")
 PHOTO_MAX = 20 * 1024 ** 3
@@ -3252,7 +3165,7 @@ def uploads_save(cfg):
 
 
 def music_dir():
-    """The folder Navidrome plays from: HLP_MUSIC_DIR, else the folder the Navidrome container has as /music, else the installer's note, else /mnt/storage/music."""
+    """Return the folder Navidrome plays from: HLP_MUSIC_DIR, else the folder the Navidrome container has as /music, else the installer's note, else /mnt/storage/music."""
     forced = os.environ.get("HLP_MUSIC_DIR")
     if forced:
         return forced
@@ -3277,7 +3190,6 @@ def music_dir():
 
 
 def immich_call(method, path, key, timeout=5):
-    """A small Immich request: (status, parsed JSON or None). A status of 0 means Immich did not answer."""
     u = urllib.parse.urlparse(IMMICH_URL)
     try:
         c = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=timeout)
@@ -3308,7 +3220,7 @@ def api_upload_state():
 
 
 def api_upload_key(body):
-    """Keep (or, when empty, forget) the Immich API key. A key Immich turns down is not kept."""
+    """Keep the Immich API key, or forget it when empty. A key that Immich rejects is not kept."""
     key = body.get("key")
     if not isinstance(key, str):
         raise Fail("Paste the key first.")
@@ -3322,11 +3234,11 @@ def api_upload_key(body):
         raise Fail("That does not look like an Immich API key (letters and numbers, at least 16).")
     st, js = immich_call("GET", "/api/users/me", key)
     if st == 0:
-        raise Fail("Immich does not answer right now, so the key could not be checked. Is Immich running?", 502)
+        raise Fail("Immich is not responding, so the key could not be checked. Check that Immich is running.", 502)
     if st == 401:
-        raise Fail("Immich turned that key down. Check that you copied all of it.", 409)
-    if st not in (200, 403):      # (403: a key that may only upload cannot read the account; it is still a good key)
-        raise Fail("Immich answered in a way the panel did not expect (code %d)." % st, 502)
+        raise Fail("Immich rejected that key. Check that the whole key was copied.", 409)
+    if st not in (200, 403):
+        raise Fail("Immich returned an unexpected response (code %d)." % st, 502)
     cfg = uploads_cfg()
     cfg["immich_key"] = key
     uploads_save(cfg)
@@ -3335,18 +3247,16 @@ def api_upload_key(body):
 
 
 def upload_name(raw, allowed):
-    """A file name that is safe to save: no folders, no control characters, one of the allowed kinds."""
     name = re.sub(r"[\x00-\x1f\x7f]", "", (raw or "").replace("\\", "/").split("/")[-1]).strip().lstrip(".").strip()
     if not name or len(name) > 255:
         raise Fail("That file has no usable name.", 400)
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
     if ext not in allowed:
-        raise Fail("That kind of file is not accepted here (.%s)." % ext if ext else "That file has no ending like .mp3 or .jpg.", 415)
+        raise Fail("That file type is not accepted (.%s)." % ext if ext else "That file has no extension such as .mp3 or .jpg.", 415)
     return name
 
 
 def upload_drain(handler, n):
-    """Read and drop a refused upload's body (up to a limit), so the answer reaches a browser that is still sending."""
     left = min(n, 64 * 1024 * 1024)
     while left > 0:
         b = handler.rfile.read(min(left, UPLOAD_CHUNK))
@@ -3357,33 +3267,35 @@ def upload_drain(handler, n):
 
 
 def api_upload_stream(handler, kind, q):
+    """Receive an uploaded photo or song from the page and pass it on."""
     n = int(handler.headers.get("Content-Length") or 0)
     try:
         if n <= 0:
             raise Fail("The file is empty.", 400)
-        one = lambda k: (q.get(k) or [""])[0]      # noqa: E731
+        one = lambda k: (q.get(k) or [""])[0]  # noqa: E731
         if kind == "photo":
             name = upload_name(one("name"), PHOTO_EXT)
             if n > PHOTO_MAX:
-                raise Fail("That file is bigger than 20 GB.", 413)
+                raise Fail("That file is larger than 20 GB.", 413)
             key = uploads_cfg().get("immich_key", "")
             if not key:
                 raise Fail("Paste your Immich key first.", 409)
         else:
             name = upload_name(one("name"), SONG_EXT)
             if n > SONG_MAX:
-                raise Fail("That song is bigger than 2 GB.", 413)
+                raise Fail("That song is larger than 2 GB.", 413)
     except Fail:
         upload_drain(handler, n)
         raise
     try:
         return upload_photo(handler, name, n, one("mtime"), key) if kind == "photo" else upload_song(handler, name, n)
     except Fail:
-        handler.close_connection = True      # (the rest of the body, if any, is not read)
+        handler.close_connection = True
         raise
 
 
 def upload_photo(handler, name, n, mtime, key):
+    """Send an uploaded photo to Immich with its original time stamp."""
     try:
         ms = int(mtime)
     except ValueError:
@@ -3406,7 +3318,7 @@ def upload_photo(handler, name, n, mtime, key):
         c.endheaders()
         c.send(pre)
     except (OSError, http.client.HTTPException):
-        raise Fail("Immich does not answer right now. Is it running?", 502) from None
+        raise Fail("Immich is not responding. Check that it is running.", 502) from None
     left = n
     try:
         while left > 0:
@@ -3418,13 +3330,13 @@ def upload_photo(handler, name, n, mtime, key):
             left -= len(b)
         c.send(post)
     except (OSError, http.client.HTTPException):
-        pass      # (Immich may have answered early with a reason; read it below)
+        pass
     try:
         r = c.getresponse()
         raw = r.read(1 << 20)
         c.close()
     except (OSError, http.client.HTTPException):
-        raise Fail("Immich stopped answering while the file was sent.", 502) from None
+        raise Fail("Immich stopped responding while the file was being sent.", 502) from None
     try:
         js = json.loads(raw)
     except ValueError:
@@ -3432,8 +3344,8 @@ def upload_photo(handler, name, n, mtime, key):
     if r.status in (200, 201):
         return {"ok": True, "status": "duplicate" if js.get("status") == "duplicate" else "created", "id": js.get("id", "")}
     if r.status == 401:
-        raise Fail("Immich turned the key down. Paste the key again.", 409)
-    raise Fail("Immich refused the file (code %d): %s" % (r.status, str(js.get("message") or raw[:200])[:200]), 502)
+        raise Fail("Immich rejected the key. Paste the key again.", 409)
+    raise Fail("Immich rejected the file (code %d): %s" % (r.status, str(js.get("message") or raw[:200])[:200]), 502)
 
 
 def datetime_iso(ts):
@@ -3441,11 +3353,12 @@ def datetime_iso(ts):
 
 
 def upload_song(handler, name, n):
+    """Save an uploaded song in the music folder after checking the folder, free space and file name."""
     d = music_dir()
     if not os.path.isdir(d):
-        raise Fail("The music folder (%s) is not there. Is the drive connected?" % d, 409)
+        raise Fail("The music folder (%s) was not found. Check that the drive is connected." % d, 409)
     if not os.access(d, os.W_OK | os.X_OK):
-        raise Fail("The panel may not write in the music folder (%s)." % d, 409)
+        raise Fail("The panel does not have permission to write to the music folder (%s)." % d, 409)
     try:
         free = shutil.disk_usage(d).free
     except OSError:
@@ -3467,7 +3380,7 @@ def upload_song(handler, name, n):
         final, i = os.path.join(d, name), 1
         while True:
             try:
-                os.close(os.open(final, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o664))      # (take the name; a song that is already there is never replaced)
+                os.close(os.open(final, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o664))
                 break
             except FileExistsError:
                 i += 1
@@ -3483,13 +3396,11 @@ def upload_song(handler, name, n):
     return {"ok": True, "saved": os.path.basename(final)}
 
 
-# ================================================================ the web server
-TERM_MAX = 6_000_000             # the biggest page the terminal may send (its own page is under 1 MB)
-TERM_IDLE = 600                  # a terminal connection with no traffic at all for this many seconds is closed (ttyd pings every few seconds)
+TERM_MAX = 6_000_000
+TERM_IDLE = 600
 
 
 class UnixConn(http.client.HTTPConnection):
-    """An HTTP connection to a socket file (ttyd listens on one)."""
     def __init__(self, path, timeout=20):
         super().__init__("localhost", timeout=timeout)
         self.sock_path = path
@@ -3501,6 +3412,7 @@ class UnixConn(http.client.HTTPConnection):
 
 
 class Handler(BaseHTTPRequestHandler):
+    """The panel's HTTP server: serves the page files and the API, checks the session and the request origin, and relays the terminal."""
     server_version = "homelab-panel"
     sys_version = ""
     protocol_version = "HTTP/1.1"
@@ -3509,7 +3421,6 @@ class Handler(BaseHTTPRequestHandler):
         if os.environ.get("HLP_LOG"):
             sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
 
-    # --- helpers
     def host_ok(self):
         host = (self.headers.get("Host") or "").lower()
         ok = {"localhost:%d" % PORT, "127.0.0.1:%d" % PORT, "[::1]:%d" % PORT}
@@ -3518,7 +3429,6 @@ class Handler(BaseHTTPRequestHandler):
         return host in ok
 
     def origin_ok(self, origin):
-        """The page that sent the request is the panel itself. (Tailscale may pass the Host header on or replace it; both are accepted.)"""
         net = urllib.parse.urlparse(origin).netloc.lower()
         return net == (self.headers.get("Host") or "").lower() or net in set(HOSTS) | {"localhost:%d" % PORT, "127.0.0.1:%d" % PORT}
 
@@ -3559,7 +3469,6 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(n) if n else b""
 
     def api_guard(self):
-        """Every call that changes something: right host, same origin, our own header, a logged-in session."""
         if self.headers.get("X-Panel") != "1":
             raise Fail("This request did not come from the panel page.", 403)
         origin = self.headers.get("Origin")
@@ -3568,11 +3477,11 @@ class Handler(BaseHTTPRequestHandler):
         if not session_ok(self.cookie_token()):
             raise Fail("Please log in again.", 401)
 
-    # --- GET
     def do_HEAD(self):
         self.do_GET()
 
     def do_GET(self):
+        """Handle GET requests: the page files, the session and the read-only API calls."""
         try:
             if not self.host_ok():
                 return self.send(421, {"error": "Unknown address."})
@@ -3600,7 +3509,7 @@ class Handler(BaseHTTPRequestHandler):
                 if self.headers.get("X-Panel") != "1" or not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return self.send(200, api_updates_state("fresh=1" in self.path) if path == "/api/updates" else api_updates_job())
-            if path == "/api/backup/download":      # (a link the page opened: the one-time token in it, and the session cookie, are the proof)
+            if path == "/api/backup/download":
                 if not session_ok(self.cookie_token()):
                     raise Fail("Please log in again.", 401)
                 return backup_download(self, urllib.parse.urlparse(self.path).query)
@@ -3618,7 +3527,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/api/drives":
                     return self.send(200, api_drives_state())
                 action, extra = path.rsplit("/", 1)[1], ()
-                if action == "setups":      # ?skip=sdc,sdd: spare drives the person left out of the scan
+                if action == "setups":
                     skip = [x for x in urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("skip", [""])[0].split(",") if x]
                     if len(skip) > 24 or not all(DRIVE_ID.match(x) for x in skip):
                         raise Fail("Those are not drive names.", 400)
@@ -3633,11 +3542,10 @@ class Handler(BaseHTTPRequestHandler):
             self.static(path)
         except Fail as e:
             self.fail(e)
-        except Exception as e:      # never show a stack trace to the browser
+        except Exception as e:
             sys.stderr.write("error: %r\n" % (e,))
-            self.send(500, {"error": "Something went wrong inside the panel. Look at:  journalctl -u homelab-panel -n 30"})
+            self.send(500, {"error": "An internal error occurred in the panel. See:  journalctl -u homelab-panel -n 30"})
 
-    # --- the web terminal: ttyd on a private socket, passed through after the login
     def terminal_page(self, code, text):
         page = ("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'><title>Terminal</title>"
                 "<body style='font:16px system-ui,sans-serif;background:#0a0f19;color:#dbe4f5;padding:24px'><p>%s</p>"
@@ -3650,15 +3558,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def terminal(self):
         if not session_ok(self.cookie_token()):
-            return self.terminal_page(401, "Please log in to the control panel first (the Customize tab uses the same login), then reload this card.")
+            return self.terminal_page(401, "Log in to the control panel first (the Customize tab uses the same login), then reload this card.")
         if (self.headers.get("Upgrade") or "").lower() == "websocket":
             origin = self.headers.get("Origin")
-            if not origin or not self.origin_ok(origin):          # a page of another website must not be able to open the terminal
+            if not origin or not self.origin_ok(origin):
                 raise Fail("This request came from another website.", 403)
             return self.terminal_socket()
         try:
             conn = UnixConn(TERM_SOCK)
-            page = urllib.parse.urlparse(self.path).path.rstrip("/") in ("/terminal", "")      # the page itself (not its scripts): plain, so a line can be added to it
+            page = urllib.parse.urlparse(self.path).path.rstrip("/") in ("/terminal", "")
             conn.request("GET", self.terminal_target(), headers={"Host": "localhost", "Accept": self.headers.get("Accept") or "*/*",
                                                     "Accept-Encoding": "identity" if page else (self.headers.get("Accept-Encoding") or "identity")})
             r = conn.getresponse()
@@ -3668,9 +3576,8 @@ class Handler(BaseHTTPRequestHandler):
         except (OSError, http.client.HTTPException):
             return self.terminal_page(502, "The terminal is not running. On the server, look at:  sudo systemctl status homelab-terminal")
         if len(body) > TERM_MAX or status not in (200, 304, 401, 404):
-            return self.terminal_page(502, "The terminal gave an answer the panel does not understand.")
+            return self.terminal_page(502, "The terminal returned a response that the panel cannot read.")
         if status == 200 and ctype.startswith("text/html") and not enc and b"</head>" in body:
-            # the dashboard card must not move when the terminal reaches its top or bottom while you scroll
             body = body.replace(b"</head>", b"<style>html,body{overscroll-behavior:contain}</style></head>", 1)
         anc = " ".join(["'self'"] + FRAME)
         csp = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; "
@@ -3678,7 +3585,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(status, body, ctype, {"Content-Encoding": enc} if enc else None, csp=csp)
 
     def terminal_socket(self):
-        """The terminal's WebSocket: the handshake is passed on and then the bytes go both ways until one side closes."""
+        """Relay the terminal's WebSocket: pass the handshake on, then pass bytes both ways until one side closes."""
         up = socket.socket(socket.AF_UNIX)
         try:
             up.settimeout(5)
@@ -3724,8 +3631,8 @@ class Handler(BaseHTTPRequestHandler):
         ctype = mimetypes.guess_type(fn)[0] or "application/octet-stream"
         self.send(200, data, ctype + ("; charset=utf-8" if ctype.startswith("text/") or ctype.endswith("javascript") else ""))
 
-    # --- POST
     def do_POST(self):
+        """Handle POST requests: login and every change the panel can make."""
         try:
             if not self.host_ok():
                 return self.send(421, {"error": "Unknown address."})
@@ -3744,18 +3651,18 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/background/theme":
                 tb = json.loads(self.read_body(1 << 20) or b"{}")
                 if not isinstance(tb, dict):
-                    raise Fail("The request is not understood.")
+                    raise Fail("The request is not valid.")
                 return self.send(200, theme_picture(tb))
             if path == "/api/background/upload":
                 data = self.read_body(MAX_UPLOAD)
                 with LOCK:
                     res = api_bg_upload(data)
                 return self.send(200, res)
-            if path in ("/api/upload/photo", "/api/upload/song"):      # (the body is the file itself, passed on piece by piece)
+            if path in ("/api/upload/photo", "/api/upload/song"):
                 return self.send(200, api_upload_stream(self, path.rsplit("/", 1)[1], urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)))
             body = json.loads(self.read_body(1 << 20) or b"{}")
             if not isinstance(body, dict):
-                raise Fail("The request is not understood.")
+                raise Fail("The request is not valid.")
             if path == "/api/upload/immich-key":
                 return self.send(200, dict(api_upload_key(body), ok=True))
             if path == "/api/updates/start":
@@ -3765,17 +3672,17 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/backup/dltoken":
                 return self.send(200, api_backup_dltoken(body, self.cookie_token()))
             if path in ("/api/backup/run", "/api/backup/dry", "/api/backup/restore"):
-                return self.send(200, api_backup_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/backup/job
+                return self.send(200, api_backup_job_start(path.rsplit("/", 1)[1], body))
             if path in ("/api/backup/delete", "/api/backup/toggle", "/api/backup/sshkey", "/api/backup/sshtest", "/api/backup/cloud-add"):
                 return self.send(200, dict(api_backup_task(path.rsplit("/", 1)[1], body), ok=True))
             if path == "/api/drives/abort":
                 return self.send(200, dict(api_drives_abort(), ok=True))
             if path in ("/api/drives/add", "/api/drives/wipe", "/api/drives/disconnect", "/api/drives/move", "/api/drives/setup", "/api/drives/bootadd", "/api/drives/appsfix", "/api/drives/moveboot"):
-                return self.send(200, api_drives_job_start(path.rsplit("/", 1)[1], body))      # runs in the background: the page follows it with /api/drives/job
+                return self.send(200, api_drives_job_start(path.rsplit("/", 1)[1], body))
             if path in ("/api/drives/rename", "/api/drives/sleep", "/api/drives/wake", "/api/drives/remount"):
-                return self.send(200, dict(api_drives_do(path.rsplit("/", 1)[1], body), ok=True))      # not under LOCK: a remount takes a while
+                return self.send(200, dict(api_drives_do(path.rsplit("/", 1)[1], body), ok=True))
             if path == "/api/location/search":
-                return self.send(200, dict(api_location_search(body), ok=True))      # (the internet is asked: not under LOCK)
+                return self.send(200, dict(api_location_search(body), ok=True))
             routes = {"/api/location": api_location_save, "/api/look": api_look_save, "/api/look/css": api_look_css, "/api/look/reset": api_look_reset, "/api/background": api_bg_save, "/api/background/reset": api_bg_reset,
                       "/api/layout": api_layout_save, "/api/card": api_card, "/api/hlcards/restore": api_hl_restore, "/api/mytheme": api_mytheme, "/api/link": api_link, "/api/group": api_group,
                       "/api/undo": lambda b: {"undone": undo()}}
@@ -3788,10 +3695,10 @@ class Handler(BaseHTTPRequestHandler):
         except Fail as e:
             self.fail(e)
         except ValueError:
-            self.send(400, {"error": "The request is not understood."})
+            self.send(400, {"error": "The request is not valid."})
         except Exception as e:
             sys.stderr.write("error: %r\n" % (e,))
-            self.send(500, {"error": "Something went wrong inside the panel. Look at:  journalctl -u homelab-panel -n 30"})
+            self.send(500, {"error": "An internal error occurred in the panel. See:  journalctl -u homelab-panel -n 30"})
 
 
 def read_bytes(p):
@@ -3802,7 +3709,6 @@ def read_bytes(p):
         return None
 
 
-# ================================================================ commands
 def cmd_serve():
     srv = ThreadingHTTPServer((BIND, PORT), Handler)
     srv.daemon_threads = True
@@ -3819,20 +3725,20 @@ def cmd_set_password(args):
     else:
         pw = getpass.getpass("New password for the control panel (at least 10 characters): ")
         if getpass.getpass("Type it again: ") != pw:
-            print("The two entries did not match. Nothing was changed.", file=sys.stderr)
+            print("The two entries do not match. Nothing was changed.", file=sys.stderr)
             return 1
     try:
         set_password(pw)
     except Fail as e:
         print(str(e), file=sys.stderr)
         return 1
-    print("The control panel password is set. Everyone who was logged in is logged out.")
+    print("The control panel password is set. All active sessions have been logged out.")
     return 0
 
 
 def cmd_status():
     print("homelab-panel %s" % VERSION)
-    print("  password:       %s" % ("set" if os.path.exists(PASSFILE) else "NOT set yet (run: homelab panel password)"))
+    print("  password:       %s" % ("set" if os.path.exists(PASSFILE) else "Not set (run: homelab panel password)"))
     print("  listens on:     http://%s:%d" % (BIND, PORT))
     print("  dashboard files: %s" % HP)
     print("  page files:     %s" % UI_DIR)

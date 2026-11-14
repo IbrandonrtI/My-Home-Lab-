@@ -10,16 +10,16 @@
   sudo homelab-cards sync --dry-run   show what would change and change nothing
   homelab-cards version | help
 
-The same command also runs by itself every 5 minutes (root's crontab: homelab-cards auto) and says nothing unless it changes something.
+The same command also runs automatically every 5 minutes (root's crontab: homelab-cards auto) and says nothing unless it changes something.
 
 What it does for a container that is not one of the lab's own apps, has a port published on this machine and answers on it like a web page:
   - guesses the section from the image and container name: Network & DNS, Monitoring & Management, Files & Photos or Media & Entertainment
     (when it cannot tell, the card goes into Monitoring & Management and the login screen asks you to move it: sudo homelab-cards move NAME SECTION)
   - adds the card to ~/homepage-config/services.yaml (name, link, up/down dot, icon, short text) at the end of that section
-  - adds its colour to ~/homepage-config/custom.css, in the same lists as the other cards
+  - adds its color to ~/homepage-config/custom.css, in the same lists as the other cards
   - gives it a Tailscale HTTPS address (the next free port from 1009), so the card's link works from anywhere
   - keeps the card's addresses right when the IP address or the Tailscale name changes
-  - removes the card (and its Tailscale address and colour) when the container is gone for good (two looks in a row, 5 minutes apart)
+  - removes the card (and its Tailscale address and color) when the container is gone for good (two looks in a row, 5 minutes apart)
 It never touches cards it did not make (your own hand-written ones, like Metube and Downtify before this command existed).
 The old services.yaml and custom.css are saved once as services.yaml.before-cards and custom.css.before-cards.
 Image updates need nothing here: sudo homelab-update already looks after every running container.
@@ -41,15 +41,13 @@ VERSION = "1.0"
 SECTIONS = ["Network & DNS", "Monitoring & Management", "Files & Photos", "Media & Entertainment"]
 UNSURE_SECTION = "Monitoring & Management"
 FIRST_SERVE_PORT = 1009
-MISSING_LIMIT = 2            # looks in a row with the container gone before its card is removed
+MISSING_LIMIT = 2
 
-# the lab's own containers and Portainer stacks: never get an automatic card
 BUILTIN_NAMES = {"adguardhome", "beszel", "beszel-agent", "homepage", "immich_server", "immich_machine_learning", "immich_postgres",
                  "immich_redis", "nextcloud", "nextcloud_cron", "nextcloud_db", "nextcloud_redis", "speedtest-tracker", "netdata",
                  "filebrowser", "portainer", "portainer_agent"}
 BUILTIN_PROJECTS = {"adguard", "beszel", "homepage", "immich", "nextcloud", "speedtest-tracker", "netdata", "filebrowser", "portainer"}
 
-# words that tell the section (specific names first, general words only when no specific name fits)
 KEYWORDS = {
     "Network & DNS": (
         "adguard adguardhome pihole unbound wireguard wgeasy openvpn tailscale headscale zerotier nginxproxymanager traefik caddy "
@@ -74,7 +72,6 @@ KEYWORDS = {
         "music video movies movie media download downloader spotify youtube podcast games game tv"),
 }
 
-# colours (R, G, B) of well known apps; any other card takes the next colour of the palette that no card uses yet
 KNOWN_COLORS = {"jellyfin": (170, 92, 195), "plex": (229, 160, 13), "emby": (82, 181, 75), "sonarr": (53, 197, 244),
                 "radarr": (255, 194, 40), "lidarr": (0, 164, 129), "prowlarr": (225, 102, 59), "qbittorrent": (47, 103, 177),
                 "grafana": (244, 104, 0), "uptimekuma": (92, 221, 139), "pihole": (150, 6, 24), "syncthing": (3, 144, 214),
@@ -83,7 +80,6 @@ KNOWN_COLORS = {"jellyfin": (170, 92, 195), "plex": (229, 160, 13), "emby": (82,
 PALETTE = [(255, 171, 0), (0, 188, 212), (156, 39, 176), (255, 87, 34), (233, 30, 99), (76, 175, 80), (3, 169, 244),
            (205, 220, 57), (121, 85, 72), (96, 125, 139), (255, 235, 59), (0, 150, 136), (63, 81, 181), (244, 67, 54)]
 
-# short texts for well known apps (the key is a word of the image or container name)
 KNOWN_DESCRIPTIONS = {
     "metube": "YouTube video downloader", "downtify": "Spotify music downloader", "jellyfin": "Movies, shows and music server",
     "plex": "Movies, shows and music server", "emby": "Movies, shows and music server", "sonarr": "TV show manager",
@@ -104,7 +100,7 @@ KNOWN_DESCRIPTIONS = {
     "joplin": "Notes", "bookstack": "Wiki and notes", "linkding": "Bookmarks", "mealie": "Recipes", "scrutiny": "Drive health",
 }
 DESC_MAX = 60
-DESC_RETRY_SECS = int(os.environ.get("HOMELAB_DESC_RETRY_SECS", "21600"))     # a failed look-up is repeated after 6 hours
+DESC_RETRY_SECS = int(os.environ.get("HOMELAB_DESC_RETRY_SECS", "21600"))
 HUB_API = os.environ.get("HOMELAB_DESC_HUB", "https://hub.docker.com").rstrip("/")
 GITHUB_API = os.environ.get("HOMELAB_DESC_GITHUB", "https://api.github.com").rstrip("/")
 
@@ -112,7 +108,6 @@ ICON_CDN = os.environ.get("HOMELAB_ICON_CDN", "https://cdn.jsdelivr.net").rstrip
 GENERIC_ICON = "mdi-docker"
 
 
-# ---------------------------------------------------------------- where things are
 def lab_user():
     name = os.environ.get("HOMELAB_USER") or os.environ.get("SUDO_USER")
     if name and name != "root":
@@ -154,7 +149,6 @@ def say(msg=""):
 
 
 def note(msg):
-    """Something that changed: always logged, shown unless quiet."""
     CHANGES.append(msg)
     say(msg)
     try:
@@ -182,7 +176,6 @@ def read_text(path):
 
 
 def write_text(path, text, like=None):
-    """Write atomically; the new file keeps the owner and permissions of `like` (or of the old file)."""
     like = like or path
     try:
         st = os.stat(like)
@@ -205,7 +198,6 @@ def backup_once(path, suffix=".before-cards"):
         shutil.copy2(path, path + suffix)
 
 
-# ---------------------------------------------------------------- state
 def load_state():
     try:
         with open(STATE_FILE, encoding="utf-8") as f:
@@ -236,9 +228,8 @@ def save_state(st):
     os.replace(tmp, SUMMARY_FILE)
 
 
-# ---------------------------------------------------------------- containers
 def containers():
-    """[{name, status, image, project, labels, ports: [host ports, tcp]}] for every container, or None when Docker does not answer."""
+    """Return [{name, status, image, project, labels, ports: [host ports, tcp]}] for every container, or None when Docker does not answer."""
     rc, ids = run([DOCKER, "ps", "-aq"])
     if rc != 0:
         return None
@@ -274,7 +265,6 @@ def answers_like_a_web_page(port):
 
 
 def _answers(host, port):
-    """True when something on this machine answers HTTP on the port (any status counts: a login page is a web page too)."""
     try:
         urllib.request.urlopen("http://%s:%d/" % (host, port), timeout=3).close()
         return True
@@ -288,18 +278,16 @@ def is_builtin(c):
     return (c["name"] in BUILTIN_NAMES or c["project"] in BUILTIN_PROJECTS or c["name"].startswith(("immich_", "nextcloud_")))
 
 
-# ---------------------------------------------------------------- names, sections, icons, colours
 def tokens_of(c):
     repo = c["image"].split("@")[0]
     if ":" in repo.rsplit("/", 1)[-1]:
-        repo = repo.rsplit(":", 1)[0]                      # the tag is not part of the name
+        repo = repo.rsplit(":", 1)[0]
     text = " ".join([repo, c["name"], c["project"], c["labels"].get("org.opencontainers.image.title", "")]).lower()
     toks = [t for t in re.split(r"[^a-z0-9]+", text) if t]
     return toks, "".join(toks)
 
 
 def guess_section(c):
-    """(section, sure)."""
     toks, joined = tokens_of(c)
     for generic in (0, 1):
         for sec in SECTIONS:
@@ -312,12 +300,11 @@ def guess_section(c):
 def display_name(c):
     t = re.sub(r"[:#\[\]{},&*!|>'\"%@`]", "", c["labels"].get("org.opencontainers.image.title", "")).strip()
     if t and len(t) <= 30:
-        return t[:1].upper() + t[1:]                    # an image that calls itself "navidrome" gets the card "Navidrome"
+        return t[:1].upper() + t[1:]
     return " ".join(w[:1].upper() + w[1:] for w in re.split(r"[-_.\s]+", c["name"]) if w)
 
 
 def tidy_description(d):
-    """One short line from a longer text (cut at a word, no trailing punctuation); '' when there is nothing useful."""
     d = re.sub(r"\s+", " ", re.sub(r"[`*_#>]|\[([^\]]*)\]\([^)]*\)", lambda m: m.group(1) or "", d or "")).strip()
     if len(d) > DESC_MAX:
         d = d[:DESC_MAX + 1].rsplit(" ", 1)[0] if " " in d[:DESC_MAX + 1] else d[:DESC_MAX]
@@ -334,7 +321,7 @@ def fetch_json(url):
 
 
 def online_description(c):
-    """The short text of the image on Docker Hub, or of its GitHub project (images from ghcr.io). '' when there is none."""
+    """Return the short text of the image on Docker Hub, or of its GitHub project for ghcr.io images. Empty when there is none."""
     if os.environ.get("HOMELAB_CARDS_OFFLINE"):
         return ""
     repo = c["image"].split("@")[0]
@@ -347,7 +334,7 @@ def online_description(c):
         if parts[0] == "ghcr.io" and len(parts) >= 3:
             return tidy_description(fetch_json("%s/repos/%s/%s" % (GITHUB_API, parts[1], parts[2])).get("description"))
         if parts[0] == "lscr.io" and len(parts) >= 3:
-            parts = parts[1:]                                   # lscr.io/linuxserver/x is linuxserver/x on Docker Hub
+            parts = parts[1:]
         else:
             return ""
     if len(parts) == 1:
@@ -362,8 +349,6 @@ def fallback_description(c):
 
 
 def description_of(c, online=True):
-    """Short text for the card: a known app, the image's own label, Docker Hub or GitHub; else a plain note (which is replaced later
-    when a better one is found)."""
     toks, _ = tokens_of(c)
     for w, d in KNOWN_DESCRIPTIONS.items():
         if w in toks:
@@ -379,7 +364,6 @@ def description_of(c, online=True):
 
 
 def yaml_text(s):
-    """A value for services.yaml: quoted when plain text would not be read back as the same text."""
     if (re.search(r": |:$| #", s) or re.match(r"[-?:,\[\]{}#&*!|>'\"%@`\s]", s) or s != s.strip()
             or s.lower() in ("yes", "no", "true", "false", "null", "~", "on", "off")):
         return '"%s"' % s.replace("\\", "\\\\").replace('"', '\\"')
@@ -410,7 +394,6 @@ def url_exists(url):
 
 
 def find_icon(c):
-    """Homepage icon name: from its icon library, then Simple Icons, else a plain Docker icon."""
     if os.environ.get("HOMELAB_CARDS_OFFLINE"):
         return GENERIC_ICON
     for s in icon_slugs(c):
@@ -439,7 +422,6 @@ def pick_color(c, css):
     return PALETTE[len(used) % len(PALETTE)]
 
 
-# ---------------------------------------------------------------- Tailscale
 def lan_ip():
     if os.environ.get("HOMELAB_LAN_IP"):
         return os.environ["HOMELAB_LAN_IP"]
@@ -460,7 +442,6 @@ def tailscale_name():
 
 
 def serve_map():
-    """{https port: proxy target} of the Tailscale Serve addresses now, or None when Tailscale does not answer."""
     rc, txt = run([TAILSCALE, "serve", "status", "--json"], timeout=20)
     if rc != 0:
         return None
@@ -477,11 +458,11 @@ def serve_map():
 
 
 def ensure_serve(hostport, want_port, lan, current):
-    """Make sure an HTTPS address points at the container; returns its port, or None when Tailscale cannot do it now."""
+    """Make sure an HTTPS address points at the container. Returns its port, or None when Tailscale cannot do it now."""
     if current is None:
         return None
     target = "http://%s:%d" % (lan, hostport)
-    for p, t in current.items():                       # an address for this very port exists already (also one made by hand)
+    for p, t in current.items():
         if t.endswith(":%d" % hostport) and p >= FIRST_SERVE_PORT:
             return p
     port = want_port if want_port and current.get(want_port, target) == target else None
@@ -504,13 +485,11 @@ def drop_serve(port, current):
         run([TAILSCALE, "serve", "--https=%d" % port, "off"], timeout=60)
 
 
-# ---------------------------------------------------------------- services.yaml (edited as text: comments and layout stay)
 def indent(line):
     return len(line) - len(line.lstrip(" "))
 
 
 def groups_of(lines):
-    """[(name, start, end)] of the top level sections."""
     heads = [(i, re.match(r"^- (.+?):\s*$", l).group(1)) for i, l in enumerate(lines) if re.match(r"^- (.+?):\s*$", l)]
     out = []
     for n, (i, name) in enumerate(heads):
@@ -519,7 +498,6 @@ def groups_of(lines):
 
 
 def card_range(lines, card_id):
-    """(start, end) of the card with this id, or None."""
     idx = next((i for i, l in enumerate(lines) if re.match(r"^\s*id:\s*%s\s*$" % re.escape(card_id), l)), None)
     if idx is None:
         return None
@@ -550,7 +528,7 @@ def card_block(name, card_id, href, monitor, icon, desc):
 
 
 def insert_card(lines, section, block, top=False):
-    """Put a card at the end of its section (top=True: as the first card)."""
+    """Put a card at the end of its section, or first when top=True."""
     gs = groups_of(lines)
     for name, start, end in gs:
         if name == section:
@@ -564,7 +542,6 @@ def insert_card(lines, section, block, top=False):
             has_items = any(re.match(r"^\s+- .+:\s*$", l) for l in lines[start + 1:end])
             lines[at:at] = ([""] if has_items else []) + block
             return
-    # the section is not in the file yet: put it where the fixed order of the sections says
     order = SECTIONS.index(section)
     later = next((s for n, s, _ in gs if n in SECTIONS and SECTIONS.index(n) > order), None)
     new = ["- %s:" % section, ""] + block + [""]
@@ -585,7 +562,6 @@ def remove_card(lines, card_id):
     del lines[s:e]
     while s < len(lines) and s > 0 and not lines[s].strip() and not lines[s - 1].strip():
         del lines[s]
-    # the section it was in is removed too when no card is left in it (Homepage does not like an empty one)
     if home:
         g = next((g for g in groups_of(lines) if g[0] == home[0]), None)
         if g and not any(l.strip() and not l.strip().startswith("#") for l in lines[g[1] + 1:g[2]]):
@@ -594,7 +570,6 @@ def remove_card(lines, card_id):
 
 
 def set_card_line(lines, card_id, key, value):
-    """Change one line (href, siteMonitor) of a card. True when something changed."""
     r = card_range(lines, card_id)
     if not r:
         return False
@@ -638,12 +613,11 @@ def valid_yaml(text):
         return False
 
 
-# ---------------------------------------------------------------- custom.css
 LISTS = ("", "::before", "::after")
 
 
 def css_add(css, card_id, rgb, name):
-    """Add the card to the lists that style every card and give it its colour line. Returns the new text."""
+    """Add the card to the lists that style every card and give it its color line. Returns the new text."""
     tok = "#%s" % card_id
     for suf in LISTS:
         pat = re.compile(r"((?:#[\w-]+-card%s\s*,\s*)+#[\w-]+-card%s)(\s*\{)" % (re.escape(suf), re.escape(suf)))
@@ -668,8 +642,8 @@ def css_remove(css, card_id):
     css = re.sub(r"(?m)^%s\s*\{\s*--accent:[^}]*\}.*\n?" % re.escape(tok), "", css)
     for suf in LISTS:
         t = re.escape(tok + suf)
-        css = re.sub(r",\s*%s(?=\s*[,{])" % t, "", css)          # the last or a middle one of a list
-        css = re.sub(r"%s\s*,\s*" % t, "", css)                  # the first one of a list
+        css = re.sub(r",\s*%s(?=\s*[,{])" % t, "", css)
+        css = re.sub(r"%s\s*,\s*" % t, "", css)
     return css
 
 
@@ -677,7 +651,6 @@ def css_has(css, card_id):
     return bool(re.search(r"(?m)^#%s\s*\{\s*--accent" % re.escape(card_id), css))
 
 
-# ---------------------------------------------------------------- the work
 def section_arg(text):
     t = re.sub(r"[^a-z]", "", text.lower())
     for s in SECTIONS:
@@ -690,8 +663,8 @@ def section_arg(text):
 
 
 class Files:
-    """services.yaml and custom.css, read once, written once, only when something changed."""
 
+    """services.yaml and custom.css, read once and written once, only when something changed."""
     def __init__(self):
         self.svc_text = read_text(SERVICES)
         self.css_text = read_text(CSS)
@@ -702,7 +675,7 @@ class Files:
         new_svc = "\n".join(self.lines)
         if new_svc != self.svc_text:
             if not valid_yaml(new_svc):
-                raise RuntimeError("the new services.yaml would not be valid YAML, so nothing was written (a bug: please report it)")
+                raise RuntimeError("the new services.yaml would not be valid YAML, so nothing was written (this is a bug; please report it)")
             if not DRY:
                 backup_once(SERVICES)
                 write_text(SERVICES, new_svc)
@@ -712,7 +685,7 @@ class Files:
 
 
 def update_managed_cards(st, f, by_name, lan, fq, serve):
-    """Cards made earlier: keep their links, colour, text and section right; drop a card when its container is gone for good."""
+    """Keep the cards made earlier up to date (links, color, text, section) and remove a card when its container no longer exists."""
     for name, m in sorted(st["managed"].items()):
         c = by_name.get(name)
         if c is None:
@@ -730,7 +703,7 @@ def update_managed_cards(st, f, by_name, lan, fq, serve):
             del st["managed"][name]
             f.css = css_remove(f.css, m["card"])
             drop_serve(m.get("serve"), serve)
-            note("The card %s is not in services.yaml any more (you removed it), so %s is ignored. Allow it again with: sudo homelab-cards unignore %s" % (m["name"], name, name))
+            note("The card %s is no longer in services.yaml (it was removed), so %s is ignored. To allow it again, run: sudo homelab-cards unignore %s" % (m["name"], name, name))
             continue
         if c["ports"] and m["hostport"] not in c["ports"]:
             m["hostport"] = c["ports"][0]
@@ -739,7 +712,6 @@ def update_managed_cards(st, f, by_name, lan, fq, serve):
             m["serve"] = sp
         href = "https://%s:%d" % (fq, m["serve"]) if fq and m.get("serve") else "http://%s:%d" % (lan, m["hostport"])
         monitor = "http://%s:%d" % (lan, m["hostport"])
-        # while Tailscale does not answer, the link is left as it is (a hiccup must not swap it for the local address)
         wanted = [("siteMonitor", monitor)] + ([("href", href)] if serve is not None and (fq or not m.get("serve")) else [])
         for key, val in wanted:
             if set_card_line(f.lines, m["card"], key, val):
@@ -753,12 +725,12 @@ def update_managed_cards(st, f, by_name, lan, fq, serve):
             if not is_auto_description(better) and set_card_line(f.lines, m["card"], "description", yaml_text(better)):
                 note("Updated the text of the card %s: %s" % (m["name"], better))
         here = card_section(f.lines, m["card"])
-        if here and here != m["section"]:                  # moved by hand in the file: it stays where the person put it
+        if here and here != m["section"]:
             m["section"], m["unsure"] = here, False
 
 
 def add_new_cards(st, f, cs, lan, fq, serve):
-    """A card for every running container that answers like a web page and has no card yet."""
+    """Make a card for every running container that answers like a web page and has no card yet."""
     ids, ports = existing_ids_and_ports(f.lines)
     for c in cs:
         name = c["name"]
@@ -766,7 +738,7 @@ def add_new_cards(st, f, cs, lan, fq, serve):
         if name in st["managed"] or name in st["ignore"] or is_builtin(c) or card_id in ids or not c["ports"]:
             continue
         if any(p in ports for p in c["ports"]):
-            continue                                   # a card (maybe a hand written one) already watches this port
+            continue
         if c["status"] != "running":
             continue
         port = next((p for p in c["ports"] if answers_like_a_web_page(p)), None)
@@ -788,20 +760,20 @@ def add_new_cards(st, f, cs, lan, fq, serve):
         if not sure:
             note("  To put it somewhere else:  sudo homelab-cards move %s \"Files & Photos\"   (or Network & DNS, Media & Entertainment)" % name)
         if not sp:
-            note("  No Tailscale HTTPS address yet (Tailscale is not ready): the card uses the local address for now and gets the HTTPS one on a later look.")
+            note("  No Tailscale HTTPS address is available yet (Tailscale is not ready): the card uses the local address and will get the HTTPS address on a later run.")
 
 
 def sync():
-    """The whole job. Returns 0, or 1 when it could not run (Docker or the Homepage files missing)."""
+    """The whole job: update existing cards and add new ones. Returns 0, or 1 when it could not run (Docker or the Homepage files missing)."""
     if not os.path.exists(SERVICES):
         say("There is no %s, so there is no dashboard to put cards on." % SERVICES)
         return 1
     if not valid_yaml(read_text(SERVICES)):
-        note("%s is not valid YAML now (maybe a half finished edit), so no card was changed. Fix it, then run: sudo homelab-cards" % SERVICES)
+        note("%s is not valid YAML (possibly an unfinished edit), so no card was changed. Fix the file, then run: sudo homelab-cards" % SERVICES)
         return 1
     cs = containers()
     if cs is None:
-        say("Docker does not answer, so nothing was looked at.")
+        say("Docker is not responding, so nothing was checked.")
         return 1
     st = load_state()
     f = Files()
@@ -827,6 +799,7 @@ def find_managed(st, text):
 
 
 def cmd_move(args):
+    """`move CARD SECTION`: put a card in another section."""
     if len(args) < 2:
         print("Usage: sudo homelab-cards move CARD SECTION   (SECTION: Network & DNS, Monitoring & Management, Files & Photos or Media & Entertainment)")
         return 1
@@ -855,6 +828,7 @@ def cmd_move(args):
 
 
 def cmd_ignore(args, undo):
+    """`ignore NAME`: never make a card for this container and remove the one already made."""
     if not args:
         print("Usage: sudo homelab-cards %s NAME" % ("unignore" if undo else "ignore"))
         return 1
@@ -892,7 +866,7 @@ def cmd_list():
         print("  none yet")
     for name, m in sorted(st["managed"].items()):
         print("  %-22s %-26s %s%s" % (m["name"], m["section"], "https://...:%s" % m["serve"] if m.get("serve") else "local address only",
-                                    "   (not sure about the section: sudo homelab-cards move %s SECTION)" % name if m.get("unsure") else ""))
+                                    "   (the section is uncertain; to change it, run: sudo homelab-cards move %s SECTION)" % name if m.get("unsure") else ""))
     if st["ignore"]:
         print("Ignored: %s" % ", ".join(st["ignore"]))
     if cs:
@@ -901,12 +875,12 @@ def cmd_list():
         wait = [c["name"] for c in cs if not is_builtin(c) and c["name"] not in st["managed"] and c["name"] not in st["ignore"]
                 and c["ports"] and "%s-card" % c["name"].lower() not in ids and not any(p in ports for p in c["ports"])]
         if wait:
-            print("Waiting (no web page answered yet, or not running): %s" % ", ".join(wait))
+            print("Waiting (no web page has responded yet, or it is not running): %s" % ", ".join(wait))
     return 0
 
 
 def cmd_check():
-    """Look-only report for homelab-selftest: lines of 'ok: ...', 'warn: ...' or 'fail: ...'."""
+    """Report only: print 'ok: ...', 'warn: ...' or 'fail: ...' lines for homelab-selftest."""
     st = load_state()
     if not st["managed"]:
         print("info: no automatic service cards yet")
@@ -919,23 +893,24 @@ def cmd_check():
     for name, m in sorted(st["managed"].items()):
         c = names.get(name)
         if c is None:
-            print("warn: the container %s of the card %s is gone (the card goes away at the next look)" % (name, m["name"]))
+            print("warn: the container %s of the card %s no longer exists (the card is removed at the next run)" % (name, m["name"]))
         elif c["status"] != "running":
             print("warn: %s (card %s) is not running: %s" % (name, m["name"], c["status"]))
         elif card_range(lines, m["card"]) is None:
             print("warn: the card %s is missing in services.yaml" % m["card"])
         elif not css_has(css, m["card"]):
-            print("warn: the card %s has no colour in custom.css" % m["card"])
+            print("warn: the card %s has no color in custom.css" % m["card"])
         elif m.get("serve") and serve is not None and m["serve"] not in serve:
             print("warn: the Tailscale address :%s of %s is missing (sudo homelab-cards sync sets it again)" % (m["serve"], m["name"]))
         else:
             print("ok: the card %s is in order (%s, port %s)" % (m["name"], m["section"], m["hostport"]))
         if m.get("unsure"):
-            print("warn: not sure which section %s belongs to: sudo homelab-cards move %s SECTION" % (m["name"], name))
+            print("warn: the section of %s is uncertain: sudo homelab-cards move %s SECTION" % (m["name"], name))
     return 0
 
 
 def main(argv):
+    """Read the command line and run the requested command."""
     global QUIET, DRY
     args = [a for a in argv if a not in ("--dry-run", "-n")]
     DRY = len(args) != len(argv)
@@ -963,7 +938,7 @@ def main(argv):
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         if cmd != "auto":
-            print("Another homelab-cards is running. Try again in a minute.")
+            print("Another homelab-cards process is running. Try again shortly.")
         return 0 if cmd == "auto" else 1
     except OSError:
         lock = None

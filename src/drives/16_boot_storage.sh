@@ -1,21 +1,15 @@
-# ---------- the boot drive as the default storage of the Main pool ----------
-# The services must keep running no matter what. With no drive in Main, or with its drive missing, /mnt/storage is a plain folder on the
-# boot drive and the services use it. As soon as a drive is in Main, the drive is the storage. What was saved on the boot drive in the
-# meantime is not lost: it lies under the mounted pool, and `sudo drives moveboot` copies it to the pool (and asks before it removes the old files).
-IMMICH_DIRS="upload library thumbs encoded-video profile backups"      # Immich looks for a hidden .immich file in each of these
+IMMICH_DIRS="upload library thumbs encoded-video profile backups"
 
-main_boot_flag() { printf '%s' "$STATE_DIR/main-on-boot"; }       # exists while Main should have a drive but the boot drive is the storage
-boot_kept_flag() { printf '%s' "$STATE_DIR/boot-files-kept"; }    # exists while copies are left on the boot drive under the mounted pool
+main_boot_flag() { printf '%s' "$STATE_DIR/main-on-boot"; }
+boot_kept_flag() { printf '%s' "$STATE_DIR/boot-files-kept"; }
 
-boot_folder_ready() {   # the Main pool path becomes a usable plain folder (with the folders Immich and Nextcloud expect); nothing happens while a pool is mounted there
+boot_folder_ready() {
   mountpoint -q "$MAIN_POOL" 2>/dev/null && return 0
   chattr -i "$MAIN_POOL" 2>/dev/null || true
   local d
   mkdir -p "$MAIN_POOL/immich" "$MAIN_POOL/nextcloud" || return 1
   give_to_owner "$MAIN_POOL/immich"
   chown 33:33 "$MAIN_POOL/nextcloud" 2>/dev/null || true
-  # Immich refuses to start when its folders exist without the marker file (it would otherwise show an empty library by mistake). This folder is
-  # the storage on purpose, so the markers are made here.
   for d in $IMMICH_DIRS; do
     mkdir -p "$MAIN_POOL/immich/$d"
     [ -e "$MAIN_POOL/immich/$d/.immich" ] || : >"$MAIN_POOL/immich/$d/.immich"
@@ -25,7 +19,7 @@ boot_folder_ready() {   # the Main pool path becomes a usable plain folder (with
 }
 
 BOOT_VIEW=""; BOOT_UNDER=""
-boot_view_open() {   # sets BOOT_UNDER to the folder of the Main pool that lies UNDER the mounted pool (what was saved while the boot drive was the storage)
+boot_view_open() {
   local fsroot rel
   fsroot=$(findmnt -nT "$(dirname "$MAIN_POOL")" -o TARGET 2>/dev/null) || return 1
   [ -n "$fsroot" ] || return 1
@@ -45,13 +39,13 @@ boot_view_close() {
   return 0
 }
 
-boot_has_files() {   # boot_has_files FOLDER: real files (the Immich marker files and empty folders do not count)
+boot_has_files() {
   [ -d "$1" ] && [ -n "$(find "$1" ! -type d ! -name .immich ! -path '*/lost+found/*' -print -quit 2>/dev/null)" ]
 }
 
 boot_files_bytes() { du -sb --exclude=.immich --exclude=lost+found "$1" 2>/dev/null | awk '{print $1 + 0}'; }
 
-boot_files_pending() {   # 0 when the Main pool is mounted and files saved on the boot drive lie under it
+boot_files_pending() {
   mountpoint -q "$MAIN_POOL" 2>/dev/null || return 1
   [ -n "$(branches_of main)" ] || return 1
   array_active && return 1
@@ -60,13 +54,13 @@ boot_files_pending() {   # 0 when the Main pool is mounted and files saved on th
   return $rc
 }
 
-main_drive_missing() {   # 0 when Main has drives in its setup, but the pool is not mounted (a drive is missing or unplugged)
+main_drive_missing() {
   array_active && return 1
   { [ -n "$(branches_of main)" ] || pool_in_fstab "$MAIN_POOL"; } || return 1
   ! mountpoint -q "$MAIN_POOL" 2>/dev/null
 }
 
-main_fallback_start() {   # the boot drive is the storage until the Main drive is back
+main_fallback_start() {
   boot_folder_ready || return 1
   mkdir -p "$STATE_DIR" 2>/dev/null
   [ -e "$(main_boot_flag)" ] || date '+%F %T' >"$(main_boot_flag)"
@@ -74,17 +68,14 @@ main_fallback_start() {   # the boot drive is the storage until the Main drive i
   return 0
 }
 
-# ---------- sudo drives guard: run at start-up, before Docker ----------
 guard_flow() {
   array_active && return 0
   if ! main_drive_missing; then
-    # no drive in Main: a plain folder on the boot drive; a mounted pool: nothing to do
     mountpoint -q "$MAIN_POOL" 2>/dev/null || boot_folder_ready
     if boot_files_pending; then date '+%F %T' >"$(boot_kept_flag)" 2>/dev/null; else rm -f "$(main_boot_flag)"; fi
     return 0
   fi
   local mp all=1
-  # (the pool is only mounted when EVERY Main drive is there: a pool over a missing drive would look empty)
   for mp in $(branches_of main); do mountpoint -q "$mp" || mount_fstab "$mp" 2>/dev/null || all=0; done
   if [ "$all" = 1 ] && mount_fstab "$MAIN_POOL" 2>/dev/null; then
     log "guard: the Main pool is mounted"
@@ -97,8 +88,8 @@ guard_flow() {
   return 0
 }
 
-# ---------- sudo drives moveboot ----------
-moveboot_core() {   # moveboot_core: the containers are stopped. Copies what lies under the pool to the pool, checks it, asks before removing it. 0 = nothing left behind
+# Containers are stopped. Copy what is under the pool path on the boot drive into the pool, verify it, and ask before removing the originals. Returns 0 when nothing is left behind.
+moveboot_core() {
   local src=$BOOT_UNDER bytes free diff
   bytes=$(boot_files_bytes "$src"); free=$(df -B1 --output=avail "$MAIN_POOL" 2>/dev/null | tail -1 | tr -d ' ')
   if [ -n "$free" ] && [ "${bytes:-0}" -gt "$free" ] 2>/dev/null; then
@@ -118,7 +109,6 @@ moveboot_core() {   # moveboot_core: the containers are stopped. Copies what lie
     return 1
   fi
   say "Every file is on the pool now."
-  # (the terminal asks; the panel's "Move the files" button was the person's yes, and every file was just checked)
   if [ "${PANEL_MOVEBOOT:-0}" = 1 ] || { [ "$PANEL_MODE" != 1 ] && yn_yes "Remove the old copies from the boot drive now (they only use up space there)?"; }; then
     find "$src" -mindepth 1 ! -type d ! -name .immich -delete 2>/dev/null
     find "$src" -mindepth 1 -depth -type d -empty -delete 2>/dev/null
@@ -134,6 +124,7 @@ moveboot_core() {   # moveboot_core: the containers are stopped. Copies what lie
   return 0
 }
 
+# `moveboot`: move files stored on the boot drive into the pool.
 moveboot_flow() {
   array_guard || return 1
   if [ -z "$(branches_of main)" ]; then
@@ -142,7 +133,7 @@ moveboot_flow() {
   fi
   if ! mountpoint -q "$MAIN_POOL"; then
     note "The Main pool is not mounted, so its drive is missing and the services use the boot drive for now."
-    note "Plug the drive in and run:  sudo drives remount"
+    note "Connect the drive and run:  sudo drives remount"
     return 1
   fi
   boot_view_open || die "Could not look at the boot drive folder under the Main pool."
@@ -168,7 +159,7 @@ moveboot_flow() {
   return $rc
 }
 
-panel_moveboot_flow() {   # the Drives tab's "Move the files to the drive" button: copy, check every file, remove the old copies, start the services again
+panel_moveboot_flow() {
   PANEL_MOVEBOOT=1
   progress 0 "Looking at the files"
   moveboot_flow
@@ -177,7 +168,7 @@ panel_moveboot_flow() {   # the Drives tab's "Move the files to the drive" butto
   return $rc
 }
 
-moveboot_offer() {   # after the Main pool came back (Fix Drives): the containers are stopped; asks in the terminal, only says so in the panel
+moveboot_offer() {
   boot_files_pending || return 0
   boot_view_open || return 0
   if [ "$PANEL_MODE" = 1 ] || [ "$DRY_RUN" = 1 ]; then

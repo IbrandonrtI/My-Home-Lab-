@@ -37,28 +37,26 @@ import urllib.request
 VERSION = "1.0"
 STATE_DIR = os.environ.get("HOMELAB_STATE_DIR", "/var/lib/homelab")
 YEARS_BACK, YEARS_AHEAD = 1, 5
-STAMP = "20260101T000000Z"                     # a fixed time stamp, so a file only changes when its events change
+STAMP = "20260101T000000Z"
 LUNAR_NEW_YEAR = {2026: (2, 17), 2027: (2, 6), 2028: (1, 26), 2029: (2, 13), 2030: (2, 3), 2031: (1, 23), 2032: (2, 11), 2033: (1, 31),
                   2034: (2, 19), 2035: (2, 8)}
 DIWALI = {2026: (11, 8), 2027: (10, 29), 2028: (10, 17), 2029: (11, 5), 2030: (10, 26), 2031: (11, 14), 2032: (11, 2), 2033: (10, 22),
           2034: (11, 10), 2035: (10, 30)}
-EVENTS_HEADER = ("# Your own events for the Calendar on the Homepage dashboard. One per line:  DATE | once or yearly | text\n"
-                 "# Add one with:  homelab event add 2026-12-25 \"Family dinner\"   (you may also edit this file by hand)\n")
+EVENTS_HEADER = ("# Custom events for the Calendar on the Homepage dashboard. One per line:  DATE | once or yearly | text\n"
+                 "# Add one with:  homelab event add 2026-12-25 \"Family dinner\"   (this file can also be edited manually)\n")
 
 
-FEEDS_HEADER = ("# Your online calendars for the Calendar on the Homepage dashboard. One per line:  NAME | ADDRESS\n"
+FEEDS_HEADER = ("# Online calendars for the Calendar on the Homepage dashboard. One per line:  NAME | ADDRESS\n"
                 "# The address of a Google Calendar is private: do not share this file. Add one with:  homelab calendar add NAME ADDRESS\n")
 FEED_MAX_BYTES = 8 * 1024 * 1024
-FEED_KEEP_DAYS = 400                  # events that do not repeat and ended longer ago than this are left out (keeps the file small)
+FEED_KEEP_DAYS = 400
 
 
 class Fail(Exception):
     pass
 
 
-# ---------------------------------------------------------------- the holidays
 def nth_weekday(year, month, weekday, n):
-    """The n-th weekday (0 = Monday ... 6 = Sunday) of a month."""
     first = datetime.date(year, month, 1)
     return first + datetime.timedelta(days=(weekday - first.weekday()) % 7 + 7 * (n - 1))
 
@@ -70,7 +68,6 @@ def last_weekday(year, month, weekday):
 
 
 def official(y):
-    """US federal holidays and the New York State extras: [(date, name)]."""
     d = datetime.date
     return [
         (d(y, 1, 1), "New Year's Day"),
@@ -90,7 +87,6 @@ def official(y):
 
 
 def observances(y):
-    """Days that are not official holidays: [(date, name)]."""
     d = datetime.date
     out = [(d(y, 2, 14), "Valentine's Day"), (nth_weekday(y, 5, 6, 2), "Mother's Day"), (nth_weekday(y, 6, 6, 3), "Father's Day"),
            (d(y, 10, 31), "Halloween")]
@@ -106,17 +102,15 @@ def years(today=None):
     return range(y - YEARS_BACK, y + YEARS_AHEAD + 1)
 
 
-# ---------------------------------------------------------------- calendar files (iCalendar)
 def esc(text):
     return text.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", " ")
 
 
 def fold(line):
-    """Lines of an .ics file are at most 75 characters; a longer one continues on the next line after a space."""
     out, b = [], line.encode("utf-8")
     while len(b) > 74:
         cut = 74
-        while cut > 0 and (b[cut] & 0xC0) == 0x80:      # never cut inside a character
+        while cut > 0 and (b[cut] & 0xC0) == 0x80:
             cut -= 1
         out.append(b[:cut].decode("utf-8"))
         b = b[cut:]
@@ -136,8 +130,6 @@ def vevent(day, name, yearly=False):
 
 
 def ics(name, events):
-    """events: [(date, text, yearly)]. A calendar without any event shows an error on the dashboard, so an empty one gets a note in
-    the year 2000 (far outside what the calendar shows)."""
     body = []
     for day, text, yearly in events:
         body += vevent(day, text, yearly)
@@ -147,7 +139,6 @@ def ics(name, events):
     return "\r\n".join(fold(l) for l in lines) + "\r\n"
 
 
-# ---------------------------------------------------------------- where the files are
 def lab_user():
     name = os.environ.get("HOMELAB_USER") or os.environ.get("SUDO_USER")
     if name and name != "root":
@@ -186,7 +177,6 @@ def read(path):
 
 
 def write_if_changed(path, text, owner_of):
-    """Write a file only when its text changed. When run by root the file is handed to the owner of `owner_of`, so the user can change it."""
     if read(path) == text:
         return False
     tmp = path + ".tmp"
@@ -200,8 +190,8 @@ def write_if_changed(path, text, owner_of):
     return True
 
 
-# ---------------------------------------------------------------- your events
 def parse_date(text, today=None):
+    """Parse a date typed as YYYY-MM-DD, M/D/YYYY or M/D (the next time that day comes)."""
     today = today or datetime.date.today()
     t = text.strip()
     m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", t)
@@ -214,7 +204,7 @@ def parse_date(text, today=None):
             return datetime.date(y + 2000 if y < 100 else y, int(m.group(1)), int(m.group(2)))
         m = re.fullmatch(r"(\d{1,2})/(\d{1,2})", t)
         if m:
-            for y in (today.year, today.year + 1, today.year + 2, today.year + 3, today.year + 4):     # 2/29 waits for a leap year
+            for y in (today.year, today.year + 1, today.year + 2, today.year + 3, today.year + 4):
                 try:
                     day = datetime.date(y, int(m.group(1)), int(m.group(2)))
                 except ValueError:
@@ -223,11 +213,10 @@ def parse_date(text, today=None):
                     return day
     except ValueError:
         pass
-    raise Fail("'%s' is not a date I can read. Use 2026-12-25, 12/25/2026 or 12/25 (the next 12/25), and a real day of the month." % text)
+    raise Fail("'%s' is not a valid date. Use 2026-12-25, 12/25/2026 or 12/25 (the next 12/25), and a real day of the month." % text)
 
 
 def load_events(hp):
-    """[(date, text, yearly)] from events.txt, sorted. Lines that cannot be read are skipped."""
     out = []
     for line in read(os.path.join(hp, "events.txt")).splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -248,9 +237,7 @@ def save_events(hp, events):
     write_if_changed(os.path.join(hp, "events.txt"), text, hp)
 
 
-# ---------------------------------------------------------------- your online calendars
 def load_feeds(hp):
-    """[(name, address)] from calendars.txt. Lines that cannot be read are skipped."""
     out = []
     for line in read(os.path.join(hp, "calendars.txt")).splitlines():
         if not line.strip() or line.lstrip().startswith("#") or "|" not in line:
@@ -264,7 +251,7 @@ def load_feeds(hp):
 def save_feeds(hp, feeds):
     path = os.path.join(hp, "calendars.txt")
     write_if_changed(path, FEEDS_HEADER + "".join("%s | %s\n" % f for f in feeds), hp)
-    os.chmod(path, 0o600)                      # the address of a calendar must stay private
+    os.chmod(path, 0o600)
 
 
 def feed_url(addr):
@@ -272,7 +259,6 @@ def feed_url(addr):
 
 
 def fetch_feed(addr):
-    """The text of an online calendar. Raises Fail when it cannot be had or is not a calendar."""
     req = urllib.request.Request(feed_url(addr), headers={"User-Agent": "homelab-calendar"})
     try:
         with urllib.request.urlopen(req, timeout=25) as r:
@@ -280,7 +266,7 @@ def fetch_feed(addr):
     except (urllib.error.URLError, OSError, ValueError) as e:
         raise Fail("could not read that address (%s)" % getattr(e, "reason", e)) from None
     if len(data) > FEED_MAX_BYTES:
-        raise Fail("that calendar is bigger than %d MB" % (FEED_MAX_BYTES >> 20))
+        raise Fail("that calendar is larger than %d MB" % (FEED_MAX_BYTES >> 20))
     text = data.decode("utf-8", "replace")
     if "BEGIN:VCALENDAR" not in text:
         raise Fail("that address is not an iCal calendar (it should end in .ics)")
@@ -292,7 +278,6 @@ def feed_slug(name):
 
 
 def unfold(text):
-    """The lines of an .ics text, with continuation lines joined."""
     lines = []
     for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         if raw[:1] in (" ", "\t") and lines:
@@ -303,7 +288,6 @@ def unfold(text):
 
 
 def feed_parts(text, name, today=None):
-    """(time zone blocks, events) of one calendar. Every event title starts with [name]. Old one-time events are dropped."""
     today = today or datetime.date.today()
     cutoff = (today - datetime.timedelta(days=FEED_KEEP_DAYS)).strftime("%Y%m%d")
     zones, events, cur, kind = [], [], None, ""
@@ -323,7 +307,6 @@ def feed_parts(text, name, today=None):
 
 
 def tag_event(lines, name, cutoff):
-    """The event with [name] in front of its title, or None for an old event that does not repeat."""
     start = next((l for l in lines if l.startswith("DTSTART")), "")
     day = re.sub(r"\D", "", start.split(":", 1)[-1])[:8]
     if day and day < cutoff and not any(l.startswith("RRULE") for l in lines):
@@ -342,7 +325,7 @@ def tag_event(lines, name, cutoff):
 
 
 def merged_feeds(hp):
-    """The text of mycalendars.ics from the saved copies of the online calendars."""
+    """Return the text of mycalendars.ics built from the saved copies of the online calendars."""
     zones, seen, body = [], set(), []
     for name, _addr in load_feeds(hp):
         z, ev = feed_parts(read(os.path.join(hp, "calendar-cache", feed_slug(name) + ".ics")), name)
@@ -363,7 +346,6 @@ def merged_feeds(hp):
 
 
 def sync_feeds(hp, only=None):
-    """Fetch the online calendars again (a calendar that cannot be fetched keeps its last copy). Returns [(name, 'ok' or the problem)]."""
     cache = os.path.join(hp, "calendar-cache")
     os.makedirs(cache, exist_ok=True)
     if os.geteuid() == 0:
@@ -383,7 +365,6 @@ def sync_feeds(hp, only=None):
 
 
 def build(hp):
-    """Write the calendar files. Returns the list of files that changed."""
     img = os.path.join(hp, "images")
     os.makedirs(img, exist_ok=True)
     if os.geteuid() == 0:
@@ -402,7 +383,7 @@ def build(hp):
 def say_events(events):
     today = datetime.date.today()
     if not events:
-        print("You have no events yet. Add one:  homelab event add 2026-12-25 \"Family dinner\"")
+        print("There are no events yet. Add one:  homelab event add 2026-12-25 \"Family dinner\"")
         return
     for i, (d, t, y) in enumerate(events, 1):
         when = d.strftime("%a %b %d") + " (every year)" if y else d.strftime("%a %b %d, %Y") + ("" if d >= today else " (past)")
@@ -411,10 +392,11 @@ def say_events(events):
 
 def short_addr(addr):
     m = re.match(r"^(\w+://[^/]+)", addr)
-    return (m.group(1) if m else addr[:30]) + "/..."          # the rest of the address is private
+    return (m.group(1) if m else addr[:30]) + "/..."
 
 
 def feed_cmd(hp, a):
+    """`feed list|add|remove|sync`: manage the online calendars shown on the Homepage."""
     sub = a[0] if a else ""
     feeds = load_feeds(hp)
     if sub == "list":
@@ -431,8 +413,8 @@ def feed_cmd(hp, a):
         if not re.match(r"^(https?|webcal)://", addr, re.I):
             raise Fail("The address must start with https:// or webcal://  (Google Calendar: Settings > your calendar > Integrate calendar > the address in iCal format).")
         if any(n.lower() == name.lower() for n, _ in feeds):
-            raise Fail("There is already an online calendar called %s. Remove it first, or use another name." % name)
-        text = fetch_feed(addr)                    # refuses an address that is not a calendar
+            raise Fail("There is already an online calendar named %s. Remove it first, or use another name." % name)
+        text = fetch_feed(addr)
         feeds.append((name, addr))
         save_feeds(hp, feeds)
         cache = os.path.join(hp, "calendar-cache")
@@ -443,7 +425,7 @@ def feed_cmd(hp, a):
         write_if_changed(os.path.join(cache, feed_slug(name) + ".ics"), text, hp)
         build(hp)
         n = len(feed_parts(text, name)[1])
-        print("Added %s (%d events). They show in the dashboard's Calendar within 5 minutes (or reload the page). A daily job keeps them fresh." % (name, n))
+        print("Added %s (%d events). They appear in the dashboard's Calendar within 5 minutes (or reload the page). A daily job keeps them up to date." % (name, n))
         return 0
     if sub in ("remove", "rm", "delete"):
         if len(a) != 2 or not a[1].isdigit():
@@ -466,6 +448,7 @@ def feed_cmd(hp, a):
 
 
 def run(argv):
+    """Read the command line and run the requested command."""
     hp = homepage_dir()
     cmd = argv[0] if argv else ""
     if cmd in ("version", "--version"):
@@ -508,7 +491,7 @@ def run(argv):
         save_events(hp, events)
         build(hp)
         print("Added: %s  %s%s" % (day.strftime("%a %b %d, %Y"), text, "  (every year)" if yearly else ""))
-        print("It shows on the dashboard's Calendar within 5 minutes (or reload the page).")
+        print("It appears in the dashboard's Calendar within 5 minutes (or reload the page).")
         return 0
     if cmd in ("remove", "rm", "delete"):
         if len(argv) != 2 or not argv[1].isdigit():
@@ -533,7 +516,7 @@ def run(argv):
         return 1 if any(r != "ok" for _, r in res) else 0
     if cmd == "feed":
         return feed_cmd(hp, argv[1:])
-    raise Fail("I do not know '%s'. Try:  homelab event add | list | remove | holidays   or   homelab calendar add | list | remove | sync" % cmd)
+    raise Fail("Unknown command '%s'. Try:  homelab event add | list | remove | holidays   or   homelab calendar add | list | remove | sync" % cmd)
 
 
 def main(argv):

@@ -1,6 +1,4 @@
-# ---------- is anything being written right now? ----------
-# An update restarts containers. If files are being uploaded to a pool (or a backup is copying), wait for that to finish.
-pool_devices() {   # the whole drives behind the pools (not the boot drive), one name per line
+pool_devices() {
   if [ -n "${HLU_POOL_DEVS:-}" ]; then printf '%s\n' $HLU_POOL_DEVS; return; fi
   local src dsk
   while read -r src; do
@@ -10,7 +8,7 @@ pool_devices() {   # the whole drives behind the pools (not the boot drive), one
   done < <(findmnt -rn -o SOURCE,TARGET 2>/dev/null | awk '$2 ~ "^/mnt/(disks/|storage$|backup$)" {print $1}') | sort -u
 }
 
-sectors_written() {   # sectors written to the pool drives so far (field 7 of /sys/block/DEV/stat)
+sectors_written() {
   local d t=0 w
   while read -r d; do
     [ -n "$d" ] || continue
@@ -20,24 +18,23 @@ sectors_written() {   # sectors written to the pool drives so far (field 7 of /s
   echo "$t"
 }
 
-busy_reason() {   # prints why it is a bad moment to restart containers, or nothing
-  if [ -n "${HLU_BUSY:-}" ]; then [ "$HLU_BUSY" = none ] || echo "$HLU_BUSY"; return 0; fi   # test hook
+busy_reason() {
+  if [ -n "${HLU_BUSY:-}" ]; then [ "$HLU_BUSY" = none ] || echo "$HLU_BUSY"; return 0; fi
   if ! ( exec 7>"${HLU_BACKUP_LOCK:-/var/lock/homelab-backup.lock}" && flock -n 7 ) 2>/dev/null; then
-    echo "a backup is running right now"; return 0
+    echo "a backup is running"; return 0
   fi
   local a b secs=${HLU_SAMPLE_SECS:-5}
   a=$(sectors_written); sleep "$secs"; b=$(sectors_written)
-  # more than about 300 KB per second written to the pool drives: files are coming in
-  if [ $(( (b - a) * 512 / secs )) -gt 300000 ]; then echo "files are being written to a storage pool (an upload?)"; fi
+  if [ $(( (b - a) * 512 / secs )) -gt 300000 ]; then echo "files are being written to a storage pool (for example an upload)"; fi
   return 0
 }
 
-# ---------- quick database dump (instead of a full backup) ----------
 dump_dir() {
   if mountpoint -q /mnt/backup 2>/dev/null; then echo "${HLU_DUMP_DIR:-/mnt/backup/db-dumps/pre-update}"; else echo "${HLU_DUMP_DIR:-$STATE_DIR/pre-update-dumps}"; fi
 }
 
-dump_stack_db() {   # dump_stack_db STACK: dump every PostgreSQL database in the stack. 0 = all saved (or nothing to dump)
+# dump_stack_db STACK: dump every PostgreSQL database in the stack. Returns 0 when all are saved or there is nothing to dump.
+dump_stack_db() {
   local s=$1 i c img dir stamp user db f n=0 free
   stamp=$(date +%Y%m%d-%H%M%S); dir=$(dump_dir)
   for i in "${!CN[@]}"; do
@@ -54,7 +51,6 @@ dump_stack_db() {   # dump_stack_db STACK: dump every PostgreSQL database in the
        && [ "$(stat -c %s "$f.tmp")" -gt "${HLU_DUMP_MIN:-200}" ]; then
       mv "$f.tmp" "$f"; chmod 600 "$f"
       line_ok "Database dump saved: $f ($(hb "$(stat -c %s "$f")"))"
-      # keep the newest 3 dumps of this database
       # shellcheck disable=SC2012
       ls -1t "$dir/$c"-*.sql.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
       n=$((n + 1))

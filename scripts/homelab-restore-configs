@@ -1,30 +1,11 @@
 #!/usr/bin/env bash
-# homelab-restore-configs - put the saved config files back on a rebuilt server.
-#
-# The daily backup (homelab-backup) keeps the boot drive's config files under their
-# full paths in  <backup>/boot-configs/.  After a fresh Linux install this tool copies
-# them back the safe way:
-#   - it NEVER restores /etc/fstab (the old boot drive's identifiers would stop the
-#     new server from booting), /usr/local/ (the scripts come from GitHub),
-#     root-crontab.txt (a record to read, not a file to copy) or /var/lib/docker/
-#     (Docker volumes are restored one by one with:  volume NAME)
-#   - it shows a preview first (what is new, what would be replaced) and asks you to
-#     type RESTORE
-#   - it never deletes anything
-#
-# Usage:
-#   sudo homelab-restore-configs [BACKUP_FOLDER]     restore the config files
-#   sudo homelab-restore-configs check [BACKUP]      only show the preview, never copy (safe on a running server)
-#   sudo homelab-restore-configs list [BACKUP]       list the Docker volumes in the backup
-#   sudo homelab-restore-configs volume NAME [BACKUP]  restore one Docker volume
-#   homelab-restore-configs version | help
 
 set -u
 set -o pipefail
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 VERSION="1.0"
-ROOT="${HRC_ROOT:-/}"                                     # tests point this at a fake root
+ROOT="${HRC_ROOT:-/}"
 ROOT="${ROOT%/}"
 BACKUP_POOL="${HRC_BACKUP_POOL:-/mnt/backup}"
 STATUS_FILE="${HRC_STATUS_FILE:-/var/lib/homelab-backup/last-run}"
@@ -65,10 +46,10 @@ EOF
 
 [ "$(id -u)" -eq 0 ] || [ "${1:-}" = version ] || [ "${1:-}" = help ] || [ "${1:-}" = --help ] || die "Run it with sudo."
 
-# ---------- find the backup ----------
 has_configs() { [ -d "$1/boot-configs" ]; }
 
-find_backup() {   # find_backup [explicit]  -> prints the backup folder
+# find_backup [explicit]: print the backup folder to restore from.
+find_backup() {
   local c="${1:-}" dest fb
   if [ -n "$c" ]; then
     c="${c%/}"
@@ -88,7 +69,7 @@ find_backup() {   # find_backup [explicit]  -> prints the backup folder
   return 1
 }
 
-backup_age() {   # backup_age DIR -> text about the last run, if the status file points at this backup
+backup_age() {
   local d=$1 line
   if [ -r "$STATUS_FILE" ]; then
     line=$(tail -1 "$STATUS_FILE")
@@ -100,10 +81,9 @@ backup_age() {   # backup_age DIR -> text about the last run, if the status file
   printf 'no record of a backup run for this folder; newest file inside: %s' "$(find "$d/boot-configs" -type f -printf '%TY-%Tm-%Td\n' 2>/dev/null | sort | tail -1)"
 }
 
-# ---------- containers (volume restore) ----------
 docker_ok() { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }
 
-stop_for_volume() {   # stop_for_volume NAME
+stop_for_volume() {
   local list
   docker_ok || { STOPPED=""; return 0; }
   list=$(docker ps --filter "volume=$1" --format '{{.Names}}' | tr '\n' ' ')
@@ -122,8 +102,6 @@ start_stopped() {
   STOPPED=""
 }
 
-# ---------- preview and copy ----------
-# preview SRC/ DEST/ [excludes...]  -> sets NEW_N CHG_N BYTES, writes $OUT (itemized lines)
 preview() {
   local src=$1 dst=$2; shift 2
   OUT=$(mktemp); STATS=$(mktemp)
@@ -137,7 +115,7 @@ preview() {
   NEW_LIST=$STATS.new; CHG_LIST=$STATS.chg
 }
 
-show_names() {   # show_names LISTFILE TITLE
+show_names() {
   local n; n=$(wc -l <"$1")
   [ "$n" -gt 0 ] || return 0
   say "$2 (first $PREVIEW_NAMES):"
@@ -147,7 +125,7 @@ show_names() {   # show_names LISTFILE TITLE
 
 cleanup_preview() { rm -f "${OUT:-}" "${STATS:-}" "${STATS:-}.err" "${STATS:-}.new" "${STATS:-}.chg" 2>/dev/null || true; }
 
-report_preview() {   # report_preview NEW_TEXT CHANGED_TEXT  -> the counts, size and first names
+report_preview() {
   say "$1: $NEW_N"
   say "$2: $CHG_N"
   say "Total size to copy: $(human "$BYTES")"
@@ -157,15 +135,15 @@ report_preview() {   # report_preview NEW_TEXT CHANGED_TEXT  -> the counts, size
   say ""
 }
 
-confirm_restore() {   # asks for RESTORE; on "no" it cleans up and fails
+confirm_restore() {
   if typed RESTORE "Type RESTORE (capitals) to copy these $((NEW_N + CHG_N)) files: "; then cleanup_preview; return 0; fi
   say "Cancelled. Nothing was copied."; cleanup_preview; return 1
 }
 
-# ---------- restore the config files ----------
+# Restore the config files from the backup's boot-configs folder.
 restore_configs() {
   local bk src
-  bk=$(find_backup "${1:-}") || die "No backup with a boot-configs folder was found. Plug in the backup drive and run  sudo drives, or give the folder:  sudo homelab-restore-configs /path/to/backup"
+  bk=$(find_backup "${1:-}") || die "No backup with a boot-configs folder was found. Connect the backup drive and run  sudo drives, or give the folder:  sudo homelab-restore-configs /path/to/backup"
   src="$bk/boot-configs"
   say "Backup: $bk"
   say "  $(backup_age "$bk")"
@@ -210,7 +188,6 @@ restore_configs() {
   return 0
 }
 
-# ---------- list and restore Docker volumes ----------
 vol_dir() { echo "$1/boot-configs/var/lib/docker/volumes"; }
 
 list_volumes() {
@@ -222,7 +199,8 @@ list_volumes() {
   return 0
 }
 
-restore_volume() {   # restore_volume NAME [backup]
+# restore_volume NAME [backup]: restore one Docker volume from the backup.
+restore_volume() {
   local name=${1:-} bk src dst
   [ -n "$name" ] || die "Give the volume name. List them with:  sudo homelab-restore-configs list"
   [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || die "That is not a valid volume name."

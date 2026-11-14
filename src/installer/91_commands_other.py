@@ -1,4 +1,3 @@
-# ================================================================ more commands: adguard, cards, upgrade, filebrowser, homepage, fill, secrets, progress
 def cmd_adguard():
     """`adguard`: add AdGuard Home to a machine that was installed without it."""
     load_all()
@@ -32,7 +31,7 @@ LASTFM_KEY = re.compile(r"^[0-9a-fA-F]{32}$")
 
 
 def cmd_lastfm(rest):
-    """`lastfm`: save your own Last.fm API key and secret so Navidrome can suggest similar songs and artists (`lastfm remove` takes them out)."""
+    """`lastfm`: save your Last.fm API key and secret so Navidrome can suggest similar songs and artists. `lastfm remove` deletes them."""
     load_all()
     if Mode.existing:
         say("This machine was built by hand, so the installer only reads it. Put the two Last.fm keys into the Navidrome stack in Portainer yourself.")
@@ -80,7 +79,6 @@ MEM_SIZE = re.compile(r"^(\d+(?:\.\d+)?)\s*([mMgG])[bB]?$")
 
 
 def cpu_has_avx2():
-    """True when the processor has AVX2 (AudioMuse-AI will not start without it). True too when it cannot be read."""
     if os.environ.get("HLS_NO_AVX2"):
         return False
     try:
@@ -90,18 +88,15 @@ def cpu_has_avx2():
 
 
 def mem_mb(text):
-    """'3g' or '3072m' as megabytes (3072)."""
     m = MEM_SIZE.match(str(text))
     return int(float(m.group(1)) * (1024 if m.group(2).lower() == "g" else 1)) if m else 3072
 
 
 def gb_text(mb):
-    """'3072' (megabytes) as '3 GB'."""
     return "%g GB" % round(int(mb) / 1024, 1)
 
 
 def audiomuse_limit_mb(text):
-    """The worker's memory cap in whole megabytes, from what was typed (3g, 4096m, 2.5g). Raises Abort for a number that does not work."""
     m = MEM_SIZE.match(text.strip())
     if not m:
         raise Abort("'%s' is not a size. Write it like 3g (gigabytes) or 3072m (megabytes), or write auto." % text)
@@ -115,7 +110,6 @@ def audiomuse_limit_mb(text):
 
 
 def port_taken_by(port, mine=("audiomuse-flask",)):
-    """The name of another container that already publishes this port on the machine ('' when none does)."""
     rc, txt = docker("ps", "--format", "{{.Names}}|{{.Ports}}", timeout=30)
     for line in txt.splitlines():
         name, _, ports = line.partition("|")
@@ -127,11 +121,11 @@ def port_taken_by(port, mine=("audiomuse-flask",)):
 def audiomuse_memory_help():
     total = ram_gb()
     cur = audiomuse_mem()
-    rows = [(4, "a small machine"), (8, "what most small servers have"), (16, "a roomy machine"), (32, "a big machine")]
+    rows = [(4, "a small machine"), (8, "typical for a small server"), (16, "a machine with plenty of memory"), (32, "a large machine")]
     out("")
     say("The AudioMuse-AI worker (the part that listens to your songs) may use up to %s of memory." % (
         gb_text(mem_mb(cur))) + (" This machine has %.1f GB in all." % total if total else ""))
-    say("What I suggest, by the memory of the machine (my estimates for a library of a few thousand songs, not measurements):")
+    say("Suggested limits by the machine's memory (estimates for a library of a few thousand songs, not measurements):")
     for gb, note in rows:
         out("      %2d GB machine   %-5s  %s%s" % (gb, audiomuse_mem_suggest(gb * 0.93).replace("g", " GB"), note,
                                                   "   <- this machine" if total and abs(total - gb * 0.93) < gb * 0.2 else ""))
@@ -140,13 +134,12 @@ def audiomuse_memory_help():
 
 
 def audiomuse_usage():
-    """What the three containers use right now, as lines of text ([] when Docker cannot say)."""
     rc, txt = docker("stats", "--no-stream", "--format", "{{.Name}}|{{.MemUsage}}", *STACKS["audiomuse"][1], timeout=60)
     return ["%-20s %s" % tuple(l.split("|", 1)) for l in txt.splitlines() if "|" in l] if rc == 0 else []
 
 
 def audiomuse_set_memory(rest):
-    """`audiomuse memory [SIZE | auto]`: show the worker's memory cap with suggestions, and change it."""
+    """`audiomuse memory [SIZE | auto]`: show the worker's memory limit with suggestions, or change it."""
     audiomuse_memory_help()
     if audiomuse_wanted():
         for line in audiomuse_usage():
@@ -179,7 +172,6 @@ def audiomuse_set_memory(rest):
 
 
 def audiomuse_worker(stop):
-    """`audiomuse pause` / `audiomuse resume`: stop the worker to free its memory, or start it again."""
     if not audiomuse_wanted():
         raise Abort("AudioMuse-AI is not set up on this machine. Run `sudo homelab-setup audiomuse`.")
     if Opt.dry:
@@ -208,14 +200,14 @@ def audiomuse_status():
     say("Web page: %s   (log in as %s; the password is AUDIOMUSE_PASSWORD in `sudo homelab-setup secrets`)" % (url("audiomuse"), Ctx.admin))
     for c in STACKS["audiomuse"][1]:
         paused = c == "audiomuse-worker" and State.data.get("audiomuse_paused")
-        out("      %-20s %s" % (c, "paused on purpose" if paused and c not in up else "running" if c in up else "NOT running"))
+        out("      %-20s %s" % (c, "paused on purpose" if paused and c not in up else "running" if c in up else "not running"))
     say("The worker may use up to %s of memory (change it: sudo homelab-setup audiomuse memory)." % gb_text(mem_mb(audiomuse_mem())))
     for line in audiomuse_usage():
         out("      right now: " + line)
 
 
 def audiomuse_remove():
-    """`audiomuse remove`: take the plugin out of Navidrome and remove the three containers (the analysis data stays)."""
+    """`audiomuse remove`: remove the plugin from Navidrome and the three containers. The analysis data is kept."""
     if not audiomuse_wanted():
         say("AudioMuse-AI is not set up. Nothing to remove.")
         return
@@ -242,7 +234,7 @@ def audiomuse_remove():
 
 
 def cmd_audiomuse(rest):
-    """`audiomuse`: set up AudioMuse-AI (Navidrome suggests similar songs by how they sound); also memory, pause, resume, status, remove."""
+    """`audiomuse`: set up AudioMuse-AI, which lets Navidrome suggest similar songs by sound. Also handles memory, pause, resume, status and remove."""
     load_all()
     if Mode.existing:
         say("This machine was built by hand, so the installer only reads it. AudioMuse-AI is set up with its own compose file; see its page on GitHub.")
@@ -304,12 +296,12 @@ def cmd_audiomuse(rest):
 
 
 LB_TOKEN = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
-SERVICE_USER = re.compile(r"^[^\s/?#&:@]{1,64}$")               # a Last.fm or ListenBrainz user name: no spaces, slashes or other address characters
+SERVICE_USER = re.compile(r"^[^\s/?#&:@]{1,64}$")
 NAVILIST_SECRETS = ("NAVILIST_LASTFM_USER", "NAVILIST_LB_USER", "NAVILIST_LB_TOKEN")
 
 
 def cmd_navilist(rest):
-    """`navilist`: set up naviList (Navidrome playlists from your ListenBrainz and Last.fm listening); also subscribe, status, remove."""
+    """`navilist`: set up naviList, which creates Navidrome playlists from ListenBrainz and Last.fm listening. Also handles subscribe, status and remove."""
     load_all()
     if Mode.existing:
         say("This machine was built by hand, so the installer only reads it. naviList is set up with its own compose file; see its page on GitHub.")
@@ -336,7 +328,7 @@ def cmd_navilist(rest):
     say("What this does:\n"
         "  - adds one small container (its web page is on port %d) and makes a small Navidrome login for it\n"
         "  - asks for your ListenBrainz user name and token (and your Last.fm user name if you saved a Last.fm key)\n"
-        "  - refreshes by itself: Navidrome every 5 minutes, ListenBrainz and Last.fm every 30 minutes\n"
+        "  - refreshes automatically: Navidrome every 5 minutes, ListenBrainz and Last.fm every 30 minutes\n"
         "  - never downloads anything\n"
         "  - ListenBrainz makes your playlists only after it has some of your listens, so the first ones can take a few days" % PORTS["navilist"])
     if State.data.get("navilist"):
@@ -385,7 +377,7 @@ def cmd_navilist(rest):
     say("Last step, once: Navidrome has to tell ListenBrainz (and Last.fm) what you play, or they have nothing to recommend from.\n"
         "  1. Open Navidrome, click your name at the top right, then Personal.\n"
         "  2. Switch on Scrobble to ListenBrainz and paste the same token. If you use Last.fm, link your Last.fm account there too.\n"
-        "  3. Play music as usual. In a few days ListenBrainz makes your playlists; they appear in Navidrome by themselves.\n"
+        "  3. Play music as usual. In a few days ListenBrainz makes your playlists; they appear in Navidrome automatically.\n"
         "naviList's own page is %s. Check on it with `sudo homelab-setup navilist status`." % url("navilist"))
 
 
@@ -395,7 +387,7 @@ def navilist_report_subscribe():
         good("Subscribed: %s. It is in Navidrome's Playlists now." % name)
     if waiting:
         say("Not there yet: %s. This is normal at first; they appear after a few days of listening. "
-            "`sudo homelab-setup navilist subscribe` tries again (or tick them on naviList's page)." % "; ".join(waiting))
+            "`sudo homelab-setup navilist subscribe` tries again (or select them on naviList's page)." % "; ".join(waiting))
     elif not done:
         say("Everything is subscribed already.")
 
@@ -418,7 +410,7 @@ def navilist_status():
         return
     up = containers_running()
     say("Web page: %s" % url("navilist"))
-    out("      %-20s %s" % ("navilist", "running" if "navilist" in up else "NOT running"))
+    out("      %-20s %s" % ("navilist", "running" if "navilist" in up else "not running"))
     out("      %-20s %s" % ("ListenBrainz", Secrets.get("NAVILIST_LB_USER") or "not used"))
     out("      %-20s %s" % ("Last.fm", (Secrets.get("NAVILIST_LASTFM_USER") or "not used") if Secrets.get("LASTFM_APIKEY") else "no Last.fm key saved"))
     if "navilist" in up:
@@ -433,7 +425,7 @@ def navilist_status():
 
 
 def navilist_remove():
-    """`navilist remove`: remove the container. The playlists it made stay in Navidrome."""
+    """`navilist remove`: remove the container. The playlists it created stay in Navidrome."""
     if not navilist_wanted():
         say("naviList is not set up. Nothing to remove.")
         return
@@ -458,7 +450,6 @@ def navilist_remove():
 
 
 def cmd_cards(rest):
-    """`cards`: look for new services (containers with a web page) and give each its Homepage card; also move, ignore, list."""
     prog = installed_copy("homelab-cards", "/usr/local/sbin")
     if not prog:
         raise Abort("The helper homelab-cards is not installed yet. Run `sudo homelab-setup refresh` first.")
@@ -469,8 +460,7 @@ def cmd_cards(rest):
 
 
 def cmd_upgrade():
-    """`upgrade`: download the newest files from GitHub, then run the NEW installer's refresh, so every changed script,
-    the installer itself and every new step are put on this machine in one go (no `sudo install` by hand)."""
+    """`upgrade`: download the newest files from GitHub, then run the new installer's refresh so changed scripts, the installer and new steps are all installed in one go."""
     load_all()
     repo = Ctx.repo
     if not os.path.isdir(os.path.join(repo, ".git")):
@@ -478,7 +468,7 @@ def cmd_upgrade():
                     "Download the lab again:  git clone https://github.com/IbrandonrtI/My-Home-Lab-.git  and run  sudo bash setup.sh refresh  inside it." % repo)
     prefix = []
     if not FAKE and os.geteuid() == 0 and have("sudo"):
-        try:     # git must run as the folder's owner: a root-owned .git folder would block your own git pull later
+        try:
             owner = pwd.getpwuid(os.stat(repo).st_uid).pw_name
         except (KeyError, OSError):
             owner = ""
@@ -516,7 +506,6 @@ def cmd_upgrade():
 
 
 def cmd_filebrowser():
-    """Update FileBrowser's drive folders after a drive was connected or removed (sudo drives calls this by itself)."""
     load_all()
     if Mode.existing:
         say("This machine already runs the lab. The installer does not change it.")
@@ -536,7 +525,6 @@ def cmd_filebrowser():
 
 
 def host_mount_types():
-    """{mount point: file system type} as the host sees its own mounts."""
     try:
         return mount_types(open("/proc/self/mountinfo").read())
     except OSError:
@@ -544,11 +532,9 @@ def host_mount_types():
 
 
 def homepage_sees_pools():
-    """True when Homepage shows each pool the way the host has it (a mounted pool as a mounted pool, no pool as no pool).
-    Homepage can only measure a pool that is a mount point inside its own container."""
     rc, txt = docker("exec", "homepage", "cat", "/proc/self/mountinfo", timeout=30)
     if rc != 0:
-        return True          # cannot look inside: do not restart for nothing
+        return True
     inside, host = mount_types(txt), host_mount_types()
     for pool in ("/mnt/storage", "/mnt/backup"):
         h = host.get(pool, "").startswith("fuse")
@@ -559,22 +545,20 @@ def homepage_sees_pools():
 
 
 def apply_custom_css():
-    """Move this machine's custom.css to the shipped, tidier layout (the old file is saved first)."""
     dst = hp_path("custom.css")
     cur = read_file(dst)
     new = css_new_layout(cur, read_file(repo_file("homepage-config", "custom.css"))) if cur else cur
     if new == cur:
         return
     rule("Homepage")
-    out("  Moving custom.css to the new, tidier layout. Your accent colours, the numbers you changed and the homelab theme block are kept.")
+    out("  Moving custom.css to the new layout. Your accent colors, the numbers you changed and the homelab theme block are kept.")
     out("  The old file is saved as custom.css.before-layout2. Reload the page to see it (Ctrl+Shift+R)")
     write_file(dst + ".before-layout2", cur, 0o644, (Ctx.uid, Ctx.gid))
     write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
 
 
 def update_homepage_stack():
-    """Make the Homepage stack in Portainer mount the whole /mnt folder (see homepage_volumes).
-    Returns "changed", "unchanged", or "dry" (a dry run only said what it would do)."""
+    """Change the Homepage stack in Portainer to mount the whole /mnt folder. Returns "changed", "unchanged", or "dry" for a dry run."""
     manual = ("In Portainer open the stack 'homepage' > Editor. Replace the lines that mount /mnt/storage and /mnt/backup with this one line "
               "under volumes, then click Update the stack:\n      - %s" % HOMEPAGE_PARENT_LINE)
     if not Secrets.get("PORTAINER_TOKEN") or not Portainer.alive():
@@ -605,8 +589,6 @@ def update_homepage_stack():
 
 
 def restart_homepage_if_blind():
-    """Restart Homepage when it does not see the pools the way the host has them mounted.
-    Returns "changed", "unchanged", or "dry"."""
     if "homepage" not in containers_running() or homepage_sees_pools():
         return "unchanged"
     rule("Homepage")
@@ -620,14 +602,13 @@ def restart_homepage_if_blind():
 
 
 def cmd_homepage():
-    """Make Homepage see the Main and Backup Pool (the two drive pills). sudo drives calls this by itself."""
     load_all()
     if "homepage" not in containers_all():
         say("Homepage is not installed on this machine.")
         return
     apply_custom_css()
     result = update_homepage_stack()
-    if result == "unchanged":                 # the stack was fine; the container may still be looking at an old mount
+    if result == "unchanged":
         result = restart_homepage_if_blind()
     if result == "dry":
         return
@@ -670,7 +651,6 @@ def cmd_fill():
 
 
 def cmd_mark(kind, sid):
-    """`done` or `skip`: mark a step by hand."""
     load_all()
     if sid not in BY_ID:
         raise Abort("There is no step called '%s'. Names: %s" % (sid, ", ".join(s.id for s in STEPS if s.kind == "ack" or s.optional)))
@@ -681,7 +661,6 @@ def cmd_mark(kind, sid):
 
 
 def cmd_secrets():
-    """`secrets`: show the generated passwords and keys."""
     load_all()
     if not Secrets.vals:
         say("No generated passwords or keys are stored on this machine.")
@@ -692,7 +671,6 @@ def cmd_secrets():
 
 
 def uptime_seconds():
-    """Seconds since the machine booted (HLS_UPTIME overrides it, for tests)."""
     try:
         return float(os.environ.get("HLS_UPTIME") or open("/proc/uptime").read().split()[0])
     except (OSError, ValueError, IndexError):
@@ -700,7 +678,6 @@ def uptime_seconds():
 
 
 def started_by_cron():
-    """True when the output goes to /dev/null: the schedule started this, nobody is reading."""
     try:
         return os.stat("/dev/null").st_rdev == os.fstat(1).st_rdev and not os.isatty(1)
     except OSError:
@@ -708,7 +685,6 @@ def started_by_cron():
 
 
 def drop_progress_line():
-    """Take the progress line out of root's crontab, so nothing keeps running for no reason."""
     if Opt.dry:
         return
     cur = crontab_text()
@@ -717,12 +693,11 @@ def drop_progress_line():
         run(["crontab", "-"], input_text="\n".join(kept) + "\n")
 
 
-AUTO_EVERY = 20 * 60        # the quiet schedule looks at the checklist at most this often
-AUTO_RETRY = 3 * 3600       # a step that failed in a quiet run is tried again after this long
+AUTO_EVERY = 20 * 60
+AUTO_RETRY = 3 * 3600
 
 
 def another_setup_running():
-    """True when a person (or the background job) is running the installer right now: the quiet schedule then keeps out of the way."""
     me = os.getpid()
     for d in glob.glob("/proc/[0-9]*"):
         try:
@@ -737,9 +712,7 @@ def another_setup_running():
 
 
 def auto_continue(res):
-    """The quiet schedule: do the steps that became possible by themselves (for example after MagicDNS was turned on), so nobody has to run
-    `sudo homelab-setup refresh`. Steps that need the admin password stay open (the person does them with refresh), and a failed step is
-    tried again only every few hours. Returns the new results."""
+    """The scheduled run: do the steps that have become possible. Steps that need the admin password stay open for the person to do."""
     if Mode.existing or State.readonly or not State.exists() or finish_running() or another_setup_running():
         return res
     tried = State.data.setdefault("auto_tried", {})
@@ -753,7 +726,7 @@ def auto_continue(res):
         for s in ready:
             tried[s.id] = now
         State.save()
-        with open(os.devnull, "w") as quiet_out, contextlib.redirect_stdout(quiet_out):      # (nobody reads it; the log file keeps the details)
+        with open(os.devnull, "w") as quiet_out, contextlib.redirect_stdout(quiet_out):
             run_pass(res, skip=skip)
         res = evaluate()
         for s in STEPS:
@@ -769,12 +742,7 @@ def auto_continue(res):
 
 
 def cmd_progress():
-    """`progress`: write the progress counts for the login screen.
-
-    Run by the schedule it stays light: nothing in the first 10 minutes after a boot (apps are still
-    starting, and a full check of every step would only slow the machine down), nothing while the saved
-    counts are less than 20 minutes old, and once setup is finished the schedule line removes itself.
-    """
+    """`progress`: write the progress counts for the login screen. When run by the schedule it does nothing in the first 10 minutes after boot, while apps are still starting."""
     quiet = len(sys.argv) > 2 and sys.argv[2] == "--quiet"
     if quiet or started_by_cron():
         if uptime_seconds() < BOOT_GRACE:
@@ -783,7 +751,7 @@ def cmd_progress():
             if time.time() - os.path.getmtime(PROGRESS_FILE) < AUTO_EVERY:
                 return
         except OSError:
-            pass            # no counts saved: either never written, or setup is finished; one check tells which
+            pass
         try:
             os.nice(19)
         except OSError:
@@ -836,7 +804,6 @@ is growing an LVM system volume into unused space of its drive, and only after y
 """
 
 
-# every command that needs no more than its name (done STEP and skip STEP also take the step)
 COMMANDS = {"checklist": cmd_checklist, "check": cmd_checklist, "install": cmd_install, "refresh": cmd_refresh, "fill": cmd_fill,
             "secrets": cmd_secrets, "progress": cmd_progress, "verify": cmd_verify, "filebrowser": cmd_filebrowser,
             "homepage": cmd_homepage, "adguard": cmd_adguard, "upgrade": cmd_upgrade, "growdisk": cmd_growdisk,

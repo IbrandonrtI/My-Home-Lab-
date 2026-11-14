@@ -1,7 +1,4 @@
-# ---------- secrets ----------
-# Shows which secrets a rebuild needs and checks what the server can confirm.
-# It NEVER prints a value: only "set", a length, or a yes/no.
-real_home() {   # home folder of the person who runs it (also under sudo)
+real_home() {
   if [ -n "${HOMELAB_HOME:-}" ]; then echo "$HOMELAB_HOME"; return; fi
   if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then getent passwd "$SUDO_USER" | cut -d: -f6; else echo "$HOME"; fi
 }
@@ -9,7 +6,7 @@ real_home() {   # home folder of the person who runs it (also under sudo)
 dk() { timeout 10 docker "$@" 2>/dev/null; }
 container_running() { dk ps --format '{{.Names}}' | grep -qx "$1"; }
 
-dump_age_line() {   # dump_age_line LABEL DIR PATTERN MISSING-TEXT: how old the newest database dump is
+dump_age_line() {
   local label=$1 days
   days=$(age_days "$2" "$3") || days=""
   if [ -z "$days" ]; then bad "$label" "$4"
@@ -17,19 +14,20 @@ dump_age_line() {   # dump_age_line LABEL DIR PATTERN MISSING-TEXT: how old the 
   else ok "$label" "newest dump is $days day(s) old"; fi
 }
 
-env_info() {   # env_info CONTAINER VAR -> "LENGTH STARTS_WITH_base64 LOOKS_LIKE_PLACEHOLDER", or nothing
+env_info() {
   dk inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$1" | awk -F= -v v="$2" '
     $1 == v { sub(/^[^=]*=/, ""); print length($0), ($0 ~ /^base64:/ ? 1 : 0), ($0 ~ /your-own-key|^changeme$|^yours?$|^your-password$/ ? 1 : 0); found = 1 }
     END { if (!found) exit 1 }'
 }
 
-age_days() {   # age_days DIR PATTERN -> whole days since the newest matching file, or nothing
+age_days() {
   local newest
   newest=$(find "$1" -maxdepth 1 -type f -name "$2" -printf '%T@\n' 2>/dev/null | sort -n | tail -1)
   [ -n "$newest" ] || return 1
   echo $(( ( $(date +%s) - ${newest%.*} ) / 86400 ))
 }
 
+# `homelab secrets`: show which keys and passwords are needed to rebuild the lab and whether each one is saved. Values are never shown.
 secrets() {
   local uh dest line len b64 ph n_key n_ph d f missing got
   uh=$(real_home)
@@ -54,11 +52,9 @@ LIST
   if [ -r "$LAST_RUN_FILE" ]; then dest=$(awk -F'|' 'END {print $3}' "$LAST_RUN_FILE"); fi
   [ "$dest" = none ] && dest=""
 
-  # Docker needed for the next checks
   if ! { command -v docker >/dev/null 2>&1 && timeout 5 docker info >/dev/null 2>&1; }; then
     warn "Containers" "cannot read Docker, so the keys inside the containers were not checked"
   else
-    # Nextcloud database password
     if container_running nextcloud; then
       n_key=$(dk exec nextcloud grep -c "'dbpassword'" /var/www/html/config/config.php || true)
       if [ "${n_key:-0}" -ge 1 ] 2>/dev/null; then ok "Nextcloud DB" "password is set in config.php (a rebuild must reuse this same password)"
@@ -66,7 +62,6 @@ LIST
     else
       warn "Nextcloud DB" "the nextcloud container is not running, not checked"
     fi
-    # Immich database password
     if container_running immich_postgres; then
       line=$(env_info immich_postgres POSTGRES_PASSWORD) || line=""
       read -r len _ ph <<<"$line"
@@ -76,7 +71,6 @@ LIST
     else
       warn "Immich DB" "the immich_postgres container is not running, not checked"
     fi
-    # Speedtest Tracker key
     if container_running speedtest-tracker; then
       line=$(env_info speedtest-tracker APP_KEY) || line=""
       read -r len b64 ph <<<"$line"
@@ -89,7 +83,6 @@ LIST
     fi
   fi
 
-  # Homepage keys
   f="$uh/homepage-config/services.yaml"
   if [ -r "$f" ]; then
     n_key=$(grep -c -E '^[[:space:]]+(key|password|token|apikey|deviceid):[[:space:]]*[^[:space:]]' "$f")
@@ -100,22 +93,20 @@ LIST
     warn "Homepage keys" "cannot read $f"
   fi
 
-  # Tailscale
   if command -v tailscale >/dev/null 2>&1; then
     if timeout 5 tailscale status >/dev/null 2>&1; then ok "Tailscale" "this machine is logged in"
     else warn "Tailscale" "not logged in, or cannot be read without sudo"; fi
   fi
 
-  # The backup
   if [ -z "$dest" ]; then
     warn "Backup" "no backup location is known yet (no backup has run)"
   elif [ ! -d "$dest" ]; then
     bad "Backup" "the backup folder $dest is not there"
   else
     if [ "$(stat -c %d "$dest" 2>/dev/null)" = "$(stat -c %d "$BOOT_PATH" 2>/dev/null)" ]; then
-      warn "Backup place" "$dest is on the boot drive: it is lost if that drive dies (connect a backup drive)"
+      warn "Backup place" "$dest is on the boot drive: it is lost if that drive fails (connect a backup drive)"
     elif only_boot_section BACKUP; then
-      warn "Backup place" "$dest is a section of the boot drive: it is lost if that drive dies (connect a backup drive)"
+      warn "Backup place" "$dest is a section of the boot drive: it is lost if that drive fails (connect a backup drive)"
     else
       ok "Backup place" "$dest is on its own drive"
     fi
@@ -134,7 +125,6 @@ LIST
     dump_age_line "Nextcloud dump" "$dest/db-dumps" 'nextcloud-*.sql.gz' "no database dump found in $dest/db-dumps"
   fi
 
-  # Immich's own database dumps (in the main pool)
   d="$MAIN_POOL/immich/backups"
   if [ -d "$d" ]; then
     dump_age_line "Immich dump" "$d" '*.sql.gz' "no Immich database dump in $d (Immich > Administration > Job Queues > Create job > Create Database Dump)"

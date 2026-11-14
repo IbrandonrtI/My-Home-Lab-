@@ -1,14 +1,13 @@
-# ---------- balance: even out the used space between the drives of one storage ----------
 BALANCE_TMP=""
 
 PICK_COUNT=0; PICK_BYTES=0
-balance_pick_files() {   # balance_pick_files GIVER RECEIVER BYTES LISTFILE -> sets PICK_COUNT and PICK_BYTES: the files chosen (largest first, as many as fit)
+balance_pick_files() {
   local giver=$1 recv=$2 want=$3 list=$4 sz rel remaining=$3 count=0 got=0 stop
   stop=$(( want / 50 )); [ "$stop" -ge 1 ] || stop=1
   : >"$list"
   while IFS=$'\t' read -r -d '' sz rel; do
     [ "$sz" -le "$remaining" ] || continue
-    [ -e "$recv/$rel" ] && continue                 # the same path is already on the other drive: never touch it
+    [ -e "$recv/$rel" ] && continue
     [ -n "${BALANCE_TAKEN[$giver/$rel]:-}" ] && continue
     BALANCE_TAKEN[$giver/$rel]=1
     printf '%s\0' "$rel" >>"$list"
@@ -18,18 +17,19 @@ balance_pick_files() {   # balance_pick_files GIVER RECEIVER BYTES LISTFILE -> s
   PICK_COUNT=$count; PICK_BYTES=$got
 }
 
-balance_undo() {   # balance_undo RECEIVER LISTFILE: take back the copies this run made (they did not exist before)
+balance_undo() {
   local recv=$1 list=$2 rel
   while IFS= read -r -d '' rel; do rm -f -- "${recv:?}/$rel"; done <"$list"
 }
 
-balance_table() {   # balance_table MP... -> name, used, size, percent
+balance_table() {
   local mp
   for mp in "$@"; do
     printf '  %-28s %9s of %-9s %s\n' "$(branch_name "$mp")" "$(human "$(used_bytes "$mp")")" "$(human "$(total_bytes "$mp")")" "$(pct "$(used_bytes "$mp")" "$(total_bytes "$mp")")"
   done
 }
 
+# `balance`: spread the files in the Main pool evenly across its drives.
 balance_main() {
   local role pool mp i n it pg lo hi g r b lim
   local -a mps=() rows=() steps=() lists=() gs=() rs=() cnt=() nbytes=()
@@ -51,9 +51,8 @@ balance_main() {
     [ "$pg" -gt "$hi" ] && hi=$pg
   done
   if [ $(( hi - lo )) -le "$BALANCE_TOLERANCE" ]; then
-    say ""; say "The drives are already within $BALANCE_TOLERANCE percentage points of each other. Nothing to move."; return 0
+    say ""; say "The drives are already within $BALANCE_TOLERANCE percentage points of each other. Nothing needs to be moved."; return 0
   fi
-  # the plan: from the fullest drive to the emptiest, until they are about equally full (in percent of their size)
   for mp in "${mps[@]}"; do
     lim=$(branch_minfree "$mp" | tr -d K); lim=${lim:-0}
     rows+=("$(total_bytes "$mp") $(used_bytes "$mp") $(avail_bytes "$mp") $(( lim * 1024 ))")
@@ -92,8 +91,8 @@ balance_main() {
     [ "${cnt[$i]}" -gt 0 ] && say "  - $(human "${nbytes[$i]}") (${cnt[$i]} files) from $(branch_name "${mps[${gs[$i]}]}") to $(branch_name "${mps[${rs[$i]}]}")"
   done
   say "Each file is copied and checked first, then removed from the old drive. The files keep their place in the pool."
-  say "Your services keep running while the files are copied; they stop for a short time at the end to catch the last changes."
-  say "A big move can take hours. New files still go where the fill order says (see: sudo drives fillorder)."
+  say "The services keep running while the files are copied. They stop for a short time at the end to copy the last changes."
+  say "A large move can take hours. New files still go where the fill order says (see: sudo drives fillorder)."
   yn "Move the files now?" || { say "Cancelled. Nothing was changed."; return 1; }
   pre_change "Copy the chosen files ($(human "$total")) between the drives of the $role pool, while the services run." \
              "Stop the containers that use the $role pool for a short time and copy the last changes." \
@@ -114,7 +113,7 @@ balance_main() {
   local rel bad=0
   for i in "${!steps[@]}"; do
     [ "${cnt[$i]}" -gt 0 ] || continue
-    while IFS= read -r -d '' rel; do   # a file deleted meanwhile must not come back from the copy
+    while IFS= read -r -d '' rel; do
       [ -e "${mps[${gs[$i]}]}/$rel" ] || rm -f -- "${mps[${rs[$i]}]:?}/$rel"
     done <"${lists[$i]}"
     rsync -aH --numeric-ids --from0 --files-from="${lists[$i]}" --ignore-missing-args "${mps[${gs[$i]}]}/" "${mps[${rs[$i]}]}/"
@@ -151,7 +150,7 @@ balance_flow() {
   return "$rc"
 }
 
-# ---------- resize: make a boot drive section bigger or smaller ----------
+# `resize`: make a boot drive section bigger or smaller.
 resize_flow() {
   array_guard || return 1
   need_cmds fallocate resize2fs e2fsck truncate || return 1
@@ -172,7 +171,7 @@ resize_flow() {
   keep=$BOOT_KEEP_FREE_BYTES; min=$BOOT_MIN_BYTES
   free=$(( $(boot_free_bytes) + cur ))
   max=$(( (free - keep) / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))
-  lower=$(( (used * 100 / 90 + BOOT_UNIT_BYTES - 1) / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))   # the files may fill at most 90% of the new size
+  lower=$(( (used * 100 / 90 + BOOT_UNIT_BYTES - 1) / BOOT_UNIT_BYTES * BOOT_UNIT_BYTES ))
   [ "$lower" -ge "$min" ] || lower=$min
   say ""
   say "$(branch_name "$mp") is $(pretty_size "$cur") now and holds $(human "$used") ($(pct "$used" "$cur"))."
@@ -189,33 +188,33 @@ resize_flow() {
     if [[ "$gb" =~ ^[0-9]+$ ]]; then
       bytes=$(( gb * BOOT_UNIT_BYTES ))
       [ "$bytes" -lt "$lower" ] && { note "That is too small. The files in it would fill more than 90% of it: the smallest is $(pretty_size "$lower")."; continue; }
-      [ "$bytes" -gt "$max" ] && { note "That is too big. The boot drive must keep $(pretty_size "$keep") free: the most is $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME."; continue; }
+      [ "$bytes" -gt "$max" ] && { note "The size is too large. The boot drive must keep $(pretty_size "$keep") free: the most is $(( max / BOOT_UNIT_BYTES )) $BOOT_UNIT_NAME."; continue; }
       break
     fi
-    note "Please type a number of $BOOT_UNIT_NAME, for example 100."
+    note "Enter a number of $BOOT_UNIT_NAME, for example 100."
   done
   new_gb=$bytes
   if [ "$bytes" -eq "$cur" ]; then say "It already has that size. Nothing was changed."; return 0; fi
   [ "$bytes" -lt "$cur" ] && shrink=1
   if [ "$shrink" = 1 ]; then
     say ""
-    say "Making the section smaller rewrites its file system. It is safe when nothing goes wrong, but if the power fails halfway the section can be damaged."
-    say "The files in it are in the backup only if the main pool is backed up (a section of the backup pool has no second copy)."
-    typed "CONTINUE" "Type CONTINUE to go on, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
+    say "Making the section smaller rewrites its file system. If the power fails during this, the section can be damaged."
+    say "The files in it are in the backup only if the Main pool is backed up. A section of the Backup pool has no second copy."
+    typed "CONTINUE" "Type CONTINUE to continue, or press Enter to cancel: " || { say "Cancelled. Nothing was changed."; return 1; }
   fi
-  yn "Change the section from $(pretty_size "$cur") to $(pretty_size "$new_gb") now? The $role containers stop for a minute or more." || { say "Cancelled. Nothing was changed."; return 1; }
+  yn "Change the section from $(pretty_size "$cur") to $(pretty_size "$new_gb") now? The $role containers stop for at least a minute." || { say "Cancelled. Nothing was changed."; return 1; }
   pre_change "Stop the containers that use the $role pool." \
              "Unmount the $role pool and $(branch_name "$mp"), check its file system." \
              "$([ "$shrink" = 1 ] && echo "Shrink the file system, then the file, to $(pretty_size "$new_gb")." || echo "Make the file $(pretty_size "$new_gb") big and grow the file system into it.")" \
              "Mount everything again, compare the files, and start the containers." && return 0
   before_files=$(find "$mp" -xdev -type f 2>/dev/null | wc -l); before_used=$used
   stop_containers "$pool"
-  ROLLED_BACK=1    # nothing in fstab changes, so if a step fails the old mounts can simply be restored
+  ROLLED_BACK=1
   pool_umount "$pool" || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
   if ! umount "$mp" 2>/dev/null; then mount_fstab "$pool" 2>/dev/null; start_containers; die "Could not take $(branch_name "$mp") offline (something is using it). Nothing was changed."; fi
   back() { mount_fstab "$mp" 2>/dev/null; mount_fstab "$pool" 2>/dev/null; start_containers; }
   if ! e2fsck -fn "$img" >/dev/null 2>&1; then back; die "The file system of the section has errors, so it was not resized. Nothing was changed. Check it with: sudo drives check"; fi
-  e2fsck -fp "$img" >/dev/null 2>&1 || true    # resize2fs refuses a file system that was not checked since it was last mounted
+  e2fsck -fp "$img" >/dev/null 2>&1 || true
   if [ "$shrink" = 1 ]; then
     fs_min=$(resize2fs -P "$img" 2>/dev/null | awk -F: '/minimum size/ {gsub(/ /, "", $2); print $2}')
     if [[ "$fs_min" =~ ^[0-9]+$ ]] && [ $(( fs_min * $(dumpe2fs -h "$img" 2>/dev/null | awk -F: '/^Block size/ {gsub(/ /, "", $2); print $2}') )) -gt "$new_gb" ]; then

@@ -1,6 +1,4 @@
-# ================================================================ commands: install, refresh, verify, checklist, growdisk
 def ensure_root():
-    """Start the installer again under sudo when it was not started as root."""
     if FAKE or os.geteuid() == 0:
         return
     if not have("sudo"):
@@ -9,7 +7,6 @@ def ensure_root():
 
 
 def load_all():
-    """Load the state file, the saved secrets and this machine's facts."""
     State.load()
     Secrets.load()
     Ctx.detect()
@@ -18,17 +15,14 @@ def load_all():
 
 
 def password_warning():
-    """Explain that one password is used for every login."""
     out("")
     warn("One password is used for every admin login (Portainer, %sBeszel, Immich, Nextcloud, FileBrowser, "
          "Speedtest Tracker). If one service leaks it, all of them are exposed. Homepage's configuration file also stores "
-         "some of these logins in plain text. Use a long password that you use nowhere else and keep it in a password "
+         "some of these logins in plain text. Use a long password that is not used anywhere else and keep it in a password "
          "manager." % ("AdGuard Home, " if adguard_wanted() else ""))
 
 
 def auto_location(a):
-    """Time zone and weather city are found by themselves, from this connection's public IP address (nothing to type).
-    When no service answers, the machine's own time zone is used and the weather card keeps New York. The Look tab of Customize changes both later."""
     if a.get("tz") and a.get("weather"):
         return
     found = ip_location()
@@ -38,7 +32,7 @@ def auto_location(a):
             a["tz_found"] = found["tz"]
         if not a.get("weather"):
             a["weather"] = {k: found[k] for k in ("name", "region", "country", "lat", "lon")}
-        good("Found by itself: %s, time zone %s (change it any time on the Look tab of Customize)" % (
+        good("Detected automatically: %s, time zone %s (change it any time on the Look tab of Customize)" % (
             ", ".join(x for x in (found["name"], found["region"], found["country"]) if x), a.get("tz") or Ctx.tz))
     else:
         a.setdefault("tz", Ctx.tz)
@@ -46,23 +40,21 @@ def auto_location(a):
              "Change both on the Look tab of Customize." % a["tz"])
 
 
-LVM_EXPLAIN = ("Ubuntu Server's installer makes the system volume small (about 100 GB) and leaves the rest of the drive unused. "
-               "Using that space makes the system volume bigger. Nothing is erased and nothing moves: your files stay as they "
-               "are, and it is done while the machine runs. It is needed if you want to use part of this drive as a pool "
-               "pool later (sudo drives bootsection). A volume grows easily but only shrinks with effort.")
+LVM_EXPLAIN = ("The Ubuntu Server installer creates a small system volume (about 100 GB) and leaves the rest of the drive unused. "
+               "Using that space enlarges the system volume. Nothing is erased and nothing moves: files stay as they "
+               "are, and it is done while the machine runs. It is needed to use part of this drive as a pool "
+               "later (sudo drives bootsection). A volume is easy to grow but difficult to shrink.")
 
 
 def lvm_question(info):
-    """The question about unused space in the system volume's drive."""
     out("")
     say("This machine's system volume is %s, but its drive has another %s that nothing uses." %
         (pretty_size(info["size"]), pretty_size(info["free"])))
     say(LVM_EXPLAIN)
-    return yesno("Give the unused space to the system volume?", True)
+    return yesno("Add the unused space to the system volume?", True)
 
 
 def ask_grow_boot_volume(a):
-    """Install question: offer to use the unused space of an LVM system volume (asked once; the answer is kept)."""
     if "lvm_grow" in a:
         return
     info = root_lvm_info()
@@ -73,7 +65,6 @@ def ask_grow_boot_volume(a):
 
 
 def grow_boot_volume():
-    """Make the system volume use all the unused space of its volume group. Returns True when it grew."""
     info = root_lvm_info()
     if not info or info["free"] < LVM_MIN_FREE:
         return False
@@ -82,36 +73,34 @@ def grow_boot_volume():
     say("Growing the system volume from %s by %s ..." % (pretty_size(info["size"]), pretty_size(info["free"])))
     rc, text = act(["lvextend", "-r", "-l", "+100%FREE", info["src"]], timeout=900)
     if rc != 0:
-        warn("The system volume could not be made bigger, so nothing was changed. The reason:\n      %s\n"
-             "      You can try again later:  sudo homelab-setup growdisk" % "\n      ".join(text.strip().splitlines()[-4:]))
+        warn("The system volume could not be enlarged, so nothing was changed. Reason:\n      %s\n"
+             "      To try again later, run:  sudo homelab-setup growdisk" % "\n      ".join(text.strip().splitlines()[-4:]))
         return False
     if not Opt.dry:
-        good("The system volume is now bigger.")
+        good("The system volume has been enlarged.")
         State.data["answers"]["lvm_grow"] = "done"
         State.save()
     return True
 
 
 def cmd_growdisk():
-    """`growdisk`: give the unused space of the drive to the system volume (LVM only), after asking."""
     info = root_lvm_info()
     if not info or info["free"] < LVM_MIN_FREE:
         out("")
         say("Nothing to do: the system volume already uses its whole drive, or it is not an LVM volume with room to grow.")
         return
     if not lvm_question(info):
-        say("Okay, nothing was changed.")
+        say("Nothing was changed.")
         return
     grow_boot_volume()
 
 
 def is_ipv4(text):
-    """Four numbers from 0 to 255 with dots, like 192.168.1.20."""
     return bool(re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", text)) and all(int(x) <= 255 for x in text.split("."))
 
 
 def ask_tailscale_token(a):
-    """One optional question: the Tailscale access token for the Homepage Tailscale card. Enter skips it (it can be added later with `fill`)."""
+    """Optionally ask for the Tailscale access token used by the Homepage Tailscale card. Pressing Enter skips it; it can be added later with `fill`."""
     if a.get("ts_token_asked") or Secrets.get("TAILSCALE_API_TOKEN") or Opt.yes or Opt.dry:
         return
     if FAKE:
@@ -120,9 +109,9 @@ def ask_tailscale_token(a):
     elif not interactive():
         return
     out("")
-    say("The Tailscale card on your dashboard needs an access token. It takes a minute to make, and then the installer fills the card in by itself. "
+    say("The Tailscale card on your dashboard needs an access token. It takes a minute to create, and the installer then fills in the card automatically. "
         "Open https://login.tailscale.com/admin/settings/keys, press Generate access token, copy it and paste it here. "
-        "Press Enter to skip: it is only for that one card, and you can add it later with:  sudo homelab-setup fill")
+        "Press Enter to skip. The token is used only for that card and can be added later with:  sudo homelab-setup fill")
     tok = ask_secret("Tailscale access token (starts with tskey-api-, Enter to skip)").strip()
     a["ts_token_asked"] = "yes"
     State.save()
@@ -136,7 +125,7 @@ def ask_tailscale_token(a):
 
 
 def ask_answers():
-    """Ask the first questions of an install: admin name, email, LAN address and the password (time zone and city are found by themselves)."""
+    """Ask the questions at the start of an install: admin name, email, LAN address and password. Time zone and city are detected automatically."""
     a = State.data["answers"]
     out("")
     say("A few answers are needed first. They stay on this machine and only fill in its configuration files.")
@@ -146,15 +135,15 @@ def ask_answers():
     while not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", a["email"]):
         a["email"] = ask("That is not a valid email address. Enter it again", "")
     auto_location(a)
-    a["lan"] = ask("This machine's LAN address (reserve it in your router so it does not change)", a.get("lan") or Ctx.lan)
+    a["lan"] = ask("This machine's LAN address (reserve it in the router so that it does not change)", a.get("lan") or Ctx.lan)
     while not is_ipv4(a["lan"].strip()):
         a["lan"] = ask("That is not an address like 192.168.1.20. Enter it again", "")
     a["lan"] = a["lan"].strip()
     if "adguard" not in a:
         out("")
         say("AdGuard Home blocks ads and trackers for every device on your network by acting as the network's DNS server. To do "
-            "that it takes port 53 from this machine's built-in DNS resolver, and you then point each device at it. You can "
-            "skip it now and add it later with:  sudo homelab-setup adguard")
+            "that it takes port 53 from this machine's built-in DNS resolver, and each device must then be pointed at it. It can be "
+            "skipped now and added later with:  sudo homelab-setup adguard")
         a["adguard"] = "yes" if yesno("Install AdGuard Home?", True) else "no"
     State.save()
     Ctx.detect()
@@ -178,7 +167,6 @@ def ask_answers():
 
 
 def preflight():
-    """Check that the machine can run the install."""
     out("")
     if OsSupported().probe() != "done":
         raise Abort(OsSupported().help())
@@ -200,7 +188,6 @@ def preflight():
 
 
 def show_secret_values():
-    """The generated passwords and keys, one per line."""
     out("")
     for k in sorted(Secrets.vals):
         out("   %-28s %s" % (k, Secrets.vals[k]))
@@ -208,8 +195,6 @@ def show_secret_values():
 
 
 def final_report(res, background=False):
-    """End of install: how it went, where the generated passwords are, the checklist, the next step.
-    `background` is True when the last steps were handed to the background job."""
     Live.close()
     done, total = counts(res)
     failed = [s for s in STEPS if res[s.id].state == "failed"]
@@ -231,8 +216,6 @@ def final_report(res, background=False):
 
 
 def offer_drive_wizard():
-    """End of the first install: when no storage exists yet, let `sudo drives wizard` look at the drives and offer a setup (once).
-    The wizard itself stays silent when storage is already set up, and it formats nothing before the person has read the plan and typed ERASE."""
     if FAKE or Opt.yes or Opt.dry or not interactive() or State.data.get("wizard_offered"):
         return
     drives = P("/usr/local/sbin/drives")
@@ -241,8 +224,8 @@ def offer_drive_wizard():
     State.data["wizard_offered"] = time.strftime("%F %T")
     State.save()
     rule("Your drives")
-    say("Next the drive wizard looks at the drives that are plugged in and can suggest a ready-made setup. "
-        "Nothing is changed unless you pick one, read its plan and type ERASE. Run it again any time:\n$ sudo drives wizard")
+    say("Next, the drive wizard inspects the connected drives and can suggest a ready-made setup. "
+        "Nothing is changed unless a setup is chosen, its plan is reviewed and ERASE is typed. The wizard can be run again at any time:\n$ sudo drives wizard")
     try:
         subprocess.call([drives, "wizard", "--first-run"])
     except OSError as e:
@@ -255,13 +238,11 @@ SERVICE_LABELS = [("homepage", "Homepage"), ("portainer", "Portainer"), ("adguar
 
 
 def navidrome_wanted():
-    """True when this machine is meant to run Navidrome (every new install has it)."""
     return BY_ID["stack-navidrome"].applies()
 
 
 def added_services():
-    """Services added after the install: Navidrome (when set up) and every card that `homelab-cards` made.
-    Returns [(label, container, local port, Tailscale port or 0)], sorted by label."""
+    """List the services added after the install (Navidrome and every card made with `homelab-cards`) as (label, container, local port, Tailscale port or 0), sorted by label."""
     found = {}
     try:
         managed = json.loads(read_file(PROGRESS_DIR + "/cards.json") or "{}").get("managed", {})
@@ -270,10 +251,10 @@ def added_services():
                 label = NAVIDROME_TITLE if container == "navidrome" else (m.get("name") or container)
                 found[container] = (label, container, int(m["hostport"]), int(m.get("serve") or 0))
     except (ValueError, AttributeError, TypeError):
-        pass                                                  # an unreadable list only means "nothing added"
+        pass
     if navidrome_wanted() and "navidrome" not in found:
         found["navidrome"] = ("Navidrome", "navidrome", PORTS["navidrome"], 0)
-    if "navidrome" in found:                                  # the card is called Navidrome, whatever the saved list says
+    if "navidrome" in found:
         found["navidrome"] = ("Navidrome",) + found["navidrome"][1:]
     if audiomuse_wanted() and navidrome_wanted() and "audiomuse-flask" not in found:
         found["audiomuse-flask"] = ("AudioMuse-AI", "audiomuse-flask", PORTS["audiomuse"], 0)
@@ -287,7 +268,7 @@ def added_services():
 
 
 def system_check():
-    """Look at the running system and report whether everything is up. Returns the number of problems."""
+    """Check the running system and report whether everything is up. Returns the number of problems found."""
     rule("System check")
     problems = []
     names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
@@ -338,14 +319,13 @@ def system_check():
                 out("  %s%s%s %-18s %s" % (G, S_OK, N, label, mark(link)))
             elif container in ("navidrome", "audiomuse-flask", "navilist") and (
                     container == "navidrome" or (container == "audiomuse-flask" and audiomuse_wanted()) or (container == "navilist" and navilist_wanted())):
-                # the installer owns Navidrome, AudioMuse-AI and naviList, so a silent one is a problem
                 out("  %s%s%s %-18s %s  (no answer)" % (R, S_BAD, N, label, mark(link)))
                 problems.append(container)
-            else:                                             # a service the person added: stopping it can be on purpose
-                out("  %s%s%s %-18s %s  (no answer: is the container running?)" % (Y, S_WAIT, N, label, mark(link)))
+            else:
+                out("  %s%s%s %-18s %s  (no answer: check that the container is running)" % (Y, S_WAIT, N, label, mark(link)))
     if Ctx.fqdn:
         out("")
-        out("  %sServices over Tailscale%s %s(use these from your other devices; a machine cannot open its own Tailscale addresses)%s" % (B, N, D, N))
+        out("  %sServices over Tailscale%s %s(use these from other devices; a machine cannot open its own Tailscale addresses)%s" % (B, N, D, N))
         for port, key in serve_items():
             label = dict(SERVICE_LABELS)[key]
             out("    %-18s %s" % (label, mark("https://%s:%d" % (Ctx.fqdn, port))))
@@ -362,7 +342,7 @@ def system_check():
 
 
 def next_step_section(res):
-    """The last thing on screen: the one command to run next, or the system check when everything is done."""
+    """Print the last section of the output: the next command to run, or the system check when everything is done."""
     if Mode.existing:
         return
     done, total = counts(res)
@@ -390,7 +370,6 @@ def next_step_section(res):
 
 
 def cmd_verify():
-    """`verify`: run the system check."""
     load_all()
     if Mode.existing and not Opt.force_existing:
         say("This machine already runs the lab. The system check is for machines set up by the installer.")
@@ -399,7 +378,6 @@ def cmd_verify():
 
 
 def cmd_checklist():
-    """Show the checklist."""
     load_all()
     res = evaluate()
     if Mode.existing:
@@ -420,17 +398,16 @@ GROUP_BLURB = {
     "Logins and keys": "creates the admin accounts and API keys inside the apps",
     "Homepage": "connects the dashboard widgets to the apps",
     "Scripts and schedule": "helper commands, scheduled jobs and the login screen",
-    "Your devices and drives": "things only you can do",
+    "Your devices and drives": "steps that need your input",
 }
 
 
 def welcome():
-    """Print the welcome screen."""
     say("This turns this machine into a home lab: Docker, Tailscale and up to nine apps (Homepage, Portainer, AdGuard Home "
         "(optional, you are asked), Beszel, Netdata, Speedtest Tracker, FileBrowser, Immich and Nextcloud), with their logins "
         "and dashboard widgets.")
     out("")
-    say("It takes roughly 30 to 60 minutes and downloads about 10 GB. You can leave it running; it only asks when it needs you. "
+    say("It takes roughly 30 to 60 minutes and downloads about 10 GB. It can be left running and asks only when input is needed. "
         "If it stops, run the same command again: finished steps are skipped.")
     out("")
     say("Have ready:")
@@ -438,18 +415,15 @@ def welcome():
                  "a free Tailscale account (tailscale.com), to sign in once in a browser",
                  "about 20 GB of free space on this machine"):
         lines = styled(item, 6)
-        out("    %s %s" % (S_DOT, lines[0][6:]))          # bullet, then the text lines up under itself
+        out("    %s %s" % (S_DOT, lines[0][6:]))
         for l in lines[1:]:
             out(l)
 
 
 def plan_install(res):
-    """Sort the open steps into (todo, later, by_hand): the ones the installer runs now, the ones it runs by itself once
-    a step that needs the person is done, and the ones only the person can do."""
     open_auto = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind == "auto"]
 
     def runs_now(s, seen=()):
-        """True when everything this step needs is done or will be done by the installer itself in this run."""
         for n in s.needs:
             if res[n].state in ("done", "na", "skip"):
                 continue
@@ -458,23 +432,21 @@ def plan_install(res):
                 return False
         return True
     todo = [s for s in open_auto if runs_now(s)]
-    later = [s for s in open_auto if s not in todo]          # wait for a step that only the person can do
+    later = [s for s in open_auto if s not in todo]
     by_hand = [s for s in STEPS if res[s.id].state in ("todo", "failed", "blocked") and s.kind != "auto"
-               and not (s.id == "weather" and (Opt.dry or State.data["answers"].get("weather")))]   # set from the city answer
+               and not (s.id == "weather" and (Opt.dry or State.data["answers"].get("weather")))]
     return todo, later, by_hand
 
 
 def by_hand_tag(s):
-    """When the person will be asked to do this step."""
     if s.id in DURING_INSTALL:
         return "during the install"
     if getattr(s, "auto", None):
-        return "afterwards, detected automatically once done"
+        return "detected automatically once done"
     return "afterwards"
 
 
 def show_plan(todo, later, by_hand):
-    """Print what the install will do, and what needs the person."""
     rule("Planned steps")
     say("%d steps run automatically, in this order:" % len(todo))
     out("")
@@ -490,7 +462,7 @@ def show_plan(todo, later, by_hand):
                 "so you do not have to wait for them. `sudo homelab-setup status` shows how far they are." % len(slow))
     if later:
         out("")
-        say("%d more %s by itself once the steps that need you are done: %s" % (
+        say("%d more %s automatically once the steps that need input are done: %s" % (
             len(later), "step runs" if len(later) == 1 else "steps run", "; ".join(s.title for s in later)))
     if by_hand:
         out("")
@@ -501,7 +473,7 @@ def show_plan(todo, later, by_hand):
 
 
 def cmd_install():
-    """`install`: plan, ask, then build the lab."""
+    """`install`: show the plan, ask the questions, then build the lab."""
     load_all()
     if Mode.existing and not Opt.force_existing:
         out("")
@@ -568,14 +540,11 @@ def cmd_install():
 
 
 def run_install(res, later=None):
-    """Run the install: Docker first, then the downloads of every image start in the background, then the other early steps and the two steps
-    a person must do, then up to four more passes. `later` holds the ids of the steps that finish in the background after the install.
-    The system upgrade is not on the way: it runs after everything else (in the background job when there is one)."""
+    """Run the install. Docker comes first, then image downloads start in the background, then the other early steps and the steps that need a person, then up to four more passes. Steps listed in `later` finish in the background."""
     rule("Installing")
     run_pass(res, {"os", "apt-update", "packages", "docker", "docker-group"})
-    Prefetch.start()        # the images of every stack download in the background (several at a time) while the next steps run
+    Prefetch.start()
     run_pass(res, {"tailscale-install"})
-    # the two things only a person can do: log in to Tailscale and switch HTTPS on
     for sid in ("tailscale-login", "tailscale-https"):
         s = BY_ID[sid]
         if res[s.id].state == "todo":
@@ -596,12 +565,10 @@ def run_install(res, later=None):
         if not gained:
             break
     if "apt-upgrade" not in (later or ()):
-        run_pass(res, {"apt-upgrade"})      # (no background job: the upgrade is the last thing)
+        run_pass(res, {"apt-upgrade"})
 
 
 def wait_for_apps():
-    """Before the steps are checked: give Docker and the apps a moment if they are busy or still starting (after a reboot or an update),
-    so that a slow answer is not mistaken for something that is missing."""
     if not have("docker") or Opt.dry:
         return
     if not docker_answers():
@@ -617,8 +584,6 @@ def wait_for_apps():
 
 
 def update_panel_when_blocked(res):
-    """A machine whose Main pool has no drive cannot finish the steps after 'Folders for the services exist', but the control panel and the
-    helper scripts do not need the storage. So a panel that was installed before is still brought up to date here (it is the way to add a drive)."""
     s = BY_ID.get("panel-files")
     if s is None or Opt.dry or not s.applies() or res["panel-files"].state != "blocked" or not main_storage_missing():
         return False
@@ -634,7 +599,7 @@ def update_panel_when_blocked(res):
 
 
 def storage_notice(res):
-    """Plain words about what is paused while the Main pool has no drive, and what to do."""
+    """Explain what is paused while the Main pool has no drive, and what to do about it."""
     if Opt.dry or not main_storage_missing():
         return
     waits = [s for s in STEPS if res[s.id].state in ("blocked", "todo", "failed") and s.id != "folders" and waits_for_folders(s)]
@@ -655,13 +620,13 @@ def storage_notice(res):
         out("")
     say("What to do:\n1. Open the control panel, then Customize, then Drives, and drag a drive into Main pool (Keep the files if it already holds them).\n"
         "   Or run:  sudo drives\n"
-        "2. The services that were stopped start again by themselves.\n"
+        "2. The services that were stopped start again automatically.\n"
         "3. Run:  sudo homelab-setup refresh")
     out("")
 
 
 def cmd_refresh():
-    """`refresh`: check every step again and do what is now possible."""
+    """`refresh`: check every step again and do whatever is now possible."""
     load_all()
     if Mode.existing:
         say("This machine already runs the lab. Its checklist is shown read-only.")

@@ -1,4 +1,4 @@
-# ---------- remount (after an unplug or a power cut) ----------
+# `remount`: mount the drives again after an unplug or power cut.
 remount_flow() {
   array_guard || return 1
   local mp fail=0
@@ -12,7 +12,6 @@ remount_flow() {
              "Check that Immich and Nextcloud find their files. If not, offer to copy them back from the backup." \
              "Apply the drive power settings and start the containers again." && return 0
   stop_containers "$MAIN_POOL" "$BACKUP_POOL" "$DISKS_DIR"
-  # pools first, then the drives under them
   pool_umount "$BACKUP_POOL" 2>/dev/null
   pool_umount "$MAIN_POOL" 2>/dev/null
   for mp in $(all_branches); do
@@ -29,22 +28,19 @@ remount_flow() {
       fi
     fi
   done
-  # the backup pool does not depend on the main drives: bring it back even when a main drive is missing
   if [ -n "$(branches_of backup)" ]; then
     mount_fstab "$BACKUP_POOL" || warn "The backup pool did not mount."
   fi
   local onboot=0
   if [ "$fail" = 1 ]; then
-    # a Main drive is missing: the pool is not mounted (it would be an incomplete storage). The boot drive is the storage until the drive is back
     if main_fallback_start; then
       onboot=1
-      warn "A Main drive was not found. Your services run from the boot drive for now (files on the missing drive are not visible)."
+      warn "A Main drive was not found. The services are using the boot drive. Files on the missing drive are not available."
     else
-      HOLD_HINT="The folder on the boot drive could not be made. Plug the drive in and run  sudo drives remount  again. If it is dead:  sudo drives replace"
+      HOLD_HINT="The folder on the boot drive could not be created. Connect the drive and run  sudo drives remount  again. If the drive has failed, run  sudo drives replace"
       return 1
     fi
   elif pool_in_fstab "$MAIN_POOL"; then
-    # main pool: the pool, or the plain drive before it is converted
     mount_fstab "$MAIN_POOL" || { echo "The main pool did not mount. Check the cable."; return 1; }
     rm -f "$(main_boot_flag)"
     moveboot_offer
@@ -54,16 +50,15 @@ remount_flow() {
   [ "$onboot" = 1 ] || apps_flow
   start_containers
   if [ "$onboot" = 1 ]; then
-    echo "Your services are running from the boot drive. Plug the missing Main drive in and run  sudo drives remount  to use it again."
+    echo "The services are using the boot drive. Connect the missing Main drive and run  sudo drives remount  to use it again."
   elif [ -n "${APPS_HELD// /}" ]; then
     echo "The drives are mounted again. Still stopped:$APPS_HELD (their files are missing, see above)."
   else
-    echo "The drives are mounted again and your services are running."
+    echo "The drives are mounted again and the services are running."
   fi
 }
 
-# ---------- replace a dead drive ----------
-missing_branches() {   # missing_branches main|backup -> mount points of pool drives whose drive cannot be found
+missing_branches() {
   local mp
   for mp in $(branches_of "$1"); do
     is_boot_section "$mp" && continue
@@ -71,7 +66,7 @@ missing_branches() {   # missing_branches main|backup -> mount points of pool dr
   done
 }
 
-backup_candidates() {   # folders that may hold the latest backup (a folder with main/ inside), best guess first
+backup_candidates() {
   local dest="" conf="${BACKUP_CONF:-/etc/homelab-backup.conf}"
   [ -r "$BACKUP_STATUS_FILE" ] && dest=$(awk -F'|' 'NR == 1 {print $3}' "$BACKUP_STATUS_FILE")
   printf '%s\n' "${DRIVES_RESTORE_SRC:-}" "$dest" "$BACKUP_POOL"
@@ -79,7 +74,7 @@ backup_candidates() {   # folders that may hold the latest backup (a folder with
   if [ -r "$conf" ] && { [ "$TEST_MODE" != 1 ] || [ -n "${BACKUP_CONF:-}" ]; }; then ( DEST_FALLBACK=""; . "$conf" >/dev/null 2>&1; printf '%s\n' "$DEST_FALLBACK" ); fi
 }
 
-find_backup_source() {   # prints the folder that holds main/, or fails
+find_backup_source() {
   local c
   while read -r c; do
     [ -n "$c" ] || continue
@@ -88,7 +83,7 @@ find_backup_source() {   # prints the folder that holds main/, or fails
   return 1
 }
 
-show_backup_source() {   # show_backup_source folder -> asks to continue when the last backup did not end OK
+show_backup_source() {
   local src=$1 stamp="" result="" dest=""
   say "Backup copy to restore from: $src/main"
   if [ -r "$BACKUP_STATUS_FILE" ]; then
@@ -103,27 +98,28 @@ show_backup_source() {   # show_backup_source folder -> asks to continue when th
       yn "Use $src anyway?" || return 1
     fi
   else
-    warn "There is no record of a backup run. I cannot tell how old this copy is."
+    warn "There is no record of a backup run, so the age of this copy is unknown."
     yn "Use this copy anyway?" || return 1
   fi
   return 0
 }
 
-stat_num() {   # stat_num "Total transferred file size" file -> the number, without commas
+stat_num() {
   awk -F': ' -v k="$1" 'index($0, k ":") == 1 {gsub(/[^0-9]/, "", $2); print $2; exit}' "$2"
 }
 
-restore_undo() {   # restore_undo LIST N: Cancel was pressed: the files this restore copied are removed again, so Main is as it was before (only paths that the preview listed as missing, which cannot have been there before)
+# restore_undo LIST N: when Cancel is pressed, remove the files this restore copied so Main is as it was. Only paths the preview listed as missing are removed.
+restore_undo() {
   local list=$1 n=$2 rel gone=0 skipped=0
   RESTORE_STOPPED=1
   note "Cancelled. Removing the files that were copied so far..."
   progress 0 "Removing the copied files"
   while IFS= read -r rel; do
     [ -n "$rel" ] || continue
-    case "$rel" in /*|..|../*|*/..|*/../*|*'\#'*) skipped=$((skipped + 1)); continue ;; esac      # (never a path that leaves the pool; a name with a control character is left alone)
+    case "$rel" in /*|..|../*|*/..|*/../*|*'\#'*) skipped=$((skipped + 1)); continue ;; esac
     if [ -e "$MAIN_POOL/$rel" ] || [ -L "$MAIN_POOL/$rel" ]; then rm -f -- "$MAIN_POOL/$rel" && gone=$((gone + 1)); fi
   done <"$list"
-  if [ -s "$list.dirs" ]; then      # the folders this restore made (only the ones that are empty now are removed, the deepest first)
+  if [ -s "$list.dirs" ]; then
     while IFS= read -r rel; do
       rel=${rel%/}
       case "$rel" in ""|/*|..|../*|*/..|*/../*|*'\#'*|.) continue ;; esac
@@ -132,13 +128,14 @@ restore_undo() {   # restore_undo LIST N: Cancel was pressed: the files this res
   fi
   sync_fs "$MAIN_POOL"
   log "restore cancelled: $gone of $n copied files removed again ($skipped left alone)"
-  local msg="Stopped as you asked. The $gone files that were copied are removed again, so the Main pool is as it was before."
+  local msg="Stopped. The $gone files that were copied were removed again, so the Main pool is as it was before."
   [ "$skipped" -eq 0 ] || msg="$msg ($skipped files with unusual names were left alone.)"
   RESTORE_MSG=$msg
-  [ "$PANEL_MODE" = 1 ] || say "$msg"      # (the panel's flow says it last, after the services are started again: that line is the answer the page shows)
+  [ "$PANEL_MODE" = 1 ] || say "$msg"
 }
 
-restore_files() {   # restore_files folder  (main pool mounted, containers stopped): preview, ask, copy only what is missing, verify
+# restore_files FOLDER (Main mounted, containers stopped): show a preview, ask, copy only the missing files and verify them.
+restore_files() {
   local src=$1 base out list n bytes avail miss tag
   base="$src/main/"
   tag=$(date +%Y%m%d-%H%M%S)
@@ -151,7 +148,7 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
     return 1
   fi
   grep -E '^[<>ch][fLDS]' "$out" | sed -E 's/^[^ ]+ //' >"$list" || true
-  grep -E '^cd\+{9} ' "$out" | sed -E 's/^[^ ]+ //' >"$list.dirs" || true      # (the folders the copy will make: kept for Cancel)
+  grep -E '^cd\+{9} ' "$out" | sed -E 's/^[^ ]+ //' >"$list.dirs" || true
   n=$(wc -l <"$list" | tr -d ' ')
   bytes=$(stat_num "Total transferred file size" "$out"); bytes=${bytes:-0}
   if [ "$n" -eq 0 ]; then
@@ -167,14 +164,14 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
   say ""
   say "What this will and will not do:"
   say "  - Files that are already in the pool are never overwritten."
-  say "  - Files you deleted since the last backup come back too (the backup still has them)."
-  say "  - Files created or changed since the last backup are not in the backup, so they cannot come back."
+  say "  - Files deleted since the last backup are restored too, because the backup still has them."
+  say "  - Files created or changed since the last backup are not in the backup and cannot be restored."
   if [ "$bytes" -gt $((avail - DRAIN_SPARE_BYTES)) ]; then
     warn "Not enough free space in $MAIN_POOL: $(human "$avail") free, $(human "$bytes") needed plus $(human "$DRAIN_SPARE_BYTES") spare."
     return 1
   fi
-  typed "RESTORE" "Type RESTORE (capitals) to copy these $n files: " || { say "Cancelled. Nothing was copied."; return 1; }
-  if [ -z "${STOPPED// /}" ]; then   # the check above changes nothing: the containers are stopped only now, for the copy
+  typed "RESTORE" "Type RESTORE in capital letters to copy these $n files: " || { say "Cancelled. Nothing was copied."; return 1; }
+  if [ -z "${STOPPED// /}" ]; then
     pre_change "Stop the containers that use the main pool." \
                "Copy the $n missing files ($(human "$bytes")) from the backup into the main pool. Files already there are never overwritten." \
                "Check that every file is there, then start the containers again." && return 0
@@ -189,7 +186,7 @@ restore_files() {   # restore_files folder  (main pool mounted, containers stopp
       if abort_requested; then restore_undo "$list" "$n"; return 1; fi
       warn "The copy stopped with an error."; return 1
     fi
-    if abort_requested; then restore_undo "$list" "$n"; return 1; fi      # (Cancel arrived in the last moment, after the copy was done)
+    if abort_requested; then restore_undo "$list" "$n"; return 1; fi
   else
     local prog=--info=stats1
     [ -t 1 ] && prog=--info=progress2
@@ -224,15 +221,13 @@ after_restore_hints() {
   say "  - Run the backup again when you are happy:  sudo homelab-backup"
 }
 
-# The music folder (Navidrome's /music, also where the panel's Upload card puts songs). When its drive was replaced, Docker made the folder again,
-# owned by root, and the panel could not write songs in it ("Cannot write there"). Fix Drives gives the folder back to the user who runs the lab.
-music_folder() {   # prints the folder Navidrome has as /music (empty when Navidrome is not set up here)
+music_folder() {
   docker_ok || return 0
   docker inspect navidrome --format '{{range .Mounts}}{{if eq .Destination "/music"}}{{.Source}}{{end}}{{end}}' 2>/dev/null
   return 0
 }
 
-repair_music_folder() {   # only a folder inside the pools that root owns: nothing else is touched, and only the folder itself (not what is in it)
+repair_music_folder() {
   local d
   d=$(music_folder)
   [ -n "$d" ] && [ -d "$d" ] || return 0
@@ -243,20 +238,14 @@ repair_music_folder() {   # only a folder inside the pools that root owns: nothi
   return 0
 }
 
-# ---------- Immich and Nextcloud: do they find their files? ----------
-# Both refuse to start when the small marker file of their folder is missing (Nextcloud: .ncdata, Immich: .immich in each of its folders). That is
-# on purpose: an app that started on an empty folder would look as if every photo and file had been deleted, and a phone that syncs with it could
-# delete its own copies. The markers live in the Main pool, so when the drive that held them is gone (a dead drive, or one taken out without
-# copying its files) the two stop. Fix Drives (remount) checks this before it starts the containers: the person can copy the files back
-# from the backup, or start the two on empty folders. The accounts and settings stay either way: they are in databases on the boot drive.
 IMMICH_FOLDERS="upload library thumbs profile backups encoded-video"
 APPS_HELD=""
 RESTORE_MSG=""
-RESTORE_STOPPED=0      # 1 when Cancel was pressed while files were copied from the backup (the copied files were removed again)
+RESTORE_STOPPED=0
 
 app_container_exists() { docker_ok && docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx "$1"; }
 
-apps_missing() {   # prints nextcloud and/or immich when that app is set up here and its folder in the Main pool has no marker
+apps_missing() {
   mountpoint -q "$MAIN_POOL" 2>/dev/null || return 0
   local f
   if app_container_exists nextcloud && [ ! -f "$MAIN_POOL/nextcloud/.ncdata" ]; then echo nextcloud; fi
@@ -268,7 +257,7 @@ apps_missing() {   # prints nextcloud and/or immich when that app is set up here
   return 0
 }
 
-apps_label() {   # nextcloud immich -> "Nextcloud and Immich"
+apps_label() {
   local out="" a
   for a in "$@"; do
     case "$a" in nextcloud) a=Nextcloud ;; immich) a=Immich ;; esac
@@ -277,14 +266,14 @@ apps_label() {   # nextcloud immich -> "Nextcloud and Immich"
   printf '%s' "$out"
 }
 
-apps_fresh() {   # apps_fresh nextcloud|immich ...: make the folders and the marker files, so the apps start on empty folders (nothing is overwritten)
+apps_fresh() {
   local a f
   for a in "$@"; do
     case "$a" in
       nextcloud)
         mkdir -p "$MAIN_POOL/nextcloud"
         [ -f "$MAIN_POOL/nextcloud/.ncdata" ] || printf '# Nextcloud data directory\n' >"$MAIN_POOL/nextcloud/.ncdata"
-        chown 33:33 "$MAIN_POOL/nextcloud" "$MAIN_POOL/nextcloud/.ncdata" 2>/dev/null || true      # 33 is www-data inside the Nextcloud image
+        chown 33:33 "$MAIN_POOL/nextcloud" "$MAIN_POOL/nextcloud/.ncdata" 2>/dev/null || true
         chmod 750 "$MAIN_POOL/nextcloud" 2>/dev/null || true ;;
       immich)
         give_to_owner "$MAIN_POOL/immich"
@@ -299,7 +288,7 @@ apps_fresh() {   # apps_fresh nextcloud|immich ...: make the folders and the mar
   log "started Immich / Nextcloud on empty folders: $*"
 }
 
-apps_hold() {   # apps_hold nextcloud|immich ...: their containers leave STOPPED, so they stay stopped (a later Fix Drives checks again)
+apps_hold() {
   local n keep="" held=""
   for n in $STOPPED; do
     case "$n" in
@@ -313,14 +302,14 @@ apps_hold() {   # apps_hold nextcloud|immich ...: their containers leave STOPPED
   [ -z "${held// /}" ] || note "These stay stopped until their files are back:$held"
 }
 
-apps_explain() {   # apps_explain nextcloud immich: what is wrong, in plain words
+apps_explain() {
   say ""
   say "$(apps_label "$@") cannot find their files in $MAIN_POOL."
-  say "Their folder is missing a marker file. That happens when the drive that held their files is not in the pool any more."
-  say "The apps refuse to start without it, so they cannot show an empty library by mistake. Your accounts and settings are not lost: they are on the boot drive."
+  say "Their folder is missing a marker file. This happens when the drive that held their files is no longer in the pool."
+  say "The apps do not start without it, so they cannot show an empty library by mistake. Accounts and settings are not lost: they are on the boot drive."
 }
 
-apps_fix() {   # apps_fix restore|fresh nextcloud immich ...: act on the choice
+apps_fix() {
   local act=$1 src; shift
   case "$act" in
     restore)
@@ -328,7 +317,6 @@ apps_fix() {   # apps_fix restore|fresh nextcloud immich ...: act on the choice
       show_backup_source "$src" || { say "Cancelled."; return 1; }
       restore_files "$src" || return 1 ;;
     fresh)
-      # (a script's --confirm-erase never answers this one: only a person typing START, or the panel passing it, counts)
       if [ "$PANEL_MODE" = 1 ]; then typed START "Type START to start $(apps_label "$@") on empty folders: " || { say "Cancelled."; return 1; }
       else [ "$(ask "Type START to start $(apps_label "$@") on empty folders: ")" = START ] || { say "Cancelled."; return 1; }; fi
       apps_fresh "$@" ;;
@@ -336,16 +324,16 @@ apps_fix() {   # apps_fix restore|fresh nextcloud immich ...: act on the choice
   return 0
 }
 
-apps_flow() {   # before the containers start again: what is wrong is dealt with (the person chooses) or the two stay stopped
+# Before the containers start again, deal with any problem with the apps' data (the person chooses), or keep the apps stopped.
+apps_flow() {
   local bad
   bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
   [ -n "$bad" ] || return 0
   # shellcheck disable=SC2086
   apps_explain $bad
-  # the control panel asks in its own page and then runs `appsfix` (see 42_panel.sh); here only the terminal asks
   if [ "$PANEL_MODE" != 1 ]; then
     if find_backup_source >/dev/null 2>&1; then
-      say "A backup copy of your files exists."
+      say "A backup copy of the files exists."
       # shellcheck disable=SC2086
       yn "Copy the missing files back from the backup now?" && apps_fix restore $bad
       bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
@@ -355,7 +343,7 @@ apps_flow() {   # before the containers start again: what is wrong is dealt with
     if [ -n "$bad" ]; then
       say ""
       say "$(apps_label $bad) can also start on EMPTY folders. The photos and files that were on the missing drive are not shown then,"
-      say "and Nextcloud apps that sync with the server may remove their own copies of files the server no longer has. Do this only when the old files are really gone."
+      say "and Nextcloud apps that sync with the server may remove their own copies of files the server no longer has. Do this only when the old files are permanently gone."
       # shellcheck disable=SC2086
       apps_fix fresh $bad
       bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
@@ -366,7 +354,7 @@ apps_flow() {   # before the containers start again: what is wrong is dealt with
   return 0
 }
 
-apps_json() {   # panel apps: {"problems":["nextcloud"],"backup":{"found":true,"stamp":"...","result":"OK"}} (look only)
+apps_json() {
   local a first=1 src stamp="" result=""
   printf '{"problems":['
   for a in $(apps_missing); do
@@ -383,19 +371,20 @@ apps_json() {   # panel apps: {"problems":["nextcloud"],"backup":{"found":true,"
   printf '}\n'
 }
 
-appsfix_flow() {   # panel appsfix restore|fresh: the person chose in the panel's page (the word they typed is in PANEL_TYPED); then the apps start
+# panel appsfix restore|fresh: apply the choice made in the panel, then start the apps.
+appsfix_flow() {
   mountpoint -q "$MAIN_POOL" || { note "The Main pool is not mounted. Press Fix Drives first."; return 1; }
   local bad
   bad=$(apps_missing | tr '\n' ' '); bad=${bad% }
   if [ -z "$bad" ]; then say "Done. Immich and Nextcloud find their files."; return 0; fi
-  ASSUME_YES=1      # (the questions of the backup check; the typed word below is still needed)
-  rm -f "$ABORT_FILE"; echo $$ >"$BATCH_PID_FILE"      # (the Cancel button of the panel finds this run through the file)
+  ASSUME_YES=1
+  rm -f "$ABORT_FILE"; echo $$ >"$BATCH_PID_FILE"
   stop_containers "$MAIN_POOL"
   HOLD_HINT="The containers stay stopped until this is fixed. Press Fix Drives again."
   # shellcheck disable=SC2086
   if ! apps_fix "$PANEL_APPS_ACT" $bad; then
     rm -f "$BATCH_PID_FILE" "$ABORT_FILE"
-    if [ "$RESTORE_STOPPED" = 1 ]; then      # Cancel: the copied files are removed again; what does not need the missing files starts again, the two stay stopped
+    if [ "$RESTORE_STOPPED" = 1 ]; then
       HOLD_HINT=""
       # shellcheck disable=SC2086
       apps_hold $bad
@@ -417,14 +406,14 @@ appsfix_flow() {   # panel appsfix restore|fresh: the person chose in the panel'
     return 1
   fi
   if [ "$PANEL_APPS_ACT" = restore ]; then
-    say "Done. The files are back and the apps are running again. Check a few photos and files."
+    say "Done. The files are restored and the apps are running again. Check a few photos and files."
   else
-    say "Done. The apps are running on empty folders. Your accounts are the same."
+    say "Done. The apps are running on empty folders. The accounts are unchanged."
   fi
   return 0
 }
 
-restore_flow() {   # restore only the missing files from the backup into the main pool
+restore_flow() {
   need_tools || return 1
   mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive and run sudo drives remount first."; return 1; }
   local src
@@ -438,6 +427,7 @@ restore_flow() {   # restore only the missing files from the backup into the mai
   return 0
 }
 
+# `replace`: replace a failed or removed drive with a new one.
 replace_flow() {
   array_guard || return 1
   need_tools || return 1
@@ -448,31 +438,31 @@ replace_flow() {
   done
   if [ ${#miss[@]} -eq 0 ]; then
     say "No pool drive is missing, so there is nothing to replace."
-    say "  - A drive that was only unplugged: plug it in and run  sudo drives remount"
-    say "  - A working drive you want to swap: use  sudo drives  > Add or remove drives > Disconnect, then Connect"
+    say "- A drive that was only disconnected: connect it and run  sudo drives remount"
+    say "- A working drive that is being swapped: use  sudo drives  > Add or remove drives > Disconnect, then Connect"
     return 1
   fi
   for m in "${miss[@]}"; do items+=("$(branch_name "$m")  ($(branch_role "$m"))  not found"); done
   say "Pool drives that cannot be found:"
-  idx=$(choose "Which drive is dead? " "${items[@]}") || return 1
+  idx=$(choose "Which drive has failed? " "${items[@]}") || return 1
   mp=${miss[$idx]}; role=$(branch_role "$mp"); label=$(basename "$mp"); pool=$(role_pool "$role")
   local shown; shown=$(branch_name "$mp")
 
   say ""
   say "$shown will be replaced by a new drive. The new drive takes its place in the $role pool and is named by what it is."
   if [ "$role" = main ]; then
-    say "The files that were on the dead drive are copied back from the backup. Only missing files are copied."
+    say "The files that were on the failed drive are copied back from the backup. Only missing files are copied."
     src=$(find_backup_source) || { note "No backup copy of the main pool was found. Nothing was changed."; return 1; }
     show_backup_source "$src" || { say "Cancelled. Nothing was changed."; return 1; }
-    say "Measuring the backup copy (this can take a minute)..."
+    say "Measuring the backup copy (this can take a few minutes)..."
     need=$(du -sb "$src/main" 2>/dev/null | awk '{print $1}'); need=${need:-0}
     have=0
     for o in $(branches_of main); do mountpoint -q "$o" && [ -n "$(branch_part "$o")" ] && have=$((have + $(used_bytes "$o"))); done
     need=$((need > have ? need - have : 0))
-    say "The backup holds about $(human "$need") more than the remaining main drives. The new drive should be larger than that."
+    say "The backup holds about $(human "$need") more than the remaining Main drives. The new drive should be larger than that."
   else
     say "A new backup drive starts empty. The next backup run copies everything to it again."
-    say "Older versions of deleted files (the _deleted folders) that were on the dead drive are gone."
+    say "Older versions of deleted files (the _deleted folders) that were on the failed drive are lost."
     need=0
   fi
 
@@ -507,7 +497,7 @@ replace_flow() {
   if ! mount_fstab "$mp"; then fstab_rollback; die "Could not mount $part at $mp. fstab was restored."; fi
   if [ "$role" = main ]; then give_to_owner "$mp"; fi
   name_store_put "$label" "$(disk_base_name "$dev")"
-  log "replaced dead drive $label ($shown) with $part (UUID $uuid) in the $role pool"
+  log "replaced failed drive $label ($shown) with $part (UUID $uuid) in the $role pool"
 
   left=$(for m in $(missing_branches "$role"); do printf '%s, ' "$(branch_name "$m")"; done)
   if [ -n "${left// /}" ]; then
@@ -533,14 +523,14 @@ replace_flow() {
   else
     start_containers
     local bcmd="${HOMELAB_BACKUP_CMD:-$(command -v homelab-backup || echo /usr/local/sbin/homelab-backup)}"
-    if [ -x "$bcmd" ] && yn "Run the backup now to fill the new drive (it can take a long time)?"; then
+    if [ -x "$bcmd" ] && yn "Run the backup now to fill the new drive? This can take a long time."; then
       "$bcmd" 9>&- || warn "The backup run reported an error. Read: sudo tail -20 /var/log/homelab-backup.log"
     else
-      say "Run  sudo homelab-backup  when you are ready. The 6:00 backup also fills the drive."
+      say "Run  sudo homelab-backup  when ready. The 6:00 backup also fills the drive."
     fi
   fi
   say ""
-  say "Done. If the old drive ever turns up again, do not plug it in next to the new one: the computer sees both as the same drive."
+  say "Done. If the old drive is found again, do not connect it together with the new one: the computer would see both as the same drive."
   return 0
 }
 

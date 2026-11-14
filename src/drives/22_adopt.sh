@@ -1,9 +1,9 @@
-# ---------- adopt the current single data drive ----------
+# `adopt`: make the current single data drive the first drive of the Main pool.
 adopt_flow() {
   array_guard || return 1
   need_tools || return 1
   [ -z "$(branches_of main)" ] || { note "A main pool already exists. Nothing to convert."; return 1; }
-  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Plug the drive in, run sudo drives remount, then try again."; return 1; }
+  mountpoint -q "$MAIN_POOL" || { note "$MAIN_POOL is not mounted. Connect the drive, run sudo drives remount, then try again."; return 1; }
   local src fst uuid part label cur before after pool="$MAIN_POOL" mp
   src=$(findmnt -no SOURCE "$pool"); fst=$(findmnt -no FSTYPE "$pool")
   [ "$fst" = ext4 ] || { note "$pool is $fst, not a plain ext4 drive. Cannot convert."; return 1; }
@@ -12,15 +12,15 @@ adopt_flow() {
   cur=$(fs_label "$part")
   label=$(next_label main); mp="$DISKS_DIR/$label"
   say ""
-  say "This converts your current data drive into the first drive of the main pool."
+  say "This converts the current data drive into the first drive of the Main pool."
   say "  Drive:        $(disk_summary "$(disk_of_part "$part")")"
   say "  Now:          mounted directly at $pool"
   say "  After:        mounted as a pool drive, and $pool becomes the pool"
-  say "  Your files are not moved or copied. Containers using $pool will be stopped for a minute."
+  say "  Files are not moved or copied. Containers using $pool are stopped briefly."
   yn "Continue?" || { say "Cancelled."; return 1; }
-  pre_change "Stop the containers that use $pool for a minute." \
-             "Mount the drive as a pool drive and make $pool the pool. Your files are not moved or copied." \
-             "Check the pool shows the same files, then start the containers again." && return 0
+  pre_change "Stop the containers that use $pool briefly." \
+             "Mount the drive as a pool drive and make $pool the pool. Files are not moved or copied." \
+             "Check that the pool shows the same files, then start the containers again." && return 0
 
   before=$(ls -A "$pool" | wc -l)
   stop_containers "$pool"
@@ -34,19 +34,19 @@ adopt_flow() {
   sd_reload
   if ! mount_fstab "$mp"; then
     fstab_rollback; mount_fstab "$pool"; start_containers
-    die "Could not mount the drive at $mp. fstab was restored and the old mount is back."
+    die "Could not mount the drive at $mp. fstab was restored and the previous mount is back."
   fi
   if ! apply_pool main; then
     fstab_rollback; pool_umount "$pool"; mountpoint -q "$mp" && umount "$mp"
     mount_fstab "$pool"; start_containers
-    die "The pool did not mount. fstab was restored and the old mount is back."
+    die "The pool did not mount. fstab was restored and the previous mount is back."
   fi
   after=$(ls -A "$pool" | wc -l)
   if [ "$before" != "$after" ]; then
-    warn "The pool shows $after items but the drive showed $before. Rolling back."
+    warn "The pool shows $after items but the drive showed $before. Reverting the change."
     fstab_rollback; pool_umount "$pool"; mountpoint -q "$mp" && umount "$mp"
     mount_fstab "$pool"; start_containers
-    die "Rolled back. Nothing was lost."
+    die "Reverted. Nothing was lost."
   fi
   start_containers
   power_apply "$mp" main

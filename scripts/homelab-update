@@ -1,29 +1,34 @@
 #!/usr/bin/env bash
-# homelab-update - find newer container images, download them, and update the containers one stack at a time.
-#
-#   sudo homelab-update            check, download, then update each stack that has something new (asks before each)
-#   sudo homelab-update --yes      the same without the questions (a Nextcloud major version jump is still left to you)
-#   sudo homelab-update --now      do not wait for uploads or a running backup to finish (see below)
-#   sudo homelab-update --backup   also run the full backup first (by default only a quick database dump is made)
-#   sudo homelab-update check      only look: which images have a newer version online (downloads nothing)
-#   homelab-update list            show the last result and the order to update in (no sudo needed)
-#   sudo homelab-update clean      delete the saved old versions and leftover old images NOW (shows first, asks)
-#   sudo homelab-update clean --old   only the saved copies older than 30 days
-#   sudo homelab-update auto       for cron: refresh the list, and run the weekly check when it is due
-#   sudo homelab-update refresh    for cron: re-read the list without using the internet
-#   homelab-update version
-#
-# What it does for each stack: a quick dump of the database (Nextcloud and Immich only, seconds), then the same as
-# "Update the stack" in Portainer (it asks Portainer through the key the installer saved), then it waits until the
-# containers are running and healthy. Portainer itself is recreated from the terminal. It stops BEFORE touching
-# anything while files are being written to a pool (an upload) or a backup is running; run it again when that is done.
-# It compares the image behind the tag a container runs. For a tag fixed to one version (v2.6.0) it also looks up newer
-# version numbers at the registry (v2.7.0). It never touches images locked to an exact fingerprint (@sha256) or listed in HOLD.
-#
-# Files it writes in /var/lib/homelab/:
-#   image-updates   what the login screen reads: line 1 = time of the last check, then one line per stack
-#   image-state     the details behind it (stack, image, fingerprint or new version found online, time found)
-# Settings can be changed in /etc/homelab-update.conf (see the guide).
+
+usage() {
+  cat <<'HELP'
+homelab-update - find newer container images, download them, and update the containers one stack at a time.
+
+  sudo homelab-update            check, download, then update each stack that has something new (asks before each)
+  sudo homelab-update --yes      the same without the questions (a Nextcloud major version jump is still left to you)
+  sudo homelab-update --now      do not wait for uploads or a running backup to finish (see below)
+  sudo homelab-update --backup   also run the full backup first (by default only a quick database dump is made)
+  sudo homelab-update check      only look: which images have a newer version online (downloads nothing)
+  homelab-update list            show the last result and the order to update in (no sudo needed)
+  sudo homelab-update clean      delete the saved old versions and leftover old images NOW (shows first, asks)
+  sudo homelab-update clean --old   only the saved copies older than 30 days
+  sudo homelab-update auto       for cron: refresh the list, and run the weekly check when it is due
+  sudo homelab-update refresh    for cron: re-read the list without using the internet
+  homelab-update version
+
+What it does for each stack: a quick dump of the database (Nextcloud and Immich only, seconds), then the same as
+"Update the stack" in Portainer (it asks Portainer through the key the installer saved), then it waits until the
+containers are running and healthy. Portainer itself is recreated from the terminal. It stops BEFORE touching
+anything while files are being written to a pool (an upload) or a backup is running; run it again when that is done.
+It compares the image behind the tag a container runs. For a tag fixed to one version (v2.6.0) it also looks up newer
+version numbers at the registry (v2.7.0). It never touches images locked to an exact fingerprint (@sha256) or listed in HOLD.
+
+Files it writes in /var/lib/homelab/:
+  image-updates   what the login screen reads: line 1 = time of the last check, then one line per stack
+  image-state     the details behind it (stack, image, fingerprint or new version found online, time found)
+Settings can be changed in /etc/homelab-update.conf (see the guide).
+HELP
+}
 
 set -u
 export PATH="${HOMELAB_EXTRA_PATH:+$HOMELAB_EXTRA_PATH:}/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -35,16 +40,15 @@ BACKUP_CMD="${HLU_BACKUP_CMD:-/usr/local/sbin/homelab-backup}"
 BACKUP_STATUS="${HLU_BACKUP_STATUS:-/var/lib/homelab-backup/last-run}"
 LOCKFILE="${HLU_LOCKFILE:-/run/homelab-update.lock}"
 
-HOLD=(immich_postgres immich_redis)   # containers never checked or updated here (Immich locks these on purpose)
-CHECK_EVERY_DAYS=7                    # how often "auto" looks online
-RETRY_HOURS=6                         # after a failed check, wait this long before "auto" tries again
-MIN_FREE_GB=5                         # refuse to download with less free space than this
-ROLLBACK_KEEP_DAYS=30                 # "clean" removes saved old versions older than this
-REGISTRY_TIMEOUT=60                   # seconds to wait for one registry answer
+HOLD=(immich_postgres immich_redis)
+CHECK_EVERY_DAYS=7
+RETRY_HOURS=6
+MIN_FREE_GB=5
+ROLLBACK_KEEP_DAYS=30
+REGISTRY_TIMEOUT=60
 # shellcheck disable=SC1090
 [ -r "$CONF" ] && . "$CONF"
 
-# ---------- looks (colours only on a terminal; plain symbols if the terminal is not UTF-8) ----------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-dumb}" != "dumb" ]; then
   B=$'\033[1m'; D=$'\033[2m'; G=$'\033[32m'; Y=$'\033[33m'; R=$'\033[31m'; C=$'\033[36m'; N=$'\033[0m'
 else
@@ -55,7 +59,7 @@ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *)                                S_OK="+"; S_UP="^"; S_DL="v"; S_PEND="*"; S_BAD="x"; S_WARN="!"; S_DOT="-"; S_ARR="->"; S_RULE="-" ;;
 esac
 
-rule() {   # rule "Title": a spaced section heading with a thin line
+rule() {
   local w t="$1" n pad
   w=$(term_cols); [ "$w" -gt 76 ] && w=76
   n=$(( w - ${#t} - 8 )); [ "$n" -lt 3 ] && n=3
@@ -66,12 +70,12 @@ line_ok()   { printf '   %s%s%s  %s\n' "$G" "$S_OK" "$N" "$*"; }
 line_warn() { printf '   %s%s%s  %s\n' "$Y" "$S_WARN" "$N" "$*"; }
 line_bad()  { printf '   %s%s%s  %s\n' "$R" "$S_BAD" "$N" "$*"; }
 line_note() { printf '   %s%s  %s%s\n' "$D" "$S_DOT" "$*" "$N"; }
-img_row()   { printf '   %s%s%s  %-18s %s%-32s%s %s\n' "$1" "$2" "$N" "$3" "$D" "$4" "$N" "$5"; }   # colour symbol stack image status
+img_row()   { printf '   %s%s%s  %-18s %s%-32s%s %s\n' "$1" "$2" "$N" "$3" "$D" "$4" "$N" "$5"; }
 term_cols() { local c; c=$(tput cols 2>/dev/null) || c=80; [[ "$c" =~ ^[0-9]+$ ]] || c=80; [ "$c" -lt 40 ] && c=40; echo "$c"; }
-kv() {   # kv KEY TEXT: an indented "key  text" line; long text wraps under itself
+kv() {
   local k=$1 first=1 l w
   w=$(( $(term_cols) - 16 )); [ "$w" -gt 90 ] && w=90
-  [ "$k" = image ] && w=500   # image names are never broken
+  [ "$k" = image ] && w=500
   while IFS= read -r l; do
     if [ "$first" -eq 1 ]; then printf '      %s%-9s%s %s\n' "$D" "$k" "$N" "$l"; first=0
     else printf '      %9s %s\n' "" "$l"; fi
@@ -79,10 +83,6 @@ kv() {   # kv KEY TEXT: an indented "key  text" line; long text wraps under itse
 }
 hb()        { numfmt --to=iec --suffix=B "$1" 2>/dev/null || echo "$1 B"; }
 
-# The registry and Portainer talk is done in Python (python3 is on every Linux Mint). Subcommands:
-#   tags IMAGE          the newest version number newer than the running tag (v2.6.0 -> v2.7.0), or nothing
-#   pt-has STACK        yes / no: does Portainer have a stack with that name
-#   pt-update STACK [OLD NEW]...   change image names in the saved stack file and redeploy it
 read -r -d '' PYLIB <<'PY' || true
 import json, os, re, sys, urllib.error, urllib.parse, urllib.request
 
@@ -167,7 +167,6 @@ def newer_tag(ref):
     return best_tag
 
 
-# ---------------------------------------------------------------- Portainer
 def pt_token():
     path = os.environ.get("HLU_SECRETS") or "/root/.homelab-setup/secrets.env"
     try:
@@ -258,7 +257,7 @@ die() { echo "$*" >&2; exit 1; }
 
 need_root() { [ "$(id -u)" -eq 0 ] || die "Run it with sudo: sudo homelab-update ${1:-}"; }
 
-take_lock() {   # take_lock quiet|loud
+take_lock() {
   mkdir -p "$(dirname "$LOCKFILE")" 2>/dev/null
   exec 9>"$LOCKFILE" || die "Cannot open $LOCKFILE"
   if ! flock -n 9; then
@@ -267,15 +266,14 @@ take_lock() {   # take_lock quiet|loud
   fi
 }
 
-put() {   # put NAME  (content on stdin): write atomically, readable by everyone
+put() {
   local tmp
   mkdir -p "$STATE_DIR" && chmod 755 "$STATE_DIR" 2>/dev/null
   tmp=$(mktemp "$STATE_DIR/.tmp.XXXXXX") || return 1
   cat >"$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$STATE_DIR/$1"
 }
 
-# ---------- what is running ----------
-CX=(); CN=(); CI=(); CD=(); CS=()      # container id, name, image name, image id, stack
+CX=(); CN=(); CI=(); CD=(); CS=()
 load_containers() {
   CX=(); CN=(); CI=(); CD=(); CS=()
   local ids cid name img imgid stack
@@ -285,13 +283,13 @@ load_containers() {
   while IFS='|' read -r cid name img imgid stack; do
     [ -n "$cid" ] || continue
     name=${name#/}
-    [ "$stack" = "<no value>" ] && stack=""   # Docker prints this for a container that is not part of a Compose stack
+    [ "$stack" = "<no value>" ] && stack=""
     CX+=("$cid"); CN+=("$name"); CI+=("$img"); CD+=("$imgid"); CS+=("${stack:-$name}")
   done < <(docker inspect $ids --format '{{.Id}}|{{.Name}}|{{.Config.Image}}|{{.Image}}|{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null)
   return 0
 }
 
-is_held() {   # is_held NAME IMAGE
+is_held() {
   local n=$1 img=$2 h
   [[ "$img" == *@sha256:* || "$img" == sha256:* ]] && return 0
   for h in "${HOLD[@]}"; do [ "$h" = "$n" ] && return 0; done
@@ -314,8 +312,7 @@ build_images() {
   done
 }
 
-# ---------- asking the registry, and comparing ----------
-remote_digest() {   # remote_digest IMAGE -> prints the fingerprint of the newest image online
+remote_digest() {
   local out d
   out=$(timeout "$REGISTRY_TIMEOUT" docker buildx imagetools inspect "$1" 2>/dev/null) || return 1
   d=$(printf '%s\n' "$out" | awk '/^Digest:/ {print $2; exit}')
@@ -323,19 +320,19 @@ remote_digest() {   # remote_digest IMAGE -> prints the fingerprint of the newes
   printf '%s\n' "$d"
 }
 
-local_has() {   # local_has IMAGE DIGEST: is that exact version already downloaded?
+local_has() {
   docker image inspect -f '{{range .RepoDigests}}{{println .}}{{end}}' "$1" 2>/dev/null | grep -qF -- "@$2"
 }
 
-pull_ref() {   # pull_ref IMAGE DIGEST -> what to download: the image itself, or the newer version tag found for it
+pull_ref() {
   if [[ "$2" == tag=* ]]; then printf '%s:%s\n' "${1%:*}" "${2#tag=}"; else printf '%s\n' "$1"; fi
 }
 
-classify() {   # classify IMAGE DIGEST -> new (not downloaded) | downloaded (downloaded, container still old) | current
+classify() {
   local ref=$1 d=$2 tagid i running=0
-  if [[ "$d" == tag=* ]]; then   # a newer version number was found (v2.6.0 -> v2.7.0)
+  if [[ "$d" == tag=* ]]; then
     for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$ref" ] && running=1; done
-    [ "$running" -eq 1 ] || { echo current; return; }          # no container runs the old version any more
+    [ "$running" -eq 1 ] || { echo current; return; }
     if docker image inspect "$(pull_ref "$ref" "$d")" >/dev/null 2>&1; then echo downloaded; else echo new; fi
     return
   fi
@@ -349,10 +346,9 @@ classify() {   # classify IMAGE DIGEST -> new (not downloaded) | downloaded (dow
   echo current
 }
 
-# ---------- the saved state ----------
 summary_epoch() { local e=""; [ -r "$SUMMARY_FILE" ] && e=$(head -1 "$SUMMARY_FILE"); [[ "$e" =~ ^[0-9]+$ ]] && echo "$e"; }
 
-OLD_STATE=()   # lines "stacks|image|digest|found"
+OLD_STATE=()
 read_state() {
   OLD_STATE=()
   [ -r "$STATE_FILE" ] || return 0
@@ -360,7 +356,7 @@ read_state() {
   while IFS= read -r l; do [ -n "$l" ] && OLD_STATE+=("$l"); done <"$STATE_FILE"
 }
 
-write_outputs() {   # write_outputs EPOCH   (lines "stacks|image|digest|found|status" on stdin)
+write_outputs() {
   local epoch=$1 line stacks img dig at st s
   local -a order=(); local -A per=()
   local all=""
@@ -379,7 +375,7 @@ write_outputs() {   # write_outputs EPOCH   (lines "stacks|image|digest|found|st
   } | put image-updates
 }
 
-evaluate_state() {   # prints the saved lines that still need action, with their current status appended
+evaluate_state() {
   local line stacks img dig at st
   for line in "${OLD_STATE[@]}"; do
     IFS='|' read -r stacks img dig at <<<"$line"
@@ -388,11 +384,11 @@ evaluate_state() {   # prints the saved lines that still need action, with their
   done
 }
 
-# ---------- check ----------
 CHECK_NEW=(); CHECK_DL=(); CHECK_FAILED=(); CHECK_OK=0
-declare -A NEWTAG=()       # image -> a newer version number found for it (v2.7.0)
-TAG_UNSURE=()              # pinned images whose newer versions could not be looked up
-do_check() {   # do_check show(0/1)
+declare -A NEWTAG=()
+TAG_UNSURE=()
+# do_check show(0/1): look online for newer images of every running container and save the result.
+do_check() {
   local show=$1 img d st n=0 now line stacks i nt
   CHECK_NEW=(); CHECK_DL=(); CHECK_FAILED=(); CHECK_OK=0; NEWTAG=(); TAG_UNSURE=()
   now=$(date +%s)
@@ -405,7 +401,7 @@ do_check() {   # do_check show(0/1)
   for img in "${IMG_LIST[@]}"; do
     n=$((n + 1))
     if d=$(remote_digest "$img"); then
-      if [[ "$img" =~ :v?[0-9]+(\.[0-9]+)+$ ]]; then      # pinned to a version number: is there a newer one?
+      if [[ "$img" =~ :v?[0-9]+(\.[0-9]+)+$ ]]; then
         if nt=$(pylib tags "$img" 2>/dev/null); then
           if [ -n "$nt" ]; then d="tag=$nt"; NEWTAG[$img]=$nt; fi
         else
@@ -420,7 +416,6 @@ do_check() {   # do_check show(0/1)
       [ "$st" = current ] || new_lines+="${IMG_STACKS[$img]}|$img|$d|$now|$st"$'\n'
     else
       CHECK_FAILED+=("$img"); STAT[$img]=failed
-      # keep what was known about it before
       for line in "${OLD_STATE[@]}"; do
         IFS='|' read -r stacks i d _ <<<"$line"
         if [ "$i" = "$img" ]; then
@@ -454,19 +449,17 @@ do_check() {   # do_check show(0/1)
     return 0
   fi
   [ "$show" -eq 1 ] && line_bad "Could not reach the registry for ${#CHECK_FAILED[@]} image(s). Is the internet working? The saved result was only partly updated."
-  # partial answer: save what is known, but keep the old "checked" time (or save nothing if there was none)
   local ep; ep=$(summary_epoch) || ep=""
   if [ -n "$ep" ] && [ "$CHECK_OK" -gt 0 ]; then printf '%s' "$new_lines" | write_outputs "$ep" || true; fi
   return 2
 }
 
-# ---------- rollback copies, space, backup ----------
-running_id_of() {   # running_id_of IMAGE -> the id of the image the first container with that name runs, or nothing
+running_id_of() {
   local i
   for i in "${!CI[@]}"; do [ "${CI[$i]}" = "$1" ] && { echo "${CD[$i]}"; return; }; done
 }
 
-rollback_tag() {   # keep a named copy of the version that runs now, so a bad update can be undone
+rollback_tag() {
   local ref=$1 id safe
   id=$(running_id_of "$ref")
   [ -n "$id" ] || return 0
@@ -475,16 +468,16 @@ rollback_tag() {   # keep a named copy of the version that runs now, so a bad up
 }
 
 docker_root() { local r; r=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null); echo "${r:-/var/lib/docker}"; }
-avail_of() {   # avail_of UNIT PATH -> free space at PATH in that unit (1 = bytes, 1G = gigabytes)
+avail_of() {
   df -B"$1" --output=avail "$2" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/, "", $1); print $1}'
 }
 free_gb() {
-  [ -n "${HLU_FREE_GB:-}" ] && { echo "$HLU_FREE_GB"; return; }   # test hook
+  [ -n "${HLU_FREE_GB:-}" ] && { echo "$HLU_FREE_GB"; return; }
   avail_of 1G "$(docker_root)"
 }
 free_bytes() { avail_of 1 "$(docker_root)"; }
 
-run_backup() {   # runs the backup and checks the result file. Returns 0 only when a NEW run finished OK.
+run_backup() {
   local start start_min last ts res
   start=$(date +%s); start_min=$(date -d "@$start" '+%F %H:%M')
   "$BACKUP_CMD"; local rc=$?
@@ -501,7 +494,6 @@ run_backup() {   # runs the backup and checks the result file. Returns 0 only wh
   return 0
 }
 
-# ---------- the plan ----------
 rank_of() {
   case "${1,,}" in
     adguard*) echo 2 ;; immich*) echo 3 ;; nextcloud*) echo 4 ;; portainer*) echo 5 ;; *) echo 1 ;;
@@ -511,13 +503,13 @@ rank_of() {
 img_version() {
   local v
   v=$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$1" 2>/dev/null)
-  [ "$v" = "<no value>" ] && v=""   # Docker prints this when the image has no version label
+  [ "$v" = "<no value>" ] && v=""
   printf '%s' "$v"
 }
 
 nc_version_of() { sed -n "s/.*OC_VersionString *= *'\([^']*\)'.*/\1/p" | head -1; }
 
-warn_block() {   # warn_block "text..." : a yellow ! line that wraps under itself
+warn_block() {
   local first=1 l w text="$*"
   w=$(( $(term_cols) - 14 )); [ "$w" -gt 90 ] && w=90
   while IFS= read -r l; do
@@ -526,8 +518,8 @@ warn_block() {   # warn_block "text..." : a yellow ! line that wraps under itsel
   done < <(printf '%s\n' "$text" | fold -s -w "$w")
 }
 
-PLAN_STACKS=(); declare -A SIMG=() SST=() SNT=()      # the stacks waiting, their images, each image's status, each image's newer version
-build_plan() {   # reads the saved state and fills PLAN_STACKS (in the order to update) / SIMG / SST / SNT
+PLAN_STACKS=(); declare -A SIMG=() SST=() SNT=()
+build_plan() {
   local line stacks img dig at st s
   PLAN_STACKS=(); SIMG=(); SST=(); SNT=()
   read_state
@@ -547,7 +539,8 @@ build_plan() {   # reads the saved state and fills PLAN_STACKS (in the order to 
   while IFS= read -r s; do [ -n "$s" ] && PLAN_STACKS+=("$s"); done <<<"$sorted"
 }
 
-print_stack() {   # print_stack N STACK: what is waiting in one stack, with the notes that matter
+# print_stack N STACK: show what is waiting in one stack, with the notes that matter.
+print_stack() {
   local n=$1 s=$2 img any_new=0 oldid newv oldv m i
   for img in ${SIMG[$s]}; do [ "${SST["$s|$img"]}" = new ] && any_new=1; done
   if [ "$any_new" -eq 1 ]; then
@@ -571,7 +564,7 @@ print_stack() {   # print_stack N STACK: what is waiting in one stack, with the 
     m=$(anon_volumes_of "${CX[$i]}")
     if [ -n "$m" ]; then
       warn_block "WARNING: ${CN[$i]} keeps data in an anonymous volume ($(echo "$m" | paste -sd, -))." \
-        "Updating can leave it EMPTY, so it is NOT updated here. Copy that data out first."
+        "Updating can leave it empty, so it is not updated here. Copy that data out first."
     fi
   done
   case "${s,,}" in
@@ -581,15 +574,15 @@ print_stack() {   # print_stack N STACK: what is waiting in one stack, with the 
       kv "" "A quick dump of its database is made right before. Do it alone, not together with Nextcloud." ;;
     nextcloud*) nextcloud_notes "$s" ;;
     portainer*)
-      kv note "Portainer is recreated from the terminal (it is not a stack). Its page and the Homepage card are down for a minute." ;;
+      kv note "Portainer is recreated from the terminal (it is not a stack). Its page and the Homepage card are unavailable for about a minute." ;;
   esac
 }
 
-anon_volumes_of() {   # anon_volumes_of CONTAINER: the paths kept in anonymous volumes (a 64-character name)
+anon_volumes_of() {
   docker inspect "$1" --format '{{range .Mounts}}{{if eq .Type "volume"}}{{.Name}} {{.Destination}}{{println}}{{end}}{{end}}' 2>/dev/null | awk '$1 ~ /^[0-9a-f]{64}$/ {print $2}'
 }
 
-print_plan() {   # for "list": every waiting stack, in order
+print_plan() {
   build_plan
   if [ "${#PLAN_STACKS[@]}" -eq 0 ]; then line_ok "Nothing is waiting: every container runs the newest image."; return 0; fi
   local n=0 todl=0 s img
@@ -607,7 +600,7 @@ print_plan() {   # for "list": every waiting stack, in order
   echo "  ${D}When everything runs fine, free the disk space with:${N}  sudo homelab-update clean"
 }
 
-nc_versions() {   # nc_versions STACK -> "OLD NEW" Nextcloud version numbers (the running one and the downloaded one), or nothing
+nc_versions() {
   local s=$1 i name="" ref="" old new
   for i in "${!CS[@]}"; do
     if [ "${CS[$i]}" = "$s" ] && [[ "${CI[$i]}" == nextcloud:* || "${CI[$i]}" == nextcloud ]]; then
@@ -622,7 +615,7 @@ nc_versions() {   # nc_versions STACK -> "OLD NEW" Nextcloud version numbers (th
   return 0
 }
 
-nc_jump() {   # nc_jump OLD NEW -> skip (more than one major version) | major | same | minor
+nc_jump() {
   local om=${1%%.*} nm=${2%%.*}
   [[ "$om" =~ ^[0-9]+$ && "$nm" =~ ^[0-9]+$ ]] || { echo minor; return; }
   if [ "$nm" -gt $((om + 1)) ]; then echo skip
@@ -631,11 +624,11 @@ nc_jump() {   # nc_jump OLD NEW -> skip (more than one major version) | major | 
   else echo minor; fi
 }
 
-nextcloud_notes() {   # nextcloud_notes STACK   (uses SST from build_plan)
+nextcloud_notes() {
   local s=$1 old new
   if read -r old new < <(nc_versions "$s") && [ -n "${new:-}" ]; then
     case "$(nc_jump "$old" "$new")" in
-      skip) warn_block "STOP: Nextcloud would jump from $old to $new and skip a major version. It is NOT updated here." \
+      skip) warn_block "Stop: Nextcloud would jump from $old to $new and skip a major version. It is not updated here." \
               "Nextcloud can only go up one major version at a time. Read the Nextcloud release notes first." ;;
       major) warn_block "MAJOR upgrade: $old $S_ARR $new. Read the Nextcloud release notes first;" \
               "check that your apps support it. It is only done when you type yes yourself (not with --yes)." ;;
@@ -651,9 +644,7 @@ nextcloud_notes() {   # nextcloud_notes STACK   (uses SST from build_plan)
   kv note "A quick dump of its database is made right before. Do it alone, not together with Immich. Never skip a major version."
 }
 
-# ---------- is anything being written right now? ----------
-# An update restarts containers. If files are being uploaded to a pool (or a backup is copying), wait for that to finish.
-pool_devices() {   # the whole drives behind the pools (not the boot drive), one name per line
+pool_devices() {
   if [ -n "${HLU_POOL_DEVS:-}" ]; then printf '%s\n' $HLU_POOL_DEVS; return; fi
   local src dsk
   while read -r src; do
@@ -663,7 +654,7 @@ pool_devices() {   # the whole drives behind the pools (not the boot drive), one
   done < <(findmnt -rn -o SOURCE,TARGET 2>/dev/null | awk '$2 ~ "^/mnt/(disks/|storage$|backup$)" {print $1}') | sort -u
 }
 
-sectors_written() {   # sectors written to the pool drives so far (field 7 of /sys/block/DEV/stat)
+sectors_written() {
   local d t=0 w
   while read -r d; do
     [ -n "$d" ] || continue
@@ -673,24 +664,23 @@ sectors_written() {   # sectors written to the pool drives so far (field 7 of /s
   echo "$t"
 }
 
-busy_reason() {   # prints why it is a bad moment to restart containers, or nothing
-  if [ -n "${HLU_BUSY:-}" ]; then [ "$HLU_BUSY" = none ] || echo "$HLU_BUSY"; return 0; fi   # test hook
+busy_reason() {
+  if [ -n "${HLU_BUSY:-}" ]; then [ "$HLU_BUSY" = none ] || echo "$HLU_BUSY"; return 0; fi
   if ! ( exec 7>"${HLU_BACKUP_LOCK:-/var/lock/homelab-backup.lock}" && flock -n 7 ) 2>/dev/null; then
-    echo "a backup is running right now"; return 0
+    echo "a backup is running"; return 0
   fi
   local a b secs=${HLU_SAMPLE_SECS:-5}
   a=$(sectors_written); sleep "$secs"; b=$(sectors_written)
-  # more than about 300 KB per second written to the pool drives: files are coming in
-  if [ $(( (b - a) * 512 / secs )) -gt 300000 ]; then echo "files are being written to a storage pool (an upload?)"; fi
+  if [ $(( (b - a) * 512 / secs )) -gt 300000 ]; then echo "files are being written to a storage pool (for example an upload)"; fi
   return 0
 }
 
-# ---------- quick database dump (instead of a full backup) ----------
 dump_dir() {
   if mountpoint -q /mnt/backup 2>/dev/null; then echo "${HLU_DUMP_DIR:-/mnt/backup/db-dumps/pre-update}"; else echo "${HLU_DUMP_DIR:-$STATE_DIR/pre-update-dumps}"; fi
 }
 
-dump_stack_db() {   # dump_stack_db STACK: dump every PostgreSQL database in the stack. 0 = all saved (or nothing to dump)
+# dump_stack_db STACK: dump every PostgreSQL database in the stack. Returns 0 when all are saved or there is nothing to dump.
+dump_stack_db() {
   local s=$1 i c img dir stamp user db f n=0 free
   stamp=$(date +%Y%m%d-%H%M%S); dir=$(dump_dir)
   for i in "${!CN[@]}"; do
@@ -707,7 +697,6 @@ dump_stack_db() {   # dump_stack_db STACK: dump every PostgreSQL database in the
        && [ "$(stat -c %s "$f.tmp")" -gt "${HLU_DUMP_MIN:-200}" ]; then
       mv "$f.tmp" "$f"; chmod 600 "$f"
       line_ok "Database dump saved: $f ($(hb "$(stat -c %s "$f")"))"
-      # keep the newest 3 dumps of this database
       # shellcheck disable=SC2012
       ls -1t "$dir/$c"-*.sql.gz 2>/dev/null | tail -n +4 | xargs -r rm -f
       n=$((n + 1))
@@ -718,8 +707,7 @@ dump_stack_db() {   # dump_stack_db STACK: dump every PostgreSQL database in the
   return 0
 }
 
-# ---------- updating one stack ----------
-wait_stack() {   # wait_stack STACK: wait until every container of the stack runs again (and is healthy). 0 = yes
+wait_stack() {
   local s=$1 i c st h deadline ok bad_names
   deadline=$(( $(date +%s) + ${HLU_WAIT:-300} ))
   while :; do
@@ -735,13 +723,14 @@ wait_stack() {   # wait_stack STACK: wait until every container of the stack run
   done
 }
 
-manual_steps() {   # manual_steps STACK WHY
+manual_steps() {
   line_warn "$2"
   echo "      Do it by hand in Portainer: Stacks ${S_ARR} $1 ${S_ARR} Editor ${S_ARR} (change the version on the image: line if one is listed above)"
   echo "      ${S_ARR} Update the stack. Then check:  docker ps --format \"table {{.Names}}\\t{{.Status}}\""
 }
 
-update_portainer() {   # recreate the Portainer container itself from the terminal (it is not a stack)
+# Recreate the Portainer container itself from the terminal. It is not a stack.
+update_portainer() {
   local img="" i restart ports mounts args old="portainer-before-update"
   for i in "${!CN[@]}"; do [ "${CN[$i]}" = portainer ] && img=${CI[$i]}; done
   [ -n "$img" ] || { line_bad "No container named portainer is running."; return 1; }
@@ -765,7 +754,7 @@ update_portainer() {   # recreate the Portainer container itself from the termin
   return 1
 }
 
-wait_http() {   # wait_http URL SECONDS: wait until the address answers 200
+wait_http() {
   local url=$1 deadline=$(( $(date +%s) + $2 ))
   until curl -fsS -m 5 -o /dev/null "$url" 2>/dev/null; do
     [ "$(date +%s)" -ge "$deadline" ] && return 1
@@ -773,14 +762,14 @@ wait_http() {   # wait_http URL SECONDS: wait until the address answers 200
   done
 }
 
-update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop here), 2 left for you (nothing was changed)
+# update_stack STACK YES(0/1): returns 0 when updated, 1 when it failed (stop here), 2 when it is left for the person (nothing was changed).
+update_stack() {
   local s=$1 yes=$2 img nt pairs=() old_ids="" i c v old new
   for img in ${SIMG[$s]}; do
     if [ "${SST["$s|$img"]}" = new ]; then manual_steps "$s" "$s was not downloaded yet: run  sudo homelab-update  again first."; return 2; fi
     nt=${SNT["$s|$img"]:-}
     [ -n "$nt" ] && pairs+=("$img" "${img%:*}:$nt")
   done
-  # data in an anonymous volume can be lost when the container is recreated
   for i in "${!CN[@]}"; do
     [ "${CS[$i]}" = "$s" ] || continue
     v=$(anon_volumes_of "${CX[$i]}")
@@ -822,8 +811,6 @@ update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop he
     echo "      Going back: the old version of each image is saved as homelab-rollback:<name>-<date>."
     return 1
   fi
-  # did the containers really change? Portainer can answer before Docker has recreated them, so give it a little time.
-  # Only a container whose image tag now points to a NEWER image is expected to change (a database that did not get a new version stays as it is).
   local settle_end waiting name oldid cur
   settle_end=$(( $(date +%s) + ${HLU_SETTLE:-90} ))
   while :; do
@@ -846,7 +833,6 @@ update_stack() {   # update_stack STACK YES(0/1) -> 0 updated, 1 failed (stop he
   return 0
 }
 
-# ---------- commands ----------
 cmd_check() {
   need_root check; take_lock loud
   rule "Look online for newer images"
@@ -867,9 +853,9 @@ cmd_refresh() {
   evaluate_state | write_outputs "$ep"
 }
 
+# `auto`: the scheduled run. Does nothing in the first 10 minutes after boot, runs at low priority, refreshes the saved results and looks online when the last check is old enough.
 cmd_auto() {
   need_root auto
-  # the first 10 minutes after a boot: the apps are still starting, so this waits for the next hourly run
   local up=${HOMELAB_UPTIME:-$(cut -d. -f1 /proc/uptime 2>/dev/null)}
   if [[ "${up:-}" =~ ^[0-9]+$ ]] && [ "$up" -lt 600 ]; then return 0; fi
   renice -n 19 -p $$ >/dev/null 2>&1 || true
@@ -905,13 +891,14 @@ cmd_list() {
   echo
 }
 
-confirm() {   # confirm TEXT yes(0/1)
+confirm() {
   [ "$2" -eq 1 ] && return 0
-  [ -t 0 ] || [ "${HLU_TEST_STDIN:-}" = 1 ] || die "Not a terminal. Add --yes to go on without asking."
+  [ -t 0 ] || [ "${HLU_TEST_STDIN:-}" = 1 ] || die "Not a terminal. Add --yes to continue without asking."
   local a; read -r -p "  $1 [y/N] " a
   [[ "$a" == [yY]* ]]
 }
 
+# `run`: look online, download the new images, make sure nothing is being uploaded, then update the stacks one at a time.
 cmd_run() {
   local yes=$1 rc=0 img free
   need_root ""; take_lock loud
@@ -953,7 +940,6 @@ cmd_run() {
     [ "${#failed_pull[@]}" -eq 0 ] || { echo; line_warn "${#failed_pull[@]} download(s) failed; they are marked [not downloaded yet] below. Run homelab-update again later."; }
   fi
 
-  # save what we know now (so the login screen shows the new state even if something stops later)
   refresh_state
 
   rule "Step 3 of 4 ${S_DOT} Is anything being uploaded?"
@@ -1008,7 +994,6 @@ cmd_run() {
       2) left=$((left + 1)) ;;
       *) echo; line_bad "Stopped at $s. The stacks after it were not touched."; echo; refresh_state; return 1 ;;
     esac
-    # the containers changed: read them again so the next stack and the login screen see the truth
     refresh_state
   done
   echo
@@ -1018,21 +1003,21 @@ cmd_run() {
   return 0
 }
 
-refresh_state() {   # re-read the containers and save what is still waiting
+refresh_state() {
   load_containers; build_images; read_state
   evaluate_state | write_outputs "$(summary_epoch || date +%s)"
 }
 
-held_note() {   # held_note COUNT: says how many leftover images stay because a container uses them
+held_note() {
   [ "$1" -eq 0 ] || line_note "$1 leftover image(s) are kept because a container still uses them (a stopped one counts)."
 }
 
-cmd_clean() {   # cmd_clean YES OLD_ONLY
+# cmd_clean YES OLD_ONLY: remove the saved rollback copies of images (all of them, or only those older than the keep time).
+cmd_clean() {
   need_root clean; take_lock loud
   local yes=$1 old_only=$2 tag size age d t now iid in_use i before after since lab all_ids held=0
   local -a tags=() tsizes=() tuse=() dids=() dsizes=() dinfo=()
   load_containers || die "Cannot talk to Docker. Is it running? (docker ps)"
-  # every image that ANY container uses, stopped ones too (for example a spare kept from an old Portainer update)
   all_ids=" "
   local cids; cids=$(docker ps -aq 2>/dev/null)
   # shellcheck disable=SC2086
@@ -1093,14 +1078,13 @@ cmd_clean() {   # cmd_clean YES OLD_ONLY
   for tag in "${tags[@]}"; do
     if docker rmi "homelab-rollback:$tag" >/dev/null 2>&1; then removed=$((removed + 1)); else line_warn "could not remove homelab-rollback:$tag"; fi
   done
-  # An image that other images are built on cannot go before them, so go in passes until nothing more can be removed.
   local -a pending=("${dids[@]}") nxt=()
   local -A errs=()
   while [ "${#pending[@]}" -gt 0 ]; do
     nxt=(); progress=0
     for iid in "${pending[@]}"; do
       if msg=$(docker image rm "$iid" 2>&1); then removed=$((removed + 1)); progress=1
-      elif [[ "$msg" == *"No such image"* ]]; then removed=$((removed + 1)); progress=1   # Docker already removed it together with its child
+      elif [[ "$msg" == *"No such image"* ]]; then removed=$((removed + 1)); progress=1
       else nxt+=("$iid"); errs[$iid]=$msg; fi
     done
     pending=("${nxt[@]}")
@@ -1120,9 +1104,8 @@ cmd_clean() {   # cmd_clean YES OLD_ONLY
   echo
 }
 
-usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; }
 
-[ "${HLU_SOURCE_ONLY:-}" = 1 ] && return 0   # tests load the functions only
+[ "${HLU_SOURCE_ONLY:-}" = 1 ] && return 0
 YES=0; OLD=0; NOW=0; FULL_BACKUP=0; ARGS=()
 for a in "$@"; do case "$a" in --yes|-y) YES=1 ;; --old) OLD=1 ;; --now) NOW=1 ;; --backup) FULL_BACKUP=1 ;; *) ARGS+=("$a") ;; esac; done
 case "${ARGS[0]:-run}" in

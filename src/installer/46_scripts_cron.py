@@ -1,21 +1,16 @@
-# ================================================================ your scripts, schedule and login screen
 SCRIPTS = [("drives", "/usr/local/sbin"), ("homelab-backup", "/usr/local/sbin"), ("homelab-backup-tasks", "/usr/local/sbin"), ("homelab-update", "/usr/local/sbin"),
            ("homelab-restore-configs", "/usr/local/sbin"), ("homelab-sample", "/usr/local/sbin"), ("homelab-stats", "/usr/local/sbin"), ("homelab-alerts", "/usr/local/sbin"),
            ("homelab-calendar", "/usr/local/bin"), ("homelab-cards", "/usr/local/sbin"), ("homelab-selftest", "/usr/local/sbin"),
            ("homelab", "/usr/local/bin"), ("homelab-repocheck", "/usr/local/bin"), ("homelab-panel", "/usr/local/sbin")]
-# commands that were renamed or removed: an upgrade deletes the old copies so they do not linger on the server
 RETIRED_SCRIPTS = ["/usr/local/bin/hdd-recover", "/usr/local/bin/homelab-check"]
 
 
 def render_script(name):
-    """A script from scripts/ ready to install (the user name filled in)."""
     text = read_file(repo_file("scripts", name))
-    # the scripts look the lab's user up by themselves (the first normal user); the installed copy names this machine's user
     return text.replace("$(getent passwd 1000 | cut -d: -f1)", Ctx.user)
 
 
 def installed_copy(name, where):
-    """Path of the installed copy of a script, or None when it is not installed."""
     p = P(where + "/" + name)
     if os.path.exists(p):
         return p
@@ -25,11 +20,12 @@ def installed_copy(name, where):
 
 @step
 class ScriptsInstalled(Step):
+    """Install the helper commands (homelab, drives and the others) into /usr/local/sbin or /usr/local/bin, and remove retired ones."""
     id, group, title = "scripts", "Scripts and schedule", "Helper commands installed (homelab, homelab-update, drives, backup, ...)"
     needs = ("packages",)
 
     def _wanted(self):
-        items = [(n, d, render_script(n)) for n, d in SCRIPTS if n != "homelab-panel" or panel_applies()]   # a hand-built server has no panel
+        items = [(n, d, render_script(n)) for n, d in SCRIPTS if n != "homelab-panel" or panel_applies()]
         me = repo_file("installer", "homelab-setup")
         items.append(("homelab-setup", "/usr/local/sbin", read_file(me)))
         return items
@@ -62,6 +58,7 @@ GUARD_UNIT = "/etc/systemd/system/homelab-storage-guard.service"
 
 
 def guard_unit_text():
+    """The systemd unit that runs `drives guard` before Docker starts."""
     return "\n".join([
         "# Written by homelab-setup. Change nothing here: an upgrade puts it back.",
         "[Unit]",
@@ -81,11 +78,12 @@ def guard_unit_text():
 
 @step
 class StorageGuard(Step):
+    """Make the services keep running from the boot drive when the Main drive is not mounted at start-up."""
     id, group, title = "storage-guard", "Platform", "Storage guard at start-up (the services keep running on the boot drive when the Main drive is missing)"
     needs = ("scripts",)
 
     def probe(self):
-        if Mode.existing:      # a server built by hand is only read, never changed
+        if Mode.existing:
             return "na"
         if read_file(P(GUARD_UNIT)) != guard_unit_text():
             return "todo"
@@ -106,7 +104,6 @@ class BackupConf(Step):
         path = P("/etc/homelab-backup.conf")
         if not os.path.exists(path):
             return "todo"
-        # a file left by an earlier install can name ~/750GB_HDD, a folder this machine does not have
         m = re.search(r'DEST_FALLBACK="([^"]*)"', read_file(path))
         if m and "/750GB_HDD/" in m.group(1) and not os.path.isdir(P(Ctx.home + "/750GB_HDD")):
             return "todo"
@@ -128,24 +125,21 @@ CRON_LINES = [
     ("hdparm -B 254", '@reboot sleep 60 && /usr/sbin/hdparm -B 254 "/dev/$(lsblk -no pkname "$(findmnt -no SOURCE /boot/efi)")" >/dev/null 2>&1'),
 ]
 CRON_PROGRESS = ("homelab-setup progress", "*/10 * * * * /usr/local/sbin/homelab-setup progress >/dev/null 2>&1")
-CRON_BACKUP_OLD = ("homelab-backup", "0 6 * * * /usr/local/sbin/homelab-backup")      # the nightly job on its own (a server built by hand keeps it)
-CRON_BACKUP = ("homelab-backup-tasks due", "*/5 * * * * /usr/local/sbin/homelab-backup-tasks due >/dev/null 2>&1")      # the scheduler of the backup tasks; the nightly backup is the first task
+CRON_BACKUP_OLD = ("homelab-backup", "0 6 * * * /usr/local/sbin/homelab-backup")
+CRON_BACKUP = ("homelab-backup-tasks due", "*/5 * * * * /usr/local/sbin/homelab-backup-tasks due >/dev/null 2>&1")
 OLD_BACKUP_LINE = re.compile(r"^\s*\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+/usr/local/sbin/homelab-backup(\s|$)")
 
 
 def crontab_text():
-    """Root's crontab as text ('' when there is none)."""
     rc, txt = run(["crontab", "-l"])
     return txt if rc == 0 else ""
 
 
 def crontab_active(txt):
-    """The crontab without comments and blank lines."""
     return "\n".join(l for l in txt.splitlines() if l.strip() and not l.strip().startswith("#"))
 
 
 def crontab_add(lines):
-    """Add lines to root's crontab unless the same line is already active; the old crontab is saved first."""
     cur = crontab_text()
     if Opt.dry:
         for _, l in lines:
@@ -165,7 +159,6 @@ def crontab_add(lines):
 
 
 def crontab_remove(match):
-    """Take the lines `match` says yes to out of root's crontab (the old crontab is saved first). Returns how many went."""
     cur = crontab_text()
     keep = [l for l in cur.splitlines() if not match(l)]
     gone = len(cur.splitlines()) - len(keep)
@@ -184,6 +177,7 @@ def crontab_remove(match):
 
 @step
 class CronLines(Step):
+    """Add the scheduled jobs to root's crontab: readings, update check and drive power."""
     id, group, title = "cron", "Scripts and schedule", "Scheduled jobs in root's crontab (readings, update check, drive power)"
     needs = ("scripts",)
 
@@ -191,14 +185,13 @@ class CronLines(Step):
         return CRON_LINES + ([] if Mode.existing else [CRON_PROGRESS])
 
     def probe(self):
-        # the progress line is not required: it removes itself once setup is finished
         act_lines = crontab_active(crontab_text())
         return "done" if all(k in act_lines for k, _ in CRON_LINES) else "todo"
 
     def run(self):
         crontab_add(self._lines())
         if not FAKE and os.path.exists(P("/usr/local/sbin/homelab-alerts")):
-            run([P("/usr/local/sbin/homelab-alerts")], timeout=120)      # the bell has its list at once, not after the first 5 minutes
+            run([P("/usr/local/sbin/homelab-alerts")], timeout=120)
 
 
 @step
@@ -211,21 +204,21 @@ class DataDrive(Step):
         return "done" if os.path.ismount(P("/mnt/storage")) or os.environ.get("HLS_MOUNTED") == "1" else "todo"
 
     def help(self):
-        return ("/mnt/storage is currently a plain folder on the boot drive, which is fine for testing. To use a dedicated drive, connect it, then either open the drives menu and choose what to do:\n$ sudo drives\nor let the drive wizard look at the drives, suggest a ready-made setup and ask before changing anything (the installer itself never formats a drive):\n$ sudo drives wizard\nThen turn on the daily backup:\n$ sudo homelab-setup refresh\nTo skip this step:\n$ sudo homelab-setup skip data-drive")
+        return ("/mnt/storage is currently a plain folder on the boot drive, which is suitable for testing. To use a dedicated drive, connect it, then either open the drives menu and choose what to do:\n$ sudo drives\nor let the drive wizard look at the drives, suggest a ready-made setup and ask before changing anything (the installer itself never formats a drive):\n$ sudo drives wizard\nThen turn on the daily backup:\n$ sudo homelab-setup refresh\nTo skip this step:\n$ sudo homelab-setup skip data-drive")
 
 
 @step
 class CronBackup(Step):
+    """Add the backup schedule to root's crontab and migrate the old single backup line to the per-task backup settings."""
     id, group, title = "cron-backup", "Scripts and schedule", "Backup tasks run on schedule (the nightly backup at 6:00, the others as set in the Backups section)"
     needs = ("scripts", "data-drive")
 
     def applies(self):
-        # the nightly backup refuses to run unless /mnt/storage is a real drive, so a skipped drive means no backup job
         return not State.data["skip"].get("data-drive")
 
     def probe(self):
         act = crontab_active(crontab_text())
-        if Mode.existing:      # a server built by hand has no panel: it keeps the nightly job as it was
+        if Mode.existing:
             return "done" if CRON_BACKUP_OLD[0] in act else "todo"
         return "done" if CRON_BACKUP[0] in act and not any(OLD_BACKUP_LINE.match(l) for l in act.splitlines()) else "todo"
 
@@ -233,7 +226,7 @@ class CronBackup(Step):
         if Mode.existing:
             crontab_add([CRON_BACKUP_OLD])
             return
-        if not Opt.dry:      # the task list is made first, from the old line (so the nightly time you had carries over)
+        if not Opt.dry:
             env = dict(os.environ, HLB_CONF=P("/etc/homelab-backup-tasks.json"), HLB_STATE=P("/var/lib/homelab-backup/tasks"),
                        HLB_LEGACY_CONF=P("/etc/homelab-backup.conf"))
             run([P("/usr/local/sbin/homelab-backup-tasks"), "list"], env=env)
@@ -258,22 +251,21 @@ fi
 
 @step
 class LoginHook(Step):
+    """Add the block to the user's .bashrc that shows the homelab screen when a terminal is opened. The original .bashrc is saved once as a backup."""
     id, group, title = "login-hook", "Scripts and schedule", "The homelab screen shows when you open a terminal"
     needs = ("scripts",)
 
     def probe(self):
         txt = read_file(P(Ctx.home + "/.bashrc"))
-        # an older block (without "timeout --foreground 20 homelab login") is replaced: the new one cannot freeze the login
         if "# >>> homelab login display >>>" not in txt:
             return "todo"
-        # a server built by hand is only looked at, so its older block counts too
         return "done" if Mode.existing or "timeout --foreground 20 homelab login" in txt else "todo"
 
     def run(self):
         path = P(Ctx.home + "/.bashrc")
         cur = read_file(path)
         if not Opt.dry and cur:
-            bak = path + ".bak-homelab-setup"          # the first copy of the file, kept once
+            bak = path + ".bak-homelab-setup"
             if not os.path.exists(bak):
                 write_file(bak, cur, 0o644, (Ctx.uid, Ctx.gid))
         if "# >>> homelab login display >>>" in cur:
@@ -283,25 +275,21 @@ class LoginHook(Step):
         write_file(path, new, 0o644, (Ctx.uid, Ctx.gid))
 
 
-# ================================================================ things only you can do
 EXPECTED_CONTAINERS = 19
 
 
 def expected_containers():
-    """How many containers a finished install runs: 18, or one fewer without AdGuard Home."""
     return EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
-WEATHER_DEFAULTS = ((40.7128, -74.0060), (40.7143, -74.0060))    # the coordinates the shipped widgets.yaml has had (New York)
+WEATHER_DEFAULTS = ((40.7128, -74.0060), (40.7143, -74.0060))
 
 
 def boot_id():
-    """An id that changes at every boot."""
     return os.environ.get("HLS_BOOT_ID") or read_file("/proc/sys/kernel/random/boot_id").strip()
 
 
 def chk_weather():
-    """True when the weather widget has coordinates."""
     if State.data.get("weather_set"):
-        return True          # a city was chosen at install and written into widgets.yaml
+        return True
     txt = read_file(P(Ctx.home + "/homepage-config/widgets.yaml"))
     m = re.search(r"openmeteo:(.*?)(?:\n- |\Z)", txt, re.S)
     if not m:
@@ -317,7 +305,6 @@ def chk_weather():
 
 
 def chk_blocklists():
-    """AdGuard Home starts with at most two lists on; three or more enabled means you added some."""
     on, inside = 0, False
     for line in adguard_yaml().split("\n"):
         if re.match(r"^filters:\s*$", line):
@@ -331,7 +318,6 @@ def chk_blocklists():
 
 
 def chk_devices_dns():
-    """AdGuard Home has answered DNS questions from a device that is not this machine or a Docker network."""
     user, pw = hp_get("adguard-card", "username"), hp_get("adguard-card", "password")
     if is_placeholder(user) or is_placeholder(pw):
         return False
@@ -358,7 +344,6 @@ def chk_devices_dns():
 
 
 def chk_speedtest():
-    """True when Speedtest Tracker's widget has a real key."""
     key = hp_get("speedtest-card", "key")
     if is_placeholder(key):
         return False
@@ -369,7 +354,6 @@ def chk_speedtest():
 
 @step
 class SpeedtestFirst(Step):
-    """The first speed test runs by itself (the Homepage card has nothing to show until one result exists)."""
     id, group, title = "speedtest-first", "Your devices and drives", "Speedtest Tracker has run its first speed test"
     needs = ("w-speedtest",)
 
@@ -381,7 +365,6 @@ class SpeedtestFirst(Step):
 
     @staticmethod
     def php(lines):
-        """Run a few PHP lines inside the Speedtest Tracker container with its first user as $u. Returns the output."""
         code = ("<?php\nchdir('/app/www');\nrequire '/app/www/vendor/autoload.php';\n"
                 "$app = require '/app/www/bootstrap/app.php';\n"
                 "$app->make(Illuminate\\Contracts\\Console\\Kernel::class)->bootstrap();\n"
@@ -390,8 +373,6 @@ class SpeedtestFirst(Step):
         return run(["docker", "exec", "-u", "abc", "-i", "speedtest-tracker", "php"], input_text=code, timeout=120)[1]
 
     def run(self):
-        # A short-lived token that may only start a test is made inside the container, used once and deleted again: the widget's own token
-        # (Read Results) stays as it is, and no password is needed.
         if Opt.dry:
             out("      would start the first speed test in Speedtest Tracker")
             return
@@ -406,18 +387,17 @@ class SpeedtestFirst(Step):
             self.php([drop])
         if st not in (200, 201, 202):
             raise Abort("Speedtest Tracker did not start the first speed test (answer %s). Open %s and click Speedtest." % (st, url("speedtest")))
-        for _ in range(1 if FAKE else 30):      # a real test takes up to a minute or two
+        for _ in range(1 if FAKE else 30):
             if chk_speedtest():
                 break
             time.sleep(0 if FAKE else 5)
-        State.mark("speedtest-first")            # started once: a later silent moment of the service does not start another test
+        State.mark("speedtest-first")
 
     def help(self):
         return "Open Speedtest Tracker (port 8088) and click Speedtest. The Homepage card fills in afterwards."
 
 
 def chk_reboot():
-    """All containers are up and the machine has restarted since the lab was first seen running."""
     n = len([l for l in run(["docker", "ps", "-q"])[1].split("\n") if l.strip()])
     if n < expected_containers():
         return False
@@ -430,6 +410,7 @@ def chk_reboot():
 
 
 class AckStep(Step):
+    """A checklist step that only a person can confirm. It is marked done by `homelab-setup done ID`, or automatically when its check passes."""
     kind = "ack"
     group = "Your devices and drives"
 
@@ -437,7 +418,7 @@ class AckStep(Step):
         self.id, self.title, self.text, self.optional, self.needs = sid, title, text, optional, tuple(needs)
         self.tip = tip
         self.auto = auto
-        self.wants = wants       # a function: False means this step is not part of this machine's list
+        self.wants = wants
 
     def applies(self):
         return not Mode.existing and (self.wants is None or self.wants())
@@ -472,7 +453,6 @@ class AckStep(Step):
 
 
 def _register_acks():
-    """Create the checklist steps that only a person can confirm."""
     items = [
         AckStep("devices-dns", "Your devices use AdGuard Home as their DNS server",
                 "On each device, set DNS manually: preferred = this machine's LAN address (shown by `homelab`), alternate = 8.8.8.8 (or leave it empty for strict filtering). Windows: Settings > Network > DNS. iPhone: Wi-Fi > (i) > Configure DNS.",
@@ -481,9 +461,9 @@ def _register_acks():
                 "The weather city is asked during install. If it was not set (the city lookup was unavailable), edit ~/homepage-config/widgets.yaml and change latitude and longitude under openmeteo "
                 "(the default is New York).\n$ nano ~/homepage-config/widgets.yaml",
                 optional=True, needs=("homepage-files",), auto=chk_weather),
-        AckStep("reboot-test", "Reboot once to check that everything comes back by itself",
+        AckStep("reboot-test", "Reboot once to check that everything starts again automatically",
                 "When it suits you, restart the machine once (`sudo reboot`) and log in again after about two minutes: the login screen should show all containers running. "
-                "Nothing here waits for it, and it is ticked off by itself afterwards.",
+                "Nothing here waits for it, and it is marked done automatically afterwards.",
                 optional=True, needs=("stack-homepage",), auto=chk_reboot, tip=True),
     ]
     for s in items:
@@ -498,6 +478,7 @@ BLOCKLISTS = [
 
 @step
 class Blocklists(Step):
+    """Add the DNS blocklists to AdGuard Home through its API."""
     id, group, title = "blocklists", "Logins and keys", "AdGuard Home blocklists added (HaGeZi Pro, Peter Lowe's)"
     needs = ("adguard-setup",)
     optional = True

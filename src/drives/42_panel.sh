@@ -1,25 +1,5 @@
-# ---------- the control panel's door: `sudo drives panel ACTION` ----------
-# The control panel (the Drives tab of the dashboard) runs as the lab's own user and is allowed to run exactly these commands as root, without
-# a password (the installer writes /etc/sudoers.d/homelab-panel). Nothing else. Every word is checked here again, because the rule only
-# matches the start of the line. The commands never ask a question and never change anything but what their name says.
-#   panel status | health | check | actions     look only (JSON)
-#   panel rename ID NAME                          give a pool drive a name of your own (NAME auto: the automatic name again)
-#   panel sleep ID | panel wake ID                put a spinning hard drive to sleep / wake it (ID is like sda)
-#   panel remount                                 Fix Drives: mount the drives again after an unplug or a lost drive (refused while a backup or upload runs); Immich and Nextcloud whose files are missing stay stopped
-#   panel apps                                    look only (JSON): which of Immich / Nextcloud cannot find their files, and whether a backup copy exists
-#   panel appsfix restore|fresh [WORD...]         copy their files back from the backup (needs RESTORE typed) or start them on empty folders (needs START typed)
-#   panel abort                                   Stop: the add / move / disconnect that runs now stops at the next safe moment (not while a drive is being erased)
-#   Stage 4 (these change or erase drives; every one is refused while a backup or upload runs, and none asks a question):
-#   panel add DISK main|backup keep|erase [WORD...]   add a spare drive to a pool, keeping its files or erasing it first (erase needs /dev/DISK and ERASE typed)
-#   panel wipe DISK empty|format [WORD...]            erase a spare drive (needs /dev/DISK and ERASE typed)
-#   panel disconnect LABEL yes|no [WORD...]           take a drive out of its pool; yes = copy its files to the other drives first (no needs CONTINUE typed)
-#   panel move LABEL keep|erase yes|no [WORD...]      move a drive to the other pool; keep|erase = what happens to the files on the drive (erase needs
-#                                                     /dev/DISK and ERASE, keep needs KEEP); yes|no = copy its files to the other drives of its old pool first
-#   panel setups | panel setup NAME DISK,DISK,... [WORD...]   Configure Drives: rank the ready-made setups for the spare drives / build one (needs NAME and ERASE typed)
-#   panel bootadd main|backup GB [WORD...]            part of the boot drive becomes a drive of that pool (needs CONTINUE typed)
-#   WORD is what the person typed: ERASE, CONTINUE, REMOVE, KEEP or a /dev/NAME. A word only counts when the question that asks for it gets exactly it.
 
-panel_branch() {   # panel_branch LABEL -> the mount point of the pool drive with that label (nothing and 1 when there is none)
+panel_branch() {
   local mp
   for mp in $(all_branches); do
     [ "$(basename "$mp")" = "$1" ] && { echo "$mp"; return 0; }
@@ -28,7 +8,8 @@ panel_branch() {   # panel_branch LABEL -> the mount point of the pool drive wit
   return 1
 }
 
-panel_actions_json() {   # what the Drives tab may offer: pool drives (rename, move, take out), spare drives (add, erase) and spinning drives (sleep, wake)
+# What the Drives tab may offer: pool drives (rename, move, take out), spare drives (add, erase) and spinning drives (sleep, wake).
+panel_actions_json() {
   local mp label dev first=1 chosen role others used data boot kept
   printf '{"rename":['
   for mp in $(all_branches); do
@@ -65,7 +46,7 @@ panel_actions_json() {   # what the Drives tab may offer: pool drives (rename, m
   printf '],"can_sleep":%s}\n' "$(command -v hdparm >/dev/null 2>&1 && echo true || echo false)"
 }
 
-panel_list() {   # panel_list WORDS: "sdc" or "sdc,sdd" or "sdc:keep,sdd:erase" -> PANEL_IDS and PANEL_MODES (up to 8 drives, none twice)
+panel_list() {
   local t id m seen=","
   local -a toks
   IFS=, read -ra toks <<<"$1"
@@ -80,12 +61,13 @@ panel_list() {   # panel_list WORDS: "sdc" or "sdc,sdd" or "sdc:keep,sdd:erase" 
   return 0
 }
 
-panel_one() {   # panel_one add|move|disconnect ID MODE: one drive of a batch (sets ABORTED and PUTBACK when Stop ended it)
+# panel_one add|move|disconnect ID MODE: run one drive of a batch. Sets ABORTED and PUTBACK when Stop ended it.
+panel_one() {
   local act=$1 id=$2 mode=$3 rc=0 mp part
   PROG_ITEM=$id; PROG_LO=0; PROG_HI=100; ABORTED=0; PUTBACK=0; NOROOM=0
-  if [ "$act" != add ] && [ -n "$PANEL_RESERVE_DIR" ]; then      # where the drive came from, in case Stop is pressed after it is done and it has to go back
+  if [ "$act" != add ] && [ -n "$PANEL_RESERVE_DIR" ]; then
     mp=$(panel_branch "$id" 2>/dev/null); part=$(branch_part "$mp")
-    if ! is_boot_section "$mp"; then      # (a boot drive section is deleted when it leaves: it cannot be put back)
+    if ! is_boot_section "$mp"; then
       printf '%s\n' "$(branch_role "$mp")" >"$PANEL_RESERVE_DIR/$id.role"
       printf '%s\n' "$(disk_of_part "$part")" >"$PANEL_RESERVE_DIR/$id.dev"
     fi
@@ -104,7 +86,7 @@ panel_one() {   # panel_one add|move|disconnect ID MODE: one drive of a batch (s
   return "$rc"
 }
 
-panel_job_end() {   # panel_job_end ID RC: what a drive's own process leaves for the batch to read (its result, the containers it left stopped, the ones that did not start)
+panel_job_end() {
   local id=$1 rc=$2 state="done"
   if [ "$rc" != 0 ]; then
     if [ "$PUTBACK" = 1 ]; then state=putback; elif [ "$ABORTED" = 1 ]; then state=stopped; elif [ "$NOROOM" = 1 ]; then state=noroom; else state=failed; fi
@@ -113,31 +95,31 @@ panel_job_end() {   # panel_job_end ID RC: what a drive's own process leaves for
   printf '%s\n' "$state" >"$PANEL_RESERVE_DIR/$id.state"
   printf '%s\n' "${STOPPED:-}" >"$PANEL_RESERVE_DIR/$id.stopped"
   printf '%s\n' "${START_FAILED:-}" >"$PANEL_RESERVE_DIR/$id.startfailed"
-  [ "$state" = failed ] && : >"$ABORT_FILE"      # something went wrong: the other drives stop too, at the next safe moment
+  [ "$state" = failed ] && : >"$ABORT_FILE"
   return 0
 }
 
-# shellcheck disable=SC2034      # (nameof is read through a name reference by panel_batch_report)
-panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up to PANEL_JOBS at the same time (the busy check was made once, FileBrowser is told once at the end)
+# panel_batch add|move|disconnect: run the drives of PANEL_IDS, up to PANEL_JOBS at the same time.
+# shellcheck disable=SC2034
+panel_batch() {
   local act=$1 n=${#PANEL_IDS[@]} i id mode sameall=${PANEL_ALL:-} rc=0 mp r
-  # every drive is checked before the first one is touched
   if [ "$act" = add ]; then
     for id in "${PANEL_IDS[@]}"; do
       grep -qx "/dev/$id" <<<"$(candidate_disks)" || { panel_refuse "$id is not a spare drive that can be added."; return 1; }
     done
   else
     for id in "${PANEL_IDS[@]}"; do panel_branch "$id" >/dev/null || return 1; done
-    if [ "$n" -gt 1 ] && [ "$act" = move ]; then      # several drives moving at once must leave at least one Main drive (a single drive gets its own, longer explanation from the flow)
+    if [ "$n" -gt 1 ] && [ "$act" = move ]; then
       local keepleft
       keepleft=$(branches_of main | wc -l)
       for id in "${PANEL_IDS[@]}"; do [ "$(branch_role "$(panel_branch "$id" 2>/dev/null)")" = main ] && keepleft=$((keepleft - 1)); done
       if [ "$keepleft" -lt 1 ]; then panel_refuse "That would take every drive out of the Main pool. Keep at least one Main drive."; return 1; fi
     fi
   fi
-  PANEL_RESERVE_DIR=$(mktemp -d) || { panel_refuse "No room for working files."; return 1; }
+  PANEL_RESERVE_DIR=$(mktemp -d) || { panel_refuse "Not enough space for working files."; return 1; }
   rm -f "$ABORT_FILE"; echo $$ >"$BATCH_PID_FILE"
   local -A nameof=()
-  local par=$PANEL_JOBS      # (when every drive of a pool leaves there is nothing to copy to: the files stay on the drives, and the flow asks for the words)
+  local par=$PANEL_JOBS
   [ "$n" -gt 1 ] || par=1
   PANEL_LEAVING=()
   [ "$n" -gt 1 ] && { PANEL_HOLD=1; PANEL_BARRIER=1; }
@@ -146,14 +128,13 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
     if [ "$act" = add ]; then nameof[$id]=$(disk_base_name "/dev/$id")
     else mp=$(panel_branch "$id"); nameof[$id]=$(branch_name "$mp"); PANEL_LEAVING+=("$mp"); fi
   done
-  # the drives, each in its own process when there are several (a process that stops with an error stops only itself)
   for ((i = 0; i < n; i++)); do
     id=${PANEL_IDS[$i]}; mode=${PANEL_MODES[$i]:-$sameall}
     if [ "$n" = 1 ]; then
       panel_one "$act" "$id" "$mode" || { if [ "$ABORTED" = 1 ]; then rc=4; else rc=1; fi; }
       continue
     fi
-    while [ "$(batch_copying "${started[@]}")" -ge "$par" ]; do sleep 0.5; done      # (a drive that is only waiting for the others does not count: the next one can start copying)
+    while [ "$(batch_copying "${started[@]}")" -ge "$par" ]; do sleep 0.5; done
     if abort_requested; then printf 'notstarted\n' >"$PANEL_RESERVE_DIR/$id.state"; progress_for "$id" 0 "Not started"; continue; fi
     started+=("$id")
     ( trap 'panel_job_end "$id" $?' EXIT; panel_one "$act" "$id" "$mode" ) &
@@ -161,7 +142,7 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
   : >"$PANEL_RESERVE_DIR/launched-all"
   wait
   PANEL_BARRIER=0
-  if [ "$n" -gt 1 ] && [ "$act" != add ] && abort_requested; then panel_undo_done "$act"; fi      # Stop was pressed: the drives that were already done go back where they were
+  if [ "$n" -gt 1 ] && [ "$act" != add ] && abort_requested; then panel_undo_done "$act"; fi
   batch_start_held; PANEL_HOLD=0
   [ "$n" = 1 ] && { rm -f "$BATCH_PID_FILE" "$ABORT_FILE"; rm -rf "$PANEL_RESERVE_DIR"; PANEL_RESERVE_DIR=""; PANEL_LEAVING=(); return "$rc"; }
   panel_batch_report "$act" nameof
@@ -170,7 +151,7 @@ panel_batch() {   # panel_batch add|move|disconnect: the drives of PANEL_IDS, up
   return "$rc"
 }
 
-branch_of_dev() {   # branch_of_dev /dev/sdX -> the mount point of the pool drive that lives on that disk
+branch_of_dev() {
   local b part
   for b in $(all_branches); do
     part=$(branch_part "$b")
@@ -179,12 +160,12 @@ branch_of_dev() {   # branch_of_dev /dev/sdX -> the mount point of the pool driv
   return 1
 }
 
-panel_undo_one() {   # panel_undo_one ACT ID: a finished drive goes back to the pool it came from, with the files it has now (nothing is erased)
+panel_undo_one() {
   local act=$1 id=$2 dev role mp rc=0
   dev=$(cat "$PANEL_RESERVE_DIR/$id.dev" 2>/dev/null); role=$(cat "$PANEL_RESERVE_DIR/$id.role" 2>/dev/null)
   [ -n "$dev" ] && [ -n "$role" ] || return 2
   PROG_ITEM=$id; PROG_LO=0; PROG_HI=100; PANEL_LEAVING=()
-  progress 10 "Putting the drive back"
+  progress 10 "Restoring the drive"
   if [ "$act" = move ]; then
     mp=$(branch_of_dev "$dev") || return 1
     PANEL_COPY=no
@@ -195,17 +176,17 @@ panel_undo_one() {   # panel_undo_one ACT ID: a finished drive goes back to the 
   return "$rc"
 }
 
-panel_undo_done() {   # panel_undo_done ACT: Stop was pressed. Every drive that was already done goes back (one after the other; the Stop request no longer counts)
+panel_undo_done() {
   local act=$1 id st
   ABORT_IGNORE=1; PANEL_UNDO=1
   for id in "${PANEL_IDS[@]}"; do
     st=$(cat "$PANEL_RESERVE_DIR/$id.state" 2>/dev/null)
     case "$st" in done|late) ;; *) continue ;; esac
-    say "Stopped as you asked. Putting back a drive that was already done..."
+    say "Stopped. Restoring a drive that was already done..."
     panel_undo_one "$act" "$id"
     case $? in
       0) printf 'undone\n' >"$PANEL_RESERVE_DIR/$id.state" ;;
-      2) ;;      # (it cannot be put back: it stays done)
+      2) ;;
       *) printf 'undofailed\n' >"$PANEL_RESERVE_DIR/$id.state"; progress_for "$id" 100 "Could not put back" ;;
     esac
   done
@@ -213,12 +194,13 @@ panel_undo_done() {   # panel_undo_done ACT: Stop was pressed. Every drive that 
   return 0
 }
 
-progress_for() {   # progress_for ID PERCENT "Text": a progress line for a drive that has no process of its own
+progress_for() {
   [ "$PANEL_MODE" = 1 ] || return 0
   printf 'PROGRESS %s %s %s\n' "$1" "$2" "$3"
 }
 
-panel_batch_report() {   # panel_batch_report ACT NAMEOF: read what each drive's process left, say what happened, and give the batch's exit code (0 all done, 1 something failed, 4 stopped on request)
+# panel_batch_report ACT NAMEOF: read what each drive's process left, report it, and return the batch's exit code (0 all done, 1 something failed, 4 stopped on request).
+panel_batch_report() {
   local act=$1 id st name f
   local -n nm=$2
   local -a okl=() failed=() stopped=() back=() late=() skipped=() undone=() undofail=() noroom=()
@@ -241,10 +223,10 @@ panel_batch_report() {   # panel_batch_report ACT NAMEOF: read what each drive's
   done
   joinl() { local out="" x; for x in "$@"; do out="${out:+$out, }$x"; done; printf '%s' "$out"; }
   if [ ${#failed[@]} -gt 0 ]; then
-    [ ${#stopped[@]} -gt 0 ] && say "The other drives were stopped with nothing lost: $(joinl "${stopped[@]}")."
-    [ ${#back[@]} -gt 0 ] && say "Put back where they were: $(joinl "${back[@]}")."
+    [ ${#stopped[@]} -gt 0 ] && say "The other drives were stopped without data loss: $(joinl "${stopped[@]}")."
+    [ ${#back[@]} -gt 0 ] && say "Restored to their previous state: $(joinl "${back[@]}")."
     local why_f why_all=""
-    for id in "${PANEL_IDS[@]}"; do      # what each failed drive complained about
+    for id in "${PANEL_IDS[@]}"; do
       [ "$(cat "$PANEL_RESERVE_DIR/$id.state" 2>/dev/null)" = failed ] || [ ! -f "$PANEL_RESERVE_DIR/$id.state" ] || continue
       why_f=$(cat "$PANEL_RESERVE_DIR/$id.err" 2>/dev/null || tail -1 "$PANEL_RESERVE_DIR/$id.warn" 2>/dev/null)
       [ -n "$why_f" ] && why_all="${why_all:+$why_all; }${nm[$id]:-$id}: $why_f"
@@ -255,17 +237,17 @@ panel_batch_report() {   # panel_batch_report ACT NAMEOF: read what each drive's
   fi
   if [ ${#noroom[@]} -gt 0 ] && [ ${#stopped[@]} -eq 0 ] && [ ${#undone[@]} -eq 0 ]; then
     [ ${#okl[@]} -gt 0 ] && say "Done: $(joinl "${okl[@]}")."
-    say "Not taken out, because the drives that stay do not have room for its files (the drive and its files are untouched): $(joinl "${noroom[@]}")."
+    say "Not removed, because the remaining drives do not have room for its files (the drive and its files are unchanged): $(joinl "${noroom[@]}")."
     return 1
   fi
   if [ ${#stopped[@]} -gt 0 ] || [ ${#back[@]} -gt 0 ] || [ ${#skipped[@]} -gt 0 ] || [ ${#undone[@]} -gt 0 ] || [ ${#undofail[@]} -gt 0 ]; then
-    local msg="Stopped as you asked."
+    local msg="Stopped by request."
     [ ${#okl[@]} -gt 0 ] && msg="$msg Finished before the stop: $(joinl "${okl[@]}")."
     [ ${#late[@]} -gt 0 ] && msg="$msg Could not be stopped, finished: $(joinl "${late[@]}")."
     [ ${#stopped[@]} -gt 0 ] && msg="$msg Stopped with nothing lost: $(joinl "${stopped[@]}")."
     [ ${#back[@]} -gt 0 ] && msg="$msg Put back where it was: $(joinl "${back[@]}")."
     [ ${#undone[@]} -gt 0 ] && msg="$msg Already done, now put back where it was: $(joinl "${undone[@]}")."
-    [ ${#undofail[@]} -gt 0 ] && msg="$msg COULD NOT be put back (add it again from the Drives box): $(joinl "${undofail[@]}")."
+    [ ${#undofail[@]} -gt 0 ] && msg="$msg could not be put back (add it again from the Drives box): $(joinl "${undofail[@]}")."
     [ ${#skipped[@]} -gt 0 ] && msg="$msg Not started: $(joinl "${skipped[@]}")."
     say "$msg"
     return 4
@@ -273,13 +255,13 @@ panel_batch_report() {   # panel_batch_report ACT NAMEOF: read what each drive's
   return 0
 }
 
-panel_abort() {   # Stop: the drive change that runs now stops at the next safe moment (a copy is cut off; a drive that is being erased cannot be stopped)
+panel_abort() {
   local pid
   pid=$(cat "$BATCH_PID_FILE" 2>/dev/null)
   if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
     : >"$ABORT_FILE"
     pkill -TERM -f -- '--info=progress2 --no-inc-recursive' 2>/dev/null || true
-    say "Stop requested. The drives are stopped at the next safe moment."
+    say "Stop requested. The drives stop at the next safe point."
     return 0
   fi
   note "No drive change is running right now. Nothing was changed."
@@ -288,6 +270,7 @@ panel_abort() {   # Stop: the drive change that runs now stops at the next safe 
 
 panel_refuse() { note "$1 Nothing was changed."; return 1; }
 
+# Entry point of `drives panel ...`: the commands the Drives tab is allowed to run.
 panel_main() {
   local act=${1:-} n=$# i w
   case "$act" in
@@ -306,7 +289,7 @@ panel_main() {
   esac
   PANEL_IDS=(); PANEL_MODES=()
   case "$act" in
-    add|move|disconnect) panel_list "$2" || return 1 ;;      # one drive, or several (ID,ID,... and with "each" ID:keep or ID:erase)
+    add|move|disconnect) panel_list "$2" || return 1 ;;
     setup) [[ "$2" =~ ^[a-z0-9-]{3,12}$ ]] || { panel_refuse "That setup name is not allowed."; return 1; } ;;
     *) if [ "$n" -ge 2 ] && ! [[ "$2" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then panel_refuse "That drive id is not allowed."; return 1; fi ;;
   esac
@@ -326,7 +309,6 @@ panel_main() {
     appsfix)    [[ "$2" =~ ^(restore|fresh)$ ]] || arg_ok=0; typed_from=3 ;;
     bootadd)    [[ "$2" =~ ^(main|backup)$ ]] && [[ "$3" =~ ^[0-9]{1,6}$ ]] || arg_ok=0; typed_from=4 ;;
   esac
-  # a drive with its own choice (ID:keep) needs the word "each"; without it every drive gets the same choice
   if [ "$arg_ok" = 1 ] && [[ "$act" =~ ^(add|move)$ ]]; then
     local m modeword=$3
     [ "$act" = add ] && modeword=$4
@@ -345,19 +327,18 @@ panel_main() {
   fi
   [ "$(id -u)" = 0 ] || die "Run this with sudo:  sudo drives"
   case "$act" in
-    status|health|check|actions|abort|setups|apps) ;;      # looking only (and Stop): these may run beside each other and beside a change (the panel does not start the looking ones during a change)
+    status|health|check|actions|abort|setups|apps) ;;
     *) take_lock ;;
   esac
   PANEL_MODE=1
-  ASSUME_YES=0      # nothing is ever answered with yes for the person; a question nobody can answer means no
+  ASSUME_YES=0
   local why
   case "$act" in
-    rename|sleep|wake|status|health|check|actions|abort|setups|apps) ASSUME_YES=1 ;;      # (these never ask anything that matters)
+    rename|sleep|wake|status|health|check|actions|abort|setups|apps) ASSUME_YES=1 ;;
     *) why=""
-       # a drive that joins a running pool stops nothing, so a backup or an upload may go on
-       if [ "$PANEL_NOW" = 1 ]; then :      # the person chose "Go Ahead Anyway"
+       if [ "$PANEL_NOW" = 1 ]; then :
        elif [ "$act" = add ] && [[ "${3:-}" =~ ^(main|backup)$ ]] && pool_is_live "$3"; then :; else why=$(busy_reason); fi
-       if [ -n "$why" ]; then note "Not a good moment: $why. Nothing was changed. Try again when it has finished."; return 1; fi
+       if [ -n "$why" ]; then note "Not safe to continue now: $why. Nothing was changed. Try again when it has finished."; return 1; fi
        NOW=1 ;;
   esac
   case "$act" in

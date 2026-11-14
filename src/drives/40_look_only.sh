@@ -1,8 +1,7 @@
-# ---------- look-only commands: list, usage, health, check (they change nothing; check --full takes one drive offline for a while) ----------
-JSON=0               # --json: print machine-readable JSON (the messages go to stderr)
-FULL=0               # check --full
-FOLDERS=0            # usage --folders
-US=$'\037'           # separates the fields of an internal row (a tab would swallow empty fields)
+JSON=0
+FULL=0
+FOLDERS=0
+US=$'\037'
 
 json_str() {
   local s=$1
@@ -11,10 +10,11 @@ json_str() {
   printf '"%s"' "$s"
 }
 json_num() { if [[ "${1:-}" =~ ^[0-9]+$ ]]; then printf '%s' "$1"; else printf 'null'; fi; }
-hs() { if [[ "${1:-}" =~ ^[0-9]+$ ]]; then human "$1"; else printf '%s' "-"; fi; }   # a size for people, or "-"
+hs() { if [[ "${1:-}" =~ ^[0-9]+$ ]]; then human "$1"; else printf '%s' "-"; fi; }
 pct() { if [[ "${1:-}" =~ ^[0-9]+$ ]] && [[ "${2:-}" =~ ^[0-9]+$ ]] && [ "$2" -gt 0 ]; then printf '%s%%' $(( $1 * 100 / $2 )); else printf '%s' "-"; fi; }
 
-drive_rows() {   # one row per drive: name US role US device US size US used US free US state US mount
+# One row per drive, fields separated by US: name, role, device, size, used, free, state, mount.
+drive_rows() {
   local mp p name role d m size prot legacy managed state
   prot=$(protected_disks); legacy=$(legacy_disks); managed=$(managed_disks)
   for mp in $(all_branches); do
@@ -43,20 +43,20 @@ drive_rows() {   # one row per drive: name US role US device US size US used US 
     if [ "$d" != "-" ]; then
       printf '%s\n' "$(disk_base_name "$d")${US}array$US$d$US$(disk_size_bytes "$d")$US$US$US$(array_kind_text "$kind")$US"
     else
-      printf '%s\n' "$(basename "$m")${US}array${US}-$US$US$US${US}MISSING (cable? replace it with the tools of the array)$US"
+      printf '%s\n' "$(basename "$m")${US}array${US}-$US$US$US${US}MISSING (check the cable, or replace the drive with the array tools)$US"
     fi
   done < <(array_disk_kinds)
   for d in $(all_disks | sort -u); do
     grep -qx "$d" <<<"$managed" && continue
     size=$(lsblk -dnbo SIZE "$d" 2>/dev/null | head -1 | tr -d ' ')
-    if grep -qx "$d" <<<"$prot"; then role=system; state="boot/system drive (never touched)"
+    if grep -qx "$d" <<<"$prot"; then role=system; state="boot/system drive (not changed)"
     elif grep -qx "$d" <<<"$legacy"; then role=plain-data; state="current data drive, not in a pool yet"
     else role=spare; state="not connected to a pool"; fi
     printf '%s\n' "$(disk_base_name "$d")$US$role$US$d$US$size$US$US$US$state$US"
   done
 }
 
-pool_rows() {   # one row per pool: role US path US mounted(1/0) US fstype US size US used US free
+pool_rows() {
   local role pool
   for role in main backup; do
     pool=$(role_pool "$role")
@@ -68,11 +68,12 @@ pool_rows() {   # one row per pool: role US path US mounted(1/0) US fstype US si
   done
 }
 
-folder_rows() {   # the biggest folders of a pool: bytes US path
+folder_rows() {
   du -x -B1 --max-depth=1 "$1" 2>/dev/null | sort -rn | awk 'NR > 1' | head -10 | while read -r b d; do printf '%s\n' "$b$US$d"; done
 }
 
-json_drives() {   # {"pools":[...],"drives":[...]} (usage, list and status all use it)
+# Print {"pools":[...],"drives":[...]}, used by usage, list and status.
+json_drives() {
   local first=1 role pool mounted fst size used free name dev state mount
   printf '{"pools":['
   while IFS=$US read -r role pool mounted fst size used free; do
@@ -103,19 +104,16 @@ json_drives() {   # {"pools":[...],"drives":[...]} (usage, list and status all u
       "$(json_str "$state")" "$(json_str "$mount")"
   done < <(drive_rows)
   printf ']'
-  # Main has no drive (and is not a ZFS / RAID setup): the services that keep their files there wait; the panel shows a warning
   local empty=false held n hf=1
   if [ -z "$(branches_of main)" ] && ! array_active; then empty=true; fi
   printf ',"main_empty":%s,"main_held":[' "$empty"
   held=$(sort -u "$(main_hold_file)" 2>/dev/null)
   for n in $held; do [ "$hf" = 1 ] || printf ','; hf=0; printf '%s' "$(json_str "$n")"; done
   printf ']'
-  # the boot drive is the storage (no Main drive, or its drive is missing); files saved there wait under a mounted pool
   local onboot=false pend=false
   main_drive_missing && onboot=true
   boot_files_pending && pend=true
   printf ',"main_on_boot":%s,"boot_files_waiting":%s' "$onboot" "$pend"
-  # a RAID or ZFS setup: its name and health (the panel shows it as one tile inside Main, with its drives)
   if array_active; then
     local ah; ah=$(array_health_text); ah=${ah%%   (*}
     printf ',"array":{"title":%s,"health":%s}' "$(json_str "$(preset_title "$(preset_current)")")" "$(json_str "$ah")"
@@ -131,7 +129,7 @@ list_flow() {
     printf '%-26s %-10s %-12s %-9s %s\n' "$name" "$role" "${dev:--}" "$(hs "$size")" "$state"
   done < <(drive_rows)
   say ""
-  say "Roles: main and backup are pool drives; parity holds SnapRAID protection data; array is part of a ZFS or RAID array. spare = plugged in, not used. system = the boot drive (never touched)."
+  say "Roles: main and backup are pool drives; parity holds SnapRAID parity data; array is part of a ZFS or RAID array; spare = connected but not used; system = the boot drive (not changed)."
   say "More: sudo drives usage (space)   sudo drives health (SMART)   sudo drives check (file system errors)"
   say ""
 }
@@ -155,32 +153,31 @@ usage_flow() {
     printf '%-26s %-10s %-9s %-9s %-9s %s\n' "$name" "$role" "$(hs "$size")" "$(hs "$used")" "$(hs "$free")" "$(pct "$used" "$size")"
   done < <(drive_rows)
   say ""
-  say "The pool stops putting files on a drive when only its free-space limit is left (${POOL_FREE_PERCENT}% unless you set another with: sudo drives limit), so a drive shows as full a little before 100%."
+  say "The pool stops placing files on a drive when only its free-space limit is left (${POOL_FREE_PERCENT}% unless another value is set with: sudo drives limit), so a drive appears full slightly before 100%."
   if [ "$FOLDERS" = 1 ]; then
     while IFS=$US read -r role pool mounted fst size used free; do
       [ "$mounted" = 1 ] || continue
       say ""
-      say "Biggest folders in the $role pool ($pool). This can take a while on a big drive."
+      say "Largest folders in the $role pool ($pool). This can take a while on a large drive."
       while IFS=$US read -r fb fp; do printf '  %-9s %s\n' "$(hs "$fb")" "$fp"; done < <(folder_rows "$pool")
     done < <(pool_rows)
   else
-    say "Add --folders to also list the biggest folders (slow on a big drive)."
+    say "Add --folders to also list the largest folders (slow on a large drive)."
   fi
   say ""
 }
 
-smart_detail() {   # smart_detail /dev/sdX -> health US temperature(C) US power-on hours US reallocated US pending US note
+# smart_detail /dev/sdX: print health, temperature (C), power-on hours, reallocated, pending and a note, separated by US.
+smart_detail() {
   local dev=$1 sc=smartctl o="" opt h t hrs re pe note=""
   if [ "$TEST_MODE" = 1 ]; then
     if [ -n "${DRIVES_SMARTCTL:-}" ]; then sc=$DRIVES_SMARTCTL; else printf '%s\n' "skipped (test mode)$US$US$US$US$US"; return 0; fi
   fi
   if ! command -v "$sc" >/dev/null 2>&1; then printf '%s\n' "smartctl not installed$US$US$US$US${US}install it with: sudo apt install smartmontools"; return 0; fi
-  # a USB stick or a memory card has no health report (and no motor, so it is never "asleep"): say so instead of guessing
   if [ "$(drive_kind "$dev" "$(lsblk -dno MODEL "$dev" 2>/dev/null | sed 's/ *$//' | head -1)")" = Flash ]; then
     printf '%s\n' "unsupported$US$US$US$US${US}a USB stick or memory card does not report its health"; return 0
   fi
   for opt in "" "-d sat"; do
-    # -n standby: a sleeping drive is not woken up just to read its health
     # shellcheck disable=SC2086
     o=$("$sc" -H -A -n standby $opt "$dev" 2>&1)
     if grep -Eqi 'in (STANDBY|SLEEP)' <<<"$o"; then printf '%s\n' "asleep$US$US$US$US${US}not woken up for this; it checks again when the drive is awake"; return 0; fi
@@ -198,16 +195,15 @@ smart_detail() {   # smart_detail /dev/sdX -> health US temperature(C) US power-
   [ -n "$hrs" ] || hrs=$(sed -n 's/^Power On Hours:[[:space:]]*\([0-9,][0-9,]*\).*/\1/p' <<<"$o" | head -1 | tr -d ,)
   re=$(awk '$1 == 5 && $10 ~ /^[0-9]/ {sub(/[^0-9].*/, "", $10); print $10; exit}' <<<"$o")
   pe=$(awk '$1 == 197 && $10 ~ /^[0-9]/ {sub(/[^0-9].*/, "", $10); print $10; exit}' <<<"$o")
-  [ "$h" = FAILED ] && note="the drive says it is failing: back up its files now"
+  [ "$h" = FAILED ] && note="the drive reports that it is failing: back up its files now"
   if [ -n "$pe" ] && [ "$pe" -gt 0 ]; then note="${note:+$note; }$pe sector(s) are waiting to be remapped (a bad sign)"; fi
   if [ -n "$re" ] && [ "$re" -gt 0 ]; then note="${note:+$note; }$re sector(s) were already remapped: keep an eye on it"; fi
   if [ -n "$t" ] && [ "$t" -ge 55 ]; then note="${note:+$note; }it is hot (${t} C)"; fi
   printf '%s\n' "$h$US$t$US$hrs$US$re$US$pe$US$note"
 }
 
-disk_extra() {   # disk_extra /dev/sdX -> removable US file system US label US used bytes US free bytes
-  # For a drive that is in no pool. The drive is looked at read-only for a moment (or where the desktop mounted it already): nothing is written to it,
-  # and an ext or xfs file system is not even repaired (noload / norecovery). Without a readable file system the last two are empty.
+# disk_extra /dev/sdX: print removable, file system, label, used bytes and free bytes, separated by US.
+disk_extra() {
   local d=$1 kind rem=false fst lbl used=0 free=0 got=0 part pfs mp tmp opts u f
   local -a ps=()
   kind=$(drive_kind "$d" "$(lsblk -dno MODEL "$d" 2>/dev/null | sed 's/ *$//' | head -1)")
@@ -239,7 +235,8 @@ disk_extra() {   # disk_extra /dev/sdX -> removable US file system US label US u
   if [ "$got" = 1 ]; then printf '%s\n' "$rem$US$fst$US$lbl$US$used$US$free"; else printf '%s\n' "$rem$US$fst$US$lbl$US$US"; fi
 }
 
-health_rows() {   # one row per physical drive: name US device US health US temp US hours US reallocated US pending US note US removable US file system US label US used US free (the last five only for a drive in no pool)
+# One row per physical drive: name, device, health, temperature, hours, reallocated, pending, note, removable, file system, label, used, free. The last five fields are only filled for a drive in no pool.
+health_rows() {
   local d mp p managed
   managed=$(managed_disks)
   for mp in $(all_branches); do
@@ -263,7 +260,7 @@ health_rows() {   # one row per physical drive: name US device US health US temp
   done
 }
 
-disk_ident() {   # disk_ident sdb -> "MODEL US SERIAL" as the drive reports them (read from the system, the drive is not woken up)
+disk_ident() {
   local d=${1#/dev/} m s
   m=$(lsblk -dno MODEL "/dev/$d" 2>/dev/null | sed 's/^ *//; s/ *$//' | head -1)
   s=$(lsblk -dno SERIAL "/dev/$d" 2>/dev/null | sed 's/^ *//; s/ *$//' | head -1)
@@ -292,20 +289,21 @@ health_flow() {
   [ "$n" -gt 0 ] || say "(no drives found)"
   say ""
   if [ "$bad" = 1 ]; then
-    say "PROBLEM: at least one drive reports it is failing or has bad sectors. Copy its files to another drive soon."
+    say "PROBLEM: at least one drive reports that it is failing or has bad sectors. Copy its files to another drive soon."
   else
-    say "No drive reports a failure. (A sleeping drive is not woken up just to read its health.)"
+    say "No drive reports a failure. (A sleeping drive is not woken up to read its health.)"
   fi
   say ""
   return "$bad"
 }
 
-check_findings() {   # check_findings MOUNTPOINT -> lines "LEVEL US text" (OK, WARN or PROBLEM) about one pool drive
+# check_findings MOUNTPOINT: print lines "LEVEL US text" (OK, WARN or PROBLEM) about one pool drive.
+check_findings() {
   local mp=$1 part dev opts info st errs first sd h pe re base n total used
-  if ! mountpoint -q "$mp"; then printf '%s\n' "PROBLEM${US}it is not connected or not mounted (check the cable, then: sudo drives remount)"; return 0; fi
+  if ! mountpoint -q "$mp"; then printf '%s\n' "PROBLEM${US}it is not connected or not mounted (check the cable, then run: sudo drives remount)"; return 0; fi
   part=$(branch_part "$mp")
   opts=$(findmnt -no OPTIONS "$mp" 2>/dev/null)
-  if [[ ",$opts," == *,ro,* ]]; then printf '%s\n' "PROBLEM${US}it is mounted read-only: it hit an error and the system stopped writing to it"; fi
+  if [[ ",$opts," == *,ro,* ]]; then printf '%s\n' "PROBLEM${US}it is mounted read-only: an error occurred and the system stopped writing to it"; fi
   if [ -n "$part" ] && command -v tune2fs >/dev/null 2>&1; then
     info=$(tune2fs -l "$part" 2>/dev/null)
     st=$(sed -n 's/^Filesystem state:[[:space:]]*//p' <<<"$info" | head -1)
@@ -373,8 +371,8 @@ check_flow() {
     fi
   done
   if [ "$JSON" = 1 ]; then printf '],"ok":%s}\n' "$([ "$nprob" = 0 ] && echo true || echo false)"; [ "$nprob" = 0 ]; return; fi
-  if [ "$n" = 0 ] && array_active; then say "The Main pool is a $(preset_title "$(preset_current)") array. Array health: $(array_health_text)"; say "(The health of every plugged-in drive:  sudo drives health)"; say ""; return 0; fi
-  if [ "$n" = 0 ]; then say "No drives are connected to a pool yet, so there is nothing to check."; say "(The health of every plugged-in drive, pooled or not:  sudo drives health)"; say ""; return 0; fi
+  if [ "$n" = 0 ] && array_active; then say "The Main pool is a $(preset_title "$(preset_current)") array. Array health: $(array_health_text)"; say "(Health of every connected drive:  sudo drives health)"; say ""; return 0; fi
+  if [ "$n" = 0 ]; then say "No drives are connected to a pool yet, so there is nothing to check."; say "(Health of every connected drive, in a pool or not:  sudo drives health)"; say ""; return 0; fi
   say ""
   say "Checked $n drive(s): $nok ok, $nwarn with a warning, $nprob with a problem. Nothing was changed."
   say "This quick check reads what the file system and the drive recorded. For a full scan of one drive: sudo drives check --full"
@@ -382,7 +380,8 @@ check_flow() {
   [ "$nprob" = 0 ]
 }
 
-check_full_flow() {   # a full read-only scan of one drive: it is taken offline for the scan (the containers stop), then put back
+# A full read-only scan of one drive. The drive is taken offline for the scan (the containers stop) and put back afterwards.
+check_full_flow() {
   command -v e2fsck >/dev/null 2>&1 || { note "The tool 'e2fsck' is missing (package e2fsprogs)."; return 1; }
   local mp name role pool part rc=0
   mp=$(pick_branch "Which drive do you want to scan? ") || return 1
@@ -390,15 +389,15 @@ check_full_flow() {   # a full read-only scan of one drive: it is taken offline 
   part=$(branch_part "$mp")
   if [ -z "$part" ] || ! mountpoint -q "$mp"; then note "$name is not connected, so it cannot be scanned."; return 1; fi
   say "$name will be scanned from start to finish. The scan is read-only: nothing on the drive is changed."
-  say "For the scan the drive is taken offline, so the containers that use the $role pool stop until it is done."
-  say "A big drive can take an hour or more."
+  say "The drive is taken offline for the scan, so the containers that use the $role pool stop until it is done."
+  say "A large drive can take an hour or more."
   yn "Continue?" || { say "Cancelled. Nothing was changed."; return 1; }
   pre_change "Stop the containers that use the $role pool." \
              "Unmount the $role pool and $name." \
              "Scan $part (read-only)." \
              "Mount $name and the $role pool again, then start the containers." && return 0
   stop_containers "$pool"
-  ROLLED_BACK=1    # nothing in fstab changes, so if a step fails the old mounts can simply be restored
+  ROLLED_BACK=1
   pool_umount "$pool" || { start_containers; die "Could not unmount $pool (something is using it). Nothing was changed."; }
   if mountpoint -q "$mp" && ! umount "$mp" 2>/dev/null; then
     mount_fstab "$pool" 2>/dev/null
@@ -424,13 +423,13 @@ look_menu() {
   local c
   while :; do
     say ""
-    say "Look at the drives (nothing is changed, except in the last choice)"
+    say "View the drives (nothing is changed, except by the last choice)"
     say "  1) Status: pools, drives and the last backup"
     say "  2) List of all drives"
     say "  3) Space used and free"
     say "  4) Health (SMART)"
     say "  5) Quick check for file system errors"
-    say "  6) Full scan of one drive (stops the containers for a while)"
+    say "  6) Full scan of one drive (stops the containers during the scan)"
     say "  0) Back"
     c=$(ask_choice)
     case "$c" in
@@ -441,7 +440,7 @@ look_menu() {
       5) check_flow ;;
       6) FULL=1 check_flow ;;
       0|"") return 0 ;;
-      *) say "Please type a number from the list." ;;
+      *) say "Enter a number from the list." ;;
     esac
   done
 }

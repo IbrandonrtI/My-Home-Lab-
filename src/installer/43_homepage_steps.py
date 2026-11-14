@@ -1,10 +1,7 @@
-# ================================================================ Homepage config files
 HP_FILES = ["services.yaml", "settings.yaml", "widgets.yaml", "bookmarks.yaml", "custom.css"]
 
 
 def widgets_for_machine(body):
-    """widgets.yaml for a new machine: its first resources pill carries this machine's name (the repository file calls it
-    "Server"), and the weather city chosen at the start is put in."""
     body = re.sub(r"(- resources:\n\s+label:) Server\b", lambda m: "%s %s" % (m.group(1), Ctx.hostname), body, count=1)
     w = State.data["answers"].get("weather")
     if w:
@@ -13,7 +10,7 @@ def widgets_for_machine(body):
             body = new
             State.data["weather_set"] = w["name"]
             State.save()
-    tz = State.data["answers"].get("tz_found")      # the dashboard's clock follows the time zone found from the connection (the Look tab can change it)
+    tz = State.data["answers"].get("tz_found")
     if tz:
         body = clock_apply(body, tz) or body
     return body
@@ -21,6 +18,7 @@ def widgets_for_machine(body):
 
 @step
 class HomepageFiles(Step):
+    """Copy the shipped Homepage configuration files into the user's folder with this machine's addresses filled in. Existing files are only updated for addresses."""
     id, group, title = "homepage-files", "Homepage", "Homepage config files in place for this machine"
     needs = ("folders", "tailscale-login", "restore-configs")
 
@@ -59,6 +57,7 @@ class HomepageFiles(Step):
 
 @step
 class HomepageTabs(Step):
+    """Bring settings.yaml, custom.css, custom.js and services.yaml up to the shipped tabs layout once; a layout the user removed is not added again."""
     id, group, title = "homepage-tabs", "Homepage", "Homepage tabs (Home, Stats, Links), group icons, bookmark cards, the STATS cards and their styles"
     needs = ("homepage-files", "scripts")
 
@@ -66,9 +65,6 @@ class HomepageTabs(Step):
         return not Mode.existing and os.path.exists(hp_path("settings.yaml")) and os.path.exists(hp_path("custom.css")) and bool(read_file(repo_file("homepage-config", "settings.yaml")))
 
     def wanted(self):
-        """(new settings.yaml, new custom.css, groups now known, new custom.js, new services.yaml) for this machine. The tabs are offered
-        once: after that, taking the layout: block out of settings.yaml is respected. A group of this machine that no tab knows yet is put
-        on one. The STATS groups are added to services.yaml (also offered once) when the tabs are on."""
         sett, css = read_file(hp_path("settings.yaml")), read_file(hp_path("custom.css"))
         if not State.ran("homepage-tabs"):
             sett = settings_with_layout(sett, read_file(repo_file("homepage-config", "settings.yaml")))
@@ -79,7 +75,7 @@ class HomepageTabs(Step):
                 svc = services_stats_block(svc, shipped_svc)
             if not State.ran("homepage-calendar") or CAL_BEGIN in svc:
                 svc = services_calendar_block(svc, shipped_svc)
-            if not State.ran("homepage-customize") or CUSTOM_BEGIN in svc:         # the control panel's card: offered once, then kept up to date
+            if not State.ran("homepage-customize") or CUSTOM_BEGIN in svc:
                 svc = services_customize_block(svc, shipped_svc)
         svc = cards_worded(svc)
         sett = layout_renamed(sett)
@@ -99,8 +95,6 @@ class HomepageTabs(Step):
         return sett, new_css, seen, new_js, svc
 
     def widgets_new(self):
-        """widgets.yaml with the clock showing the month as a word (Nov 9, 2026 instead of 11/9/26). Offered once: a clock set back to the short
-        form later is left alone."""
         old = read_file(hp_path("widgets.yaml")) if os.path.exists(hp_path("widgets.yaml")) else ""
         if State.ran("homepage-clock") or not old:
             return old
@@ -117,7 +111,7 @@ class HomepageTabs(Step):
                 or svc != read_file(hp_path("services.yaml")) or self.widgets_new() != (read_file(hp_path("widgets.yaml")) if os.path.exists(hp_path("widgets.yaml")) else "")):
             return "todo"
         if not Opt.dry:
-            self.remember(seen)                  # already in place (a new machine): a later removal of a group or of the tabs is respected
+            self.remember(seen)
             for k in ("homepage-tabs", "homepage-stats", "homepage-calendar", "homepage-customize", "homepage-clock"):
                 if not State.ran(k):
                     State.mark(k)
@@ -134,7 +128,7 @@ class HomepageTabs(Step):
         for name, old, new in (("settings.yaml", old_sett, sett), ("custom.css", old_css, css), ("custom.js", old_js, js), ("services.yaml", old_svc, svc), ("widgets.yaml", old_wid, wid)):
             if new == old:
                 continue
-            if old and not os.path.exists(hp_path(name) + ".before-tabs"):          # the first copy is the one worth keeping
+            if old and not os.path.exists(hp_path(name) + ".before-tabs"):
                 write_file(hp_path(name) + ".before-tabs", old, 0o644, own)
             write_file(hp_path(name), new, 0o644, own)
         self.remember(seen)
@@ -145,18 +139,16 @@ class HomepageTabs(Step):
         State.mark("homepage-clock")
         stats_file = hp_path("images/stats.json")
         if not FAKE and not os.path.exists(stats_file) and os.path.exists(P("/usr/local/sbin/homelab-stats")):
-            # Homepage only serves a file that was there when it started, so the first stats.json is made now, before the restart below
             os.makedirs(os.path.dirname(stats_file), exist_ok=True)
             run_as_root_stats(stats_file)
         if CAL_BEGIN in svc and os.path.exists(P("/usr/local/bin/homelab-calendar")):
-            # the same for the calendar files: they must exist before Homepage starts
             os.makedirs(hp_path("images"), exist_ok=True)
             run_calendar_build()
         if not FAKE and "homepage" in containers_all():
             act(["docker", "restart", "homepage"], timeout=120)
         out("      Reload the dashboard (Ctrl+Shift+R). The old files are saved as settings.yaml.before-tabs, custom.css.before-tabs, custom.js.before-tabs and services.yaml.before-tabs")
         if STATS_BEGIN in svc:
-            out("      The Stats tab fills in within 15 minutes (the folder sizes take a little longer). To fill it in now:  sudo homelab-stats")
+            out("      The Stats tab is filled in within 15 minutes; folder sizes take a little longer. To fill it in now, run:  sudo homelab-stats")
         if CUSTOM_BEGIN in svc:
             out("      The Customize tab is the control panel: change the look, the layout, the cards and the links by clicking. Its password is the admin password; change it with:  homelab panel password")
         if CAL_BEGIN in svc:
@@ -164,7 +156,6 @@ class HomepageTabs(Step):
 
 
 def fetch_picture(addr):
-    """The bytes of a picture from the web (None when it cannot be had or is not a picture). FAKE mode: the file named in HLS_FAKE_BG_FILE."""
     if FAKE:
         f = os.environ.get("HLS_FAKE_BG_FILE", "")
         data = open(f, "rb").read() if f and os.path.isfile(f) else None
@@ -180,6 +171,7 @@ def fetch_picture(addr):
 
 @step
 class HomepageBackground(Step):
+    """Download the dashboard background picture and save it on the server so the dashboard does not depend on the original address."""
     id, group, title = "homepage-background", "Homepage", "The dashboard's background picture is saved on this server (loads fast, works offline)"
     needs = ("homepage-tabs",)
 
@@ -188,7 +180,7 @@ class HomepageBackground(Step):
 
     def probe(self):
         cur = background_image(read_file(hp_path("settings.yaml")))
-        tried = time.time() - State.data.get("background_tried", 0) < 7 * 86400          # a failed attempt is repeated a week later, not on every run
+        tried = time.time() - State.data.get("background_tried", 0) < 7 * 86400
         return "done" if State.ran(self.id) or tried or not re.match(r"https?://", cur) else "todo"
 
     def detail(self):
@@ -219,16 +211,14 @@ class HomepageBackground(Step):
         write_file(hp_path("settings.yaml"), settings_with_background(sett, "/images/" + name), 0o644, (Ctx.uid, Ctx.gid))
         State.mark(self.id)
         if not FAKE and "homepage" in containers_all():
-            act(["docker", "restart", "homepage"], timeout=120)       # Homepage only serves a new picture after a restart
+            act(["docker", "restart", "homepage"], timeout=120)
         out("      The background is now %s in the images folder (the old settings.yaml is kept as settings.yaml.before-background). "
             "To use another picture later:  homelab theme background URL-or-FILE" % name)
 
 
 def run_calendar_build():
-    """Make the calendar files (holidays, observances, your events) in the images folder of Homepage."""
     run([P("/usr/local/bin/homelab-calendar"), "build"], env=dict(os.environ, HP_DIR=P(hp_dir())), timeout=60)
 
 
 def run_as_root_stats(stats_file):
-    """Make the first stats.json (without counting folder sizes, which takes minutes)."""
     run([P("/usr/local/sbin/homelab-stats"), "quick"], env=dict(os.environ, HOMELAB_STATS_OUT=stats_file), timeout=180)

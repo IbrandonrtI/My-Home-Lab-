@@ -1,30 +1,35 @@
 #!/usr/bin/env bash
-# homelab-selftest - run the lab's read-only commands one by one and look for bugs and for things that should not be there.
-#
-#   sudo homelab-selftest             run everything, print a short verdict, save the full report
-#   sudo homelab-selftest --online    also run the checks that use the internet (homelab-update check)
-#   sudo homelab-selftest --builds    also build every ready-made setup on FAKE drives (about 10 minutes, Part 4)
-#   homelab-selftest version
-#
-# It only reads. It never starts, stops or changes anything: drives remount, homelab-backup, drives release,
-# restores and every other command that changes the machine are NOT run. Part 1 runs each command and notes
-# the exit code, the time it took and error words in its output. Part 2 checks the state of the machine:
-# the pools, Docker, the containers, the web pages, the schedule, leftovers from an earlier install, and so on.
-# Part 3 tries the ready-made setups (sudo drives wizard, preset, spare, cache and their options) in look-only form: the list, the
-# plan of every setup with --dry-run, the refusals, the help texts, and the repository's own unit tests. It compares
-# /etc/fstab, /etc/crypttab, mdadm.conf and the drive records before and after, and fails if anything changed.
-# Part 4 (only with --builds) builds every ready-made setup (plain pool, mirror, SnapRAID, ZFS, RAID, with and without hot spare,
-# SSD cache and encryption) on fake drives made of files, with the INSTALLED drives command, and checks what each one did: the files
-# it wrote, the lines in fstab, the key files, the list / status / health screens, the refusals and taking it apart again.
-# No real drive, pool, mount or container is touched. It stops without running when a backup is running.
-#
-# The full report is saved in your home folder as homelab-selftest-<date>.txt. Known secret formats
-# (tokens, keys, passwords) are hidden in it, but read it before you share it.
+
+usage() {
+  cat <<'HELP'
+homelab-selftest - run the lab's read-only commands one by one and look for bugs and for things that should not be there.
+
+  sudo homelab-selftest             run everything, print a short verdict, save the full report
+  sudo homelab-selftest --online    also run the checks that use the internet (homelab-update check)
+  sudo homelab-selftest --builds    also build every ready-made setup on FAKE drives (about 10 minutes, Part 4)
+  homelab-selftest version
+
+It only reads. It never starts, stops or changes anything: drives remount, homelab-backup, drives release,
+restores and every other command that changes the machine are NOT run. Part 1 runs each command and notes
+the exit code, the time it took and error words in its output. Part 2 checks the state of the machine:
+the pools, Docker, the containers, the web pages, the schedule, leftovers from an earlier install, and so on.
+Part 3 tries the ready-made setups (sudo drives wizard, preset, spare, cache and their options) in look-only form: the list, the
+plan of every setup with --dry-run, the refusals, the help texts, and the repository's own unit tests. It compares
+/etc/fstab, /etc/crypttab, mdadm.conf and the drive records before and after, and fails if anything changed.
+Part 4 (only with --builds) builds every ready-made setup (plain pool, mirror, SnapRAID, ZFS, RAID, with and without hot spare,
+SSD cache and encryption) on fake drives made of files, with the INSTALLED drives command, and checks what each one did: the files
+it wrote, the lines in fstab, the key files, the list / status / health screens, the refusals and taking it apart again.
+No real drive, pool, mount or container is touched. It stops without running when a backup is running.
+
+The full report is saved in your home folder as homelab-selftest-<date>.txt. Known secret formats
+(tokens, keys, passwords) are hidden in it, but read it before you share it.
+HELP
+}
 
 VERSION="1.7"
 case "${1:-}" in
   version|--version) echo "homelab-selftest $VERSION"; exit 0 ;;
-  -h|--help|help) awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit 0 ;;
+  -h|--help|help) usage; exit 0 ;;
 esac
 ONLINE=0; BUILDS=0
 for a in "$@"; do
@@ -48,7 +53,7 @@ chmod 600 "$REPORT" 2>/dev/null || true
 N_OK=0; N_INFO=0; N_WARN=0; N_FAIL=0
 ISSUES=()
 
-mask() {   # hide the secret formats this lab uses
+mask() {
   sed -E \
     -e 's/tskey-[A-Za-z0-9_-]+/tskey-***/g' \
     -e 's/ptr_[A-Za-z0-9+\/=_-]+/ptr_***/g' \
@@ -65,9 +70,6 @@ info() { N_INFO=$((N_INFO + 1)); emit "  info  $*"; }
 warn() { N_WARN=$((N_WARN + 1)); emit "  WARN  $*"; ISSUES+=("WARN  $*"); }
 fail() { N_FAIL=$((N_FAIL + 1)); emit "  FAIL  $*"; ISSUES+=("FAIL  $*"); }
 
-# run_limited DIR SECONDS COMMAND...  runs the command in DIR with no input and sets OUT (its output) and RC (its exit code).
-# The output goes to a file, so a leftover child process cannot keep this script waiting, and a command that ignores the
-# time limit is killed 5 seconds later (RC is then 124 or 137: "stuck").
 run_limited() {
   local dir=$1 secs=$2 tmp
   shift 2
@@ -78,8 +80,8 @@ run_limited() {
   rm -f "$tmp"
 }
 
-# ---------------------------------------------------------------- part 1: every command
-run_cmd() {   # run_cmd LABEL SECONDS user|root ALLOWED_EXIT_CODES -- command...
+# run_cmd LABEL SECONDS user|root ALLOWED_EXIT_CODES -- command...: run one command and record whether it behaved.
+run_cmd() {
   local label=$1 secs=$2 who=$3 allowed=$4 out rc start elapsed errwords
   shift 5
   if ! command -v "$1" >/dev/null 2>&1 && [ "${1#/}" = "$1" ]; then
@@ -115,6 +117,7 @@ run_cmd() {   # run_cmd LABEL SECONDS user|root ALLOWED_EXIT_CODES -- command...
   ok "$label (${elapsed}s)"
 }
 
+# Part 1: run each read-only command and note its exit code, time and any error words.
 part_commands() {
   section "Part 1: the commands (read-only ones)"
   run_cmd "homelab version"          20  user "0" -- homelab version
@@ -159,17 +162,16 @@ part_commands() {
   done
 }
 
-# ---------------------------------------------------------------- part 2: the state of the machine
 mode_of() { stat -c %a "$1" 2>/dev/null; }
-fstab_lines() { grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null; }   # the active lines of /etc/fstab
-repo_dir() {   # the folder with the lab's repository in the home folder (prints nothing when there is none)
+fstab_lines() { grep -v '^[[:space:]]*#' /etc/fstab 2>/dev/null; }
+repo_dir() {
   local d
   for d in "$REAL_HOME/My-Home-Lab-" "$REAL_HOME/My-Home-Lab"; do [ -d "$d/scripts" ] && { echo "$d"; return 0; }; done
   return 0
 }
 BOOT_SECTIONS=/var/lib/homelab-boot-sections
 
-same_as_repo() {   # same_as_repo REPO_COPY INSTALLED_COPY: true when they are the same, apart from the user name the installer fills in
+same_as_repo() {
   cmp -s "$1" "$2" && return 0
   [ "$(wc -l <"$1")" = "$(wc -l <"$2")" ] && [ "$(diff "$1" "$2" | grep -c '^[<>]')" -le 4 ]
 }
@@ -179,24 +181,22 @@ check_scripts_vs_repo() {
   if [ -z "$repo" ]; then info "no repository folder in $REAL_HOME, so the installed scripts were not compared with it"; return; fi
   for f in drives homelab-backup homelab-update homelab-restore-configs homelab-sample homelab-cards homelab homelab-repocheck; do
     installed=$(command -v "$f" 2>/dev/null) || continue
-    # the installer puts this machine's user name into its copy, so a plain byte comparison is not enough
     if same_as_repo "$repo/scripts/$f" "$installed"; then continue; fi
     warn "the installed $f differs from the copy in $repo (it is older or newer; a fresh install or: cd $repo && git pull, then sudo homelab-setup refresh)"
   done
 }
 
+# Part 2: check the state of the machine.
 part_state() {
   section "Part 2: the state of the machine"
   local n b pool names f p
 
-  # ---- system
   if [ -r /etc/os-release ]; then info "$(grep -m1 '^PRETTY_NAME=' /etc/os-release | cut -d'"' -f2), kernel $(uname -r), up $(uptime -p | sed 's/^up //')"; fi
   local freepct
   freepct=$(df --output=pcent / | tail -1 | tr -dc 0-9)
   if [ "${freepct:-0}" -ge 90 ]; then fail "the boot drive is ${freepct}% full"; else ok "boot drive ${freepct}% used"; fi
   if [ "$(awk '/MemAvailable/ {print int($2/1024)}' /proc/meminfo)" -lt 300 ]; then warn "less than 300 MB of memory is available"; else ok "memory is fine"; fi
 
-  # ---- drives and pools
   for pool in /mnt/storage /mnt/backup; do
     if mountpoint -q "$pool"; then
       info "$pool is mounted ($(findmnt -no FSTYPE "$pool"), $(df -h --output=used,size "$pool" | tail -1 | awk '{print $1" of "$2}'))"
@@ -213,14 +213,13 @@ part_state() {
   fi
   while read -r b; do
     [ -n "$b" ] || continue
-    if ! mountpoint -q "$b"; then fail "$b is in /etc/fstab but is not mounted (drive unplugged?)"; fi
+    if ! mountpoint -q "$b"; then fail "$b is in /etc/fstab but is not mounted (drive disconnected?)"; fi
   done < <(fstab_lines | awk '$2 ~ "^/mnt/disks/" {print $2}')
   for pool in /mnt/storage /mnt/backup; do
     if ! mountpoint -q "$pool" && [ -n "$(ls -A "$pool" 2>/dev/null)" ] && fstab_lines | awk -v p="$pool" '$2 == p' | grep -q .; then
       fail "$pool has a pool line in /etc/fstab but is not mounted, and the boot drive folder has files in it"
     fi
   done
-  # boot drive sections: a file of a fixed size on the boot drive that a pool uses last
   local img
   for img in "$BOOT_SECTIONS"/*.img; do
     [ -f "$img" ] || continue
@@ -233,7 +232,6 @@ part_state() {
   if ls "$BOOT_SECTIONS"/*.img >/dev/null 2>&1; then
     local bfree; bfree=$(df -B1 --output=avail / | tail -1 | tr -d ' ')
     if [ "${bfree:-0}" -lt 128000000000 ]; then warn "the boot drive has less than 128 GB free while boot drive sections exist"; fi
-    # Timeshift copies the whole boot drive: without an exclusion every snapshot holds a full extra copy of the section
     local tsconf="${TIMESHIFT_CONF:-/etc/timeshift/timeshift.json}" tsstate
     if [ -f "$tsconf" ]; then
       tsstate=$(python3 - "$tsconf" "$BOOT_SECTIONS/**" <<'PY' 2>/dev/null || echo unreadable
@@ -258,7 +256,6 @@ PY
     info "Docker has extra settings: $(find /etc/systemd/system/docker.service.d -name '*.conf' -printf '%f ')"
   fi
 
-  # ---- backup
   if [ -r /var/lib/homelab-backup/last-run ]; then
     local stamp result dest
     IFS='|' read -r stamp result dest _ </var/lib/homelab-backup/last-run
@@ -280,7 +277,6 @@ PY
   fi
   if [ -d "$REAL_HOME/750GB_HDD" ] && [ -d "$REAL_HOME/boot-drive-files" ]; then info "both ~/750GB_HDD and ~/boot-drive-files exist (the older name is from the original server)"; fi
 
-  # ---- Docker and the containers
   if systemctl is-active --quiet docker 2>/dev/null; then ok "the Docker service is running"; else fail "the Docker service is not running (sudo systemctl status docker)"; fi
   if id -nG "$REAL_USER" | tr ' ' '\n' | grep -qx docker; then ok "$REAL_USER is in the docker group"; else fail "$REAL_USER is not in the docker group (log out and in again, or: sudo usermod -aG docker $REAL_USER)"; fi
   local ps
@@ -296,16 +292,13 @@ PY
     fail "docker ps did not answer: $(printf '%s' "$ps" | head -1)"
   fi
 
-  # ---- the web pages of the apps (answered on this machine)
   local svc port code has_adguard=1
-  # AdGuard Home is optional: without its container and its settings file it was left out on purpose
   if ! docker ps -a --format '{{.Names}}' 2>/dev/null | grep -qx adguardhome && [ ! -f /opt/adguard-docker/conf/AdGuardHome.yaml ]; then has_adguard=0; fi
   LAN_IP=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "src") {print $(i+1); exit}}')
   [ -n "$LAN_IP" ] || LAN_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
   for svc in "Homepage:3001" "Portainer:9000" "AdGuard Home:3000" "Beszel:8090" "Netdata:19999" "Speedtest Tracker:8088" "FileBrowser:8081" "Immich:2283" "Nextcloud:8082"; do
     port=${svc##*:}; svc=${svc%:*}
     if [ "$svc" = "AdGuard Home" ] && [ "$has_adguard" = 0 ]; then info "AdGuard Home is not installed (optional: sudo homelab-setup adguard adds it)"; continue; fi
-    # Homepage only answers the addresses it was told about (HOMEPAGE_ALLOWED_HOSTS), so ask by this machine's address
     code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "http://${LAN_IP:-127.0.0.1}:$port/" 2>/dev/null)
     case "$code" in
       200|301|302|303|307|308|401|403) ok "$svc answers on port $port (HTTP $code)" ;;
@@ -314,7 +307,6 @@ PY
     esac
   done
 
-  # ---- the cards homelab-cards made for new services (read only)
   if command -v homelab-cards >/dev/null 2>&1; then
     local cline
     while IFS= read -r cline; do
@@ -327,7 +319,6 @@ PY
     done < <(timeout 60 homelab-cards check 2>/dev/null)
   fi
 
-  # ---- network
   if command -v tailscale >/dev/null 2>&1; then
     if timeout 15 tailscale status >/dev/null 2>&1; then ok "Tailscale is connected"; else fail "Tailscale is not connected (sudo tailscale up)"; fi
   else
@@ -342,7 +333,6 @@ PY
   if getent hosts example.com >/dev/null 2>&1; then ok "this machine resolves names"; else fail "this machine cannot resolve names"; fi
   info "name server in /etc/resolv.conf: $(awk '/^nameserver/ {print $2}' /etc/resolv.conf | tr '\n' ' ')"
 
-  # ---- the schedule and the login screen
   local cron
   cron=$(crontab -l 2>/dev/null | grep -v '^[[:space:]]*#')
   for n in homelab-sample homelab-update homelab-cards "drives power"; do
@@ -357,7 +347,6 @@ PY
     if [ "$blocks" = 1 ]; then ok "the login screen is set up once"; elif [ "$blocks" = 0 ]; then warn "the login screen is not set up in .bashrc"; else warn "the login screen block is in .bashrc $blocks times"; fi
   fi
 
-  # ---- secrets and permissions
   if [ -f /root/.homelab-setup/secrets.env ]; then
     if [ "$(mode_of /root/.homelab-setup/secrets.env)" = 600 ]; then ok "the secrets file is root-only (600)"; else fail "the secrets file has mode $(mode_of /root/.homelab-setup/secrets.env), it should be 600"; fi
   else
@@ -371,7 +360,6 @@ PY
   done
   check_scripts_vs_repo
 
-  # ---- ports that listen on all interfaces
   local known=" 22 53 2283 3000 3001 8081 8082 8088 8090 9000 9443 19999 " unknown=""
   while read -r port proc; do
     case "$known" in *" $port "*) continue ;; esac
@@ -382,8 +370,7 @@ PY
 }
 
 
-# ---------------------------------------------------------------- part 3: the ready-made setups (look-only)
-fingerprint() {   # everything the ready-made setups could change, as one line of checksums
+fingerprint() {
   {
     cat /etc/fstab /etc/crypttab /etc/mdadm/mdadm.conf /etc/cron.d/homelab-snapraid /etc/cron.d/homelab-zfs-scrub /etc/systemd/system/homelab-zfs-key.service 2>/dev/null
     ls -lR /var/lib/homelab-drives /etc/homelab-drives 2>/dev/null
@@ -393,7 +380,7 @@ fingerprint() {   # everything the ready-made setups could change, as one line o
   } | sha256sum | cut -c1-16
 }
 
-expect_cmd() {   # expect_cmd LABEL SECONDS ALLOWED_EXIT_CODES REGEX -- command...   (root, no input; REGEX must match the output)
+expect_cmd() {
   local label=$1 secs=$2 allowed=$3 want=$4 out rc clean
   shift 5
   run_limited /root "$secs" env TERM=dumb "$@"
@@ -411,6 +398,7 @@ expect_cmd() {   # expect_cmd LABEL SECONDS ALLOWED_EXIT_CODES REGEX -- command.
   ok "$label"
 }
 
+# Part 3: check the ready-made drive setups without changing anything.
 part_presets() {
   section "Part 3: the ready-made setups (drives wizard, preset, spare, cache) - look only"
   local id before after repo help_out ids="pool mirror snapraid1 snapraid2 zfs-stripe zfs-mirror zfs-raidz1 zfs-raidz2 zfs-raidz3 md-raid0 md-raid1 md-raid5 md-raid6 md-raid10"
@@ -421,7 +409,6 @@ part_presets() {
   fi
   before=$(fingerprint)
 
-  # the words and the help
   expect_cmd "drives help preset"  20 "0" 'sudo drives preset \[NAME\].*--spare.*--cache.*--encrypt' -- drives help preset
   expect_cmd "drives help spare"   20 "0" '^sudo drives spare'   -- drives help spare
   expect_cmd "drives help cache"   20 "0" '^sudo drives cache'   -- drives help cache
@@ -435,7 +422,6 @@ part_presets() {
     done
   fi
 
-  # the list of setups
   expect_cmd "drives preset (the list)" 30 "0" 'Ready-made setups' -- drives preset
   help_out=$(drives preset 2>&1 </dev/null | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g')
   local found=0 missing=""
@@ -445,14 +431,12 @@ part_presets() {
   if [ "$found" = 14 ]; then ok "the list shows all 14 setups"; else fail "the list shows $found of 14 setups (missing:$missing)"; fi
   if printf '%s\n' "$help_out" | grep -q 'With your drives:'; then ok "the list says what your drives can do"; else fail "the list has no 'With your drives:' lines"; fi
 
-  # the plan of each setup, without changing anything: either a plan, or a clear reason why not
   for id in $ids; do
-    expect_cmd "drives preset $id --dry-run" 60 "0 1" 'DRY RUN|needs a program that is not installed|empty drives?; I found|some drives are already in a storage|is already a .* array|has files in it|is already used by something else|already exists on this computer' -- drives preset "$id" --dry-run
+    expect_cmd "drives preset $id --dry-run" 60 "0 1" 'Dry run|needs a program that is not installed|empty drives; [0-9]+ found|some drives are already in a storage|is already a .* array|is already used by something else|already exists on this computer' -- drives preset "$id" --dry-run
   done
   expect_cmd "drives preset nonsense is refused" 20 "1" "There is no setup called 'nonsense'" -- drives preset nonsense
-  expect_cmd "drives preset raidz1 (short name)" 60 "0 1" 'DRY RUN|needs a program that is not installed|empty drives?; I found|some drives are already in a storage|is already a .* array|already exists on this computer' -- drives preset raidz1 --dry-run
+  expect_cmd "drives preset raidz1 (short name)" 60 "0 1" 'Dry run|needs a program that is not installed|empty drives; [0-9]+ found|some drives are already in a storage|is already a .* array|already exists on this computer' -- drives preset raidz1 --dry-run
 
-  # the extras and their refusals
   expect_cmd "drives wizard --dry-run (looks at the drives, changes nothing)" 60 "0" 'already set up|Drive scan' -- drives wizard --dry-run
   expect_cmd "--first-run outside wizard is refused" 20 "1" 'works with: wizard' -- drives status --first-run
   expect_cmd "--spare outside preset is refused" 20 "1" 'work with: preset' -- drives status --spare
@@ -467,11 +451,9 @@ part_presets() {
     expect_cmd "drives spare --dry-run with no array is refused" 20 "1" 'no ZFS or RAID array' -- drives spare --dry-run
   fi
 
-  # the look-only commands that show array drives
   expect_cmd "drives list"   60  "0" 'DRIVE +ROLE +DEVICE' -- drives list
   expect_cmd "drives health" 180 "0 1" 'DRIVE +DEVICE|HEALTH' -- drives health
 
-  # the repository's own tests of the arithmetic and the words (they run on a temporary folder, not on this machine's drives)
   repo=$(repo_dir)
   if [ -n "$repo" ] && [ -f "$repo/tests/t_preset.sh" ]; then
     local t_out t_rc
@@ -480,7 +462,6 @@ part_presets() {
     { printf '\n--- tests/t_preset.sh  exit %s\n' "$t_rc"; printf '%s\n' "$t_out" | tail -20; } | to_report
     if [ "$t_rc" = 0 ] && printf '%s\n' "$t_out" | tail -1 | grep -qx OK; then ok "tests/t_preset.sh: $(printf '%s\n' "$t_out" | grep -m1 '^ok ' | sed 's/^ok *//')"
     else fail "tests/t_preset.sh failed: $(printf '%s\n' "$t_out" | grep -m1 FAIL | cut -c1-120)"; fi
-    # the repository copy and the installed copy must be the same version of the script
     if same_as_repo "$repo/scripts/drives" "$(command -v drives)"; then ok "the installed drives is the same as the repository copy"
     else warn "the installed drives differs from $repo/scripts/drives (after a git pull run: sudo install -m 755 scripts/drives /usr/local/sbin/drives)"; fi
   else
@@ -492,7 +473,7 @@ part_presets() {
   else fail "something on this machine changed during the checks (fstab, crypttab, RAID, pools or drive records): this part must only read"; fi
 }
 
-# ---------------------------------------------------------------- part 4: build every setup on fake drives
+# Part 4: build every setup on fake drives.
 part_builds() {
   section "Part 4: build every ready-made setup on FAKE drives (no real drive is touched)"
   local repo bench work log drives_bin before after rc pid n last free_kb bad_lines runs line dev mp
@@ -505,12 +486,12 @@ part_builds() {
   for tool in python3 losetup mkfs.ext4 mergerfs parted rsync fallocate blkid e2label wipefs partprobe; do command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"; done
   if [ -n "$missing" ]; then fail "the build test needs these programs, which are not installed:$missing"; return; fi
   if [ -e /var/lock/homelab-backup.lock ] && ! ( exec 7</var/lock/homelab-backup.lock && flock -n 7 ) 2>/dev/null; then
-    warn "a backup is running right now, so the build test was NOT started (it would slow the backup down). Run it again after the backup."; return
+    warn "a backup is running, so the build test was NOT started (it would slow the backup down). Run it again after the backup."; return
   fi
   free_kb=$(df --output=avail -k /var/tmp 2>/dev/null | tail -1 | tr -d ' ')
   if [ -z "$free_kb" ] || [ "$free_kb" -lt 2000000 ]; then fail "less than 2 GB are free in /var/tmp, which the fake drives need"; return; fi
   work=/var/tmp/homelab-selftest-builds; log=$work.log
-  if [ -d "$work" ]; then   # an earlier run that was stopped
+  if [ -d "$work" ]; then
     findmnt -rn -o TARGET | grep "^$work" | sort -r | while read -r mp; do umount -l "$mp" 2>/dev/null; done
     losetup -ln -O NAME,BACK-FILE 2>/dev/null | awk -v w="$work" 'index($2, w) {print $1}' | while read -r dev; do losetup -d "$dev" 2>/dev/null; done
     chattr -R -i "$work" 2>/dev/null; rm -rf "$work"
@@ -543,7 +524,6 @@ part_builds() {
   else
     fail "the build test did not write a report (exit $rc). Last lines: $(tail -3 "$log" 2>/dev/null | tr '\n' ' ' | cut -c1-200)"
   fi
-  # take the fake drives away again
   findmnt -rn -o TARGET | grep "^$work" | sort -r | while read -r mp; do umount -l "$mp" 2>/dev/null; done
   losetup -ln -O NAME,BACK-FILE 2>/dev/null | awk -v w="$work" 'index($2, w) {print $1}' | while read -r dev; do losetup -d "$dev" 2>/dev/null; done
   chattr -R -i "$work" 2>/dev/null; rm -rf "$work" "$log"
@@ -553,7 +533,6 @@ part_builds() {
   else fail "something on this machine changed during the build test: it must only use fake drives"; fi
 }
 
-# ---------------------------------------------------------------- run it
 emit "homelab-selftest $VERSION   $(date '+%F %T')   machine: $(hostname)   user: $REAL_USER"
 part_commands
 part_state

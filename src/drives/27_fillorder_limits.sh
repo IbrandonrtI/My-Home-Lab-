@@ -1,13 +1,12 @@
-# ---------- fill order, policy and free-space limits ----------
-pool_has_limits() {   # pool_has_limits /mnt/storage -> true when its fstab line has a free-space limit per drive (pools of the current setup have)
+pool_has_limits() {
   fstab_active | awk -v m="$1" '$2 == m && /=RW,[0-9]+K/ {f = 1} END {exit !f}'
 }
 
-pool_policy_now() {   # pool_policy_now /mnt/storage -> the policy in its fstab line (ff, mfs, ...)
+pool_policy_now() {
   fstab_active | awk -v m="$1" '$2 == m { if (match($0, /category\.create=[a-z]+/)) print substr($0, RSTART + 16, RLENGTH - 16); exit }'
 }
 
-policy_text() {   # policy_text ff|mfs -> words for people
+policy_text() {
   case "$1" in
     ff)  printf '%s' "one drive at a time (a new file goes to the first drive that has room)" ;;
     mfs) printf '%s' "spread (a new file goes to the drive with the most free space)" ;;
@@ -15,7 +14,7 @@ policy_text() {   # policy_text ff|mfs -> words for people
   esac
 }
 
-pool_live_apply() {   # pool_live_apply main|backup -> 0 when the RUNNING pool now uses the saved policy, order and limits (no remount, nothing stops)
+pool_live_apply() {
   local role=$1 pool
   pool=$(role_pool "$role")
   mountpoint -q "$pool" && command -v setfattr >/dev/null 2>&1 || return 1
@@ -24,17 +23,18 @@ pool_live_apply() {   # pool_live_apply main|backup -> 0 when the RUNNING pool n
     && setfattr -n user.mergerfs.branches -v "$(branches_string "$role")" "$pool/.mergerfs" 2>/dev/null
 }
 
-pool_reconfigure() {   # pool_reconfigure main|backup: the saved policy, order or limits just changed: use them now and write them to fstab
+# pool_reconfigure main|backup: apply the saved policy, order or limits to the running pool and write them to fstab.
+pool_reconfigure() {
   local role=$1 pool
   pool=$(role_pool "$role")
   fstab_snapshot
   if pool_live_apply "$role"; then
     fstab_set_pool "$role"; sd_reload
-    say "It is in use right now; nothing had to stop."
+    say "It is in use; nothing had to stop."
     return 0
   fi
-  if mountpoint -q "$pool" && yn "The $role pool cannot take the change while it runs. Apply it now? Its containers stop for a minute while the pool mounts again."; then
-    if ! ( busy_gate ); then settings_rollback; return 1; fi   # a subshell: when you answer no it stops here and the change is undone
+  if mountpoint -q "$pool" && yn "The $role pool cannot apply the change while it is running. Apply it now? Its containers stop briefly while the pool is mounted again."; then
+    if ! ( busy_gate ); then settings_rollback; return 1; fi
     stop_containers "$pool"
     if apply_pool "$role"; then
       start_containers
@@ -45,11 +45,11 @@ pool_reconfigure() {   # pool_reconfigure main|backup: the saved policy, order o
     return 1
   fi
   fstab_set_pool "$role"; sd_reload
-  say "The change is saved. It takes effect after the next restart (or: sudo drives remount)."
+  say "The change is saved. It takes effect after the next restart, or after  sudo drives remount."
   return 0
 }
 
-pick_pool_role() {   # pick_pool_role [MIN_REAL_DRIVES] -> main or backup (asks when both fit); fails when no pool fits
+pick_pool_role() {
   local min=${1:-1} role mp n
   local -a roles=() items=()
   for role in main backup; do
@@ -67,7 +67,7 @@ pick_pool_role() {   # pick_pool_role [MIN_REAL_DRIVES] -> main or backup (asks 
   echo "${roles[$idx]}"
 }
 
-order_text() {   # order_text main|backup -> "Toshiba, Samsung, boot drive section" (the order the pool uses its drives)
+order_text() {
   local mp out="" n own=""
   if [ -z "${NAME_CACHE:-}" ]; then NAME_CACHE=$(mktemp -d 2>/dev/null) && own=1 || NAME_CACHE=""; fi
   for mp in $(branches_of "$1"); do n=$(branch_name "$mp"); out="${out:+$out, }$n"; done
@@ -75,7 +75,8 @@ order_text() {   # order_text main|backup -> "Toshiba, Samsung, boot drive secti
   printf '%s' "$out"
 }
 
-fillorder_flow() {   # how a pool picks a drive for a new file, and which drive goes first
+# `fillorder`: choose how a pool picks a drive for a new file and which drive is used first.
+fillorder_flow() {
   array_guard || return 1
   local role pool now act idx mp first cur
   local -a real=() items=() mps=()
@@ -99,7 +100,7 @@ fillorder_flow() {   # how a pool picks a drive for a new file, and which drive 
         settings_discard; say "The $role pool already works like that. Nothing was changed."; return 0
       fi
       dry_gate "Save the setting '$(policy_text "$want")' for the $role pool." \
-               "Use it in the running pool if possible (nothing stops). Otherwise you are asked before the pool is mounted again." && { settings_discard; return 0; }
+               "Apply it to the running pool if possible (nothing stops). Otherwise you are asked before the pool is mounted again." && { settings_discard; return 0; }
       if [ "$want" = ff ]; then setting_del policy "$role"; else setting_put policy "$role" mfs; fi
       pool_reconfigure "$role" || { settings_rollback; return 1; }
       settings_discard
@@ -115,9 +116,9 @@ fillorder_flow() {   # how a pool picks a drive for a new file, and which drive 
       idx=$(choose "Which drive should be used first? " "${items[@]}") || { settings_discard; return 1; }
       first=${mps[$idx]}
       if [ "$idx" = 0 ]; then settings_discard; say "$(branch_name "$first") is already the first drive. Nothing was changed."; return 0; fi
-      [ "$now" = mfs ] && say "Note: this pool spreads files by free space, so the order matters little. It is still saved."
+      [ "$now" = mfs ] && say "Note: this pool spreads files by free space, so the order has little effect. It is still saved."
       dry_gate "Save the order: $(branch_name "$first") first, then the others in their current order." \
-               "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
+               "Apply it to the running pool if possible (nothing stops)." && { settings_discard; return 0; }
       cur="$(basename "$first")"
       for mp in "${real[@]}"; do [ "$mp" = "$first" ] || cur="$cur $(basename "$mp")"; done
       setting_put order "$role" "$cur"
@@ -130,7 +131,7 @@ fillorder_flow() {   # how a pool picks a drive for a new file, and which drive 
   return 0
 }
 
-parse_limit() {   # parse_limit "8%" or "50 GB" DRIVE_SIZE_BYTES -> prints "pct 8" or "bytes 50000000000"; fails with a message
+parse_limit() {
   local t=${1// /} size=$2 n bytes
   t=${t,,}
   if [[ "$t" =~ ^([0-9]+)%$ ]]; then
@@ -151,7 +152,7 @@ parse_limit() {   # parse_limit "8%" or "50 GB" DRIVE_SIZE_BYTES -> prints "pct 
   return 1
 }
 
-limit_text() {   # limit_text MOUNTPOINT -> "5% = 45GB (automatic)" or "50GB (your setting)"
+limit_text() {
   local k lim
   k=$(branch_minfree "$1"); lim=$(setting_get limit "$(basename "$1")")
   [ -n "$k" ] || { printf '%s' "unknown (the drive is not mounted)"; return 0; }
@@ -162,7 +163,8 @@ limit_text() {   # limit_text MOUNTPOINT -> "5% = 45GB (automatic)" or "50GB (yo
   fi
 }
 
-limit_flow() {   # how much free space a pool drive keeps before the pool uses the next drive
+# `limit`: set how much free space a pool drive keeps before the pool uses the next drive.
+limit_flow() {
   array_guard || return 1
   local mp role label size cur new parsed
   mp=$(pick_branch "Which drive do you want to set the free-space limit for? ") || return 1
@@ -171,18 +173,18 @@ limit_flow() {   # how much free space a pool drive keeps before the pool uses t
   size=$(total_bytes "$mp")
   say ""
   say "$(branch_name "$mp") is $(human "$size"). It keeps this much free before the $role pool uses the next drive: $(limit_text "$mp")"
-  say "(A drive that is nearly full works badly; a limit from 1% to 50% of the drive is accepted. Type  auto  for the automatic ${POOL_FREE_PERCENT}%.)"
+  say "(A nearly full drive performs poorly. A limit from 1% to 50% of the drive is accepted. Type  auto  for the automatic ${POOL_FREE_PERCENT}%.)"
   new=$(ask "New free-space limit (for example 50GB or 8%; Enter cancels): ")
   [ -n "$new" ] || { say "Cancelled. Nothing was changed."; return 1; }
   settings_snapshot
   if [ "$new" = auto ]; then
     if [ -z "$(setting_get limit "$label")" ]; then settings_discard; say "The limit is already automatic. Nothing was changed."; return 0; fi
-    dry_gate "Go back to the automatic limit (${POOL_FREE_PERCENT}%) for $(branch_name "$mp")." "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
+    dry_gate "Go back to the automatic limit (${POOL_FREE_PERCENT}%) for $(branch_name "$mp")." "Apply it to the running pool if possible (nothing stops)." && { settings_discard; return 0; }
     setting_del limit "$label"
   else
     parsed=$(parse_limit "$new" "$size") || { settings_discard; note "Nothing was changed."; return 1; }
     if [ "$(setting_get limit "$label")" = "$parsed" ]; then settings_discard; say "That is already the limit. Nothing was changed."; return 0; fi
-    dry_gate "Keep $new free on $(branch_name "$mp") before the $role pool uses the next drive." "Use it in the running pool if possible (nothing stops)." && { settings_discard; return 0; }
+    dry_gate "Keep $new free on $(branch_name "$mp") before the $role pool uses the next drive." "Apply it to the running pool if possible (nothing stops)." && { settings_discard; return 0; }
     setting_put limit "$label" "$parsed"
   fi
   pool_reconfigure "$role" || { settings_rollback; return 1; }

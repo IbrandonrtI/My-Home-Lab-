@@ -1,17 +1,8 @@
-# ================================================================ uninstall: take the lab off this machine again
-# `sudo homelab-setup uninstall` removes what this repository put on the machine (the containers, the scripts, the schedule, the control panel,
-# the Tailscale addresses, the pool settings) and leaves what other things may use: Tailscale itself (still logged in), Docker, and the drive and
-# helper programs (mergerfs, SnapRAID, mdadm, ZFS, smartmontools ...). Two questions decide what happens to your things:
-#   1. the apps' own data (photos, Nextcloud files, databases, settings): keep it, or wipe it
-#   2. the drives of the pools: keep every file on them (the pools are only taken apart), or erase them
-# Nothing is changed before a last numbered question (1 = yes, 2 = no; "Are you sure?" when something is wiped). `--dry-run` shows everything and changes nothing.
-# Wiping the app data also deletes the downloaded copy of the repository (the folder the installer was started from).
 
 UN_UNITS = [("homelab-terminal", TERMINAL_UNIT), ("homelab-panel", PANEL_UNIT), ("homelab-storage-guard", GUARD_UNIT)]
 
 
 def un_drives_tool():
-    """The drives tool to run. In the test machine only a stand-in named in HLS_DRIVES is ever run (the real one would touch the test computer)."""
     forced = os.environ.get("HLS_DRIVES")
     if forced:
         return forced
@@ -19,7 +10,6 @@ def un_drives_tool():
 
 
 def un_container_names():
-    """The HomeLab containers that exist on this machine (running or not)."""
     names = ["portainer"]
     for _, cs in STACKS.values():
         names += cs
@@ -28,7 +18,7 @@ def un_container_names():
 
 
 def un_serve_ports():
-    """The Tailscale Serve ports that point at HomeLab's own services (a port that points somewhere else is not ours and stays)."""
+    """Return the Tailscale Serve ports that point at HomeLab's own services. Ports that point elsewhere are left alone."""
     if not have("tailscale"):
         return []
     rc, txt = run(["tailscale", "serve", "status", "--json"], timeout=20)
@@ -38,7 +28,6 @@ def un_serve_ports():
         js = {}
     ours = {p: PORTS[s] for p, s in SERVE}
     ours[PANEL_HTTPS] = PANEL_PORT
-    # the addresses homelab-cards gave to the containers you added yourself (1009 and up) are written down in its list
     try:
         cards = json.loads(read_file(P("/var/lib/homelab/cards.json")) or "{}").get("managed") or {}
     except ValueError:
@@ -51,8 +40,6 @@ def un_serve_ports():
             continue
         port = int(m.group(1))
         prox = ((v.get("Handlers") or {}).get("/") or {}).get("Proxy", "")
-        # also an address from the card range (1009 to 1099) that points at a port of THIS machine: homelab-cards hands those out, and its list can be
-        # missing (after an earlier uninstall test, say), which used to leave them behind
         card_range = 1009 <= port < 1100 and re.match(r"^https?://(127\.0\.0\.1|localhost|\[::1\]|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)[^/]*:\d+/?$", prox)
         if port in extra or card_range or (port in ours and re.search(r":%d/?$" % ours[port], prox)):
             found.append(port)
@@ -60,7 +47,6 @@ def un_serve_ports():
 
 
 def un_data_dirs():
-    """The folders that hold the apps' own data and settings (the music library is NOT in this list: those are your songs)."""
     h = Ctx.home
     dirs = [h + "/nextcloud", h + "/immich", h + "/speedtest-tracker", h + "/homepage-config", h + "/audiomuse", h + "/navidrome", h + "/navilist",
             "/opt/adguard-docker", "/mnt/storage/immich", "/mnt/storage/nextcloud", boot_share_dir()]
@@ -68,7 +54,6 @@ def un_data_dirs():
 
 
 def un_dir_size(path):
-    """A short size of a folder ('' when it takes too long to add up)."""
     rc, txt = run(["du", "-sb", P(path)], timeout=10)
     if rc != 0 or not txt.split():
         return ""
@@ -79,24 +64,21 @@ def un_dir_size(path):
 
 
 def un_array_kind():
-    """'zfs' or 'md' when the Main pool is a real RAID / ZFS array (it cannot be taken apart without erasing it), else ''."""
     first = read_file(P("/var/lib/homelab-drives/preset")).split("|")[0].strip()
     return first.split("-")[0] if first.startswith(("zfs-", "md-")) else ""
 
 
 def un_run_drives(*args, quiet=False):
-    """Run the drives tool. Returns (exit code, output)."""
     tool = un_drives_tool()
     if not tool:
         return 127, ""
-    env = dict(os.environ, DRIVES_SKIP_SYNC="1")      # the drives tool must not try to refresh FileBrowser and Homepage: they are being removed
+    env = dict(os.environ, DRIVES_SKIP_SYNC="1")
     if quiet:
         return run([tool] + list(args), timeout=120, env=env)
     return subprocess.call([tool] + list(args), env=env), ""
 
 
 def un_disk_of(dev):
-    """The whole drive a device path belongs to (/dev/sdb1 -> /dev/sdb)."""
     rc, txt = run(["lsblk", "-no", "pkname", dev], timeout=20)
     parent = txt.split()[0] if rc == 0 and txt.split() else ""
     if parent:
@@ -106,8 +88,7 @@ def un_disk_of(dev):
 
 
 def un_pool_drives():
-    """(how many entries the pools have, [(name, /dev/xxx of the whole drive, size in bytes)]) for the drives in the pools right now. The sections of the
-    boot drive count as entries but are not listed as drives. None when the drives tool cannot be asked."""
+    """Return (number of pool entries, [(name, device of the whole drive, size in bytes)]) for the drives currently in the pools, or None when the drives tool is unavailable."""
     tool = un_drives_tool()
     if not tool or not os.path.exists(tool):
         return None
@@ -119,11 +100,10 @@ def un_pool_drives():
     if js is None:
         return None
     found = []
-    # `status` lists every drive of the machine: only the ones with a pool role are the pools' (spare, system and plain-data drives are not)
     rows = [d for d in js.get("drives") or [] if d.get("role") in ("main", "backup", "parity")]
     for d in rows:
         dev = d.get("device") or ""
-        if not dev.startswith("/dev/"):      # a section of the boot drive has "boot drive" there, a drive that is not plugged in "-"
+        if not dev.startswith("/dev/"):
             continue
         disk = un_disk_of(dev)
         if disk not in [x[1] for x in found]:
@@ -132,7 +112,6 @@ def un_pool_drives():
 
 
 def un_spare_disks():
-    """The drives `sudo drives` would let you erase right now (a drive in a pool or the boot drive is never in this list)."""
     rc, txt = un_run_drives("panel", "actions", quiet=True)
     try:
         js = json.loads(txt) if rc == 0 else {}
@@ -142,7 +121,6 @@ def un_spare_disks():
 
 
 def un_facts():
-    """Everything the uninstall would touch, looked up once."""
     f = {}
     f["containers"] = un_container_names()
     f["serve"] = un_serve_ports()
@@ -159,12 +137,11 @@ def un_facts():
     f["boot_sections"] = sorted(glob.glob(P("/var/lib/homelab-boot-sections") + "/*.img"))
     f["music"] = music_folder()
     f["adguard"] = "adguardhome" in f["containers"]
-    f["own"] = [n for n in containers_all() if n not in f["containers"]] if have("docker") else []      # containers that are not HomeLab's: they stay
+    f["own"] = [n for n in containers_all() if n not in f["containers"]] if have("docker") else []
     return f
 
 
 def un_cron_match(line):
-    """True for a line of root's crontab that HomeLab put there (lines you added yourself never match)."""
     s = line.strip()
     if not s or s.startswith("#"):
         return False
@@ -173,7 +150,6 @@ def un_cron_match(line):
 
 
 def un_menu(question, options, default="1"):
-    """Ask for one of the numbered options; returns its number as text."""
     out("")
     say(question)
     for i, text in enumerate(options, 1):
@@ -187,7 +163,7 @@ def un_menu(question, options, default="1"):
 
 
 def un_show_plan(f):
-    """The list of what goes and what stays."""
+    """Print what will be removed and what will stay."""
     rule("What the uninstall will do")
     say("These parts of HomeLab will be REMOVED:")
     if f["containers"]:
@@ -223,7 +199,7 @@ def un_show_plan(f):
 
 
 def un_ask_choices(f):
-    """The two questions. Returns (wipe_data, wipe_drives)."""
+    """Ask whether to wipe the data and whether to erase the drives. Returns (wipe_data, wipe_drives)."""
     wipe_data = wipe_drives = False
     if f["data"] or f["containers"]:
         if Opt.yes:
@@ -248,13 +224,12 @@ def un_ask_choices(f):
             out("")
             warn("You chose to keep the app data but to erase the drives. The photos and files the apps keep on those drives will be gone too. "
                  "Only the settings in your home folder and the Docker volumes would be kept.")
-            if not yesno("Go on with this choice?", False):
+            if not yesno("Continue with this choice?", False):
                 return un_ask_choices(f)
     return wipe_data, wipe_drives
 
 
 def un_confirm(wipe_data, wipe_drives, f=None):
-    """The last stop. Nothing has been changed before this. One question with numbers (no words to type): 1 = yes, 2 = no (the default)."""
     out("")
     if wipe_data:
         warn("The data of the apps will be DELETED and cannot be brought back.")
@@ -273,19 +248,17 @@ def un_confirm(wipe_data, wipe_drives, f=None):
 
 
 def un_repo_path():
-    """The folder of the downloaded repository, when it is safe to delete it (it looks like this project, and is not the home folder or the root)."""
     p = os.path.realpath(Ctx.repo or "")
     if not p or p in ("/", os.path.realpath(P(Ctx.home or "/root"))) or not os.path.isdir(p):
         return None
     if FAKE and not p.startswith(ROOT + "/"):
-        return None          # a test run never deletes a real folder
+        return None
     if not (os.path.exists(os.path.join(p, "installer", "homelab-setup")) and os.path.isdir(os.path.join(p, "src"))):
         return None
     return p
 
 
 def un_remove_repo():
-    """Delete the downloaded copy of the repository (only when the app data is wiped). True when it is gone."""
     p = un_repo_path()
     if not p:
         return False
@@ -298,10 +271,8 @@ def un_remove_repo():
     return True
 
 
-# ---------------------------------------------------------------- the removal steps
 def un_rm(path):
-    """Delete a file, a link or a folder (a dry run only says so). True when something was there."""
-    p = P(path)      # `path` is the path on the machine (the test machine puts it under its fake root)
+    p = P(path)
     if not os.path.lexists(p):
         return False
     if Opt.dry:
@@ -323,7 +294,7 @@ def un_remove_cron():
 
 def un_stop_services():
     if run(["systemctl", "is-active", FINISH_UNIT])[1].strip() in ("active", "activating"):
-        act(["systemctl", "stop", FINISH_UNIT])         # the job that finishes the install (its status and lock files go with the folders below)
+        act(["systemctl", "stop", FINISH_UNIT])
     for unit, path in UN_UNITS:
         if os.path.exists(P(path)) or run(["systemctl", "is-active", unit])[1].strip() == "active":
             act(["systemctl", "stop", unit])
@@ -348,7 +319,7 @@ def un_remove_serve(ports):
 
 
 def un_remove_containers(names, wipe_data):
-    """Remove the containers, their networks and images; the Docker volumes only when the data is wiped (Portainer's own volume always)."""
+    """Remove the containers, their networks and images. Docker volumes are removed only when the data is wiped; Portainer's own volume is always removed."""
     if not names:
         return True
     images, projects = [], set()
@@ -379,12 +350,10 @@ def un_remove_containers(names, wipe_data):
 
 
 def un_on_pool(path):
-    """True when the folder is on a mounted pool (/mnt/storage or /mnt/backup)."""
     return any(path == m or path.startswith(m + "/") for m in ("/mnt/storage", "/mnt/backup")) and any(os.path.ismount(P(m)) for m in ("/mnt/storage", "/mnt/backup"))
 
 
 def un_wipe_data(skip_pools, announce=True):
-    """Delete the apps' folders. With skip_pools the folders on the pools stay (the drives are erased anyway, and deleting terabytes first takes hours)."""
     for d in un_data_dirs():
         if skip_pools and un_on_pool(d):
             continue
@@ -398,18 +367,18 @@ def un_wipe_data(skip_pools, announce=True):
 
 
 def un_release_drives(f, wipe_drives):
-    """Take the pools apart (every file stays on the drives), then erase the drives when asked to."""
+    """Take the pools apart, leaving every file on the drives, and erase the drives when asked to."""
     if not un_drives_tool():
         say("(simulation) the drives tool would run here")
         return True
     if f["pools_known"] and not f["pools"]:
-        return True      # no drive is in a pool: nothing to take apart
+        return True
     args = ["release", "--yes", "--now"] + (["--dry-run"] if Opt.dry else [])
     out("")
     say("Taking the pools apart (the drives tool does this and says what it does):")
     rc, _ = un_run_drives(*args)
     if rc != 0:
-        warn("The drives tool did not finish (exit code %d). The drives were NOT erased. Look at the messages above, then run `sudo drives release`." % rc)
+        warn("The drives tool did not finish (exit code %d). The drives were not erased. Check the messages above, then run `sudo drives release`." % rc)
         return False
     good("The pools are taken apart; every file is still on its drive")
     if not wipe_drives or Opt.dry:
@@ -422,11 +391,11 @@ def un_release_drives(f, wipe_drives):
     for name, dev, size in f["drives"]:
         info = spare.get(dev)
         if not info:
-            warn("%s (%s) is not ready to be erased (it is in use, not plugged in, or it holds the operating system). It was left alone." % (name, dev))
+            warn("%s (%s) is not ready to be erased (it is in use, not connected, or it holds the operating system). It was left alone." % (name, dev))
             ok = False
             continue
         out("")
-        warn("Erasing %s (%s, %s) ..." % (name, dev, pretty_size(int(size)) if size else "?"))      # already confirmed with 'Are you sure?'
+        warn("Erasing %s (%s, %s) ..." % (name, dev, pretty_size(int(size)) if size else "?"))
         rc, txt = un_run_drives("panel", "wipe", info["id"], "empty", dev, "ERASE", quiet=True)
         if rc == 0:
             good("%s is erased" % name)
@@ -456,9 +425,7 @@ def un_remove_login_block():
 
 
 def un_restore_dns(f):
-    """HomeLab turned the system's own DNS resolver off so AdGuard Home could use port 53. Turn it on again.
-    Tailscale is NOT told to manage DNS again: HomeLab set it to leave /etc/resolv.conf alone because Tailscale's own resolver (100.100.100.100) can lose
-    its upstream servers while systemd-resolved is off, and then the machine cannot look up any name. That setting stays, it is Tailscale's safe one."""
+    """Turn the system's DNS resolver back on. HomeLab turned it off so AdGuard Home could use port 53."""
     if not f["adguard"]:
         return True
     if run(["systemctl", "is-active", "systemd-resolved"])[1].strip() == "active":
@@ -480,7 +447,6 @@ def un_restore_dns(f):
         time.sleep(3)
         socket.gethostbyname("github.com")
     except OSError:
-        # keep the machine able to look up names: the plain file with the router and a public server, like the installer sets it
         set_resolv_conf("nameserver %s\nnameserver 1.1.1.1\n" % (Ctx.gateway or "1.1.1.1") if "nameserver" not in old or "100.100.100.100" in old else old)
         act(["systemctl", "disable", "--now", "systemd-resolved"])
         warn("The system's DNS resolver did not work, so the machine keeps asking your router for names (as before).")
@@ -490,7 +456,6 @@ def un_restore_dns(f):
 
 
 def un_remove_files(f, wipe_data, keep_drives_tool):
-    """HomeLab's own files, settings and records. The installer itself is deleted last, and only when everything before it worked."""
     for n, w in SCRIPTS:
         if n == "drives" and keep_drives_tool:
             continue
@@ -512,7 +477,6 @@ def un_remove_files(f, wipe_data, keep_drives_tool):
 
 
 def un_inside_web_terminal():
-    """True when this command runs inside the dashboard's web terminal: stopping that service would close the window in the middle of the removal."""
     if FAKE:
         return bool(os.environ.get("HLS_IN_TERMINAL"))
     pid = os.getpid()
@@ -533,7 +497,7 @@ def un_inside_web_terminal():
 
 
 def cmd_uninstall():
-    """`uninstall`: take HomeLab off this machine. Asks what to do with the apps' data and with the drives, then a last confirmation."""
+    """`uninstall`: remove HomeLab from this machine. Asks what to do with the app data and the drives, then asks for a final confirmation."""
     load_all()
     if Mode.existing and not Opt.force_existing:
         raise Abort("This machine was built by hand, and HomeLab only looks at it: it never installed anything here, so it cannot take anything off. "
@@ -588,7 +552,6 @@ def cmd_uninstall():
         warn("Some parts could not be removed: %s. Read the messages above, fix the cause, and run `sudo homelab-setup uninstall` again. "
              "The installer and its record were left in place so you can." % "; ".join(failed))
         return 1
-    # last of all: the record of what was installed and the installer itself (nothing can be repeated without them)
     un_rm("/var/lib/homelab-setup")
     un_rm("/usr/local/sbin/homelab-setup")
     un_rm(LOG_FILE[len(ROOT):])

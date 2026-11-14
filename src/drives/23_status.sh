@@ -1,4 +1,3 @@
-# ---------- status ----------
 last_backup_line() {
   if [ -f "$BACKUP_STATUS_FILE" ]; then
     awk -F'|' '{printf "%s  result: %s  destination: %s  took: %ss\n", $1, $2, $3, $4}' "$BACKUP_STATUS_FILE"
@@ -7,6 +6,7 @@ last_backup_line() {
   fi
 }
 
+# `status`: show the pools, their drives, free space and any problems.
 status_flow() {
   local role mp pool fst p
   say ""
@@ -22,9 +22,9 @@ status_flow() {
     fi
   done
   if [ -z "$(branches_of main)" ] && ! mountpoint -q "$MAIN_POOL" && ! array_active; then
-    say "Note: no drive is in the Main pool, so the services use the boot drive as their storage. Connect a drive with  sudo drives  and you are asked whether to move the files over."
+    say "Note: no drive is in the Main pool, so the services use the boot drive as storage. Connect a drive with  sudo drives  and you are asked whether to move the files over."
   elif main_drive_missing; then
-    say "Note: the Main drive is missing, so the services use the boot drive for now (since $(cat "$(main_boot_flag)" 2>/dev/null)). Plug it in, then run  sudo drives remount."
+    say "Note: the Main drive is missing, so the services are using the boot drive (since $(cat "$(main_boot_flag)" 2>/dev/null)). Connect the drive, then run  sudo drives remount."
   fi
   if boot_files_pending; then
     say "Note: files saved on the boot drive ($(human "$(boot_view_open && boot_files_bytes "$BOOT_UNDER"; boot_view_close)")) are waiting under the Main pool. Copy them onto it with:  sudo drives moveboot"
@@ -35,7 +35,7 @@ status_flow() {
     fi
   done
   if [ -z "$(branches_of main)" ] && mountpoint -q "$MAIN_POOL" && [ "$TEST_MODE" != 1 ] && ! array_active; then
-    say "Note: main pool is still one plain drive. Run  sudo drives  and choose Settings and upgrades > Convert to turn it into a pool."
+    say "Note: the Main pool is still a single plain drive. Run  sudo drives  and choose Settings and upgrades > Convert to turn it into a pool."
   fi
   for role in main backup; do
     [ -n "$(branches_of "$role")" ] || continue
@@ -51,23 +51,23 @@ status_flow() {
         printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" \
           "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "-" "connected (used last)"
       else
-        printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" "-" "-" "-" "NOT MOUNTED (try: sudo drives remount)"
+        printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "boot drive" "-" "-" "-" "NOT MOUNTED (run: sudo drives remount)"
       fi
     elif [ -n "$p" ] && mountpoint -q "$mp"; then
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "$p" \
         "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" \
         "$(smart_health "$(disk_of_part "$p")")" "connected"
     else
-      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (cable? then: sudo drives remount. Dead? sudo drives replace)"
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_name "$mp")" "$(branch_role "$mp")" "-" "-" "-" "-" "MISSING (check the cable, then run: sudo drives remount. If the drive has failed, run: sudo drives replace)"
     fi
   done
   for mp in $(parity_mounts); do
     p=$(branch_part "$mp")
     if [ -n "$p" ] && mountpoint -q "$mp"; then
       printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "$p" \
-        "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "$(smart_health "$(disk_of_part "$p")")" "connected (SnapRAID protection)"
+        "$(human "$(total_bytes "$mp")")" "$(human "$(used_bytes "$mp")")" "$(smart_health "$(disk_of_part "$p")")" "connected (SnapRAID parity)"
     else
-      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "-" "-" "-" "-" "MISSING (cable? then: sudo drives remount)"
+      printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(branch_base_name "$mp")" "parity" "-" "-" "-" "-" "MISSING (check the cable, then run: sudo drives remount)"
     fi
   done
   if array_active; then
@@ -76,31 +76,31 @@ status_flow() {
       if [ "$ad" != "-" ]; then
         printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(disk_base_name "$ad")" "array" "$ad" "$(pretty_size "$(disk_size_bytes "$ad")")" "-" "$(smart_health "$ad")" "$(array_kind_text "$akind")"
       else
-        printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(basename "$apath")" "array" "-" "-" "-" "-" "MISSING (cable? or dead: see  zpool status / mdadm --detail)"
+        printf '%-26s %-8s %-12s %-9s %-9s %-9s %s\n' "$(basename "$apath")" "array" "-" "-" "-" "-" "MISSING (cable problem or failed drive: see  zpool status / mdadm --detail)"
       fi
     done < <(array_disk_kinds)
   fi
   [ -n "$(all_branches)" ] || array_active || say "(no drives in a pool yet)"
   [ -z "$(preset_current)" ] || say "Setup built with  sudo drives preset:  $(preset_title "$(preset_current)")"
   ! array_active || say "Array health: $(array_health_text)"
-  if array_active && array_encrypted; then say "Encrypted: yes. The server unlocks it by itself at boot with the key file in $KEY_DIR (keep a copy of that file somewhere else)."; fi
+  if array_active && array_encrypted; then say "Encrypted: yes. The server unlocks it automatically at boot with the key file in $KEY_DIR. Keep a copy of that file somewhere else."; fi
   say ""
   say "=== Boot drive ==="
-  say "Free now: $(pretty_size "$(boot_free_bytes)"). The boot drive always keeps at least $(pretty_size "$BOOT_KEEP_FREE_BYTES") free for the system and your other services; a boot drive section cannot take that away."
+  say "Free now: $(pretty_size "$(boot_free_bytes)"). The boot drive always keeps at least $(pretty_size "$BOOT_KEEP_FREE_BYTES") free for the system and other services. A boot drive section cannot use that space."
   local bs
   for bs in $(boot_section_of main) $(boot_section_of backup); do
     say "Section in the $(branch_role "$bs") storage: $(branch_name "$bs")"
   done
-  say "Add one with  sudo drives bootsection  (menu: Add or remove drives). It is the last place the pool puts files."
+  say "Add one with  sudo drives bootsection  (menu: Add or remove drives). The pool uses it last when placing new files."
   local tw; tw=$(timeshift_warn_text)
-  [ -z "$tw" ] || say "!! $tw"
+  [ -z "$tw" ] || say "Warning: $tw"
   say ""
   say "=== Other drives ==="
   local prot legacy managed d
   prot=$(protected_disks); legacy=$(legacy_disks); managed=$(managed_disks)
   for d in $(all_disks | sort -u); do
     if grep -qx "$d" <<<"$prot"; then
-      say "$(disk_summary "$d")   boot/system drive (never touched)"
+      say "$(disk_summary "$d")   boot/system drive (not changed)"
     elif grep -qx "$d" <<<"$managed"; then
       :
     elif grep -qx "$d" <<<"$legacy"; then

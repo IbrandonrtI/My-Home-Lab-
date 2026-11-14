@@ -29,12 +29,11 @@ ACCENT = {
     "pink": (236, 72, 153), "teal": (20, 184, 166), "yellow": (234, 179, 8), "cyan": (0, 197, 253), "white": (255, 255, 255),
     "gray": (148, 163, 184), "grey": (148, 163, 184), "black": (23, 21, 20),
 }
-# the cards that ship with the lab; the real list is read from services.yaml, so a service you add yourself works too
 DEFAULT_SERVICES = [("AdGuard Home", "adguard-card"), ("Tailscale", "tailscale-card"), ("Beszel", "beszel-card"), ("Netdata", "netdata-card"),
                     ("Speedtest Tracker", "speedtest-card"), ("Portainer", "portainer-card"), ("FileBrowser", "filebrowser-card"),
                     ("Immich", "immich-card"), ("Nextcloud", "nextcloud-card")]
 DEFAULT_WORDS = ("default", "reset", "normal", "shipped")
-CARD_TABLE = dict(COLORS)   # the colour names for one service card (the bright ones win over the dark ones of the same name)
+CARD_TABLE = dict(COLORS)
 CARD_TABLE.update(ACCENT)
 BLURS = ("sm", "md", "lg", "xl", "2xl", "3xl")
 NO_BLUR = ("none", "off")
@@ -74,10 +73,9 @@ def parse_color(s, table, what):
     if m:
         h = m.group(1)
         return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
-    raise Fail("I don't know the %s colour '%s'. Use a name (%s) or a hex code such as #1e3a8a." % (what, s, ", ".join(sorted(table))))
+    raise Fail("Unknown %s color '%s'. Use a name (%s) or a hex code such as #1e3a8a." % (what, s, ", ".join(sorted(table))))
 
 
-# ---------------------------------------------------------------- settings.yaml: the background block
 def bg_block(text):
     lines = text.split("\n")
     for i, l in enumerate(lines):
@@ -102,7 +100,6 @@ def bg_get(text):
 
 
 def bg_set(text, key, value):
-    """Set (or, with value None, remove) one key in the background: block."""
     lines, i, j = bg_block(text)
     if i is None:
         if value is None:
@@ -136,7 +133,6 @@ def number(s, what, lo=0, hi=100):
     return n
 
 
-# ---------------------------------------------------------------- custom.css: one marked block at the end
 def css_split(text):
     a = text.find(B1)
     if a < 0:
@@ -152,7 +148,6 @@ def fmt_alpha(a):
 
 
 def css_state(block):
-    """cards = the colour of every card; links = {group name tag: (r, g, b)}, the colour of a bookmark group (what the marked block holds)"""
     st = {"cards": None, "links": {}}
     for m in re.finditer(r'(?m)^\.bookmark-group\[data-group="([a-z0-9-]+)"\]\s*\{\s*--accent:\s*(\d+),\s*(\d+),\s*(\d+);', block):
         st["links"][m.group(1)] = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
@@ -176,24 +171,20 @@ def css_build(st):
     return "\n".join(out) + "\n"
 
 
-# The colour of one service card is the "accent colors (R, G, B)" line of that service in custom.css (it paints the glow and the edge).
 ACCENT_LINE = r"(?m)^(#%s-card\s*\{\s*--accent:\s*)(\d+),\s*(\d+),\s*(\d+);\s*\}(?:[ \t]*/\*.*?\*/)?"
 
 
 def accent_get(text):
-    """{service key: (r, g, b)} from the accent lines of a custom.css text"""
     return {m.group(1): (int(m.group(2)), int(m.group(3)), int(m.group(4)))
             for m in re.finditer(r"(?m)^#([\w-]+)-card\s*\{\s*--accent:\s*(\d+),\s*(\d+),\s*(\d+);", text)}
 
 
 def accent_set(text, key, rgb, label):
-    """Change the three numbers of one service's accent line (the spacing of the file is kept). (new text, changed?)"""
     nums = "%-5s%-5s%-6s}" % ("%d," % rgb[0], "%d," % rgb[1], "%d;" % rgb[2])
     return re.subn(ACCENT_LINE % re.escape(key), lambda m: m.group(1) + nums + "   /* %s */" % label, text, count=1)
 
 
 def shipped_copy(name, current):
-    """The shipped version of a Homepage file: the one in the repository, else the first copy saved before the first change."""
     shipped = read(os.path.join(DOCS, "homepage-config", name)) if DOCS else ""
     return shipped or read(current + ".before-theme")
 
@@ -203,12 +194,10 @@ def shipped_css():
 
 
 def split_head():
-    """custom.css without the block homelab theme writes"""
     return css_split(read(CSS))[0]
 
 
 def css_save(st, change=None):
-    """Write the marked block for st, and (optionally) first change the text above it with change(text)."""
     head = split_head()
     if change:
         head = change(head)
@@ -220,11 +209,11 @@ def cur_css():
     return css_state(css_split(read(CSS))[1])
 
 
-# ---------------------------------------------------------------- theme commands
 REFRESH = "Done. Refresh the Homepage page in the browser (Ctrl+Shift+R) to see it."
 
 
 def theme_show():
+    """Print the current theme settings: background, colors and cards."""
     need_dir()
     bg = bg_get(read(SETTINGS))
     st = cur_css()
@@ -238,21 +227,21 @@ def theme_show():
         print("  All cards     the shipped look (dark slate, 58% solid)")
     now, was = accent_get(split_head()), accent_get(shipped_css())
     changed = ["%s rgb(%d, %d, %d)" % ((names.get(k, k),) + v) for k, v in sorted(now.items()) if k in was and was[k] != v]
-    print("  Card colours  " + (", ".join(changed) if changed else "the shipped colours"))
+    print("  Card colors  " + (", ".join(changed) if changed else "the default colors"))
     mine = {tag: "rgb(%d, %d, %d)" % rgb for tag, rgb in st["links"].items()}
     names = {group_tag(g[0]): g[0] for g in marks_groups(read(MARKS))[0]}
-    print("  Link colours  " + (", ".join("%s %s" % (names.get(t, t), c) for t, c in sorted(mine.items())) if mine else "the shipped colours"))
+    print("  Link colors  " + (", ".join("%s %s" % (names.get(t, t), c) for t, c in sorted(mine.items())) if mine else "the default colors"))
     print()
     print("  Change it with:")
     print("    homelab theme background [BLUR] URL-or-FILE   a picture from the web, or one on this machine, with an optional BLUR")
     print("    homelab theme brightness 0-100           how dark the picture is (shipped: 42)")
     print("    homelab theme blur none|sm|md|lg|xl|2xl|3xl   only the blur, low to high (shipped: md)")
     print("    homelab theme saturate 0-100 | opacity 0-100")
-    print("    homelab theme cards COLOR NUMBER         ALL cards: the colour, and how solid (NUMBER 0-100)")
+    print("    homelab theme cards COLOR NUMBER         all cards: the color and opacity (NUMBER 0-100)")
     print("    homelab theme cards SERVICE COLOR        ONE card, for example:  homelab theme cards AdGuard Home blue")
-    print("    homelab theme cards SERVICE default      that card goes back to its shipped colour")
-    print("    homelab theme links GROUP COLOR          the colour of one bookmark group on the Links tab, e.g.  homelab theme links Productivity green")
-    print("    homelab theme links GROUP default        that group goes back to its shipped colour")
+    print("    homelab theme cards SERVICE default      that card goes back to its default color")
+    print("    homelab theme links GROUP COLOR          the color of one bookmark group on the Links tab, e.g.  homelab theme links Productivity green")
+    print("    homelab theme links GROUP default        that group goes back to its default color")
     print("    homelab theme reset                      the shipped look again, everywhere")
     print("  Colour names: " + ", ".join(sorted(CARD_TABLE)) + "  (or a hex code such as #1e3a8a)")
     print("  Services: " + ", ".join(n for n, i in known_services() if i))
@@ -260,7 +249,6 @@ def theme_show():
 
 
 def images_mounted():
-    """True or False: does the homepage container have the images folder mounted? None if Docker cannot be asked."""
     try:
         r = subprocess.run(["docker", "inspect", "homepage", "--format", "{{range .Mounts}}{{.Destination}} {{end}}"],
                            capture_output=True, text=True, timeout=8)
@@ -272,9 +260,10 @@ def images_mounted():
 
 
 def theme_background(src, blur=None):
+    """Set the Homepage background from a web address or a file, with an optional blur."""
     need_dir()
     if blur is not None:
-        blur = (blur_value(blur),)   # checked first, so a typo changes nothing
+        blur = (blur_value(blur),)
     if re.match(r"^https?://", src):
         value = quote(src)
     else:
@@ -308,7 +297,6 @@ def is_blur(word):
 
 
 def blur_value(arg):
-    """The blur word for settings.yaml: None for no blur at all. The sizes from low to high: sm, md, lg, xl, 2xl, 3xl."""
     a = arg.lower()
     if a in NO_BLUR:
         return None
@@ -331,7 +319,6 @@ def norm(s):
 
 
 def known_services():
-    """[(name, card id or None)] from services.yaml (the nine shipped cards when the file is missing)."""
     out, name = [], None
     for line in read(SERVICES_FILE).split("\n"):
         m = re.match(r"^    - (.+?):\s*$", line)
@@ -350,7 +337,7 @@ def known_services():
 
 
 def find_service(words, quiet=False):
-    """The (name, id) of the card the words point at: not case sensitive, spaces optional, a small typo is forgiven."""
+    """Return the (name, id) of the card the words point at. Case and spaces are ignored and a small typo is forgiven."""
     sv = known_services()
     usable = [(n, i) for n, i in sv if i]
     t = norm(words)
@@ -372,14 +359,13 @@ def find_service(words, quiet=False):
         return keys[close[0]]
     for n, i in sv:
         if not i and norm(n) == t:
-            raise Fail("'%s' has no 'id:' line in services.yaml, so its card cannot be coloured. Add this line under it:  id: %s-card" % (n, slug(n)))
+            raise Fail("'%s' has no 'id:' line in services.yaml, so its card cannot be colored. Add this line under it:  id: %s-card" % (n, slug(n)))
     if quiet:
         return None
-    raise Fail("I don't know a service called '%s'. The services are: %s." % (words, ", ".join(n for n, _ in usable)))
+    raise Fail("Unknown service '%s'. The services are: %s." % (words, ", ".join(n for n, _ in usable)))
 
 
 def theme_cards(color, opacity):
-    """Every card gets the same colour (a colour given to one card before is dropped)."""
     need_dir()
     r, g, b = parse_color(color, COLORS, "card")
     st = cur_css()
@@ -392,7 +378,6 @@ def theme_cards(color, opacity):
 
 
 def theme_service_color(words, color):
-    """One service card: the three numbers of its line in the 'accent colors (R, G, B)' list of custom.css. 'default' puts the shipped numbers back."""
     need_dir()
     name, cid = find_service(words)
     key = cid[:-5]
@@ -400,21 +385,21 @@ def theme_service_color(words, color):
     if color.lower() in DEFAULT_WORDS:
         line = next((x for x in shipped_css().split("\n") if re.match(r"#%s-card\s*\{\s*--accent:" % re.escape(key), x)), None)
         if not line:
-            raise Fail("The shipped custom.css has no colour line for %s." % name)
+            raise Fail("The shipped custom.css has no color line for %s." % name)
         rgb = accent_get(line).get(key)
         text, n = re.subn(r"(?m)^#%s-card\s*\{\s*--accent:.*$" % re.escape(key), lambda _m: line, split_head(), count=1)
     else:
         rgb, label = parse_color(color, CARD_TABLE, "card"), "%s %s" % (name, color.lower())
         text, n = accent_set(split_head(), key, rgb, label)
     if not n:
-        raise Fail("custom.css has no colour line for the %s card. The lines are in the list that starts with '/* accent colors (R, G, B) */'; "
+        raise Fail("custom.css has no color line for the %s card. The lines are in the list that starts with '/* accent colors (R, G, B) */'; "
                    "the glow rules there only cover the cards that came with the lab." % name)
     css_save(st, lambda _head: text)
-    print("The %s card is now %s: --accent: %d, %d, %d in custom.css. %s" % (name, color if color.lower() not in DEFAULT_WORDS else "its shipped colour", rgb[0], rgb[1], rgb[2], REFRESH))
+    print("The %s card is now %s: --accent: %d, %d, %d in custom.css. %s" % (name, color if color.lower() not in DEFAULT_WORDS else "its default color", rgb[0], rgb[1], rgb[2], REFRESH))
 
 
 def theme_cards_cmd(words):
-    """homelab theme cards COLOR [NUMBER]  or  homelab theme cards SERVICE COLOR  (the service name may have spaces and needs no quotes)"""
+    """homelab theme cards COLOR [NUMBER] or homelab theme cards SERVICE COLOR: set card accent colors. The service name may contain spaces and needs no quotes."""
     words = list(words)
     opacity = None
     if len(words) >= 2 and re.fullmatch(r"\d{1,3}%?", words[-1]):
@@ -426,7 +411,7 @@ def theme_cards_cmd(words):
                 parse_color(color, COLORS, "card")
             except Fail:
                 if find_service(color, quiet=True):
-                    raise Fail("Which colour? For example:  homelab theme cards %s blue" % color) from None
+                    raise Fail("Which color? For example:  homelab theme cards %s blue" % color) from None
                 raise
         if color.lower() in DEFAULT_WORDS:
             raise Fail("To put every card back to the shipped look, use:  homelab theme reset")
@@ -438,7 +423,6 @@ def theme_cards_cmd(words):
 
 
 def theme_accent_cmd(words):
-    """homelab theme accent SERVICE|all COLOR: the older name of cards SERVICE COLOR; 'all' colours every card that has a colour line"""
     name = " ".join(words[:-1])
     if norm(name) != "all":
         theme_service_color(name, words[-1])
@@ -450,12 +434,11 @@ def theme_accent_cmd(words):
 
 
 def group_tag(name):
-    """The name tag custom.js puts on a bookmark group (the same letters and digits as in the group's name, joined by dashes)."""
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
 def find_link_group(words):
-    """The name of the bookmark group the words point at: not case sensitive, spaces optional, a small typo is forgiven."""
+    """Return the name of the bookmark group the words point at. Case and spaces are ignored and a small typo is forgiven."""
     names = [g[0] for g in marks_groups(read(MARKS))[0]]
     t = norm(words)
     if not names:
@@ -475,15 +458,14 @@ def find_link_group(words):
     close = difflib.get_close_matches(t, list(keys), n=1, cutoff=0.75)
     if close:
         return keys[close[0]]
-    raise Fail("I don't know a bookmark group called '%s'. The groups are: %s." % (words, ", ".join(names)))
+    raise Fail("Unknown bookmark group '%s'. The groups are: %s." % (words, ", ".join(names)))
 
 
 def theme_links_cmd(words):
-    """homelab theme links GROUP COLOR  |  homelab theme links GROUP default  (the group name may have spaces and needs no quotes)"""
     need_dir()
     words = list(words)
     if len(words) < 2:
-        raise Fail("Which group and which colour? For example:  homelab theme links Productivity green   (groups: %s)"
+        raise Fail("Which group and which color? For example:  homelab theme links Productivity green   (groups: %s)"
                    % ", ".join(g[0] for g in marks_groups(read(MARKS))[0]))
     color = words.pop()
     group = find_link_group(" ".join(words))
@@ -492,7 +474,7 @@ def theme_links_cmd(words):
     if color.lower() in DEFAULT_WORDS:
         st["links"].pop(tag, None)
         css_save(st)
-        print("The %s group is back to its shipped colour. %s" % (group, REFRESH))
+        print("The %s group is back to its default color. %s" % (group, REFRESH))
         return
     rgb = parse_color(color, CARD_TABLE, "link")
     st["links"][tag] = rgb
@@ -502,8 +484,8 @@ def theme_links_cmd(words):
 
 def theme_reset():
     need_dir()
-    def restore(head):   # every colour line goes back to the shipped line (the rest of the file is not touched)
-        a = head.find("/* >>> homelab look >>>")           # the look block of the control panel goes too
+    def restore(head):
+        a = head.find("/* >>> homelab look >>>")
         z = head.find("/* <<< homelab look <<< */", a) if a >= 0 else -1
         if a >= 0 and z >= 0:
             head = head[:a].rstrip("\n") + "\n" + head[z + len("/* <<< homelab look <<< */"):].lstrip("\n")
@@ -521,9 +503,8 @@ def theme_reset():
     print("The shipped look is back. %s" % REFRESH)
 
 
-# ---------------------------------------------------------------- bookmarks
 def marks_groups(text):
-    """[(group, [(name, start, end)])], where start/end are line numbers in text.split('\\n') (end excluded)."""
+    """Return [(group, [(name, start, end)])], where start and end are line numbers in text.split('\n') (end excluded)."""
     lines = text.split("\n")
     groups, cur, ent = [], None, None
     for i, l in enumerate(lines):
@@ -563,11 +544,10 @@ def get_id():
     return os.environ.get("HOMELAB_BRANDFETCH_ID", "").strip() or read(IDFILE).strip()
 
 
-GENERIC_ICON = "mdi-web"   # Homepage's own plain globe icon: needs no account and no download
+GENERIC_ICON = "mdi-web"
 
 
 def image_kind(data):
-    """'svg', 'png' or 'jpeg' when the bytes really are that kind of picture (a web page that says sorry is not)."""
     head = data[:300].lstrip().lower()
     if len(data) > 100 and (head.startswith(b"<svg") or head.startswith(b"<?xml")) and b"<svg" in data[:2000].lower():
         return "svg"
@@ -579,8 +559,6 @@ def image_kind(data):
 
 
 def brandfetch_icon(domain):
-    """(web address of the logo, message). Brandfetch is asked for an SVG first, then a PNG, then a JPEG; each in the symbol, logo and
-    icon version. The address goes into bookmarks.yaml as it is, like the examples in the shipped file."""
     cid = get_id()
     if not cid:
         return None, "No Brandfetch client ID is saved, so it got the plain globe icon. Save yours once with:  homelab bookmark brandfetch YOUR-CLIENT-ID"
@@ -601,13 +579,11 @@ def brandfetch_icon(domain):
 
 
 def looks_like_icon(t):
-    """An icon given on the command line: a web address, a file in /images, a Homepage icon name (si-youtube, mdi-web, youtube.svg), or 'generic'."""
     return bool(t.lower() == "generic" or re.match(r"https?://", t) or t.startswith("/")
                 or re.fullmatch(r"(si|mdi|sh)-[\w-]+", t) or re.search(r"\.(svg|png|jpe?g|webp|ico|gif|avif)$", t, re.I))
 
 
 def make_abbr(name):
-    """The letters shown if the icon cannot be loaded: YouTube -> YT, Good Site -> GS, Spotify -> SPOT."""
     words = re.findall(r"[A-Z]?[a-z0-9]+|[A-Z]+(?![a-z])", name)
     if len(words) > 1:
         return "".join(w[0] for w in words)[:4].upper()
@@ -615,7 +591,6 @@ def make_abbr(name):
 
 
 def tty_path():
-    """Where answers can be typed: the keyboard, not the pipe this program is fed through. '' when nobody is there to answer."""
     return os.environ.get("HOMELAB_TTY", "") or ("/dev/tty" if sys.stdout.isatty() else "")
 
 
@@ -623,7 +598,6 @@ _TTY = []
 
 
 def ask(question):
-    """Ask on the keyboard. None when nobody is there to answer."""
     path = tty_path()
     if not path:
         return None
@@ -639,7 +613,6 @@ def ask(question):
 
 
 def find_group(groups, wanted):
-    """The category that 'wanted' means: not case sensitive, spaces and punctuation ignored, a small typo forgiven. None if there is none."""
     t = norm(wanted)
     for g in groups:
         if norm(g[0]) == t:
@@ -649,7 +622,6 @@ def find_group(groups, wanted):
 
 
 def pick_group(groups, what, allow_new):
-    """Show the categories as a numbered list and let the person choose one. Returns the group, or its new name as a string."""
     if not tty_path():
         return None
     print(what)
@@ -671,7 +643,6 @@ def pick_group(groups, what, allow_new):
 
 
 def place(lines, group, entry, order):
-    """The lines with 'entry' added to the category 'group' (made if it is new) at place number 'order' (1 = first; None = last)."""
     groups, _ = marks_groups("\n".join(lines))
     target = find_group(groups, group)
     if not target:
@@ -689,7 +660,6 @@ def place(lines, group, entry, order):
 
 
 def split_extras(extra, what):
-    """The optional words after NAME URL (or after NAME CATEGORY): a category, an icon, a number. They are told apart by what they look like."""
     group = icon = order = None
     words = []
     for t in extra:
@@ -704,14 +674,13 @@ def split_extras(extra, what):
                 raise Fail("Two icons were given. One is enough.")
             icon = t
         else:
-            words.append(t)     # a category may be several words, typed without quotes: Online Shopping
+            words.append(t)
     group = " ".join(words) if words else None
     return group, icon, order
 
 
 def layout_add_group(group, others):
-    """A new bookmark category is put on the tab of the other bookmark categories (settings.yaml layout:), so it is not shown on every
-    tab. Does nothing without a layout block, or when no tab is known. 'others' are the names of the categories that existed."""
+    """Put a new bookmark category on the same tab as the other bookmark categories (settings.yaml layout:) so it is not shown on every tab. Does nothing without a layout block or a known tab."""
     try:
         text = read(SETTINGS)
     except OSError:
@@ -741,7 +710,7 @@ def layout_add_group(group, others):
     key = "'%s'" % group.replace("'", "''") if re.search(r"[:#\[\]{},*!|>'\"%@`]|^[&?-]|^\s|\s$", group) else group
     icon = "mdi-dots-horizontal-circle" if group.lower() == "others" else "mdi-bookmark-multiple"
     lines[end:end] = ["  %s:" % key, "    tab: %s" % tab, "    icon: %s" % icon]
-    tmp = SETTINGS + ".tmp"          # written directly: this is not a theme change, so no .before-theme copy is made
+    tmp = SETTINGS + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
     shutil.copymode(SETTINGS, tmp)
@@ -749,6 +718,7 @@ def layout_add_group(group, others):
 
 
 def marks_add(name, url, extra):
+    """`homelab bookmarks add NAME URL [options]`: add a bookmark, creating its group if needed."""
     need_dir()
     group, icon, order = split_extras(extra, "add")
     if not re.match(r"^https?://", url):
@@ -761,7 +731,7 @@ def marks_add(name, url, extra):
     domain = re.sub(r"^www\.", "", parts.netloc.lower().split(":")[0])
     text = read(MARKS)
     groups, lines = marks_groups(text)
-    if group is None:   # no category given: ask, or use Others when nobody can answer
+    if group is None:
         choice = pick_group(groups, "Which category should '%s' go in?" % name, True) if groups else "Others"
         group = choice if choice is not None else "Others"
         if not isinstance(group, str):
@@ -805,7 +775,6 @@ def marks_list():
 
 
 def marks_pick(name, group, verb):
-    """The one bookmark meant by NAME (and CATEGORY): (group, name, start, end), plus the text and its lines."""
     text = read(MARKS)
     groups, lines = marks_groups(text)
     if group is not None:
@@ -819,7 +788,7 @@ def marks_pick(name, group, verb):
         raise Fail("No bookmark named '%s'%s. See them with:  homelab bookmark list" % (name, where))
     if len(hits) > 1:
         cats = [h[0] for h in hits]
-        choice = pick_group(cats, "'%s' is in %d categories. Which one should I %s?" % (name, len(cats), verb), False)
+        choice = pick_group(cats, "'%s' is in %d categories. Which one to %s?" % (name, len(cats), verb), False)
         if choice is None:
             raise Fail("'%s' is in %s. Say which one:  homelab bookmark %s \"%s\" \"CATEGORY\"" % (name, " and ".join("'%s'" % c[0] for c in cats), verb, name))
         hits = [h for h in hits if h[0] is choice]
@@ -827,7 +796,6 @@ def marks_pick(name, group, verb):
 
 
 def clean_marks(lines):
-    """Join the lines again with one blank line between categories, and drop a category that has no bookmark left."""
     out = "\n".join(lines)
     out = re.sub(r"([^\n])\n(- )", r"\1\n\n\2", out)
     out = re.sub(r"\n{3,}", "\n\n", out).rstrip("\n") + "\n"
@@ -854,7 +822,6 @@ def marks_remove(name, group):
 
 
 def marks_move(name, to, extra):
-    """Put a bookmark in another category (or, with a number, at another place in the same one). Its icon stays with it."""
     need_dir()
     group, _, order = split_extras(extra, "move")
     (g, n, s, e), text, lines = marks_pick(name, group, "move")
@@ -904,7 +871,6 @@ SIMPLE_BLOCK = (SIMPLE_BEGIN + " written by: homelab simple on. Remove it with: 
 
 
 def simple_css(css, on):
-    """custom.css with the 'less busy cards' rule put in (on) or taken out (off). Everything else in the file is left alone."""
     css = re.sub(r"\n*" + re.escape(SIMPLE_BEGIN) + r".*?" + re.escape(SIMPLE_END) + r"\n?", "\n", css, flags=re.S)
     css = css.rstrip("\n") + "\n" if css.strip() else ""
     return css + ("\n" if css else "") + SIMPLE_BLOCK if on else css
@@ -929,6 +895,7 @@ def simple_cmd(args):
 
 
 def main(a):
+    """Read the command line and run the requested command."""
     try:
         if not a:
             raise Fail("nothing to do")
