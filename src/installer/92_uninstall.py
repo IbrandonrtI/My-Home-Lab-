@@ -368,8 +368,12 @@ def un_wipe_data(skip_pools, announce=True):
 
 def un_release_drives(f, wipe_drives):
     """Take the pools apart, leaving every file on the drives, and erase the drives when asked to."""
-    if not un_drives_tool():
+    tool = un_drives_tool()
+    if not tool:
         say("(simulation) the drives tool would run here")
+        return True
+    if not os.path.exists(tool):
+        say("The drives tool is not installed on this machine, so no drive pools were set up and there is nothing to take apart.")
         return True
     if f["pools_known"] and not f["pools"]:
         return True
