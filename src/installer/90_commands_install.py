@@ -110,7 +110,8 @@ def ask_tailscale_token(a):
     elif not interactive():
         return
     out("")
-    say("The Tailscale card on your dashboard needs an access token. It takes a minute to create, and the installer then fills in the card automatically. "
+    say("This machine is now connected to Tailscale. The Tailscale card on your dashboard needs an access token from your Tailscale account. "
+        "It takes a minute to create, and the installer then fills in the card automatically. "
         "Open https://login.tailscale.com/admin/settings/keys, press Generate access token, copy it and paste it here. "
         "Press Enter to skip. The token is used only for that card and can be added later with:  sudo homelab-setup fill")
     tok = ask_secret("Tailscale access token (starts with tskey-api-, Enter to skip)").strip()
@@ -150,7 +151,6 @@ def ask_answers():
         a["adguard"] = "yes" if yesno("Install AdGuard Home?", True) else "no"
     State.save()
     Ctx.detect()
-    ask_tailscale_token(a)
     if not Runtime.password:
         password_warning()
         out("")
@@ -574,6 +574,10 @@ def run_install(res, later=None):
                     unblock(res, dry=Opt.dry)
             except Abort as e:
                 bad(str(e))
+    Ctx.refresh_tailscale()
+    if Ctx.fqdn:
+        with Live.pause():
+            ask_tailscale_token(State.data["answers"])
     held = set(later or ()) | {"apt-upgrade"}
     for _ in range(4):
         gained = run_pass(res, skip=held)
