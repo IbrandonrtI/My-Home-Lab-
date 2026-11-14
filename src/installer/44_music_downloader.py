@@ -127,3 +127,72 @@ class MusicDownloaderStack(StackStep):
 
 
 register(MusicDownloaderStack("music-downloader", ("portainer-env", "folders"), "Downtify and MeTube stack (music and video downloads)"))
+
+
+DT_DEFAULT_USER, DT_DEFAULT_PASS = "admin", "downtify"
+
+
+def dt_username():
+    """The install name as a Downtify username (3 to 32 letters, digits, dots, dashes or underscores); `admin` when nothing usable is left."""
+    name = re.sub(r"[^A-Za-z0-9._-]", "", Ctx.admin or "")[:32]
+    return name if len(name) >= 3 else DT_DEFAULT_USER
+
+
+def dt_login(user, password):
+    """Sign in to Downtify. Returns (status, user record, cookie header). Status 0 means no answer."""
+    st, js, hd = http("POST", url("downtify", "/api/auth/login"), body={"username": user, "password": password}, timeout=20)
+    m = re.search(r"downtify_session=([^;,\s]+)", str(hd.get("Set-Cookie", ""))) if st == 200 else None
+    rec = js.get("user") if st == 200 and isinstance(js, dict) else None
+    return st, rec, ("downtify_session=" + m.group(1)) if m else ""
+
+
+def dt_state():
+    """Where Downtify's sign-in stands: `none` (not running or no accounts), `default` (still the first admin and password), `set` (changed) or `off` (sign-in turned off)."""
+    st, js, _ = http("GET", url("downtify", "/api/auth/status"), timeout=10)
+    if st != 200 or not isinstance(js, dict):
+        return "none"
+    if js.get("auth_disabled") or js.get("require_sign_in") is False:
+        return "off"
+    st, _, _ = dt_login(DT_DEFAULT_USER, DT_DEFAULT_PASS)
+    return "default" if st == 200 else "set"
+
+
+@step
+class DowntifyLogin(Step):
+    """Give Downtify the name and password chosen at install. A new Downtify only has the account admin with the password downtify, so its first admin account is renamed and given the install password."""
+    id, group, title = "downtify-login", "Logins and keys", "Downtify sign-in set to your name and the admin password"
+    needs = ("stack-music-downloader",)
+    optional = True
+
+    def applies(self):
+        return not Mode.existing
+
+    def probe(self):
+        if not stack_up("music-downloader"):
+            return "todo"
+        return "todo" if dt_state() == "default" else "done"
+
+    def help(self):
+        return ("Open %s and sign in as admin with the password downtify. Then change the name and password in Settings, Users and General, Account. "
+                "If the password was changed and forgotten, run:  docker exec downtify python main.py auth-reset" % url("downtify"))
+
+    def run(self):
+        if Opt.dry:
+            out("      would rename Downtify's first account (admin) to %s and give it the admin password" % dt_username())
+            return
+        wait_for(lambda: dt_state() != "none", "Downtify to answer", 120)
+        pw = need_password("to set the Downtify sign-in")
+        user = dt_username()
+        if dt_login(user, pw)[0] == 200:
+            return
+        st, rec, cookie = dt_login(DT_DEFAULT_USER, DT_DEFAULT_PASS)
+        if st != 200 or not rec or not cookie:
+            raise Abort("Downtify's sign-in was changed by hand, so it was left alone. %s" % self.help())
+        body = {"username": user, "password": pw}
+        st, js, _ = http("PATCH", url("downtify", "/api/users/%s" % rec["id"]), body=body, headers={"Cookie": cookie}, timeout=30)
+        if st == 400 and user != DT_DEFAULT_USER:
+            st, js, _ = http("PATCH", url("downtify", "/api/users/%s" % rec["id"]), body={"password": pw}, headers={"Cookie": cookie}, timeout=30)
+            if st == 200:
+                warn("Downtify already has an account called %s, so the first account keeps the name admin and now has the admin password." % user)
+        if st != 200:
+            raise Abort("Downtify refused the new sign-in (HTTP %s): %s" % (st, str(js)[:200]))

@@ -1035,10 +1035,10 @@ def theme_picture(body):
         return {"restarting": False, "image": url, "stored": False}
 
 
-AUTOMATIC = {"At a Glance", "Music Library", "Library Totals", "Storage", "Backup & Updates", "Folder Sizes", "Calendar"}
+AUTOMATIC = {"Preview", "Music Library", "Library Totals", "Storage", "Backup & Updates", "Folder Sizes", "Calendar"}
 HL_ID = re.compile(r"^(stat|cal)-")
 HL_BLOCKS = (("# >>> homelab stats >>>", "# <<< homelab stats <<<"), ("# >>> homelab calendar >>>", "# <<< homelab calendar <<<"))
-HL_GROUP_LOOK = {"At a Glance": ("mdi-view-dashboard", 4, "Stats"), "Music Library": ("mdi-music", 2, "Stats"), "Library Totals": ("mdi-image-multiple", 2, "Stats"),
+HL_GROUP_LOOK = {"Preview": ("mdi-view-dashboard", 4, "Stats"), "Music Library": ("mdi-music", 2, "Stats"), "Library Totals": ("mdi-image-multiple", 2, "Stats"),
                  "Storage": ("mdi-harddisk", 3, "Stats"), "Backup & Updates": ("mdi-backup-restore", 2, "Stats"), "Folder Sizes": ("mdi-folder-multiple", 1, "Stats"),
                  "Calendar": ("mdi-calendar-month", 2, "Home")}
 PROTECTED = {"Customize", "Edit Links", "Terminal"}

@@ -53,6 +53,11 @@ class HomepageFiles(Step):
                 new = subst(old)
                 if new != old:
                     write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
+        if "navidrome" in adopted():
+            # Navidrome's card is normally added together with its login; for the person's own copy it is a plain link.
+            svc = read_file(hp_path("services.yaml"))
+            if svc and card_widget_type(svc, "navidrome-card") is None:
+                write_file(hp_path("services.yaml"), navidrome_card_added(svc, Ctx.lan or svc_host()), 0o644, (Ctx.uid, Ctx.gid))
 
 
 @step

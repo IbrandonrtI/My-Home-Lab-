@@ -279,7 +279,11 @@ EXPECTED_CONTAINERS = 19
 
 
 def expected_containers():
-    return EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
+    n = EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
+    for name, a in adopted().items():
+        if name != "adguard" or adguard_wanted():
+            n -= max(0, len(STACKS[name][1]) - len(a.get("containers", [])))
+    return n
 WEATHER_DEFAULTS = ((40.7128, -74.0060), (40.7143, -74.0060))
 
 

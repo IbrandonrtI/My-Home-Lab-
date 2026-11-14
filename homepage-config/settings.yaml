@@ -40,7 +40,7 @@ layout:
     icon: mdi-calendar-month
     style: row
     columns: 2
-  At a Glance:
+  Preview:
     tab: Stats
     icon: mdi-view-dashboard
     style: row

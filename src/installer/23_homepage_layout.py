@@ -72,12 +72,12 @@ def js_groups_block(live, shipped):
 
 
 STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"
-STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 2), "Library Totals": ("mdi-image-multiple", 2),
+STATS_GROUPS = {"Preview": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 2), "Library Totals": ("mdi-image-multiple", 2),
                 "Storage": ("mdi-harddisk", 3), "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
-STATS_AFTER = {"Music Library": "At a Glance"}
+STATS_AFTER = {"Music Library": "Preview"}
 MUSIC_WIDE = "~music-2-columns"
 STORAGE_WIDE = "~storage-3-columns"
-OLD_NAMES = {"At a glance": "At a Glance", "Library totals": "Library Totals", "Backup & updates": "Backup & Updates", "Folder sizes": "Folder Sizes"}
+OLD_NAMES = {"At a glance": "Preview", "At a Glance": "Preview", "Library totals": "Library Totals", "Backup & updates": "Backup & Updates", "Folder sizes": "Folder Sizes"}
 OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
 
 

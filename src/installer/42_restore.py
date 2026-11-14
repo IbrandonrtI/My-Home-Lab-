@@ -118,6 +118,9 @@ class RestoreData(Step):
         return "done" if State.ran("restore-data") else "todo"
 
     def run(self):
+        mine = [ADOPT_LABELS[n] for n in ("immich", "nextcloud") if n in adopted()]
+        if mine:
+            raise Abort("%s already runs here with your own setup, and the backup would be copied next to it. Skip the restore, or remove your copy first." % " and ".join(mine))
         path = restore_choice()["path"] + "/main/"
         dest = P("/mnt/storage/")
         for sub in ("immich", "nextcloud"):

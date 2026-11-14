@@ -14,7 +14,8 @@ def un_container_names():
     for _, cs in STACKS.values():
         names += cs
     present = containers_all()
-    return [n for n in dict.fromkeys(names) if n in present]
+    mine = set(adopted_names())
+    return [n for n in dict.fromkeys(names) if n in present and n not in mine]
 
 
 def un_serve_ports():
@@ -46,11 +47,19 @@ def un_serve_ports():
     return sorted(found)
 
 
+def _adopted_dirs():
+    h = Ctx.home
+    return {"nextcloud": (h + "/nextcloud", "/mnt/storage/nextcloud"), "immich": (h + "/immich", "/mnt/storage/immich"),
+            "speedtest-tracker": (h + "/speedtest-tracker",), "audiomuse": (h + "/audiomuse",), "navidrome": (h + "/navidrome",),
+            "navilist": (h + "/navilist",), "adguard": ("/opt/adguard-docker",)}
+
+
 def un_data_dirs():
     h = Ctx.home
     dirs = [h + "/nextcloud", h + "/immich", h + "/speedtest-tracker", h + "/homepage-config", h + "/audiomuse", h + "/navidrome", h + "/navilist",
             "/opt/adguard-docker", "/mnt/storage/immich", "/mnt/storage/nextcloud", boot_share_dir()]
-    return [d for d in dirs if os.path.isdir(P(d))]
+    kept = [d for n in adopted() for d in _adopted_dirs().get(n, ())]
+    return [d for d in dirs if os.path.isdir(P(d)) and d not in kept]
 
 
 def un_dir_size(path):
@@ -137,7 +146,9 @@ def un_facts():
     f["boot_sections"] = sorted(glob.glob(P("/var/lib/homelab-boot-sections") + "/*.img"))
     f["music"] = music_folder()
     f["adguard"] = "adguardhome" in f["containers"]
-    f["own"] = [n for n in containers_all() if n not in f["containers"]] if have("docker") else []
+    mine = set(adopted_names())
+    f["own"] = [n for n in containers_all() if n not in f["containers"] and n not in mine] if have("docker") else []
+    f["adopted"] = [(ADOPT_LABELS.get(n, n), a.get("containers", [])) for n, a in adopted().items()]
     return f
 
 
@@ -185,6 +196,8 @@ def un_show_plan(f):
     say("  - Docker (only HomeLab's containers, images and networks go; any container of your own stays)")
     if f.get("own"):
         say("  - these containers are not HomeLab's, so they stay (and so do their images): %s" % ", ".join(f["own"]))
+    for label, names in f.get("adopted", []):
+        say("  - %s, which you already ran before HomeLab (container%s %s), with its data. Only its dashboard card is removed." % (label, "s" if len(names) > 1 else "", ", ".join(names)))
     say("  - mergerfs, SnapRAID, mdadm, ZFS, smartmontools and the other helper programs")
     say("  - your music files%s" % (" in %s" % f["music"] if f["music"] else ""))
     say("  - the downloaded copy of this repository (%s)%s" % (Ctx.repo, "; it is deleted only if you choose to WIPE the data of the apps" if un_repo_path() else ""))
@@ -238,6 +251,8 @@ def un_confirm(wipe_data, wipe_drives, f=None):
     if wipe_drives:
         names = ", ".join(n for n, _, _ in (f or {}).get("drives", [])) or "every drive of the pools"
         warn("The drives of the pools will be ERASED for good: %s." % names)
+        if (f or {}).get("adopted"):
+            warn("Files that %s keep on those drives are erased too." % " and ".join(l for l, _ in f["adopted"]))
     if Opt.yes or Opt.dry:
         return True
     if wipe_data or wipe_drives:
@@ -574,7 +589,11 @@ def cmd_uninstall():
     if not wipe_data:
         say("The data of the apps was kept (folders %s and the Docker volumes). The saved passwords are in %s; keep that folder if you want to install again and open the old data." %
             (", ".join(d for d, _ in f["data"][:4]) + (" ..." if len(f["data"]) > 4 else ""), SECRET_DIR))
-    own = [n for n in containers_all() if n not in f["containers"]] if have("docker") else []
+    if f.get("adopted"):
+        say("Kept, because you ran them before HomeLab: %s. Their containers, images and data were not touched. Only their cards on the dashboard are gone." %
+            "; ".join("%s (%s)" % (l, ", ".join(c)) for l, c in f["adopted"]))
+    mine = set(adopted_names())
+    own = [n for n in containers_all() if n not in f["containers"] and n not in mine] if have("docker") else []
     if own:
         say("Containers that are not HomeLab's were left alone: %s. To remove them too:  docker rm -f %s  (their images:  docker image prune -a)" % (", ".join(own), " ".join(own)))
     if f["array"]:

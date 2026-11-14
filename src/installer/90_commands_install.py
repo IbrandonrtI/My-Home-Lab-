@@ -10,6 +10,7 @@ def load_all():
     State.load()
     Secrets.load()
     Ctx.detect()
+    apply_adopted_ports()
     Mode.existing = is_existing()
     State.readonly = Mode.existing and not Opt.force_existing
 
@@ -139,6 +140,8 @@ def ask_answers():
     while not is_ipv4(a["lan"].strip()):
         a["lan"] = ask("That is not an address like 192.168.1.20. Enter it again", "")
     a["lan"] = a["lan"].strip()
+    if "adguard" not in a and "adguard" in adopted():
+        a["adguard"] = "yes"
     if "adguard" not in a:
         out("")
         say("AdGuard Home blocks ads and trackers for every device on your network by acting as the network's DNS server. To do "
@@ -205,6 +208,8 @@ def final_report(res, background=False):
     if failed:
         bad("%d step(s) failed: %s. `sudo homelab-setup refresh` tries them again." % (
             len(failed), "; ".join(s.title for s in failed[:3]) + (" ..." if len(failed) > 3 else "")))
+    if adopted():
+        say("Left as they are, because you already ran them: %s." % ", ".join(ADOPT_LABELS[n] for n in adopted()))
     Secrets.load()
     if Secrets.vals:
         say("Generated passwords and keys are kept in %s (root only). Show them any time with:  sudo homelab-setup secrets" % SECRET_FILE.replace(ROOT, ""))
@@ -283,13 +288,15 @@ def system_check():
     """Check the running system and report whether everything is up. Returns the number of problems found."""
     rule("System check")
     problems = []
-    names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
+    own = adopted()
+    names = ["portainer"] + [c for n in STACK_ORDER if n not in own for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
     if navidrome_wanted():
         names.append("navidrome")
     if audiomuse_wanted() and navidrome_wanted():
         names += [c for c in STACKS["audiomuse"][1] if c != "audiomuse-worker" or not State.data.get("audiomuse_paused")]
     if navilist_wanted() and navidrome_wanted():
         names += STACKS["navilist"][1]
+    names = [c for c in names if not any(c in STACKS[n][1] for n in own)] + adopted_names()
     up = containers_running()
     missing = [c for c in names if c not in up]
     if missing:
@@ -501,6 +508,7 @@ def cmd_install():
     else:
         say("An earlier install was started on this machine. It continues where it stopped; finished steps are skipped.")
     preflight()
+    adopt_detect()
     if not Opt.dry:
         if not (State.data["answers"].get("admin") and State.data["answers"].get("email")):
             ask_answers()

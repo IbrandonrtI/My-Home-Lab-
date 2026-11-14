@@ -363,7 +363,7 @@ class Port53(Step):
     needs = ("docker",)
 
     def applies(self):
-        return adguard_wanted()
+        return adguard_wanted() and "adguard" not in adopted()
 
     def probe(self):
         procs = port53_listeners()

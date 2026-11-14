@@ -194,6 +194,131 @@ def stack_up(name):
     return all(c in run_now for c in need)
 
 
+# Services the person already ran before HomeLab was installed. The installer finds them once, at the start of a fresh install,
+# and then leaves them alone: it deploys nothing for them, sets no logins and writes no widgets. Only their Homepage card stays,
+# as a plain link. The uninstaller keeps their containers and their data.
+ADOPT_IMAGES = {
+    "adguard": ("adguard/adguardhome",), "beszel": ("henrygd/beszel",), "netdata": ("netdata/netdata",),
+    "speedtest-tracker": ("linuxserver/speedtest-tracker",), "filebrowser": ("filebrowser/filebrowser",),
+    "immich": ("immich-app/immich-server",), "nextcloud": ("nextcloud",),
+    "navidrome": ("navidrome/navidrome", "deluan/navidrome"), "audiomuse": ("neptunehub/audiomuse-ai",), "navilist": ("ofernander/navilist",),
+}
+ADOPT_PRIMARY = {"audiomuse": "audiomuse-flask"}
+ADOPT_PORT_KEY = {"speedtest-tracker": "speedtest"}
+ADOPT_INNER_PORTS = {"adguard": (3000, 80), "beszel": (8090,), "netdata": (19999,), "speedtest-tracker": (80,), "filebrowser": (80,),
+                     "immich": (2283,), "nextcloud": (80,), "navidrome": (4533,), "audiomuse": (8000,), "navilist": (3000,)}
+ADOPT_LABELS = {"adguard": "AdGuard Home", "beszel": "Beszel", "netdata": "Netdata", "speedtest-tracker": "Speedtest Tracker",
+                "filebrowser": "FileBrowser", "immich": "Immich", "nextcloud": "Nextcloud", "navidrome": "Navidrome",
+                "audiomuse": "AudioMuse", "navilist": "NaviList"}
+ADOPT_NEEDED_BY = {"navidrome": ("AudioMuse", "NaviList"), "beszel": ("the Beszel agent",)}
+
+
+def image_repo(image):
+    """The name of an image without its registry, tag or digest: ghcr.io/immich-app/immich-server:release -> immich-app/immich-server."""
+    repo = image.split("@")[0]
+    repo = repo.rsplit(":", 1)[0] if re.search(r":[^/]*$", repo) else repo
+    parts = repo.split("/")
+    if len(parts) > 1 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
+        parts = parts[1:]
+    if parts and parts[0] == "library":
+        parts = parts[1:]
+    return "/".join(parts).lower()
+
+
+def published_ports(text):
+    """Read docker's Ports column, such as "0.0.0.0:8082->80/tcp, :::8082->80/tcp", as (host port, container port) pairs."""
+    pairs = []
+    for m in re.finditer(r":(\d+)->(\d+)/", text or ""):
+        pair = (int(m.group(1)), int(m.group(2)))
+        if pair not in pairs:
+            pairs.append(pair)
+    return pairs
+
+
+def adopt_port(name, ports):
+    """The port the person's own copy answers on: the usual port if it is published, else the one that leads to the app's own port, else the only one."""
+    default = PORTS[ADOPT_PORT_KEY.get(name, name)]
+    if not ports or any(h == default for h, _ in ports):
+        return default
+    for h, c in ports:
+        if c in ADOPT_INNER_PORTS.get(name, ()):
+            return h
+    hosts = sorted({h for h, _ in ports})
+    return hosts[0] if len(hosts) == 1 else default
+
+
+def adopt_scan():
+    """Return {service: {"containers": [...], "port": number}} for every HomeLab service that already runs here, found by container name or image."""
+    rc, txt = docker("ps", "-a", "--format", "{{.Names}}|{{.Image}}|{{.Ports}}", timeout=30)
+    if rc != 0:
+        return {}
+    rows = []
+    for line in txt.splitlines():
+        f = line.split("|", 2)
+        if len(f) >= 2 and f[0].strip():
+            rows.append((f[0].strip(), image_repo(f[1].strip()), f[2] if len(f) > 2 else ""))
+    found = {}
+    for name, images in ADOPT_IMAGES.items():
+        members = STACKS[name][1]
+        primary = ADOPT_PRIMARY.get(name, members[0])
+        main = [r for r in rows if r[0] == primary or r[1] in images]
+        if not main:
+            continue
+        names = [r[0] for r in rows if r[0] in members or r in main]
+        found[name] = {"containers": list(dict.fromkeys(names)), "port": adopt_port(name, published_ports(main[0][2]))}
+    return found
+
+
+def adopted():
+    return State.data.get("adopted") or {}
+
+
+def adopted_names():
+    """The names of the containers of every service the person already ran."""
+    return [c for a in adopted().values() for c in a.get("containers", [])]
+
+
+def apply_adopted_ports():
+    """Make every address the installer builds point at the port the person's own copy uses."""
+    for name, a in adopted().items():
+        key = ADOPT_PORT_KEY.get(name, name)
+        if key in PORTS and isinstance(a.get("port"), int):
+            PORTS[key] = a["port"]
+
+
+def adopt_lines():
+    out_lines = []
+    for name, a in adopted().items():
+        port = a.get("port")
+        out_lines.append("%s (container%s %s%s)" % (ADOPT_LABELS.get(name, name), "s" if len(a["containers"]) > 1 else "", ", ".join(a["containers"]),
+                                                    ", port %s" % port if port else ""))
+    return out_lines
+
+
+def adopt_detect():
+    """Look once, before anything is installed, for services the person already runs, remember them and tell the person."""
+    if "adopted" in State.data or State.ran("install-started"):
+        return
+    State.data["adopted"] = adopt_scan() if have("docker") else {}
+    State.save()
+    apply_adopted_ports()
+    adopt_notice()
+
+
+def adopt_notice():
+    if not adopted():
+        return
+    rule("Services you already run")
+    say("These HomeLab services are already running on this machine, so they are used as they are:")
+    for line in adopt_lines():
+        out("    %s %s" % (S_DOT, line))
+    say("The installer does not install, change or log in to them. Their dashboard cards link to your copy and show no live numbers "
+        "(numbers need an API key from the service; they can be added later). The uninstaller keeps them too.")
+    later = [w for n in adopted() for w in ADOPT_NEEDED_BY.get(n, ())]
+    if later:
+        say("%s are not installed, because they work only with the copy of that service that HomeLab sets up." % " and ".join(dict.fromkeys(later)))
+
+
 def is_existing():
     if State.exists() and State.ran("install-started"):
         return False

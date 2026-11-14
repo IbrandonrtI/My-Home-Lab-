@@ -1,7 +1,8 @@
 class Result:
-    def __init__(self, state, detail=""):
+    def __init__(self, state, detail="", adopted=False):
         self.state = state
         self.detail = detail
+        self.adopted = adopted
 
 
 class Step:
@@ -100,7 +101,17 @@ def evaluate():
     return res
 
 
+def adopted_off(s, res):
+    """True for the stack of a service the person already runs and for every step that works on top of it (its logins, widgets and so on)."""
+    if s.id.startswith("stack-") and s.id[6:] in adopted():
+        return True
+    return any(res[n].adopted for n in s.needs if n in res)
+
+
 def _check_one(s, res):
+    if adopted_off(s, res):
+        res[s.id] = Result("na", "", adopted=True)
+        return
     if not s.applies():
         res[s.id] = Result("na")
         return

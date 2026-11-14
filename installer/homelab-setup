@@ -66,7 +66,7 @@ STACK_ORDER = ["homepage", "adguard", "beszel", "netdata", "speedtest-tracker", 
                "immich", "nextcloud", "beszel-agent", "music-downloader"]
 
 PORTS = {"homepage": 3001, "portainer": 9000, "immich": 2283, "beszel": 8090, "adguard": 3000,
-         "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999, "navidrome": 4533, "audiomuse": 8100, "navilist": 8200}
+         "nextcloud": 8082, "filebrowser": 8081, "speedtest": 8088, "netdata": 19999, "navidrome": 4533, "audiomuse": 8100, "navilist": 8200, "downtify": 8000}
 SERVE = [(1000, "homepage"), (1001, "portainer"), (1002, "immich"), (1003, "beszel"), (1004, "adguard"),
          (1005, "nextcloud"), (1006, "filebrowser"), (1007, "speedtest"), (1008, "netdata")]
 
@@ -1062,6 +1062,131 @@ def stack_up(name):
     return all(c in run_now for c in need)
 
 
+# Services the person already ran before HomeLab was installed. The installer finds them once, at the start of a fresh install,
+# and then leaves them alone: it deploys nothing for them, sets no logins and writes no widgets. Only their Homepage card stays,
+# as a plain link. The uninstaller keeps their containers and their data.
+ADOPT_IMAGES = {
+    "adguard": ("adguard/adguardhome",), "beszel": ("henrygd/beszel",), "netdata": ("netdata/netdata",),
+    "speedtest-tracker": ("linuxserver/speedtest-tracker",), "filebrowser": ("filebrowser/filebrowser",),
+    "immich": ("immich-app/immich-server",), "nextcloud": ("nextcloud",),
+    "navidrome": ("navidrome/navidrome", "deluan/navidrome"), "audiomuse": ("neptunehub/audiomuse-ai",), "navilist": ("ofernander/navilist",),
+}
+ADOPT_PRIMARY = {"audiomuse": "audiomuse-flask"}
+ADOPT_PORT_KEY = {"speedtest-tracker": "speedtest"}
+ADOPT_INNER_PORTS = {"adguard": (3000, 80), "beszel": (8090,), "netdata": (19999,), "speedtest-tracker": (80,), "filebrowser": (80,),
+                     "immich": (2283,), "nextcloud": (80,), "navidrome": (4533,), "audiomuse": (8000,), "navilist": (3000,)}
+ADOPT_LABELS = {"adguard": "AdGuard Home", "beszel": "Beszel", "netdata": "Netdata", "speedtest-tracker": "Speedtest Tracker",
+                "filebrowser": "FileBrowser", "immich": "Immich", "nextcloud": "Nextcloud", "navidrome": "Navidrome",
+                "audiomuse": "AudioMuse", "navilist": "NaviList"}
+ADOPT_NEEDED_BY = {"navidrome": ("AudioMuse", "NaviList"), "beszel": ("the Beszel agent",)}
+
+
+def image_repo(image):
+    """The name of an image without its registry, tag or digest: ghcr.io/immich-app/immich-server:release -> immich-app/immich-server."""
+    repo = image.split("@")[0]
+    repo = repo.rsplit(":", 1)[0] if re.search(r":[^/]*$", repo) else repo
+    parts = repo.split("/")
+    if len(parts) > 1 and ("." in parts[0] or ":" in parts[0] or parts[0] == "localhost"):
+        parts = parts[1:]
+    if parts and parts[0] == "library":
+        parts = parts[1:]
+    return "/".join(parts).lower()
+
+
+def published_ports(text):
+    """Read docker's Ports column, such as "0.0.0.0:8082->80/tcp, :::8082->80/tcp", as (host port, container port) pairs."""
+    pairs = []
+    for m in re.finditer(r":(\d+)->(\d+)/", text or ""):
+        pair = (int(m.group(1)), int(m.group(2)))
+        if pair not in pairs:
+            pairs.append(pair)
+    return pairs
+
+
+def adopt_port(name, ports):
+    """The port the person's own copy answers on: the usual port if it is published, else the one that leads to the app's own port, else the only one."""
+    default = PORTS[ADOPT_PORT_KEY.get(name, name)]
+    if not ports or any(h == default for h, _ in ports):
+        return default
+    for h, c in ports:
+        if c in ADOPT_INNER_PORTS.get(name, ()):
+            return h
+    hosts = sorted({h for h, _ in ports})
+    return hosts[0] if len(hosts) == 1 else default
+
+
+def adopt_scan():
+    """Return {service: {"containers": [...], "port": number}} for every HomeLab service that already runs here, found by container name or image."""
+    rc, txt = docker("ps", "-a", "--format", "{{.Names}}|{{.Image}}|{{.Ports}}", timeout=30)
+    if rc != 0:
+        return {}
+    rows = []
+    for line in txt.splitlines():
+        f = line.split("|", 2)
+        if len(f) >= 2 and f[0].strip():
+            rows.append((f[0].strip(), image_repo(f[1].strip()), f[2] if len(f) > 2 else ""))
+    found = {}
+    for name, images in ADOPT_IMAGES.items():
+        members = STACKS[name][1]
+        primary = ADOPT_PRIMARY.get(name, members[0])
+        main = [r for r in rows if r[0] == primary or r[1] in images]
+        if not main:
+            continue
+        names = [r[0] for r in rows if r[0] in members or r in main]
+        found[name] = {"containers": list(dict.fromkeys(names)), "port": adopt_port(name, published_ports(main[0][2]))}
+    return found
+
+
+def adopted():
+    return State.data.get("adopted") or {}
+
+
+def adopted_names():
+    """The names of the containers of every service the person already ran."""
+    return [c for a in adopted().values() for c in a.get("containers", [])]
+
+
+def apply_adopted_ports():
+    """Make every address the installer builds point at the port the person's own copy uses."""
+    for name, a in adopted().items():
+        key = ADOPT_PORT_KEY.get(name, name)
+        if key in PORTS and isinstance(a.get("port"), int):
+            PORTS[key] = a["port"]
+
+
+def adopt_lines():
+    out_lines = []
+    for name, a in adopted().items():
+        port = a.get("port")
+        out_lines.append("%s (container%s %s%s)" % (ADOPT_LABELS.get(name, name), "s" if len(a["containers"]) > 1 else "", ", ".join(a["containers"]),
+                                                    ", port %s" % port if port else ""))
+    return out_lines
+
+
+def adopt_detect():
+    """Look once, before anything is installed, for services the person already runs, remember them and tell the person."""
+    if "adopted" in State.data or State.ran("install-started"):
+        return
+    State.data["adopted"] = adopt_scan() if have("docker") else {}
+    State.save()
+    apply_adopted_ports()
+    adopt_notice()
+
+
+def adopt_notice():
+    if not adopted():
+        return
+    rule("Services you already run")
+    say("These HomeLab services are already running on this machine, so they are used as they are:")
+    for line in adopt_lines():
+        out("    %s %s" % (S_DOT, line))
+    say("The installer does not install, change or log in to them. Their dashboard cards link to your copy and show no live numbers "
+        "(numbers need an API key from the service; they can be added later). The uninstaller keeps them too.")
+    later = [w for n in adopted() for w in ADOPT_NEEDED_BY.get(n, ())]
+    if later:
+        say("%s are not installed, because they work only with the copy of that service that HomeLab sets up." % " and ".join(dict.fromkeys(later)))
+
+
 def is_existing():
     if State.exists() and State.ran("install-started"):
         return False
@@ -1588,12 +1713,12 @@ def js_groups_block(live, shipped):
 
 
 STATS_BEGIN, STATS_END = "# >>> homelab stats >>>", "# <<< homelab stats <<<"
-STATS_GROUPS = {"At a Glance": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 2), "Library Totals": ("mdi-image-multiple", 2),
+STATS_GROUPS = {"Preview": ("mdi-view-dashboard", 4), "Music Library": ("mdi-music", 2), "Library Totals": ("mdi-image-multiple", 2),
                 "Storage": ("mdi-harddisk", 3), "Backup & Updates": ("mdi-backup-restore", 2), "Folder Sizes": ("mdi-folder-multiple", 1)}
-STATS_AFTER = {"Music Library": "At a Glance"}
+STATS_AFTER = {"Music Library": "Preview"}
 MUSIC_WIDE = "~music-2-columns"
 STORAGE_WIDE = "~storage-3-columns"
-OLD_NAMES = {"At a glance": "At a Glance", "Library totals": "Library Totals", "Backup & updates": "Backup & Updates", "Folder sizes": "Folder Sizes"}
+OLD_NAMES = {"At a glance": "Preview", "At a Glance": "Preview", "Library totals": "Library Totals", "Backup & updates": "Backup & Updates", "Folder sizes": "Folder Sizes"}
 OLD_TABS = {"HOME": "Home", "LINKS": "Links", "STATS": "Stats"}
 
 
@@ -2277,9 +2402,10 @@ def hp_strip_widgets(text):
             del lines[r[2]:r[3]]
     return "\n".join(lines)
 class Result:
-    def __init__(self, state, detail=""):
+    def __init__(self, state, detail="", adopted=False):
         self.state = state
         self.detail = detail
+        self.adopted = adopted
 
 
 class Step:
@@ -2378,7 +2504,17 @@ def evaluate():
     return res
 
 
+def adopted_off(s, res):
+    """True for the stack of a service the person already runs and for every step that works on top of it (its logins, widgets and so on)."""
+    if s.id.startswith("stack-") and s.id[6:] in adopted():
+        return True
+    return any(res[n].adopted for n in s.needs if n in res)
+
+
 def _check_one(s, res):
+    if adopted_off(s, res):
+        res[s.id] = Result("na", "", adopted=True)
+        return
     if not s.applies():
         res[s.id] = Result("na")
         return
@@ -2973,7 +3109,7 @@ class Port53(Step):
     needs = ("docker",)
 
     def applies(self):
-        return adguard_wanted()
+        return adguard_wanted() and "adguard" not in adopted()
 
     def probe(self):
         procs = port53_listeners()
@@ -3706,6 +3842,9 @@ class RestoreData(Step):
         return "done" if State.ran("restore-data") else "todo"
 
     def run(self):
+        mine = [ADOPT_LABELS[n] for n in ("immich", "nextcloud") if n in adopted()]
+        if mine:
+            raise Abort("%s already runs here with your own setup, and the backup would be copied next to it. Skip the restore, or remove your copy first." % " and ".join(mine))
         path = restore_choice()["path"] + "/main/"
         dest = P("/mnt/storage/")
         for sub in ("immich", "nextcloud"):
@@ -3784,6 +3923,11 @@ class HomepageFiles(Step):
                 new = subst(old)
                 if new != old:
                     write_file(dst, new, 0o644, (Ctx.uid, Ctx.gid))
+        if "navidrome" in adopted():
+            # Navidrome's card is normally added together with its login; for the person's own copy it is a plain link.
+            svc = read_file(hp_path("services.yaml"))
+            if svc and card_widget_type(svc, "navidrome-card") is None:
+                write_file(hp_path("services.yaml"), navidrome_card_added(svc, Ctx.lan or svc_host()), 0o644, (Ctx.uid, Ctx.gid))
 
 
 @step
@@ -4748,6 +4892,75 @@ class MusicDownloaderStack(StackStep):
 
 
 register(MusicDownloaderStack("music-downloader", ("portainer-env", "folders"), "Downtify and MeTube stack (music and video downloads)"))
+
+
+DT_DEFAULT_USER, DT_DEFAULT_PASS = "admin", "downtify"
+
+
+def dt_username():
+    """The install name as a Downtify username (3 to 32 letters, digits, dots, dashes or underscores); `admin` when nothing usable is left."""
+    name = re.sub(r"[^A-Za-z0-9._-]", "", Ctx.admin or "")[:32]
+    return name if len(name) >= 3 else DT_DEFAULT_USER
+
+
+def dt_login(user, password):
+    """Sign in to Downtify. Returns (status, user record, cookie header). Status 0 means no answer."""
+    st, js, hd = http("POST", url("downtify", "/api/auth/login"), body={"username": user, "password": password}, timeout=20)
+    m = re.search(r"downtify_session=([^;,\s]+)", str(hd.get("Set-Cookie", ""))) if st == 200 else None
+    rec = js.get("user") if st == 200 and isinstance(js, dict) else None
+    return st, rec, ("downtify_session=" + m.group(1)) if m else ""
+
+
+def dt_state():
+    """Where Downtify's sign-in stands: `none` (not running or no accounts), `default` (still the first admin and password), `set` (changed) or `off` (sign-in turned off)."""
+    st, js, _ = http("GET", url("downtify", "/api/auth/status"), timeout=10)
+    if st != 200 or not isinstance(js, dict):
+        return "none"
+    if js.get("auth_disabled") or js.get("require_sign_in") is False:
+        return "off"
+    st, _, _ = dt_login(DT_DEFAULT_USER, DT_DEFAULT_PASS)
+    return "default" if st == 200 else "set"
+
+
+@step
+class DowntifyLogin(Step):
+    """Give Downtify the name and password chosen at install. A new Downtify only has the account admin with the password downtify, so its first admin account is renamed and given the install password."""
+    id, group, title = "downtify-login", "Logins and keys", "Downtify sign-in set to your name and the admin password"
+    needs = ("stack-music-downloader",)
+    optional = True
+
+    def applies(self):
+        return not Mode.existing
+
+    def probe(self):
+        if not stack_up("music-downloader"):
+            return "todo"
+        return "todo" if dt_state() == "default" else "done"
+
+    def help(self):
+        return ("Open %s and sign in as admin with the password downtify. Then change the name and password in Settings, Users and General, Account. "
+                "If the password was changed and forgotten, run:  docker exec downtify python main.py auth-reset" % url("downtify"))
+
+    def run(self):
+        if Opt.dry:
+            out("      would rename Downtify's first account (admin) to %s and give it the admin password" % dt_username())
+            return
+        wait_for(lambda: dt_state() != "none", "Downtify to answer", 120)
+        pw = need_password("to set the Downtify sign-in")
+        user = dt_username()
+        if dt_login(user, pw)[0] == 200:
+            return
+        st, rec, cookie = dt_login(DT_DEFAULT_USER, DT_DEFAULT_PASS)
+        if st != 200 or not rec or not cookie:
+            raise Abort("Downtify's sign-in was changed by hand, so it was left alone. %s" % self.help())
+        body = {"username": user, "password": pw}
+        st, js, _ = http("PATCH", url("downtify", "/api/users/%s" % rec["id"]), body=body, headers={"Cookie": cookie}, timeout=30)
+        if st == 400 and user != DT_DEFAULT_USER:
+            st, js, _ = http("PATCH", url("downtify", "/api/users/%s" % rec["id"]), body={"password": pw}, headers={"Cookie": cookie}, timeout=30)
+            if st == 200:
+                warn("Downtify already has an account called %s, so the first account keeps the name admin and now has the admin password." % user)
+        if st != 200:
+            raise Abort("Downtify refused the new sign-in (HTTP %s): %s" % (st, str(js)[:200]))
 def basic(user, pw):
     return {"Authorization": "Basic " + base64.b64encode(("%s:%s" % (user, pw)).encode()).decode()}
 
@@ -5389,7 +5602,11 @@ EXPECTED_CONTAINERS = 19
 
 
 def expected_containers():
-    return EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
+    n = EXPECTED_CONTAINERS - (0 if adguard_wanted() else len(STACKS["adguard"][1]))
+    for name, a in adopted().items():
+        if name != "adguard" or adguard_wanted():
+            n -= max(0, len(STACKS[name][1]) - len(a.get("containers", [])))
+    return n
 WEATHER_DEFAULTS = ((40.7128, -74.0060), (40.7143, -74.0060))
 
 
@@ -6204,6 +6421,7 @@ def load_all():
     State.load()
     Secrets.load()
     Ctx.detect()
+    apply_adopted_ports()
     Mode.existing = is_existing()
     State.readonly = Mode.existing and not Opt.force_existing
 
@@ -6333,6 +6551,8 @@ def ask_answers():
     while not is_ipv4(a["lan"].strip()):
         a["lan"] = ask("That is not an address like 192.168.1.20. Enter it again", "")
     a["lan"] = a["lan"].strip()
+    if "adguard" not in a and "adguard" in adopted():
+        a["adguard"] = "yes"
     if "adguard" not in a:
         out("")
         say("AdGuard Home blocks ads and trackers for every device on your network by acting as the network's DNS server. To do "
@@ -6399,6 +6619,8 @@ def final_report(res, background=False):
     if failed:
         bad("%d step(s) failed: %s. `sudo homelab-setup refresh` tries them again." % (
             len(failed), "; ".join(s.title for s in failed[:3]) + (" ..." if len(failed) > 3 else "")))
+    if adopted():
+        say("Left as they are, because you already ran them: %s." % ", ".join(ADOPT_LABELS[n] for n in adopted()))
     Secrets.load()
     if Secrets.vals:
         say("Generated passwords and keys are kept in %s (root only). Show them any time with:  sudo homelab-setup secrets" % SECRET_FILE.replace(ROOT, ""))
@@ -6477,13 +6699,15 @@ def system_check():
     """Check the running system and report whether everything is up. Returns the number of problems found."""
     rule("System check")
     problems = []
-    names = ["portainer"] + [c for n in STACK_ORDER for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
+    own = adopted()
+    names = ["portainer"] + [c for n in STACK_ORDER if n not in own for c in STACKS[n][1] if n != "adguard" or adguard_wanted()]
     if navidrome_wanted():
         names.append("navidrome")
     if audiomuse_wanted() and navidrome_wanted():
         names += [c for c in STACKS["audiomuse"][1] if c != "audiomuse-worker" or not State.data.get("audiomuse_paused")]
     if navilist_wanted() and navidrome_wanted():
         names += STACKS["navilist"][1]
+    names = [c for c in names if not any(c in STACKS[n][1] for n in own)] + adopted_names()
     up = containers_running()
     missing = [c for c in names if c not in up]
     if missing:
@@ -6695,6 +6919,7 @@ def cmd_install():
     else:
         say("An earlier install was started on this machine. It continues where it stopped; finished steps are skipped.")
     preflight()
+    adopt_detect()
     if not Opt.dry:
         if not (State.data["answers"].get("admin") and State.data["answers"].get("email")):
             ask_answers()
@@ -7681,7 +7906,8 @@ def un_container_names():
     for _, cs in STACKS.values():
         names += cs
     present = containers_all()
-    return [n for n in dict.fromkeys(names) if n in present]
+    mine = set(adopted_names())
+    return [n for n in dict.fromkeys(names) if n in present and n not in mine]
 
 
 def un_serve_ports():
@@ -7713,11 +7939,19 @@ def un_serve_ports():
     return sorted(found)
 
 
+def _adopted_dirs():
+    h = Ctx.home
+    return {"nextcloud": (h + "/nextcloud", "/mnt/storage/nextcloud"), "immich": (h + "/immich", "/mnt/storage/immich"),
+            "speedtest-tracker": (h + "/speedtest-tracker",), "audiomuse": (h + "/audiomuse",), "navidrome": (h + "/navidrome",),
+            "navilist": (h + "/navilist",), "adguard": ("/opt/adguard-docker",)}
+
+
 def un_data_dirs():
     h = Ctx.home
     dirs = [h + "/nextcloud", h + "/immich", h + "/speedtest-tracker", h + "/homepage-config", h + "/audiomuse", h + "/navidrome", h + "/navilist",
             "/opt/adguard-docker", "/mnt/storage/immich", "/mnt/storage/nextcloud", boot_share_dir()]
-    return [d for d in dirs if os.path.isdir(P(d))]
+    kept = [d for n in adopted() for d in _adopted_dirs().get(n, ())]
+    return [d for d in dirs if os.path.isdir(P(d)) and d not in kept]
 
 
 def un_dir_size(path):
@@ -7804,7 +8038,9 @@ def un_facts():
     f["boot_sections"] = sorted(glob.glob(P("/var/lib/homelab-boot-sections") + "/*.img"))
     f["music"] = music_folder()
     f["adguard"] = "adguardhome" in f["containers"]
-    f["own"] = [n for n in containers_all() if n not in f["containers"]] if have("docker") else []
+    mine = set(adopted_names())
+    f["own"] = [n for n in containers_all() if n not in f["containers"] and n not in mine] if have("docker") else []
+    f["adopted"] = [(ADOPT_LABELS.get(n, n), a.get("containers", [])) for n, a in adopted().items()]
     return f
 
 
@@ -7852,6 +8088,8 @@ def un_show_plan(f):
     say("  - Docker (only HomeLab's containers, images and networks go; any container of your own stays)")
     if f.get("own"):
         say("  - these containers are not HomeLab's, so they stay (and so do their images): %s" % ", ".join(f["own"]))
+    for label, names in f.get("adopted", []):
+        say("  - %s, which you already ran before HomeLab (container%s %s), with its data. Only its dashboard card is removed." % (label, "s" if len(names) > 1 else "", ", ".join(names)))
     say("  - mergerfs, SnapRAID, mdadm, ZFS, smartmontools and the other helper programs")
     say("  - your music files%s" % (" in %s" % f["music"] if f["music"] else ""))
     say("  - the downloaded copy of this repository (%s)%s" % (Ctx.repo, "; it is deleted only if you choose to WIPE the data of the apps" if un_repo_path() else ""))
@@ -7905,6 +8143,8 @@ def un_confirm(wipe_data, wipe_drives, f=None):
     if wipe_drives:
         names = ", ".join(n for n, _, _ in (f or {}).get("drives", [])) or "every drive of the pools"
         warn("The drives of the pools will be ERASED for good: %s." % names)
+        if (f or {}).get("adopted"):
+            warn("Files that %s keep on those drives are erased too." % " and ".join(l for l, _ in f["adopted"]))
     if Opt.yes or Opt.dry:
         return True
     if wipe_data or wipe_drives:
@@ -8241,7 +8481,11 @@ def cmd_uninstall():
     if not wipe_data:
         say("The data of the apps was kept (folders %s and the Docker volumes). The saved passwords are in %s; keep that folder if you want to install again and open the old data." %
             (", ".join(d for d, _ in f["data"][:4]) + (" ..." if len(f["data"]) > 4 else ""), SECRET_DIR))
-    own = [n for n in containers_all() if n not in f["containers"]] if have("docker") else []
+    if f.get("adopted"):
+        say("Kept, because you ran them before HomeLab: %s. Their containers, images and data were not touched. Only their cards on the dashboard are gone." %
+            "; ".join("%s (%s)" % (l, ", ".join(c)) for l, c in f["adopted"]))
+    mine = set(adopted_names())
+    own = [n for n in containers_all() if n not in f["containers"] and n not in mine] if have("docker") else []
     if own:
         say("Containers that are not HomeLab's were left alone: %s. To remove them too:  docker rm -f %s  (their images:  docker image prune -a)" % (", ".join(own), " ".join(own)))
     if f["array"]:
